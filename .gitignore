@@ -15,3 +15,6 @@ __pycache__/
 
 # Logs
 server.log
+
+#gitignore
+.gitignore

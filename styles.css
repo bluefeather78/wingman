@@ -1,0 +1,156 @@
+/* ============================================================
+   BENTO & POP — Design Tokens + Functional Bridge Classes
+   ============================================================ */
+
+/* ---------- Fonts & Base ---------- */
+body {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  background-color: #F8FAFC;
+}
+.font-heading {
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+/* ---------- Pop Card ---------- */
+.pop-card {
+  border: 3px solid #0F172A;
+  box-shadow: 4px 4px 0px #0F172A;
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.pop-card:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0px #0F172A;
+}
+
+/* ---------- Pop Button ---------- */
+.pop-btn {
+  border: 2px solid #0F172A;
+  box-shadow: 3px 3px 0px #0F172A;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.pop-btn:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0px #0F172A;
+}
+.pop-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0px #0F172A;
+}
+
+/* ============================================================
+   FUNCTIONAL BRIDGE CLASSES
+   These are toggled by JavaScript — they must exist in CSS
+   ============================================================ */
+
+/* ---------- Stage visibility (Finder wizard) ---------- */
+.stage { display: none; }
+.stage.active { display: block; }
+
+/* ---------- Nav dropdown panels (e.g. "Add Custom Item") ---------- */
+.nav-dropdown-panel { display: none; }
+.nav-dropdown-panel.open { display: block; }
+
+/* ---------- Error / status boxes ---------- */
+.form-error { display: none; }
+.form-error.show { display: block; }
+
+.intake-error { display: none; }
+.intake-error.show { display: block; }
+
+.progress-note { display: none; }
+.progress-note.show { display: block; }
+
+.change-banner { display: none; }
+.change-banner.show { display: block; }
+
+.error-banner { display: none; }
+.error-banner.show { display: block; }
+
+/* ---------- Button loading state ---------- */
+.pop-btn.loading { opacity: 0.65; cursor: wait; pointer-events: none; }
+.pop-btn.loading .spin { display: inline-block !important; }
+
+/* ---------- Step nav states ---------- */
+.step { cursor: default; opacity: 0.5; }
+.step.active { opacity: 1; font-weight: 800; }
+.step.active .num { background: #0F172A; color: #fff; }
+.step.done { opacity: 0.75; }
+.step.done .num { background: #6EE7B7; color: #0F172A; }
+.step.clickable { cursor: pointer; }
+.step.clickable:hover { opacity: 1; }
+
+/* ---------- Result card selection state ---------- */
+.result-card { transition: box-shadow 0.15s; }
+.select-toggle.selected { background: #BEF264; border-color: #0F172A; }
+
+/* ---------- Tracker filter pills ---------- */
+.bucket-pill {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 2px solid #0F172A;
+  font-weight: 700;
+  font-size: 11px;
+  background: #fff;
+  cursor: pointer;
+  box-shadow: 2px 2px 0px #0F172A;
+  transition: all 0.15s;
+}
+.bucket-pill.active {
+  background: #BAE6FD;
+  box-shadow: 3px 3px 0px #0F172A;
+}
+.bucket-pill:hover { transform: translate(-1px,-1px); box-shadow: 3px 3px 0px #0F172A; }
+
+/* ---------- View toggle active state ---------- */
+.view-toggle-btn.active { background: #E0E7FF !important; }
+
+/* ---------- Calendar strip ---------- */
+.month-card {
+  min-width: 160px;
+  background: #F8FAFC;
+  border: 2px solid #CBD5E1;
+  border-radius: 16px;
+  padding: 12px;
+  flex-shrink: 0;
+}
+.month-card.current-month { border-color: #6366F1; background: #EEF2FF; }
+.month-head { font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748B; margin-bottom: 8px; }
+.month-entries { display: flex; flex-direction: column; gap: 6px; }
+.month-entry { border-radius: 8px; padding: 6px 8px; border-left: 3px solid; display: flex; align-items: flex-start; gap: 8px; }
+.month-entry .day { font-weight: 800; font-size: 18px; line-height: 1; flex-shrink: 0; }
+.month-entry .entry-text { font-size: 11px; line-height: 1.4; }
+.month-entry .entry-text strong { display: block; }
+.month-entry .entry-type { font-size: 9px; text-transform: uppercase; opacity: 0.7; }
+.empty-state { color: #94A3B8; font-style: italic; font-size: 13px; }
+
+/* ---------- Calendar legend ---------- */
+.legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; margin-right: 4px; }
+
+/* ---------- Profile drawer (sidebar) ---------- */
+/* The profilePanel starts with translate-x-full (from Tailwind) = hidden.
+   toggleProfile() toggles that class. No extra CSS needed. */
+
+/* ---------- Selection bar — visibility controlled via style.display by JS ---------- */
+
+/* ---------- Input / textarea focus ---------- */
+textarea:focus, input:focus, select:focus {
+  outline: 2px solid #6366F1;
+  outline-offset: 1px;
+}
+
+/* ============================================================
+   UTILITY
+   ============================================================ */
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Confirm-armed state for destructive buttons (e.g. Clear Profile) */
+.confirm-armed {
+  background: #FEF3C7 !important;
+  color: #92400E !important;
+}

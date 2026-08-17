@@ -1,0 +1,17 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Local Claude Code settings (can accumulate secrets typed into commands)
+.claude/settings.local.json
+
+# Local user account database
+users_db.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+server.log

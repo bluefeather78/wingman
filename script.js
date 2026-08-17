@@ -1,6 +1,171 @@
-// Opportunities database is loaded asynchronously from opportunities.json
-// The rest of the app initialises inside init() once the fetch resolves.
+// Opportunities database is loaded asynchronously from opportunities.json.
 let OPPORTUNITIES = [];
+fetch('opportunities.json')
+  .then(res => res.json())
+  .then(data => { OPPORTUNITIES = Array.isArray(data) ? data : []; })
+  .catch(err => console.error('Failed to load opportunities.json:', err));
+
+// ============================================================
+// Auth — plain userid/password sign-in + registration. Accounts are persisted
+// server-side in a JSON file database (see server.py: /api/register, /api/login,
+// users_db.json) so an account, once created, survives page reloads and works
+// from any browser hitting this server — not just a client-side cache.
+// Passwords are hashed with SHA-256 client-side before ever leaving the browser;
+// the server only ever sees/stores the hash. Reasonable for a prototype, but not
+// production-grade (no salting, no HTTPS enforcement, no rate limiting).
+// ============================================================
+
+let currentUser = null; // { firstName, lastName, email } — the signed-in session, cached locally
+
+async function loadUser(){
+  try{
+    if(window.storage){
+      const r = await window.storage.get('hs-user');
+      if(r && r.value){ currentUser = JSON.parse(r.value); }
+    }
+  }catch(e){ /* nothing saved yet, or storage unavailable */ }
+}
+async function saveUser(){
+  try{ if(window.storage) await window.storage.set('hs-user', JSON.stringify(currentUser)); }
+  catch(e){ /* storage unavailable — stays in-memory only for this session */ }
+}
+
+// Hashes a password with SHA-256 and returns it as a hex string.
+async function hashPassword(password){
+  const data = new TextEncoder().encode(password);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Toggles between the Sign In and Register forms on the login screen.
+function showLoginMode(mode){
+  const signInForm = document.getElementById('signInForm');
+  const registerForm = document.getElementById('registerForm');
+  const tagline = document.getElementById('loginTagline');
+  const signInError = document.getElementById('signInError');
+  const registerError = document.getElementById('registerError');
+  if(signInError) signInError.textContent = '';
+  if(registerError) registerError.textContent = '';
+  if(mode === 'register'){
+    if(signInForm) signInForm.classList.add('hidden');
+    if(registerForm) registerForm.classList.remove('hidden');
+    if(tagline) tagline.textContent = 'Create an account to find and track opportunities built around your projects.';
+  }else{
+    if(registerForm) registerForm.classList.add('hidden');
+    if(signInForm) signInForm.classList.remove('hidden');
+    if(tagline) tagline.textContent = 'Sign in to find and track opportunities built around your projects.';
+  }
+}
+
+async function registerUser(event){
+  event.preventDefault();
+  const errorEl = document.getElementById('registerError');
+  const firstName = document.getElementById('regFirstName').value.trim();
+  const lastName = document.getElementById('regLastName').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const userid = document.getElementById('regUserid').value.trim();
+  const password = document.getElementById('regPassword').value;
+  const passwordConfirm = document.getElementById('regPasswordConfirm').value;
+
+  if(!firstName || !lastName || !email || !userid || !password || !passwordConfirm){
+    if(errorEl) errorEl.textContent = 'Please fill in every field.';
+    return;
+  }
+  if(password.length < 8){
+    if(errorEl) errorEl.textContent = 'Password must be at least 8 characters.';
+    return;
+  }
+  if(password !== passwordConfirm){
+    if(errorEl) errorEl.textContent = 'Passwords do not match.';
+    return;
+  }
+
+  const passwordHash = await hashPassword(password);
+  let data;
+  try{
+    const res = await fetch('/api/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ firstName, lastName, email, userid, passwordHash })
+    });
+    data = await res.json().catch(() => ({}));
+    if(!res.ok){
+      if(errorEl) errorEl.textContent = data.error || 'Could not create account.';
+      return;
+    }
+  }catch(e){
+    if(errorEl) errorEl.textContent = 'Could not reach the server. Please try again.';
+    return;
+  }
+
+  currentUser = { firstName, lastName, email };
+  await saveUser();
+  showApp();
+}
+
+async function loginUser(event){
+  event.preventDefault();
+  const errorEl = document.getElementById('signInError');
+  const userid = document.getElementById('signInUserid').value.trim();
+  const password = document.getElementById('signInPassword').value;
+
+  if(!userid || !password){
+    if(errorEl) errorEl.textContent = 'Please enter your user ID and password.';
+    return;
+  }
+
+  const passwordHash = await hashPassword(password);
+  let data;
+  try{
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userid, passwordHash })
+    });
+    data = await res.json().catch(() => ({}));
+    if(!res.ok){
+      if(errorEl) errorEl.textContent = data.error || 'Could not sign in.';
+      return;
+    }
+  }catch(e){
+    if(errorEl) errorEl.textContent = 'Could not reach the server. Please try again.';
+    return;
+  }
+
+  currentUser = { firstName: data.firstName, lastName: data.lastName, email: data.email };
+  await saveUser();
+  showApp();
+}
+
+function showLoginGate(){
+  const loginPage = document.getElementById('page-login');
+  const appShell = document.getElementById('appShell');
+  if(loginPage) loginPage.classList.remove('hidden');
+  if(appShell) appShell.classList.add('hidden');
+  showLoginMode('signin');
+}
+function showApp(){
+  const loginPage = document.getElementById('page-login');
+  const appShell = document.getElementById('appShell');
+  if(loginPage) loginPage.classList.add('hidden');
+  if(appShell) appShell.classList.remove('hidden');
+
+  const nameEl = document.getElementById('accountName');
+  const emailEl = document.getElementById('accountEmail');
+  const welcomeEl = document.getElementById('homeWelcomeBadge');
+  const fullName = [currentUser.firstName, currentUser.lastName].filter(Boolean).join(' ');
+  if(nameEl) nameEl.textContent = fullName || currentUser.email;
+  if(emailEl) emailEl.textContent = currentUser.email || '';
+  if(welcomeEl) welcomeEl.textContent = currentUser.firstName ? `Welcome, ${currentUser.firstName}` : 'Welcome';
+
+  showPage('home');
+}
+async function logoutUser(){
+  currentUser = null;
+  await saveUser();
+  toggleProfile(); // close the drawer on the way out
+  showLoginGate();
+}
 
 // ============================================================
 // Passion Project Opportunity Finder — core logic
@@ -61,7 +226,7 @@ const KIND_CONFIG = {
     placeholder: 'e.g. I built an AI-powered app that helps autistic children practice reading comprehension, using a speech recognition model fine-tuned on atypical speech and a visual system that shows images and asks kids questions about them out loud...'
   },
   'pure-competition': {
-    name: 'Pure Competition',
+    name: 'Academic Competition',
     desc: 'Skills or knowledge tests — olympiads, quiz bowls, exams',
     source: 'local',
     dbTypes: ['Competition'],
@@ -107,12 +272,22 @@ function selectKind(kind){
   if(!cfg || cfg.comingSoon) return;
   selectedKind = kind;
   document.getElementById('stage1Heading').firstChild.textContent = cfg.heading + ' ';
-  document.getElementById('stage1InfoIcon').title = cfg.sub;
   document.getElementById('stage1Label').textContent = cfg.label;
   const box = document.getElementById('pInterests');
   box.placeholder = cfg.placeholder;
-  box.value = '';
-  charCountEl.textContent = '0 characters — aim for at least 200';
+  const recallNote = document.getElementById('stage1RecallNote');
+  if(studentProfile.synthesized){
+    box.value = studentProfile.synthesized;
+    if(recallNote){
+      recallNote.textContent = `Here's what we already know about you — feel free to edit or add more below before searching.`;
+      recallNote.classList.add('show');
+    }
+  }else{
+    box.value = '';
+    if(recallNote) recallNote.classList.remove('show');
+  }
+  const len = box.value.length;
+  charCountEl.textContent = `${len} characters` + (len < 200 ? ' — aim for at least 200' : '');
   document.getElementById('prefsRow').style.display = cfg.source === 'web' ? 'none' : 'grid';
   document.getElementById('formError').classList.remove('show');
   unlocked[1] = true;
@@ -124,23 +299,9 @@ function selectKind(kind){
 function goStage(n){
   document.querySelectorAll('.stage').forEach(s => s.classList.remove('active'));
   document.getElementById('stage-' + n).classList.add('active');
-  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
-  const stepIndex = (n === 'quiz' || n === 'suggest') ? 0 : n; // both are sub-flows of "Type of opportunity"
-  for(let i = 0; i <= 2; i++){
-    const nav = document.getElementById('stepnav-' + i);
-    nav.classList.remove('active', 'done', 'clickable');
-    if(i < stepIndex){ nav.classList.add('done'); if(unlocked[i]) nav.classList.add('clickable'); }
-    if(i === stepIndex){ nav.classList.add('active'); }
-  }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 const unlocked = { 0: true, 1: false, 2: false };
-document.querySelectorAll('.step').forEach(el => {
-  el.addEventListener('click', () => {
-    const n = parseInt(el.dataset.stage, 10);
-    if(unlocked[n]) goStage(n);
-  });
-});
 
 // ---------- "Not sure?" branching quiz ----------
 const QUIZ_BRANCHES = {
@@ -179,16 +340,16 @@ function quizAnswer(value){
   if(!branch) return;
   const step2 = document.getElementById('quizStep2');
   step2.innerHTML = `
-    <p class="quiz-question">${branch.question}</p>
-    <div class="quiz-options">
+    <p class="font-bold text-lg mb-4 quiz-question">${branch.question}</p>
+    <div class="space-y-3 quiz-options">
       ${branch.options.map(o => `
-        <button class="quiz-option" onclick="selectKind('${o.kind}')">
-          <strong>${o.title}</strong>
-          <span>${o.desc}</span>
+        <button class="pop-card w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="selectKind('${o.kind}')">
+          <strong class="block font-heading text-lg">${o.title}</strong>
+          <span class="text-sm text-slate-500">${o.desc}</span>
         </button>
       `).join('')}
     </div>
-    <button class="back-link" style="margin-top:16px;" onclick="resetQuizToStep1()">← Different answer</button>
+    <button class="text-sm font-bold text-indigo-600 hover:underline mt-4 back-link" onclick="resetQuizToStep1()">← Different answer</button>
   `;
   document.getElementById('quizStep1').style.display = 'none';
   step2.style.display = '';
@@ -263,7 +424,7 @@ async function callClaude(system, userContent, useWebSearch){
   if(useWebSearch){
     body.tools = [ { type: "web_search_20250305", name: "web_search" } ];
   }
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("/api/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
@@ -356,7 +517,7 @@ async function inferSubjects(description){
 
 async function rankCandidates(description, candidates, prefs){
   const compact = candidates.map(c => ({ id: c.id, name: c.name, org: c.org, summary: c.summary, subject: c.subject, type: c.type, price: c.price, location: c.location, season: c.season }));
-  const system = "You are helping a student find the best-fit extracurricular opportunities (programs, internships, competitions, research positions) for their specific passion project, from a candidate list. Read their project description carefully and select the opportunities that would genuinely help them grow this specific project, build relevant skills, get recognition for it, or connect with the right community — not just anything thematically adjacent. Rank the best 10-12 matches only. For each, write a short specific reason tied to THEIR project (under 15 words), not a generic description of the opportunity. Assign a tier: 'strong' (excellent, specific fit), 'good' (solid fit), or 'look' (worth considering, broader fit). Respond with ONLY a raw JSON array, no markdown, no preamble, no text after the array, matching: [{\"id\":\"...\",\"reason\":\"...\",\"tier\":\"strong|good|look\"}]. Stay well within a 1000-token response — 10-12 items is a hard cap.";
+  const system = "You are helping a student find the best-fit extracurricular opportunities (programs, internships, competitions, research positions) for their specific passion project, from a candidate list. Read their project description and preferences carefully and select ONLY the opportunities that would genuinely help them grow this specific project, build relevant skills, get recognition for it, or connect with the right community — not just anything thematically adjacent. Leave out weak or generic fits entirely; every opportunity you return must be a genuinely good match. Rank the best 10-12 matches only. For each, write a short specific reason (under 15 words) that names or clearly paraphrases an actual detail from THEIR description/preferences below (a subject, skill, project, goal, or interest they stated) — never write a generic reason that could apply to any student interested in this general field, and never invent details they didn't mention. Assign a tier: 'strong' (excellent, highly specific fit) or 'look' (solid, worth a look). Respond with ONLY a raw JSON array, no markdown, no preamble, no text after the array, matching: [{\"id\":\"...\",\"reason\":\"...\",\"tier\":\"strong|look\"}]. Stay well within a 1000-token response — 10-12 items is a hard cap.";
   const prefsText = prefs ? `\n\nStudent preferences: ${prefs}` : '';
   const userContent = `Student's passion project:\n${description}${prefsText}\n\nCandidate opportunities (JSON):\n${JSON.stringify(compact)}\n\nSelect and rank the best matches per the schema.`;
   const raw = await callClaude(system, userContent, false);
@@ -369,7 +530,14 @@ async function rankCandidates(description, candidates, prefs){
 // competitions — it doesn't contain real academic conferences or journals.
 // For those two kinds, search the live web instead of the local database.
 async function findVenuesViaWeb(description, cfg, prefsText){
-  const system = `You help a student researcher find real, current ${cfg.venueKind} that fit their specific research. Use web_search to find and verify actual venues — don't rely only on memorized knowledge, since deadlines and calls-for-papers change. Prefer venues realistically accessible to a high-school or early-career researcher (student research workshops, high-school-friendly journals, open/inclusive workshops), but you can include 1-2 more ambitious or competitive options too. For each of the best 6-8 matches, respond with ONLY a raw JSON array, no markdown, no preamble, no text after the array, matching: [{\"name\":\"official venue name, include year if known\",\"url\":\"the venue's official URL\",\"org\":\"organizing body, short\",\"summary\":\"under 18 words on scope/format\",\"reason\":\"under 15 words on why it fits THIS research specifically\",\"tier\":\"strong|good|look\"}]. Stay well within a 1000-token response — 6-8 items is a hard cap, keep every field short.`;
+  const today = todayLabel();
+  const system = `You help a student researcher find real, current ${cfg.venueKind} that fit their specific research. Today's date is ${today}. Use web_search to find and verify actual venues — don't rely only on memorized knowledge, since deadlines and calls-for-papers change. Prefer venues realistically accessible to a high-school or early-career researcher (student research workshops, high-school-friendly journals, open/inclusive workshops), but you can include 1-2 more ambitious or competitive options too.
+
+Screen out discontinued venues: if you find explicit signals a venue is discontinued, paused, or no longer accepting submissions (e.g. "no longer accepting submissions," a dead/404 page, an org site with no trace of it continuing), DO NOT include it in your results at all — skip it and find a real alternative instead.
+
+Date handling: if a venue's listed submission deadline has already passed but it runs on a regular annual/recurring cycle, estimate next cycle's deadline from the prior cycle's timing and set was_estimated to true. Only include a next_deadline_iso when you found or can reasonably estimate one; use null if genuinely unknown. Never invent a date with no basis.
+
+Only include opportunities that are a genuinely good fit — omit weak or generic matches entirely. For each, the "reason" must name or clearly paraphrase an actual detail from the student's research description/preferences below (a topic, method, skill, or goal they stated) — never a generic reason that could apply to any student in this broad field. For each of the best 6-8 matches, respond with ONLY a raw JSON array, no markdown, no preamble, no text after the array, matching: [{\"name\":\"official venue name, include year if known\",\"url\":\"the venue's official URL\",\"org\":\"organizing body, short\",\"summary\":\"under 18 words on scope/format\",\"reason\":\"under 15 words on why it fits THIS research specifically\",\"tier\":\"strong|look\",\"next_deadline_iso\":\"YYYY-MM-DD or null\",\"was_estimated\":true or false}]. Stay well within a 1000-token response — 6-8 items is a hard cap, keep every field short.`;
   const prefsPart = prefsText ? `\nStudent preferences: ${prefsText}` : '';
   const userContent = `Research description:\n${description}${prefsPart}\n\nSearch the web and find the best matching real, current ${cfg.name.toLowerCase()} options.`;
   const raw = await callClaude(system, userContent, true);
@@ -388,9 +556,11 @@ async function findVenuesViaWeb(description, cfg, prefsText){
       state: '',
       location: '',
       intl: '',
-      season: ''
+      season: '',
+      nextDeadlineISO: item.next_deadline_iso || null,
+      wasEstimated: !!item.was_estimated
     };
-    return { opp, reason: item.reason || '', tier: ['strong','good','look'].includes(item.tier) ? item.tier : 'good' };
+    return { opp, reason: item.reason || '', tier: ['strong','look'].includes(item.tier) ? item.tier : 'look' };
   });
 }
 
@@ -404,7 +574,7 @@ async function findVenuesViaWeb(description, cfg, prefsText){
 const ACTIVE_KINDS = Object.keys(KIND_CONFIG).filter(k => !KIND_CONFIG[k].comingSoon);
 
 let studentProfile = { synthesized: '', updatedAt: null };
-let editingProfile = false; // true while the Home page "add to profile" textarea is open
+let editingProfile = false; // true while the profile drawer's "add to profile" textarea is open
 
 function newEntryId(){
   return 'entry-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
@@ -445,23 +615,37 @@ function toggleProfile(){
   document.getElementById('profilePanel').classList.toggle('translate-x-full');
 }
 document.addEventListener('click', (e) => {
+  if(editingProfile) return; // stay open while the student is mid-edit, until Save/Cancel
   const panel = document.getElementById('profilePanel');
   const toggle = document.getElementById('profileToggle');
-  if(panel && toggle && !panel.contains(e.target) && !toggle.contains(e.target)){
+  if(!panel || !toggle) return;
+  // Use composedPath() (captured at dispatch time) instead of .contains(e.target):
+  // clicking "+ Add to profile" re-renders the panel's innerHTML synchronously, which
+  // detaches the clicked button from the DOM before this bubbled listener runs — making
+  // panel.contains(e.target) wrongly report "outside" and slam the drawer shut.
+  const path = e.composedPath();
+  if(!path.includes(panel) && !path.includes(toggle)){
     panel.classList.add('translate-x-full');
   }
 });
 
-// Compact widget popover (top-right icon) — read-only preview, editing lives on the Home page.
+// Updates the "last updated" stamp in the profile drawer footer. The synthesized text
+// itself, plus editing, lives in renderProfileFit() — the drawer is the only place the
+// profile is shown and edited.
 function renderProfile(){
-  const el = document.getElementById('profileSynthText');
-  if(el){ el.textContent = studentProfile.synthesized || 'Nothing yet.'; }
   const updatedEl = document.getElementById('profileUpdated');
   if(updatedEl){
     updatedEl.textContent = studentProfile.updatedAt
       ? `Last updated ${new Date(studentProfile.updatedAt).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'})}`
-      : 'Not started yet';
+      : '';
   }
+}
+function openProfileDrawer(){
+  // Deferred: the click that triggers this (e.g. the Finder's "Go to Your Profile"
+  // button) still bubbles up to the document-level listener below, which would
+  // otherwise immediately re-close the drawer since the click target isn't inside
+  // the panel or toggle. Opening on the next tick lets that bubbling finish first.
+  setTimeout(() => document.getElementById('profilePanel').classList.remove('translate-x-full'), 0);
 }
 
 let clearProfileArmed = false;
@@ -492,7 +676,7 @@ async function clearProfile(btn){
 // version ever exists. Falls back to a plain append if the API is unavailable, so
 // nothing the student wrote is lost even without live access.
 async function synthesizeProfile(existing, newText){
-  const system = `You maintain a single, coherent running profile of a high school student's academic and extracurricular interests, built up over multiple sessions. You'll be given the student's CURRENT profile (may be empty) and NEW information they just added. Merge the new information in: add genuinely new details, and update or remove anything the new information supersedes or contradicts. Do not drop specific, still-relevant details from the current profile just because they weren't repeated in the new information. Write it as a concise set of factual statements in third person (not addressed to the student, not a bulleted list). Respond with ONLY the updated profile text — no markdown, no preamble, no quotes around it.`;
+  const system = `You maintain a single, coherent running profile of a high school student's academic and extracurricular interests, built up over multiple sessions. You'll be given the student's CURRENT profile (may be empty) and NEW information they just added. Merge the new information in: add genuinely new details, and update or remove anything the new information supersedes or contradicts. Do not drop specific, still-relevant details from the current profile just because they weren't repeated in the new information. Write it as concise factual statements in third person (not addressed to the student, not a bulleted list, no markdown). Structure the output as short paragraphs separated by a blank line (double newline). General paragraphs (no prefix) should cover academic interests, extracurriculars, and goals — 1-3 such paragraphs is typical. If the student has described any larger, longer-term "marquee" projects they're personally driving (as opposed to one-off activities or classes), describe EACH one in its OWN separate paragraph prefixed with the literal text "Passion Project: " — one such paragraph per distinct project, never combining multiple projects into one paragraph. Separately, if the student has described any independent research projects (research, papers, studies they're conducting), describe EACH one in its OWN separate paragraph prefixed with the literal text "Research Project: ", same rule — one per project. A project that fits both categories should be listed under whichever one fits best, not both. Only include these prefixed paragraphs for projects actually described — don't fabricate any. Respond with ONLY the updated profile text — no preamble, no quotes around it.`;
   const userContent = `CURRENT PROFILE:\n${existing || '(empty — nothing recorded yet)'}\n\nNEW INFORMATION TO ADD:\n${newText}\n\nRespond with the updated, merged profile text only.`;
   const raw = await callClaude(system, userContent, false);
   return raw.trim();
@@ -512,7 +696,7 @@ async function mergeIntoProfile(text){
   renderSuggestEntryCard();
 }
 
-// ---------- Home page: single synthesized profile card (edit / delete) ----------
+// ---------- Profile drawer: single synthesized profile card (edit / delete) ----------
 function startProfileEdit(){
   editingProfile = true;
   renderProfileFit();
@@ -536,10 +720,10 @@ async function saveProfileEdit(){
   renderProfileFit();
 }
 
-// Jumps to the Finder Suggest flow with the current profile already in place —
-// used by empty-profile prompts elsewhere in the app.
+// Used by empty-profile prompts elsewhere in the app to send the student to the one
+// place the profile now lives: the drawer.
 function jumpToProfile(){
-  showPage('home');
+  openProfileDrawer();
 }
 
 // ============================================================
@@ -557,26 +741,33 @@ function renderSuggestEntryCard(){
   const el = document.getElementById('suggestEntryCard');
   if(!el) return;
   if(!studentProfile.synthesized){
-    el.classList.add('opacity-70');
     el.innerHTML = `
-      <div>
-        <h3 class="font-heading font-bold text-xl mb-2">Suggest opportunities for me</h3>
-        <p class="text-sm text-slate-600">Based on everything in your profile. Add a few things to your profile first and this option unlocks.</p>
+      <div class="max-w-xl">
+        <h2 class="font-heading font-extrabold text-3xl mb-3">Suggest opportunities for me</h2>
+        <p class="text-sm text-indigo-100">Based on everything in your profile. Add a few things to your profile first and this option unlocks.</p>
       </div>
-      <button class="mt-4 pop-btn bg-white text-slate-900 font-bold px-4 py-2 rounded-xl w-full" onclick="showPage('home')">Go to Your Profile →</button>
+      <button class="mt-6 pop-btn bg-white text-slate-900 font-bold px-6 py-3 rounded-xl" onclick="openProfileDrawer()">Go to Your Profile →</button>
     `;
     return;
   }
-  el.classList.remove('opacity-70');
-  const preview = studentProfile.synthesized.length > 110 ? studentProfile.synthesized.slice(0, 110) + '…' : studentProfile.synthesized;
+  const preview = studentProfile.synthesized.length > 160 ? studentProfile.synthesized.slice(0, 160) + '…' : studentProfile.synthesized;
   el.innerHTML = `
-    <div>
-      <h3 class="font-heading font-bold text-xl mb-2">Suggest opportunities for me</h3>
-      <p class="text-sm text-slate-600 mb-2">Skip straight to matches based on your profile.</p>
-      <p class="text-xs text-indigo-700 font-medium italic border-l-2 border-indigo-300 pl-2">"${escapeHtmlTracker(preview)}"</p>
+    <div class="max-w-xl">
+      <h2 class="font-heading font-extrabold text-3xl mb-3">Suggest opportunities for me</h2>
+      <p class="text-sm text-indigo-100 mb-3">Skip straight to matches based on your profile — the fastest way to get started.</p>
+      <p class="text-xs text-white/90 font-medium italic border-l-2 border-white/50 pl-3">"${escapeHtmlTracker(preview)}"</p>
     </div>
-    <button class="mt-4 pop-btn bg-indigo-500 text-white font-bold px-4 py-2 rounded-xl w-full" onclick="startProfileSuggest()">Suggest opportunities →</button>
+    <button class="mt-6 pop-btn bg-lime-300 text-slate-900 font-bold px-6 py-3 rounded-xl" onclick="startProfileSuggest()">Suggest opportunities →</button>
   `;
+}
+function toggleBrowsePanel(){
+  const panel = document.getElementById('browsePanel');
+  const btn = document.getElementById('browseToggleBtn');
+  if(!panel) return;
+  const willOpen = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !willOpen);
+  if(btn) btn.textContent = willOpen ? 'Hide opportunity types ↑' : 'Prefer to browse opportunities? Click here';
+  if(willOpen) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 let suggestPendingQuestions = [];
@@ -584,7 +775,7 @@ let suggestAssessedKinds = [];
 async function startProfileSuggest(){
   if(!studentProfile.synthesized) return;
   goStage('suggest');
-  document.getElementById('suggestProfileSummary').innerHTML = `<div class="profile-fit-card"><p class="profile-entry-text">${escapeHtmlTracker(studentProfile.synthesized)}</p></div>`;
+  document.getElementById('suggestProfileSummary').innerHTML = `<div class="bg-indigo-50 border-2 border-slate-900 rounded-2xl p-4 sm:p-6">${profileSummaryBodyHTML(studentProfile.synthesized)}</div>`;
   document.getElementById('suggestQuestionsWrap').innerHTML = '';
   document.getElementById('suggestContinueBtn').style.display = 'none';
   document.getElementById('suggestError').classList.remove('show');
@@ -683,7 +874,7 @@ async function runProfileSuggestSearch(){
       const byId = {};
       pool.forEach(o => { byId[o.id] = o; });
       ranked.filter(r => byId[r.id]).forEach(r => {
-        merged.push({ opp: byId[r.id], reason: r.reason || '', tier: ['strong','good','look'].includes(r.tier) ? r.tier : 'good', kind });
+        merged.push({ opp: byId[r.id], reason: r.reason || '', tier: ['strong','look'].includes(r.tier) ? r.tier : 'look', kind });
       });
     }
     if(!merged.length){
@@ -691,6 +882,7 @@ async function runProfileSuggestSearch(){
     }
     currentResults = merged;
     selectedIds = new Set();
+    resetResultFilters();
     statusEl.textContent = '';
     renderResults();
     unlocked[2] = true;
@@ -788,13 +980,14 @@ async function runSearch(){
       pool.forEach(o => { byId[o.id] = o; });
       currentResults = ranked
         .filter(r => byId[r.id])
-        .map(r => ({ opp: byId[r.id], reason: r.reason || '', tier: ['strong','good','look'].includes(r.tier) ? r.tier : 'good' }));
+        .map(r => ({ opp: byId[r.id], reason: r.reason || '', tier: ['strong','look'].includes(r.tier) ? r.tier : 'look' }));
     }
 
     if(!currentResults.length){
       throw new Error('No matches came back — try adding more specific detail to your description.');
     }
 
+    resetResultFilters();
     renderResults();
     unlocked[2] = true;
     goStage(2);
@@ -811,54 +1004,140 @@ async function runSearch(){
 }
 
 // ---------- Stage 2: render results ----------
-const TIER_LABEL = { strong: 'Strong fit', good: 'Good fit', look: 'Worth a look' };
-const TIER_CLASS = { strong: 'tier-strong', good: 'tier-good', look: 'tier-look' };
-const TIER_ORDER = { strong: 0, good: 1, look: 2 };
+const TIER_ORDER = { strong: 0, look: 1 };
 
 function resultCardHTML(r){
   const o = r.opp;
   const isSelected = selectedIds.has(o.id);
+  const tracked = findTrackedItem(o);
   const metaParts = [o.org, o.type, o.price, o.location, o.state && o.state !== 'All States' ? o.state : null, o.season].filter(Boolean);
   const kindBadge = r.kind ? KIND_CONFIG[r.kind].name : (o.type || 'Opportunity');
   const bgClass = r.tier === 'strong' ? 'bg-emerald-50' : 'bg-white';
-  
+  const dateNote = o.nextDeadlineISO ? `<span class="bg-indigo-100 text-indigo-900 border border-slate-900 px-2.5 py-1 rounded-md">Next: ${shortDate(o.nextDeadlineISO)}${o.wasEstimated ? ' (est.)' : ''}</span>` : '';
+  // Already-tracked opportunities can't be re-selected — clicking "Save Match" on one
+  // would just be silently dropped as a duplicate at add time, so instead we surface a
+  // tag pointing back to the Tracker, where any edits belong.
+  const actionControl = tracked
+    ? `<span class="bg-slate-800 text-white font-bold text-xs px-4 py-2 rounded-xl cursor-pointer" onclick="event.stopPropagation(); goToTrackerCard('${tracked.item.id}')">📌 Tracking currently. Make edits in tracker.</span>`
+    : `<button class="pop-btn font-extrabold text-xs px-4 py-2 rounded-xl flex items-center justify-center gap-2 ${isSelected ? 'bg-lime-400 text-slate-900' : 'bg-white text-slate-900'}" onclick="event.stopPropagation(); toggleSelect('${o.id}')">
+            ${isSelected ? '⭐ Saved Match' : '⭐ Save Match'}
+         </button>`;
+
   return `
-    <div class="pop-card ${bgClass} rounded-3xl p-5 sm:p-6 space-y-4 ${isSelected ? 'border-4 border-lime-400 bg-lime-50' : 'border-4 border-slate-900'}" id="result-${o.id}">
+    <div class="pop-card result-card-clickable ${bgClass} rounded-3xl p-5 sm:p-6 space-y-4 ${isSelected ? 'border-4 border-lime-400 bg-lime-50' : 'border-4 border-slate-900'}" id="result-${o.id}" onclick="window.open('${o.url}', '_blank')">
       <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
          <div class="flex flex-wrap gap-2">
             <span class="bg-violet-200 text-violet-900 border-2 border-slate-900 font-bold text-[10px] uppercase px-3 py-1 rounded-full">${kindBadge}</span>
-            ${r.tier === 'strong' ? `<span class="bg-yellow-300 border-2 border-slate-900 font-extrabold text-[10px] uppercase px-3 py-1 rounded-full">⭐ Strong Fit</span>` : ''}
+            ${r.tier === 'strong' ? `<span class="bg-yellow-300 border-2 border-slate-900 font-extrabold text-[10px] uppercase px-3 py-1 rounded-full">⭐ Strong Fit</span>` : `<span class="bg-slate-100 border-2 border-slate-900 font-bold text-[10px] uppercase px-3 py-1 rounded-full">Worth a look</span>`}
          </div>
-         <button class="pop-btn font-extrabold text-xs px-4 py-2 rounded-xl flex items-center justify-center gap-2 ${isSelected ? 'bg-lime-400 text-slate-900' : 'bg-white text-slate-900'}" onclick="toggleSelect('${o.id}')">
-            ${isSelected ? '⭐ Saved Match' : '⭐ Save Match'}
-         </button>
+         ${actionControl}
       </div>
       <div>
-        <h3 class="font-heading text-xl sm:text-2xl font-bold text-slate-900"><a href="${o.url}" target="_blank" class="hover:underline">${o.name}</a></h3>
+        <h3 class="font-heading text-xl sm:text-2xl font-bold text-slate-900"><a href="${o.url}" target="_blank" class="hover:underline" onclick="event.stopPropagation()">${o.name}</a></h3>
       </div>
       <div class="flex flex-wrap gap-2 text-xs font-bold">
          ${metaParts.map(m => `<span class="bg-slate-100 border border-slate-900 px-2.5 py-1 rounded-md">${m}</span>`).join('')}
+         ${dateNote}
       </div>
       ${r.reason ? `<div class="bg-slate-50 border-2 border-slate-200 p-3 rounded-2xl"><p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Why it fits</p><p class="text-xs text-slate-700 font-medium">${r.reason}</p></div>` : ''}
-      ${o.summary ? `<p class="text-slate-600 text-sm leading-relaxed cursor-pointer line-clamp-3" onclick="this.classList.toggle('line-clamp-3')">${o.summary}</p>` : ''}
+      ${o.summary ? `<p class="text-slate-600 text-sm leading-relaxed line-clamp-3">${o.summary}</p>` : ''}
     </div>
   `;
 }
+// ---------- Result filters (type / cost / season / format) ----------
+let resultFilters = { type: new Set(), price: new Set(), location: new Set(), season: new Set() };
+let resultVisibleCount = 10;
+const RESULT_FILTER_FIELDS = [
+  { key: 'type', field: 'type', label: 'Type' },
+  { key: 'price', field: 'price', label: 'Cost' },
+  { key: 'season', field: 'season', label: 'Season' },
+  { key: 'location', field: 'location', label: 'Format' }
+];
+function resetResultFilters(){
+  Object.values(resultFilters).forEach(s => s.clear());
+  resultVisibleCount = 10;
+}
+function filterResultList(list){
+  return list.filter(r => RESULT_FILTER_FIELDS.every(f => {
+    const set = resultFilters[f.key];
+    return !set.size || set.has(r.opp[f.field]);
+  }));
+}
+function renderResultFilterBar(list){
+  const wrap = document.getElementById('resultFilterWrap');
+  const bar = document.getElementById('resultFilterBar');
+  if(!wrap || !bar) return;
+  let anyFacet = false;
+  bar.innerHTML = RESULT_FILTER_FIELDS.map(f => {
+    const values = [...new Set(list.map(r => r.opp[f.field]).filter(Boolean))].sort();
+    if(values.length < 2) return '';
+    anyFacet = true;
+    const panelId = 'resultFilterPanel_' + f.key;
+    const activeCount = resultFilters[f.key].size;
+    return `
+      <div class="relative nav-dropdown">
+        <button class="pop-btn bg-white font-bold text-xs px-3 py-2 rounded-xl flex items-center gap-1" onclick="toggleNavDropdownPanel('${panelId}')">
+          <span>▾</span> ${f.label}${activeCount ? ` (${activeCount})` : ''}
+        </button>
+        <div class="absolute left-0 top-full mt-2 w-56 pop-card bg-white p-3 rounded-2xl z-50 hidden nav-dropdown-panel" id="${panelId}">
+          <div class="space-y-1">
+            ${values.map(v => `
+              <label class="flex items-center gap-2 text-xs font-medium py-1 cursor-pointer">
+                <input type="checkbox" ${resultFilters[f.key].has(v) ? 'checked' : ''} onchange="toggleResultFilter('${f.key}', this.nextSibling.textContent.trim())">
+                ${v}
+              </label>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  const anyActive = Object.values(resultFilters).some(s => s.size);
+  bar.insertAdjacentHTML('beforeend', anyActive ? `<button class="text-xs font-bold text-indigo-600 hover:underline" onclick="clearResultFilters()">Clear filters</button>` : '');
+  wrap.classList.toggle('hidden', !anyFacet);
+}
+function toggleResultFilter(key, value){
+  const set = resultFilters[key];
+  if(set.has(value)) set.delete(value); else set.add(value);
+  resultVisibleCount = 10;
+  renderResults();
+}
+function clearResultFilters(){
+  resetResultFilters();
+  renderResults();
+}
+function showMoreResults(){
+  resultVisibleCount += 10;
+  renderResults();
+}
 function renderResults(){
-  const sorted = [...currentResults].sort((a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier]);
-  document.getElementById('resultGrid').innerHTML = sorted.map(resultCardHTML).join('');
-  document.getElementById('resultsCount').textContent = `${currentResults.length} matches found`;
+  // Already-tracked opportunities float to the very top, then saved matches (clicking
+  // "Save Match" visibly moves a card up into this group), then everything else —
+  // each group still ordered by tier internally.
+  const resultRank = r => findTrackedItem(r.opp) ? 0 : (selectedIds.has(r.opp.id) ? 1 : 2);
+  const sorted = [...currentResults].sort((a, b) => {
+    const rankDiff = resultRank(a) - resultRank(b);
+    if(rankDiff !== 0) return rankDiff;
+    return TIER_ORDER[a.tier] - TIER_ORDER[b.tier];
+  });
+  renderResultFilterBar(sorted);
+  const filtered = filterResultList(sorted);
+  const visible = filtered.slice(0, resultVisibleCount);
+  document.getElementById('resultGrid').innerHTML = visible.length
+    ? visible.map(resultCardHTML).join('')
+    : `<p class="empty-state">No matches with these filters. <a href="#" onclick="event.preventDefault(); clearResultFilters();">Clear filters</a></p>`;
+  const moreWrap = document.getElementById('resultShowMoreWrap');
+  if(moreWrap){
+    const remaining = filtered.length - visible.length;
+    moreWrap.classList.toggle('hidden', remaining <= 0);
+    const btn = document.getElementById('resultShowMoreBtn');
+    if(btn) btn.textContent = `Show more (${remaining} left)`;
+  }
   updateSelectionBar();
 }
 function toggleSelect(id){
   if(selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
-  const card = document.getElementById('result-' + id);
-  const btn = card.querySelector('.select-toggle');
-  const isSelected = selectedIds.has(id);
-  card.classList.toggle('selected', isSelected);
-  btn.classList.toggle('selected', isSelected);
-  btn.textContent = isSelected ? '✓ Selected' : 'Select';
-  updateSelectionBar();
+  renderResults();
 }
 function updateSelectionBar(){
   const bar = document.getElementById('selectionBar');
@@ -867,6 +1146,13 @@ function updateSelectionBar(){
   bar.style.display = currentResults.length ? 'flex' : 'none';
   document.getElementById('buildTrackerBtn').disabled = count === 0;
 }
+
+// ---------- Result detail overlay (click a card to expand) ----------
+// Locks/unlocks background scrolling while a full-screen modal is open, so the only
+// scrollable region on screen is the modal panel itself — avoids the confusing "two
+// scrollbars" feel that makes overflowing modal content seem stuck/unscrollable.
+function lockBodyScroll(){ document.body.style.overflow = 'hidden'; }
+function unlockBodyScroll(){ document.body.style.overflow = ''; }
 
 // ============================================================
 // Stage 3: Tracker
@@ -902,7 +1188,9 @@ Date reasoning:
 - Only mark status "running" if you found real evidence the program is currently active or has a future confirmed/estimated date. Use "unknown" if you found genuinely nothing usable after searching both the URL and the base site.
 - Never invent a specific date with no basis — every date must come from something you actually found, whether confirmed or reasonably estimated from a real prior cycle.
 
-Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, matching exactly this schema: {"status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format, separated by ' · '","fit":"one sentence, under 25 words, on what this actually involves","note":"one sentence, under 25 words: status/estimate basis/caveat","noteType":"good, plain, or flag — use flag if not_running or a major caveat","opens_iso":"YYYY-MM-DD when applications open, or null if unknown","deadlines":[{"label":"short specific label, e.g. 'Early Bird Registration'","date_iso":"YYYY-MM-DD"}],"deadline_label":"short text like ROLLING or TBA — only used when the deadlines array is empty","was_estimated":true or false,"requirements":[{"date":"short date text","text":"under 12 words — what's needed, not a repeat of a deadlines entry"}],"apply_url":"the best URL for actually applying","apply_label":"short button label like 'Apply now'","calendar_events":[{"date":"YYYY-MM-DD","text":"under 8 words","type":"deadline, opens, notify, or conference"}]}. Stay well within a 1000-token response: at most 3 deadlines entries, 3 requirements items, and 3 calendar_events. Never truncate mid-value or leave the JSON unclosed — shorten or drop optional arrays first, but keep at least the earliest deadline if one exists.`;
+Action items — think through what a student would actually need to DO to meet the nearest deadline, not just the deadline itself: e.g. requesting a recommendation letter, drafting an essay, gathering transcripts, preparing a portfolio or writing sample, getting parent/guardian sign-off, registering for a required test. Infer these from the requirements you find and from what's typical for this type of opportunity. Keep every item tactical and administrative — the logistics of applying, never advice about the student's own project or how to approach its substance, since you have no way of knowing the specifics of their work and must not assume or invent any. List 3-5 short, concrete action items (skip this if status is not_running).
+
+Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, matching exactly this schema: {"status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format, separated by ' · '","fit":"one sentence, under 25 words, on what this actually involves","note":"one sentence, under 25 words: status/estimate basis/caveat","noteType":"good, plain, or flag — use flag if not_running or a major caveat","opens_iso":"YYYY-MM-DD when applications open, or null if unknown","deadlines":[{"label":"short specific label, e.g. 'Early Bird Registration'","date_iso":"YYYY-MM-DD"}],"deadline_label":"short text like ROLLING or TBA — only used when the deadlines array is empty","was_estimated":true or false,"requirements":[{"date":"short date text","text":"under 12 words — what's needed, not a repeat of a deadlines entry"}],"apply_url":"the best URL for actually applying","apply_label":"short button label like 'Apply now'","calendar_events":[{"date":"YYYY-MM-DD","text":"under 8 words","type":"deadline, opens, notify, or conference"}],"action_items":["short concrete task, under 10 words", "..."]}. Stay well within a 1000-token response: at most 3 deadlines entries, 3 requirements items, 3 calendar_events, and 5 action_items. Never truncate mid-value or leave the JSON unclosed — shorten or drop optional arrays first, but keep at least the earliest deadline if one exists.`;
   const userContent = `Opportunity: ${opp.name} (${opp.org})\nURL: ${opp.url}\nKnown info: ${opp.summary}\n\nFetch this URL (and the base site if needed), and extract current tracking details per the schema. Look carefully for multiple deadline milestones (early bird vs. regular, etc.) — don't just report the final one.`;
   const raw = await callClaude(system, userContent, true);
   return extractJSON(raw);
@@ -929,14 +1217,30 @@ const BUCKET_LABELS = {
   summerPrograms: 'Summer Program',
   internships: 'Internship',
   researchCompetitions: 'Research or Project Competition',
-  pureCompetitions: 'Pure Competition',
+  pureCompetitions: 'Academic Competition',
   conferences: 'Conference',
   journals: 'Research Journal'
 };
 
 let trackerData = { summerPrograms: [], internships: [], researchCompetitions: [], pureCompetitions: [], conferences: [], journals: [] };
 let trackerSavedState = {};
-let trackerTypeFilter = new Set(ALL_BUCKETS); // which opportunity types show in the flat list — all by default
+// Ids added to the tracker in the most recent buildTracker() call — drives the "New"
+// banner on those cards. Intentionally not persisted: it's cleared the moment the user
+// navigates away from the Tracker page (see showPage), so the banner only shows for
+// the session in which the opportunity was actually added.
+let newlyAddedTrackerIds = new Set();
+
+// Checks whether an opportunity (by id or url) is already present anywhere in the
+// tracker, regardless of which bucket it'd currently classify into — used to flag
+// "already tracked" results in the Finder and to prevent it from ever being added
+// a second time.
+function findTrackedItem(opp){
+  for(const bucket of ALL_BUCKETS){
+    const match = trackerData[bucket].find(i => i.id === opp.id || (opp.url && i.url === opp.url));
+    if(match) return { item: match, bucket };
+  }
+  return null;
+}
 
 // ---------- Persistence ----------
 async function loadTrackerData(){
@@ -959,6 +1263,10 @@ async function loadTrackerData(){
           conferences: Array.isArray(parsed.conferences) ? parsed.conferences : [],
           journals: Array.isArray(parsed.journals) ? parsed.journals : []
         };
+        // Migration: older saved items predate the action-items feature — default to empty.
+        ALL_BUCKETS.forEach(b => trackerData[b].forEach(item => {
+          if(!Array.isArray(item.actionItems)) item.actionItems = [];
+        }));
       }
     }
   }catch(e){ /* nothing saved yet, or storage unavailable — start fresh */ }
@@ -1011,9 +1319,15 @@ function showPage(name){
     }
   });
 
+  // The "New" banner on freshly-added tracker cards only lasts until the user leaves
+  // the Tracker screen — clear it as soon as we navigate anywhere else.
+  if(name !== 'tracker' && newlyAddedTrackerIds.size){ newlyAddedTrackerIds.clear(); }
   if(name === 'tracker'){ renderTrackerPage(); }
   if(name === 'home'){ renderHomePage(); }
-  if(name === 'wizard'){ renderSuggestEntryCard(); }
+  // Always land on step 1 (choose opportunity type) when entering the Finder from
+  // outside — otherwise it'd resume whatever stage (results, quiz, etc.) was last left
+  // active, which is confusing when you're starting a fresh search.
+  if(name === 'wizard'){ renderSuggestEntryCard(); goStage(0); }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 function jumpToKind(kind){
@@ -1040,48 +1354,43 @@ function setOppView(view){
   trackerOppView = view;
   updateOppViewUI();
 }
+// Used by the Home "N tracked" counter — jumps straight to the Tracker's calendar view.
+function goToTrackerCalendar(){
+  setOppView('calendar');
+  showPage('tracker');
+}
 function updateOppViewUI(){
-  document.getElementById('oppViewCalendar').style.display = trackerOppView === 'calendar' ? '' : 'none';
-  document.getElementById('oppViewList').style.display = trackerOppView === 'list' ? '' : 'none';
+  document.getElementById('oppViewCalendar').classList.toggle('hidden', trackerOppView !== 'calendar');
+  document.getElementById('oppViewList').classList.toggle('hidden', trackerOppView !== 'list');
   document.getElementById('oppViewCalendarBtn').classList.toggle('active', trackerOppView === 'calendar');
   document.getElementById('oppViewListBtn').classList.toggle('active', trackerOppView === 'list');
 }
 
-// Non-exclusive type filter for the flat opportunities list — any combination of types
-// can be shown at once, unlike the old exclusive per-type tabs.
-function renderTypeFilterRow(){
-  const row = document.getElementById('typeFilterRow');
-  if(!row) return;
-  row.innerHTML = ALL_BUCKETS.map(b => `
-    <button class="bucket-pill${trackerTypeFilter.has(b) ? ' active' : ''}" onclick="toggleTypeFilter('${b}')">${BUCKET_LABELS[b]}</button>
-  `).join('');
+// Active / Saved shown as two full-page tabs within List view, rather than a
+// cramped side-by-side split, so each gets full width to itself.
+let trackerListTab = 'active';
+function setTrackerListTab(tab){
+  trackerListTab = tab;
+  updateTrackerListTabUI();
 }
-function toggleTypeFilter(bucket){
-  if(trackerTypeFilter.has(bucket)) trackerTypeFilter.delete(bucket);
-  else trackerTypeFilter.add(bucket);
-  renderTrackerPage();
-}
-function resetTypeFilter(){
-  trackerTypeFilter = new Set(ALL_BUCKETS);
-  renderTrackerPage();
+function updateTrackerListTabUI(){
+  const activeBtn = document.getElementById('trackerTabActiveBtn');
+  const savedBtn = document.getElementById('trackerTabSavedBtn');
+  if(activeBtn) activeBtn.classList.toggle('active', trackerListTab === 'active');
+  if(savedBtn) savedBtn.classList.toggle('active', trackerListTab === 'saved');
+  const activePane = document.getElementById('trackerTabActivePane');
+  const savedPane = document.getElementById('trackerTabSavedPane');
+  if(activePane) activePane.classList.toggle('hidden', trackerListTab !== 'active');
+  if(savedPane) savedPane.classList.toggle('hidden', trackerListTab !== 'saved');
 }
 
 function goToTrackerCard(id){
   if(!id) return;
+  setOppView('list');
   if(trackerSavedState[id]){
-    const drawer = document.getElementById('savedDrawer');
-    if(drawer) drawer.open = true;
+    setTrackerListTab('saved');
   }else{
-    let targetBucket = null;
-    for(const bucket of ALL_BUCKETS){
-      if(trackerData[bucket].some(i => i.id === id)){ targetBucket = bucket; break; }
-    }
-    if(!targetBucket) return;
-    if(!trackerTypeFilter.has(targetBucket)){
-      trackerTypeFilter.add(targetBucket);
-      renderTrackerPage();
-    }
-    setOppView('list');
+    setTrackerListTab('active');
   }
   requestAnimationFrame(() => {
     const card = document.getElementById('tracker-card-' + id);
@@ -1120,6 +1429,49 @@ function earliestUpcoming(item){
   candidates.sort((a, b) => a.date.localeCompare(b.date));
   return candidates[candidates.length - 1];
 }
+// System-controlled progress status — derived from the item's known milestones, not
+// user-editable. The "first step" is whichever comes earliest (the opens/registration
+// date if known, otherwise the earliest deadline) — if that hasn't happened yet, the
+// event is entirely in the future. Once the first step has started, the event is
+// "happening now" until the LAST known milestone (the latest deadline — typically
+// when judging/review for the cycle wraps up) has also passed, at which point the
+// cycle is complete. A program flagged not_running is always treated as complete.
+const PROGRESS_STATUS_LABEL = { not_started: 'Future Event', in_progress: 'Happening Now', completed: 'Past Event' };
+// Separate label set for individual action-item (sub-task) statuses — these are
+// user-toggled to-do states, not the opportunity's own event timing, so they keep
+// task-style wording instead of the "event" language used for opportunity status.
+const ACTION_ITEM_STATUS_LABEL = { not_started: 'Not Started', in_progress: 'In Progress', completed: 'Completed' };
+function computeProgressStatus(item){
+  if(item.status === 'not_running') return 'completed';
+  const dates = [];
+  if(item.opensISO) dates.push(item.opensISO);
+  (item.deadlines || []).forEach(d => { if(d.dateISO) dates.push(d.dateISO); });
+  if(!dates.length) return 'not_started';
+  dates.sort();
+  const firstStep = dates[0];
+  const lastStep = dates[dates.length - 1];
+  if(daysUntil(firstStep) > 0) return 'not_started'; // first step (registration/opens) hasn't happened yet
+  if(daysUntil(lastStep) < 0) return 'completed'; // last known milestone for the cycle has passed
+  return 'in_progress';
+}
+function statusPillHTML(status){
+  return `<span class="status-pill status-${status}">${PROGRESS_STATUS_LABEL[status]}</span>`;
+}
+// Shared segmented progress bar + legend, used by the Home "Opportunities you are tracking" card
+// and the "Coming up" to-do list.
+function progressBarHTML(counts, total, labels = PROGRESS_STATUS_LABEL){
+  if(!total){
+    return { track: '', legend: '<p class="empty-state">Nothing here yet.</p>' };
+  }
+  const order = ['not_started', 'in_progress', 'completed'];
+  const track = order.map(k => `<div class="progress-seg seg-${k}" style="width:${(counts[k] / total * 100)}%"></div>`).join('');
+  const legend = order.map(k => `
+    <span class="progress-legend-item text-xs font-bold text-slate-600">
+      <span class="progress-legend-dot seg-${k}"></span> ${labels[k]} (${counts[k]})
+    </span>
+  `).join('');
+  return { track, legend };
+}
 function trackerBadge(item){
   if(item.status === 'not_running'){
     return {cls:'notrunning-b', top:'NOT', bottom:'RUNNING'};
@@ -1150,20 +1502,6 @@ const MONTH_NAMES = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT'
 function toggleTrackerSaved(id){
   trackerSavedState[id] = !trackerSavedState[id];
   saveTrackerSaved();
-  renderTrackerPage();
-}
-function findTrackedItem(id){
-  for(const bucket of ALL_BUCKETS){
-    const found = trackerData[bucket].find(i => i.id === id);
-    if(found) return found;
-  }
-  return null;
-}
-function setProgressStatus(id, status){
-  const item = findTrackedItem(id);
-  if(!item) return;
-  item.progressStatus = status;
-  saveTrackerData();
   renderTrackerPage();
 }
 // Permanently removes an item from whichever bucket holds it (and clears its saved-for-later
@@ -1202,7 +1540,7 @@ function trackerCardHTML(item, sourceLabel){
   const notRunningBadge = item.status === 'not_running'
     ? `<span class="bg-rose-100 text-rose-900 border border-slate-900 font-bold text-[10px] uppercase px-2 py-0.5 rounded-full">Not running</span>`
     : '';
-  const sourceBadge = sourceLabel ? `<span class="bg-indigo-100 text-indigo-900 border border-slate-900 font-bold text-[10px] uppercase px-2 py-0.5 rounded-full">${sourceLabel}</span>` : '';
+  const typeBadge = sourceLabel ? `<span class="bg-purple-200 text-purple-900 border border-slate-900 font-bold text-[10px] uppercase px-2 py-0.5 rounded-full">${sourceLabel}</span>` : '';
   const estimatedNote = item.wasEstimated && item.status !== 'not_running'
     ? `<p class="text-xs text-amber-700 bg-amber-50 p-2 rounded-lg border border-amber-200">Predicted dates from past cycle.</p>`
     : '';
@@ -1212,19 +1550,20 @@ function trackerCardHTML(item, sourceLabel){
        </div>`
     : '';
   const isSaved = !!trackerSavedState[item.id];
-  const progress = item.progressStatus || 'not_started';
-  
-  // Progress Bar for Kanban Style
-  let progColor = 'bg-slate-200'; let progW = 'w-0'; let progText = 'Not Started';
-  if (progress === 'in_progress') { progColor = 'bg-indigo-500'; progW = 'w-1/2'; progText = 'In Progress'; }
-  if (progress === 'completed') { progColor = 'bg-emerald-500'; progW = 'w-full'; progText = 'Completed'; }
+  const progress = computeProgressStatus(item);
+  // Shown only for the batch of opportunities added in the current session (cleared
+  // as soon as the user navigates away from the Tracker screen — see showPage).
+  const newBanner = newlyAddedTrackerIds.has(item.id)
+    ? `<span class="absolute -left-2 -top-2 bg-lime-300 text-slate-900 font-extrabold text-[10px] uppercase px-3 py-1 rounded-lg border-2 border-slate-900 shadow-sm z-10">New</span>`
+    : '';
 
   return `
-    <div class="pop-card bg-white p-4 rounded-2xl space-y-3 ${item.status === 'not_running' ? 'opacity-60' : ''}" id="tracker-card-${item.id}">
+    <div class="pop-card bg-white p-4 rounded-2xl space-y-3 relative ${item.status === 'not_running' ? 'opacity-60' : ''}" id="tracker-card-${item.id}">
+      ${newBanner}
       <div class="flex justify-between items-start gap-2">
         <div class="flex flex-wrap gap-1">
-          ${item.type ? `<span class="bg-purple-200 text-purple-900 border border-slate-900 font-bold text-[10px] uppercase px-2 py-0.5 rounded-full">${item.type}</span>` : ''}
-          ${notRunningBadge} ${sourceBadge}
+          ${typeBadge}
+          ${notRunningBadge}
         </div>
         <div class="flex items-center gap-1">
           <button onclick="event.stopPropagation(); toggleTrackerSaved('${item.id}')" class="text-lg hover:scale-110 transition-transform" title="${isSaved ? 'Restore' : 'Save'}">${isSaved ? '★' : '☆'}</button>
@@ -1249,35 +1588,25 @@ function trackerCardHTML(item, sourceLabel){
         </div>
       </details>
 
-      <div class="w-full bg-slate-200 h-2 rounded-full overflow-hidden border border-slate-900 cursor-pointer relative group" title="Click to cycle status" onclick="cycleProgressStatus('${item.id}')">
-        <div class="${progColor} h-full ${progW} transition-all"></div>
-      </div>
-      
       <div class="flex justify-between items-center text-xs font-bold pt-1 border-t border-slate-100">
-        <span class="text-slate-500 cursor-pointer hover:text-slate-900" onclick="cycleProgressStatus('${item.id}')">${progText} (Click to change)</span>
+        ${statusPillHTML(progress)}
         <a href="${item.applyUrl}" target="_blank" class="text-indigo-600 hover:underline bg-indigo-50 px-2 py-1 rounded-md">${item.applyLabel}</a>
       </div>
     </div>
   `;
 }
-
-// Quick helper to cycle progress on click for the new UI
-window.cycleProgressStatus = function(id) {
-  const item = Object.values(trackerData).flat().find(i => i.id === id);
-  if(!item) return;
-  const p = item.progressStatus || 'not_started';
-  const next = p === 'not_started' ? 'in_progress' : (p === 'in_progress' ? 'completed' : 'not_started');
-  setProgressStatus(id, next);
-  if(next === 'completed' && typeof confetti === 'function') confetti({particleCount: 50, spread: 60, origin: {y: 0.8}});
-};
+// Groups opportunities by event timing first — Happening Now, then Future Event, then
+// Past Event (which also covers not_running items, since computeProgressStatus treats
+// those as completed) — then sorts by soonest deadline within each group.
+const TRACKER_STATUS_ORDER = { in_progress: 0, not_started: 1, completed: 2 };
 function sortedByTrackerDeadline(list){
   const earliestDateOnly = (item) => {
     const next = earliestUpcoming(item);
     return next ? next.date : '9999-12-31';
   };
   return [...list].sort((a, b) => {
-    if(a.status === 'not_running' && b.status !== 'not_running') return 1;
-    if(b.status === 'not_running' && a.status !== 'not_running') return -1;
+    const statusDiff = TRACKER_STATUS_ORDER[computeProgressStatus(a)] - TRACKER_STATUS_ORDER[computeProgressStatus(b)];
+    if(statusDiff !== 0) return statusDiff;
     return earliestDateOnly(a).localeCompare(earliestDateOnly(b));
   });
 }
@@ -1295,61 +1624,60 @@ function deriveKeyDatesForItems(items){
   });
   return dates;
 }
-function renderCalendarStripGeneric(dates, stripId, legendId){
-  const byMonth = {};
-  dates.forEach(d => { const ym = d.date.slice(0,7); (byMonth[ym] = byMonth[ym] || []).push(d); });
-  const months = Object.keys(byMonth).sort();
-  const strip = document.getElementById(stripId);
-  const legend = document.getElementById(legendId);
-  if(!months.length){
-    strip.innerHTML = '<p class="empty-state">Nothing on this calendar yet.</p>';
-    legend.innerHTML = '';
-    return;
-  }
+function monthCardHTML(ym, entries, isCurrent){
+  const [y, m] = ym.split('-');
+  return `
+    <div class="month-card${isCurrent ? ' current-month' : ''}">
+      <div class="month-head">${MONTH_NAMES[parseInt(m,10)-1]} ${y}</div>
+      <div class="month-entries">
+        ${entries.map(e => {
+          const c = hashColor(e.label);
+          return `
+          <div class="month-entry" style="background:${c.bg};border-left-color:${c.border};cursor:pointer;" onclick="goToTrackerCard('${e.venueId}')" title="Jump to ${e.label}">
+            <span class="day" style="color:${c.text};">${parseInt(e.date.slice(8,10),10)}</span>
+            <span class="entry-text" style="color:${c.text};">
+              <strong style="color:${c.text};">${e.label}</strong> — ${e.text}
+              <span class="entry-type">${e.type}</span>
+            </span>
+          </div>
+        `;}).join('')}
+      </div>
+    </div>
+  `;
+}
+// One combined calendar with a swimlane per opportunity type — replaces the old
+// three-calendar layout so all deadlines live in a single scannable view.
+function renderCalendarSwimlanes(){
+  const container = document.getElementById('calendarSwimlanes');
+  if(!container) return;
   const now = new Date();
   const currentYM = now.toISOString().slice(0,7);
-  strip.innerHTML = months.map(ym => {
-    const [y, m] = ym.split('-');
-    const entries = byMonth[ym].sort((a,b) => a.date.localeCompare(b.date));
-    const isCurrent = ym === currentYM;
+
+  const lanes = ALL_BUCKETS.map(bucket => {
+    const items = trackerData[bucket].filter(i => !trackerSavedState[i.id]);
+    const dates = deriveKeyDatesForItems(items);
+    return { bucket, label: BUCKET_LABELS[bucket], dates };
+  }).filter(lane => lane.dates.length);
+
+  if(!lanes.length){
+    container.innerHTML = '<p class="empty-state">Nothing on the calendar yet — add opportunities via the Finder or the button above.</p>';
+    return;
+  }
+
+  container.innerHTML = lanes.map(lane => {
+    const byMonth = {};
+    lane.dates.forEach(d => { const ym = d.date.slice(0,7); (byMonth[ym] = byMonth[ym] || []).push(d); });
+    const months = Object.keys(byMonth).sort();
+    const monthsHTML = months.map(ym => monthCardHTML(ym, byMonth[ym].sort((a,b) => a.date.localeCompare(b.date)), ym === currentYM)).join('');
     return `
-      <div class="month-card${isCurrent ? ' current-month' : ''}">
-        <div class="month-head">${MONTH_NAMES[parseInt(m,10)-1]} ${y}</div>
-        <div class="month-entries">
-          ${entries.map(e => {
-            const c = hashColor(e.label);
-            return `
-            <div class="month-entry" style="background:${c.bg};border-left-color:${c.border};cursor:pointer;" onclick="goToTrackerCard('${e.venueId}')" title="Jump to ${e.label}">
-              <span class="day" style="color:${c.text};">${parseInt(e.date.slice(8,10),10)}</span>
-              <span class="entry-text" style="color:${c.text};">
-                <strong style="color:${c.text};">${e.label}</strong> — ${e.text}
-                <span class="entry-type">${e.type}</span>
-              </span>
-            </div>
-          `;}).join('')}
-        </div>
+      <div class="calendar-swimlane">
+        <div class="swimlane-head text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">${lane.label}</div>
+        <div class="flex gap-4 overflow-x-auto pb-2 calendar-strip">${monthsHTML}</div>
       </div>
     `;
   }).join('');
-  const presentLabels = [...new Set(dates.map(d => d.label))];
-  legend.innerHTML = presentLabels.map(name => `
-    <span><span class="legend-dot" style="background:${hashColor(name).border};"></span>${name}</span>
-  `).join('');
-}
-function renderAllTrackerCalendars(){
-  const pubItems = [...trackerData.conferences, ...trackerData.journals].filter(i => !trackerSavedState[i.id]);
-  const compItems = [...trackerData.researchCompetitions, ...trackerData.pureCompetitions].filter(i => !trackerSavedState[i.id]);
-  const summerItems = [...trackerData.summerPrograms, ...trackerData.internships].filter(i => !trackerSavedState[i.id]);
-  renderCalendarStripGeneric(deriveKeyDatesForItems(pubItems), 'calendarStrip', 'calendarLegend');
-  renderCalendarStripGeneric(deriveKeyDatesForItems(compItems), 'competitionsCalendarStrip', 'competitionsCalendarLegend');
-  renderCalendarStripGeneric(deriveKeyDatesForItems(summerItems), 'summerCalendarStrip', 'summerCalendarLegend');
 }
 
-// ---------- Full page render ----------
-function updateTrackerNavCount(){
-  const total = ALL_BUCKETS.reduce((s, b) => s + trackerData[b].filter(i => !trackerSavedState[i.id]).length, 0);
-  document.getElementById('trackerNavCount').textContent = total ? `(${total})` : '';
-}
 // ============================================================
 // HOME PAGE — stats and the synthesized profile
 // ============================================================
@@ -1361,7 +1689,7 @@ function computeStats(){
     trackerData[bucket].forEach(item => {
       if(trackerSavedState[item.id]) return; // saved-for-later isn't "actively tracked"
       stats.total++;
-      const p = item.progressStatus || 'not_started';
+      const p = computeProgressStatus(item);
       if(stats[p] !== undefined) stats[p]++;
     });
   });
@@ -1369,14 +1697,128 @@ function computeStats(){
 }
 function renderStats(){
   const s = computeStats();
-  document.getElementById('statTotal').textContent = s.total;
-  document.getElementById('statNotStarted').textContent = s.not_started;
-  document.getElementById('statInProgress').textContent = s.in_progress;
-  document.getElementById('statCompleted').textContent = s.completed;
-  document.getElementById('statDueSoon').textContent = getUpcomingDeadlineItems().length;
+  document.getElementById('statTotal').textContent = `${s.total} tracked`;
+  const bars = progressBarHTML({ not_started: s.not_started, in_progress: s.in_progress, completed: s.completed }, s.total);
+  document.getElementById('homeProgressTrack').innerHTML = bars.track;
+  document.getElementById('homeProgressLegend').innerHTML = bars.legend;
+
+  const ctaEl = document.getElementById('homeTrackCTA');
+  if(ctaEl){
+    ctaEl.innerHTML = s.total === 0
+      ? `<button class="w-full pop-btn bg-yellow-300 text-slate-900 font-extrabold text-sm px-5 py-3.5 rounded-2xl flex items-center justify-center gap-2" onclick="showPage('wizard')">🔍 Find your first opportunity to track →</button>`
+      : `<button class="pop-btn bg-white text-slate-900 font-bold text-xs px-4 py-2 rounded-xl" onclick="showPage('wizard')">+ Find more opportunities to track</button>`;
+  }
 }
 
-// ---------- Home page: single synthesized profile card ----------
+// ---------- Home to-do list (imminent deadlines this month + next) ----------
+// Counts individual tasks (AI-generated action items) only — NOT the opportunities
+// themselves — so this reflects exactly how many tasks are not started, in progress,
+// and completed. (Opportunity-level event timing has its own separate status system —
+// Future/Happening Now/Past Event — surfaced elsewhere via computeProgressStatus/
+// statusPillHTML, and must not be mixed into this task count.)
+function allTodoUnitCounts(upcoming){
+  const counts = { not_started: 0, in_progress: 0, completed: 0 };
+  let total = 0;
+  upcoming.forEach(({ item }) => {
+    (item.actionItems || []).forEach(ai => { counts[ai.state] = (counts[ai.state] || 0) + 1; total++; });
+  });
+  return { counts, total };
+}
+function renderHomeTodo(){
+  const listEl = document.getElementById('homeTodoList');
+  const trackEl = document.getElementById('todoProgressTrack');
+  if(!listEl || !trackEl) return;
+  const upcoming = getUpcomingDeadlineItems();
+  const { counts, total } = allTodoUnitCounts(upcoming);
+  const bars = progressBarHTML(counts, total, ACTION_ITEM_STATUS_LABEL);
+  trackEl.innerHTML = bars.track;
+  const statCountsEl = document.getElementById('todoStatCounts');
+  if(statCountsEl){
+    const order = ['not_started', 'in_progress', 'completed'];
+    statCountsEl.innerHTML = order.map(k => `<span class="status-pill status-${k}">${counts[k]} ${ACTION_ITEM_STATUS_LABEL[k]}</span>`).join('');
+  }
+
+  if(!upcoming.length){
+    listEl.innerHTML = `<p class="empty-state">Nothing due this month or next — you're all caught up.</p>`;
+    return;
+  }
+  // Summarized one row per opportunity — task-level detail lives in the "View all
+  // tasks" modal (grouped by opportunity, each task individually toggleable).
+  listEl.innerHTML = upcoming.map(({ item, nextDate, nextLabel }) => {
+    const status = computeProgressStatus(item);
+    const taskCount = (item.actionItems || []).length;
+    return `
+      <div class="flex items-center justify-between gap-3 py-2 border-b border-slate-100 last:border-0">
+        <div class="min-w-0">
+          <p class="font-bold text-sm text-slate-900 truncate">${item.name}</p>
+          <p class="text-xs text-slate-500">${shortDate(nextDate)} · ${nextLabel}${taskCount ? ` · ${taskCount} task${taskCount > 1 ? 's' : ''}` : ''}</p>
+        </div>
+        ${statusPillHTML(status)}
+      </div>
+    `;
+  }).join('');
+  listEl.insertAdjacentHTML('beforeend', `<button class="w-full text-center text-xs font-bold text-indigo-600 hover:underline pt-2" onclick="event.stopPropagation(); openTodoModal();">View all tasks →</button>`);
+}
+
+// ---------- Home to-do expand modal ----------
+const NEXT_ACTION_STATE = { not_started: 'in_progress', in_progress: 'completed', completed: 'not_started' };
+function cycleActionItemState(itemId, actionId){
+  for(const bucket of ALL_BUCKETS){
+    const item = trackerData[bucket].find(i => i.id === itemId);
+    if(item){
+      const ai = (item.actionItems || []).find(a => a.id === actionId);
+      if(ai){
+        ai.state = NEXT_ACTION_STATE[ai.state] || 'not_started';
+        saveTrackerData();
+        renderHomeTodo();
+        renderTodoModalContent();
+      }
+      return;
+    }
+  }
+}
+function renderTodoModalContent(){
+  const wrap = document.getElementById('todoModalBody');
+  if(!wrap) return;
+  const upcoming = getUpcomingDeadlineItems();
+  if(!upcoming.length){
+    wrap.innerHTML = `<p class="empty-state">Nothing due this month or next — you're all caught up.</p>`;
+    return;
+  }
+  wrap.innerHTML = upcoming.map(({ item, nextDate, nextLabel }) => {
+    const status = computeProgressStatus(item);
+    const actionRows = (item.actionItems || []).map(ai => `
+      <div class="flex items-center justify-between gap-3 py-1.5">
+        <span class="text-xs font-medium text-slate-700 ${ai.state === 'completed' ? 'line-through text-slate-400' : ''}">${ai.text}</span>
+        <button class="status-pill status-${ai.state} cursor-pointer" onclick="cycleActionItemState('${item.id}','${ai.id}')" title="Click to change status">${ACTION_ITEM_STATUS_LABEL[ai.state]}</button>
+      </div>
+    `).join('');
+    return `
+      <div class="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4">
+        <div class="flex items-start justify-between gap-3 mb-1">
+          <div class="min-w-0">
+            <h4 class="font-bold text-sm text-slate-900 truncate"><a href="${item.url}" target="_blank" class="hover:underline">${item.name}</a></h4>
+            <p class="text-xs text-slate-500 line-clamp-1">${item.meta || ''}</p>
+          </div>
+          ${statusPillHTML(status)}
+        </div>
+        <p class="text-xs font-bold text-indigo-600 mb-2">${shortDate(nextDate)} · ${nextLabel}${item.wasEstimated ? ' (est.)' : ''}</p>
+        ${actionRows ? `<div class="border-t border-slate-200 pt-2 mt-2 space-y-0.5">${actionRows}</div>` : `<p class="text-xs text-slate-400 italic">No sub-tasks generated for this one.</p>`}
+      </div>
+    `;
+  }).join('');
+}
+function openTodoModal(){
+  renderTodoModalContent();
+  document.getElementById('todoModal').classList.remove('hidden');
+  lockBodyScroll();
+}
+function closeTodoModal(){
+  document.getElementById('todoModal').classList.add('hidden');
+  unlockBodyScroll();
+}
+
+// ---------- Profile drawer: single synthesized profile card ----------
 function renderProfileFit(){
   const wrap = document.getElementById('profileFitSection');
   if(!wrap) return;
@@ -1407,7 +1849,7 @@ function renderProfileFit(){
 
   wrap.innerHTML = `
     <div class="bg-indigo-50 border-2 border-slate-900 rounded-2xl p-4 sm:p-6">
-      <p class="text-sm text-slate-700 leading-relaxed font-medium mb-4">${escapeHtmlTracker(studentProfile.synthesized)}</p>
+      ${profileSummaryBodyHTML(studentProfile.synthesized)}
       <div class="flex gap-3 pt-4 border-t-2 border-indigo-200">
         <button class="text-xs font-bold text-indigo-700 hover:underline" onclick="startProfileEdit()">✎ Edit</button>
         <button class="text-xs font-bold text-rose-600 hover:underline" onclick="clearProfile(this)">🗑 Delete</button>
@@ -1416,12 +1858,75 @@ function renderProfileFit(){
   `;
 }
 
+// Splits a synthesized profile into readable paragraphs, pulling out any
+// "Passion Project: " / "Research Project: " paragraphs into their own separate,
+// individually-numbered sections rather than letting them blend in with the general
+// interests text (or with each other). Shared by the profile drawer (renderProfileFit)
+// and the Finder's "Here's what we know about you" card, so both render identically.
+function profileSummaryBodyHTML(text){
+  const allParagraphs = (text || '').split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  const passionProjects = [];
+  const researchProjects = [];
+  const generalParagraphs = [];
+  allParagraphs.forEach(p => {
+    if(/^passion projects?:/i.test(p)) passionProjects.push(p.replace(/^passion projects?:\s*/i, ''));
+    else if(/^research projects?:/i.test(p)) researchProjects.push(p.replace(/^research projects?:\s*/i, ''));
+    else generalParagraphs.push(p);
+  });
+
+  const generalHTML = generalParagraphs.map(p => `<p class="text-sm text-slate-700 leading-relaxed font-medium mb-3 last:mb-0">${escapeHtmlTracker(p)}</p>`).join('');
+
+  const numberedListHTML = items => `
+    <ol class="space-y-3">
+      ${items.map((p, i) => `
+        <li class="flex gap-2">
+          <span class="font-heading font-bold text-indigo-700 text-sm shrink-0">${i + 1}.</span>
+          <p class="text-sm text-slate-700 leading-relaxed font-medium">${escapeHtmlTracker(p)}</p>
+        </li>
+      `).join('')}
+    </ol>
+  `;
+
+  const passionHTML = passionProjects.length ? `
+    <div class="mt-4 pt-4 border-t-2 border-indigo-200">
+      <h4 class="font-heading font-bold text-xs uppercase tracking-wide text-indigo-700 mb-2">🚀 Passion Projects</h4>
+      ${numberedListHTML(passionProjects)}
+    </div>
+  ` : '';
+  const researchHTML = researchProjects.length ? `
+    <div class="mt-4 pt-4 border-t-2 border-indigo-200">
+      <h4 class="font-heading font-bold text-xs uppercase tracking-wide text-indigo-700 mb-2">🔬 Research Projects</h4>
+      ${numberedListHTML(researchProjects)}
+    </div>
+  ` : '';
+
+  return generalHTML + passionHTML + researchHTML;
+}
+
 // ---------- Deadlines due this month & next ----------
+// Deliberately generic, opportunity-agnostic fallback checklist — used only when an
+// item has no AI-generated action items yet (e.g. the extraction call failed or an
+// item was added before this field existed). Kept purely administrative: the app only
+// knows what's publicly listed for the opportunity, never the specifics of the
+// student's own project, so it must not guess at anything more specific than this.
+const GENERIC_ACTION_ITEMS = [
+  'Confirm the exact deadline and requirements on the official site',
+  'Gather required materials (transcripts, recommendation letters, etc.)',
+  'Complete and submit the application'
+];
+function ensureActionItems(item){
+  if(!item.actionItems || !item.actionItems.length){
+    item.actionItems = GENERIC_ACTION_ITEMS.map((text, i) => ({ id: `${item.id}-gt${i}`, text, state: 'not_started' }));
+    return true; // backfilled — caller should persist
+  }
+  return false;
+}
 function getUpcomingDeadlineItems(){
   const now = new Date();
   const thisMonthKey = now.getFullYear() * 12 + now.getMonth();
   const nextMonthKey = thisMonthKey + 1;
   const results = [];
+  let backfilled = false;
   ALL_BUCKETS.forEach(bucket => {
     trackerData[bucket].forEach(item => {
       if(item.status === 'not_running') return;
@@ -1431,10 +1936,12 @@ function getUpcomingDeadlineItems(){
       const d = new Date(next.date + 'T00:00:00');
       const key = d.getFullYear() * 12 + d.getMonth();
       if(key === thisMonthKey || key === nextMonthKey){
+        if(ensureActionItems(item)) backfilled = true;
         results.push({ item, bucket, nextDate: next.date, nextLabel: next.label, nextKind: next.kind });
       }
     });
   });
+  if(backfilled) saveTrackerData();
   results.sort((a, b) => a.nextDate.localeCompare(b.nextDate));
   return results;
 }
@@ -1442,16 +1949,30 @@ function getUpcomingDeadlineItems(){
 function renderHomePage(){
   if(!document.getElementById('statTotal')) return; // page not in DOM yet
   renderStats();
+  renderHomeTodo();
   renderProfileFit();
 }
 
+// Dismisses a status banner (either via the ✕ button, or automatically — banners are
+// scoped to the action that produced them and must not persist across page visits).
+function dismissBanner(id){
+  const el = document.getElementById(id);
+  if(el) el.classList.remove('show');
+}
+function bannerContentHTML(html, id){
+  return `<span class="banner-dismiss" onclick="dismissBanner('${id}')" title="Dismiss">✕</span>${html}`;
+}
 function renderTrackerPage(){
-  // Flat, filterable list of everything actively tracked (not saved-for-later), across
-  // all opportunity types at once — sorted by nearest deadline, each card tagged with
-  // its type since there's no longer a separate tab per type.
+  // Every fresh page-entry starts with no status banner showing — banners are set (and
+  // shown) only as the direct result of an action taken during THIS visit (buildTracker,
+  // refreshTracker), never carried over from a previous visit.
+  dismissBanner('trackerChangeBanner');
+  dismissBanner('trackerErrorBanner');
+
+  // Flat list of everything actively tracked (not saved-for-later), across all
+  // opportunity types at once — sorted by nearest deadline, each card tagged with its type.
   const visibleItems = [];
   ALL_BUCKETS.forEach(bucket => {
-    if(!trackerTypeFilter.has(bucket)) return;
     trackerData[bucket].filter(i => !trackerSavedState[i.id]).forEach(i => visibleItems.push({ item: i, bucket }));
   });
   const sortedItems = sortedByTrackerDeadline(visibleItems.map(x => x.item));
@@ -1459,11 +1980,8 @@ function renderTrackerPage(){
   visibleItems.forEach(x => { bucketByItemId[x.item.id] = x.bucket; });
   document.getElementById('allOppCards').innerHTML = sortedItems.length
     ? sortedItems.map(i => trackerCardHTML(i, BUCKET_LABELS[bucketByItemId[i.id]])).join('')
-    : (trackerTypeFilter.size === 0
-        ? '<p class="empty-state">No types selected. <a href="#" onclick="event.preventDefault(); resetTypeFilter();">Show all</a></p>'
-        : '<p class="empty-state">Nothing tracked here yet — add opportunities via the Finder or the button above.</p>');
+    : '<p class="empty-state">Nothing tracked here yet — add opportunities via the Finder or the button above.</p>';
   document.getElementById('allOppCount').textContent = String(sortedItems.length).padStart(2, '0');
-  renderTypeFilterRow();
 
   const savedEntries = [];
   ALL_BUCKETS.forEach(bucket => {
@@ -1475,8 +1993,7 @@ function renderTrackerPage(){
     : '<p class="empty-state">Nothing saved yet — click "☆ Save for later" on any card to move it here.</p>';
   document.getElementById('savedDrawerCount').textContent = String(savedSortedItems.length).padStart(2, '0');
 
-  renderAllTrackerCalendars();
-  updateTrackerNavCount();
+  renderCalendarSwimlanes();
   renderHomePage();
 }
 
@@ -1486,11 +2003,15 @@ async function buildTracker(){
   const label = document.getElementById('buildTrackerLabel');
   btn.disabled = true;
   btn.classList.add('loading');
+  newlyAddedTrackerIds = new Set(); // only this batch should carry the "New" banner
 
   // Group selected opportunities by their bucket — the profile-based Suggest flow can
   // return results spanning several opportunity kinds at once (each result carries its
   // own r.kind), unlike the single-kind Type flow, which falls back to selectedKind.
-  const selectedResults = currentResults.filter(r => selectedIds.has(r.opp.id));
+  // Already-tracked opportunities are excluded up front (checked across ALL buckets,
+  // not just the target one) so a single opportunity can never end up duplicated in
+  // the tracker, however it was selected.
+  const selectedResults = currentResults.filter(r => selectedIds.has(r.opp.id) && !findTrackedItem(r.opp));
   const byBucket = {};
   selectedResults.forEach(r => {
     const bucket = findBucketForKind(r.kind || selectedKind);
@@ -1502,9 +2023,7 @@ async function buildTracker(){
   let totalToFetch = 0, totalAlready = 0;
   buckets.forEach(bucket => {
     const opps = byBucket[bucket];
-    const existingIds = new Set(trackerData[bucket].map(i => i.id));
-    const existingUrls = new Set(trackerData[bucket].map(i => i.url));
-    const toFetch = opps.filter(o => !existingIds.has(o.id) && !existingUrls.has(o.url));
+    const toFetch = opps.filter(o => !findTrackedItem(o));
     totalToFetch += toFetch.length;
     totalAlready += opps.length - toFetch.length;
     fetchPlan.push({ bucket, toFetch });
@@ -1542,8 +2061,12 @@ async function buildTracker(){
           opensISO: info.opens_iso || null,
           requirements: Array.isArray(info.requirements) ? info.requirements.slice(0, 5) : null,
           applyUrl: info.apply_url || opp.url,
-          applyLabel: info.apply_label || 'Apply / learn more'
+          applyLabel: info.apply_label || 'Apply / learn more',
+          actionItems: Array.isArray(info.action_items)
+            ? info.action_items.slice(0, 5).map((text, i) => ({ id: `${opp.id}-t${i}`, text, state: 'not_started' }))
+            : []
         });
+        newlyAddedTrackerIds.add(opp.id);
       }catch(err){
         console.error(`Failed to fetch details for ${opp.name}:`, err);
         trackerData[bucket].push({
@@ -1555,8 +2078,9 @@ async function buildTracker(){
           note: 'Live details couldn\'t be fetched — showing database info only. Check the official site directly.',
           noteType: 'flag',
           deadlines: [], deadlineLabel: 'CHECK SITE', wasEstimated: false, opensISO: null,
-          requirements: null, applyUrl: opp.url, applyLabel: 'Visit site'
+          requirements: null, applyUrl: opp.url, applyLabel: 'Visit site', actionItems: []
         });
+        newlyAddedTrackerIds.add(opp.id);
       }
     }
   }
@@ -1567,21 +2091,8 @@ async function buildTracker(){
   btn.classList.remove('loading');
   label.textContent = 'Add to my tracker →';
 
-  buckets.forEach(b => trackerTypeFilter.add(b));
   showPage('tracker');
   setOppView('list');
-
-  const changeBanner = document.getElementById('trackerChangeBanner');
-  if(totalToFetch){
-    const scopeText = buckets.length > 1
-      ? `across ${buckets.length} categories`
-      : `to ${BUCKET_LABELS[buckets[0]]}s`;
-    changeBanner.innerHTML = `<strong>Added ${totalToFetch} new opportunit${totalToFetch === 1 ? 'y' : 'ies'}</strong> ${scopeText}.` +
-      (totalAlready ? ` ${totalAlready} of your selections ${totalAlready === 1 ? 'was' : 'were'} already being tracked, so ${totalAlready === 1 ? 'it was' : 'those were'} left untouched.` : '');
-  }else{
-    changeBanner.innerHTML = `All ${totalAlready} selected opportunit${totalAlready === 1 ? 'y is' : 'ies are'} already in your tracker — nothing new to add.`;
-  }
-  changeBanner.classList.add('show');
 }
 
 // ---------- Refresh: re-check every tracked item's live status/deadlines ----------
@@ -1648,13 +2159,13 @@ async function refreshTracker(){
   status.textContent = `Last checked: ${stamp}` + (changes.length === 0 && failures === 0 ? ' — no changes found.' : '');
 
   if(changes.length){
-    changeBanner.innerHTML = `<strong>${changes.length} item${changes.length > 1 ? 's' : ''} updated:</strong><ul>${changes.map(c => `<li>${c}</li>`).join('')}</ul>`;
+    changeBanner.innerHTML = bannerContentHTML(`<strong>${changes.length} item${changes.length > 1 ? 's' : ''} updated:</strong><ul>${changes.map(c => `<li>${c}</li>`).join('')}</ul>`, 'trackerChangeBanner');
     changeBanner.classList.add('show');
   }
   if(failures){
-    errorBanner.textContent = failures === allItems.length
+    errorBanner.innerHTML = bannerContentHTML(failures === allItems.length
       ? `Couldn't reach the Claude API from this page. Live refresh only works when this file is opened through a Claude-connected environment.`
-      : `${failures} item${failures > 1 ? 's' : ''} couldn't be checked (site may be blocking automated access). Left unchanged.`;
+      : `${failures} item${failures > 1 ? 's' : ''} couldn't be checked (site may be blocking automated access). Left unchanged.`, 'trackerErrorBanner');
     errorBanner.classList.add('show');
   }
 }
@@ -1677,7 +2188,9 @@ First determine 'section': 'conferences' for academic conferences/workshops that
 
 Search thoroughly with web_search: start with the given URL; if stale or missing, also check the base site (${root}). Look for language indicating the program is discontinued/not running this cycle — set status to "not_running" if so. Find EVERY distinct deadline milestone (e.g. early-bird vs. regular), each with a short label, in chronological order. If every deadline found has passed and the program is recurring, estimate the next cycle's date and set was_estimated true. Never invent a date with no basis.
 
-Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","opens_iso":"YYYY-MM-DD or null","deadlines":[{"label":"short label","date_iso":"YYYY-MM-DD"}],"deadline_label":"short text like ROLLING, only if deadlines is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null"}. Stay well within 1000 tokens: at most 3 deadlines and 3 requirements.`;
+Also think through 3-5 short, concrete action items a student would need to do to meet the nearest deadline (e.g. request a recommendation letter, draft an essay, gather transcripts) — infer these from requirements and what's typical for this type of opportunity. Keep every item tactical and administrative — the logistics of applying, never advice about the student's own project or its substance, since you don't know the specifics of their work and must not assume or invent any. Skip if status is not_running.
+
+Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","opens_iso":"YYYY-MM-DD or null","deadlines":[{"label":"short label","date_iso":"YYYY-MM-DD"}],"deadline_label":"short text like ROLLING, only if deadlines is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null","action_items":["short concrete task, under 10 words", "..."]}. Stay well within 1000 tokens: at most 3 deadlines, 3 requirements, and 5 action_items.`;
   const userContent = `URL: ${url}\n${notes ? `Extra context: ${notes}\n` : ''}\nFetch this URL, classify it, and extract tracking details per the schema.`;
   const raw = await callClaude(system, userContent, true);
   return extractJSON(raw);
@@ -1725,7 +2238,10 @@ async function trackerAnalyzeAndAdd(){
       opensISO: extracted.opens_iso || null,
       requirements: Array.isArray(extracted.requirements) ? extracted.requirements.slice(0, 5) : null,
       applyUrl: extracted.apply_url || url,
-      applyLabel: extracted.apply_label || 'Apply / learn more'
+      applyLabel: extracted.apply_label || 'Apply / learn more',
+      actionItems: Array.isArray(extracted.action_items)
+        ? extracted.action_items.slice(0, 5).map((text, i) => ({ id: `${id}-t${i}`, text, state: 'not_started' }))
+        : []
     };
     trackerData[bucket].push(item);
     await saveTrackerData();
@@ -1755,6 +2271,13 @@ function escapeHtmlTracker(str){
 
 // ---------- Initial load ----------
 Promise.all([loadTrackerData(), loadTrackerSaved()]).then(() => {
-  updateTrackerNavCount();
   renderTrackerPage();
+});
+
+// ---------- Auth gate ----------
+// Everything above populates in-memory data structures regardless of login state, but
+// #appShell stays hidden (and #page-login shown) until a returning session is found or
+// the student signs in / registers — see showApp()/showLoginGate().
+loadUser().then(() => {
+  if(currentUser){ showApp(); } else { showLoginGate(); }
 });

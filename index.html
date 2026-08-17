@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>High School Profile Builder - Bento & Pop Edition</title>
+  <title>Highschool Wingman</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,24 +14,88 @@
 </head>
 <body class="text-slate-900 pb-12 selection:bg-yellow-300 selection:text-black">
 
+  <!-- ============== LOGIN GATE ============== -->
+  <!-- Shown until sign-in/registration completes; the rest of the app (#appShell) stays
+       hidden until then. See loginUser()/registerUser() in script.js. -->
+  <section id="page-login" class="min-h-screen flex items-center justify-center px-4">
+    <div class="pop-card bg-white p-8 sm:p-10 rounded-3xl max-w-sm w-full space-y-6 border-4 border-slate-900 shadow-[6px_6px_0px_#0F172A]">
+      <div class="text-center">
+        <img src="favicon.svg" alt="" class="w-16 h-16 rounded-2xl mx-auto mb-2">
+        <h1 class="font-heading font-extrabold text-2xl">Highschool Wingman</h1>
+        <p class="text-sm text-slate-500 mt-2" id="loginTagline">Sign in to find and track opportunities built around your projects.</p>
+      </div>
+
+      <!-- Sign In form -->
+      <form id="signInForm" class="space-y-4" onsubmit="loginUser(event)">
+        <div>
+          <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="signInUserid">User ID</label>
+          <input type="text" id="signInUserid" autocomplete="username" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="e.g. sid2028">
+        </div>
+        <div>
+          <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="signInPassword">Password</label>
+          <input type="password" id="signInPassword" autocomplete="current-password" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="••••••••">
+        </div>
+        <p class="text-xs font-bold text-rose-600" id="signInError"></p>
+        <button type="submit" class="w-full pop-btn bg-lime-300 text-slate-900 font-extrabold px-6 py-3 rounded-xl">Sign In</button>
+        <p class="text-xs text-slate-500 text-center">Don't have an account? <a href="#" class="font-bold text-indigo-600 hover:underline" onclick="event.preventDefault(); showLoginMode('register');">Register</a></p>
+      </form>
+
+      <!-- Register form -->
+      <form id="registerForm" class="space-y-4 hidden" onsubmit="registerUser(event)">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="regFirstName">First name</label>
+            <input type="text" id="regFirstName" autocomplete="given-name" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium">
+          </div>
+          <div>
+            <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="regLastName">Last name</label>
+            <input type="text" id="regLastName" autocomplete="family-name" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium">
+          </div>
+        </div>
+        <div>
+          <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="regEmail">Email</label>
+          <input type="email" id="regEmail" autocomplete="email" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="you@example.com">
+        </div>
+        <div>
+          <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="regUserid">User ID</label>
+          <input type="text" id="regUserid" autocomplete="username" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="Pick a user ID">
+        </div>
+        <div>
+          <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="regPassword">Password</label>
+          <input type="password" id="regPassword" autocomplete="new-password" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="At least 8 characters">
+        </div>
+        <div>
+          <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="regPasswordConfirm">Confirm password</label>
+          <input type="password" id="regPasswordConfirm" autocomplete="new-password" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="••••••••">
+        </div>
+        <p class="text-xs font-bold text-rose-600" id="registerError"></p>
+        <button type="submit" class="w-full pop-btn bg-lime-300 text-slate-900 font-extrabold px-6 py-3 rounded-xl">Create Account</button>
+        <p class="text-xs text-slate-500 text-center">Already have an account? <a href="#" class="font-bold text-indigo-600 hover:underline" onclick="event.preventDefault(); showLoginMode('signin');">Sign In</a></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============== MAIN APP (hidden until signed in) ============== -->
+  <div id="appShell" class="hidden">
+
   <!-- Top Floating Pill Navigation -->
   <header class="sticky top-4 z-50 max-w-4xl mx-auto px-4">
     <div class="bg-white/90 backdrop-blur-md border-3 border-slate-900 rounded-full p-2 px-4 shadow-[4px_4px_0px_#0F172A] flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <span class="text-2xl">⚡</span>
-        <span class="font-heading font-bold text-xl tracking-tight hidden sm:inline">ProfilePop</span>
+        <img src="favicon.svg" alt="" class="w-8 h-8 rounded-lg">
+        <span class="font-heading font-bold text-xl tracking-tight hidden sm:inline">Highschool Wingman</span>
       </div>
 
       <!-- Nav Tabs -->
       <nav class="flex gap-1 sm:gap-2 app-nav-inner">
         <button onclick="showPage('home')" id="navHomeBtn" class="pop-btn bg-yellow-300 font-bold text-xs sm:text-sm px-3 sm:px-4 py-1.5 rounded-full flex items-center gap-1.5 active">
-          <span>🏠</span> Home
+          <img src="icon-dashboard.svg" alt="" class="w-[18px] h-[18px] rounded-md"> Dashboard
         </button>
         <button onclick="showPage('wizard')" id="navWizardBtn" class="pop-btn bg-white font-bold text-xs sm:text-sm px-3 sm:px-4 py-1.5 rounded-full flex items-center gap-1.5">
-          <span>🎯</span> Finder
+          <img src="icon-finder.svg" alt="" class="w-[18px] h-[18px] rounded-md"> Finder
         </button>
         <button onclick="showPage('tracker')" id="navTrackerBtn" class="pop-btn bg-white font-bold text-xs sm:text-sm px-3 sm:px-4 py-1.5 rounded-full flex items-center gap-1.5">
-          <span>🚀</span> Tracker <span id="trackerNavCount"></span>
+          <img src="icon-tracker.svg" alt="" class="w-[18px] h-[18px] rounded-md"> Tracker
         </button>
       </nav>
 
@@ -43,135 +108,94 @@
   </header>
 
   <!-- Side Profile Drawer -->
-  <div id="profilePanel" class="fixed inset-y-0 right-0 w-80 bg-white border-l-4 border-slate-900 shadow-[0_0_20px_rgba(0,0,0,0.5)] transform translate-x-full transition-transform duration-300 z-[100] p-6 flex flex-col justify-between">
-    <div class="space-y-6">
+  <div id="profilePanel" class="fixed inset-y-0 right-0 w-80 bg-white border-l-4 border-slate-900 shadow-[0_0_20px_rgba(0,0,0,0.5)] transform translate-x-full transition-transform duration-300 z-[100] p-6 flex flex-col justify-between overflow-y-auto">
+    <div class="space-y-4">
       <div class="flex items-center justify-between border-b-2 border-slate-900 pb-4">
         <h3 class="font-heading font-bold text-lg">Your Profile 👤</h3>
         <button onclick="toggleProfile()" class="font-bold text-slate-500 hover:text-slate-900 text-lg">✕</button>
       </div>
-      
-      <p class="text-xs font-bold text-slate-500 mb-2">A single running profile, built from everything you've told the Finder or added on the Home page.</p>
 
-      <div class="space-y-4 text-xs font-bold bg-slate-50 p-4 border-2 border-slate-900 rounded-xl">
-        <p class="text-slate-800 text-sm font-normal" id="profileSynthText">Nothing yet.</p>
+      <div class="bg-slate-50 border-2 border-slate-200 rounded-2xl p-3 flex items-center justify-between gap-2" id="accountSection">
+        <div class="min-w-0">
+          <p class="font-bold text-sm text-slate-900 truncate" id="accountName"></p>
+          <p class="text-xs text-slate-500 truncate" id="accountEmail"></p>
+        </div>
+        <button class="text-xs font-bold text-rose-600 hover:underline shrink-0" onclick="logoutUser()">Log out</button>
       </div>
+
+      <div id="profileFitSection" class="space-y-4"></div>
     </div>
 
     <div class="space-y-4">
       <div class="text-xs text-slate-500 text-center font-bold" id="profileUpdated"></div>
-      <button onclick="clearProfile(this)" class="pop-btn w-full bg-rose-200 text-rose-900 font-bold py-2.5 rounded-xl">
-        Clear Profile
-      </button>
-      <button onclick="toggleProfile()" class="pop-btn w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl">
-        Close Drawer
-      </button>
     </div>
   </div>
 
   <!-- Main Container -->
-  <main class="max-w-5xl mx-auto px-4 mt-8">
+  <main class="max-w-4xl mx-auto px-4 mt-8">
 
     <!-- ============== PAGE: HOME ============== -->
     <section id="page-home" class="space-y-6">
       
       <!-- Welcome Bento Banner -->
       <div class="pop-card bg-gradient-to-r from-violet-500 to-indigo-600 text-white p-6 sm:p-8 rounded-3xl relative overflow-hidden">
-        <div class="absolute -right-6 -bottom-6 text-9xl opacity-20 pointer-events-none">⚡</div>
+        <img src="favicon.svg" alt="" class="absolute -right-6 -bottom-6 w-40 h-40 opacity-20 pointer-events-none">
         <div class="relative z-10 space-y-2">
-          <span class="bg-yellow-300 text-slate-900 font-bold text-xs uppercase px-3 py-1 rounded-full border-2 border-slate-900 inline-block mb-1">Dashboard</span>
-          <h1 class="font-heading text-3xl sm:text-5xl font-extrabold tracking-tight">Ready to conquer? 🚀</h1>
-          <p class="text-indigo-100 max-w-xl text-sm sm:text-base">What's due soon, what to do about it, and how things are tracking.</p>
+          <span class="bg-yellow-300 text-slate-900 font-bold text-xs uppercase px-3 py-1 rounded-full border-2 border-slate-900 inline-block mb-1" id="homeWelcomeBadge">Welcome</span>
+          <h1 class="font-heading text-3xl sm:text-5xl font-extrabold tracking-tight">Main Quest: Build amazing stuff. Side Quest: Get into college.</h1>
+          <p class="text-sm sm:text-base text-indigo-100 font-medium max-w-xl">Find elite research venues, summer programs, internships, and competitions for your builds.</p>
         </div>
       </div>
 
-      <!-- Bento Grid Metrics -->
-      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 stats-row">
-        
-        <div class="pop-card bg-white p-4 rounded-3xl flex flex-col justify-between text-center">
-          <span class="font-bold text-[10px] uppercase text-slate-800 mb-2">Tracked</span>
-          <span class="font-heading text-3xl font-extrabold text-slate-900" id="statTotal">0</span>
+      <!-- Progress Overview -->
+      <div class="pop-card bg-white p-6 rounded-3xl space-y-4" id="homeProgressCard">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="font-heading font-bold text-xl">Opportunities you are tracking</h2>
+          <div class="flex flex-wrap gap-2">
+            <span class="bg-slate-900 text-white font-bold text-xs px-3 py-1.5 rounded-full cursor-pointer" id="statTotal" onclick="goToTrackerCalendar()" title="View in Tracker">0 tracked</span>
+          </div>
         </div>
-
-        <div class="pop-card bg-slate-200 p-4 rounded-3xl flex flex-col justify-between text-center">
-          <span class="font-bold text-[10px] uppercase text-slate-800 mb-2">Not Started</span>
-          <span class="font-heading text-3xl font-extrabold text-slate-900" id="statNotStarted">0</span>
-        </div>
-
-        <div class="pop-card bg-indigo-200 p-4 rounded-3xl flex flex-col justify-between text-center">
-          <span class="font-bold text-[10px] uppercase text-slate-800 mb-2">In Progress</span>
-          <span class="font-heading text-3xl font-extrabold text-slate-900" id="statInProgress">0</span>
-        </div>
-
-        <div class="pop-card bg-cyan-300 p-4 rounded-3xl flex flex-col justify-between text-center">
-          <span class="font-bold text-[10px] uppercase text-slate-800 mb-2">Completed</span>
-          <span class="font-heading text-3xl font-extrabold text-slate-900" id="statCompleted">0</span>
-        </div>
-
-        <div class="pop-card bg-rose-400 text-white p-4 rounded-3xl flex flex-col justify-between text-center">
-          <span class="font-bold text-[10px] uppercase text-white mb-2">Due Soon</span>
-          <span class="font-heading text-3xl font-extrabold" id="statDueSoon">0</span>
-        </div>
-        
+        <div class="progress-track" id="homeProgressTrack"></div>
+        <div class="flex flex-wrap gap-4" id="homeProgressLegend"></div>
+        <div id="homeTrackCTA"></div>
       </div>
 
-      <!-- Spotlight Section -->
-      <div class="pop-card bg-white p-6 rounded-3xl space-y-4">
-        <div class="flex items-center justify-between">
-          <h2 class="font-heading font-bold text-xl flex items-center gap-2">
-            <span>✨</span> Your Profile
-          </h2>
-          <span class="text-xs text-slate-400 hidden sm:inline" title="A single running summary built from everything you've told the Finder or added here.">A single running summary</span>
+      <!-- Coming Up To-Do List -->
+      <div class="pop-card bg-white p-6 rounded-3xl space-y-4" id="homeTodoCard" onclick="openTodoModal()">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="font-heading font-bold text-xl">Tasks to complete this month and next</h2>
+          <div class="flex flex-wrap gap-2" id="todoStatCounts"></div>
         </div>
-        
-        <div id="profileFitSection" class="profile-fit-grid"></div>
-        
+        <div class="progress-track" id="todoProgressTrack"></div>
+        <div class="space-y-2" id="homeTodoList"></div>
       </div>
     </section>
 
     <!-- ============== PAGE: WIZARD ============== -->
     <section id="page-wizard" class="hidden space-y-6">
       
-      <!-- Finder Header -->
-      <div class="text-center space-y-2 max-w-lg mx-auto">
-        <h2 class="font-heading text-3xl font-extrabold">Opportunity Match Deck 🎯</h2>
-        <p class="text-slate-600 text-sm">Tell us what you're looking for, describe it in your own words, and this finds the opportunities actually worth your time.</p>
-      </div>
-
-      <!-- Steps Navigator -->
-      <div class="flex flex-wrap justify-center gap-2 max-w-2xl mx-auto mb-6 steps">
-        <div class="step flex items-center gap-2 px-4 py-2 bg-white border-2 border-slate-900 rounded-full font-bold text-xs" id="stepnav-0" data-stage="0">
-          <span class="num bg-slate-900 text-white rounded-full w-5 h-5 flex items-center justify-center">1</span> Type
-        </div>
-        <div class="step flex items-center gap-2 px-4 py-2 bg-white opacity-50 border-2 border-slate-900 rounded-full font-bold text-xs" id="stepnav-1" data-stage="1">
-          <span class="num bg-slate-200 text-slate-800 rounded-full w-5 h-5 flex items-center justify-center">2</span> Describe
-        </div>
-        <div class="step flex items-center gap-2 px-4 py-2 bg-white opacity-50 border-2 border-slate-900 rounded-full font-bold text-xs" id="stepnav-2" data-stage="2">
-          <span class="num bg-slate-200 text-slate-800 rounded-full w-5 h-5 flex items-center justify-center">3</span> Matches
-        </div>
-      </div>
-
       <!-- STAGE 0: CHOOSE KIND -->
       <div class="stage active space-y-6" id="stage-0">
-        
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 entry-choice">
-          <div class="pop-card bg-emerald-50 p-6 rounded-3xl entry-choice-card flex flex-col justify-between">
-            <div>
-              <h3 class="font-heading font-bold text-xl mb-2 entry-choice-title">Browse by opportunity type</h3>
-              <p class="text-sm text-slate-600 entry-choice-desc">Pick a category, describe what you're looking for, and get matches for that type.</p>
-            </div>
-          </div>
-          <div class="pop-card bg-violet-50 p-6 rounded-3xl entry-choice-card flex flex-col justify-between" id="suggestEntryCard">
-            <!-- Will be populated by JS -->
-          </div>
+
+        <div class="pop-card hero-suggest-card bg-gradient-to-br from-indigo-600 to-violet-700 text-white p-8 sm:p-10 rounded-3xl" id="suggestEntryCard">
+          <!-- Will be populated by JS -->
         </div>
 
-        <div class="pop-card bg-white p-6 sm:p-8 rounded-3xl form-card">
-          <h2 class="font-heading font-bold text-xl mb-6">What kind of opportunity are you looking for?</h2>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 kind-grid" id="kindGrid"></div>
-          
-          <button class="w-full mt-6 py-4 border-2 border-dashed border-slate-400 text-slate-500 font-bold text-sm rounded-2xl hover:border-slate-900 hover:text-slate-900 transition-colors quiz-cta" onclick="startQuiz()">
-            Not sure? Take a quick quiz →
+        <div class="text-center">
+          <button class="text-sm font-bold text-slate-500 hover:text-slate-900 hover:underline" onclick="toggleBrowsePanel()" id="browseToggleBtn">
+            Prefer to browse opportunities? Click here
           </button>
+        </div>
+
+        <div class="hidden space-y-6" id="browsePanel">
+          <div class="pop-card bg-white p-6 sm:p-8 rounded-3xl form-card">
+            <h2 class="font-heading font-bold text-xl mb-6">What kind of opportunity are you looking for?</h2>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 kind-grid" id="kindGrid"></div>
+
+            <button class="w-full mt-6 py-4 border-2 border-dashed border-slate-400 text-slate-500 font-bold text-sm rounded-2xl hover:border-slate-900 hover:text-slate-900 transition-colors quiz-cta" onclick="startQuiz()">
+              Not sure? Take a quick quiz →
+            </button>
+          </div>
         </div>
       </div>
 
@@ -232,10 +256,11 @@
         </button>
 
         <div class="pop-card bg-white p-6 sm:p-8 rounded-3xl form-card">
-          <h2 class="font-heading font-bold text-xl mb-6" id="stage1Heading">Tell us about it <span class="info-icon" id="stage1InfoIcon" title="">ⓘ</span></h2>
+          <h2 class="font-heading font-bold text-xl mb-6" id="stage1Heading">Tell us about it </h2>
 
           <div class="space-y-4">
             <div>
+              <p class="text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg p-2 mb-2 progress-note" id="stage1RecallNote"></p>
               <label class="block font-bold text-xs uppercase text-slate-500 mb-2 field-label" id="stage1Label" for="pInterests">Details</label>
               <textarea id="pInterests" class="w-full border-2 border-slate-900 rounded-xl p-4 min-h-[160px] font-medium" placeholder=""></textarea>
               <div class="text-right text-[10px] font-bold text-slate-400 mt-1 char-count" id="charCount">0 characters — aim for at least 200</div>
@@ -297,18 +322,19 @@
           <span>←</span> Back to project description
         </button>
 
-        <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-4 results-header">
-          <div>
-            <h2 class="font-heading font-bold text-2xl">Suggested opportunities</h2>
-            <p class="text-sm text-slate-600 mt-1">Ranked by fit. Select any you'd like to track.</p>
-          </div>
-          <span class="bg-white border-2 border-slate-900 font-bold text-xs px-3 py-1.5 rounded-full results-count" id="resultsCount"></span>
+        <div class="hidden flex flex-wrap items-center gap-2 mb-4" id="resultFilterWrap">
+          <span class="text-xs font-bold text-slate-500 uppercase tracking-wide mr-1">Filter:</span>
+          <div class="flex flex-wrap gap-2" id="resultFilterBar"></div>
         </div>
 
-        <div class="grid grid-cols-1 gap-4 result-grid max-w-3xl mx-auto" id="resultGrid"></div>
+        <div class="grid grid-cols-1 gap-4 result-grid" id="resultGrid"></div>
+
+        <div class="hidden text-center" id="resultShowMoreWrap">
+          <button class="pop-btn bg-white font-bold text-xs px-6 py-3 rounded-xl" id="resultShowMoreBtn" onclick="showMoreResults()">Show more</button>
+        </div>
 
         <!-- Sticky Selection Bar -->
-        <div class="sticky bottom-4 z-40 max-w-3xl mx-auto selection-bar" id="selectionBar" style="display:none;">
+        <div class="sticky bottom-4 z-40 selection-bar" id="selectionBar" style="display:none;">
           <div class="pop-card bg-slate-900 text-white p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
             <span class="font-bold text-sm" id="selectionCount">0 selected</span>
             <button class="pop-btn bg-lime-300 text-slate-900 font-bold px-6 py-2.5 rounded-xl primary-btn" id="buildTrackerBtn" onclick="buildTracker()">
@@ -326,37 +352,41 @@
       
       <!-- Tracker Header & Controls -->
       <div class="flex flex-col md:flex-row md:items-start justify-between gap-4">
-        <div>
-          <h2 class="font-heading text-3xl font-extrabold">Application Board 🚀</h2>
-          <p class="text-slate-600 text-sm mt-1 max-w-lg">Everything you've added from the Finder, plus anything added directly here.</p>
-          <div class="flex items-center gap-2 mt-2">
-             <span id="trackerRefreshStatus" class="text-xs font-bold text-slate-400">Last checked: never</span>
-             <button class="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1" id="trackerRefreshBtn" onclick="refreshTracker()">
-                <span class="spin hidden w-3 h-3 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></span>
-                <span id="trackerRefreshBtnLabel">↻ Check for updates</span>
-             </button>
-          </div>
+        <div class="flex items-center gap-2">
+           <span id="trackerRefreshStatus" class="text-xs font-bold text-slate-400">Last checked: never</span>
+           <button class="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1" id="trackerRefreshBtn" onclick="refreshTracker()">
+              <span class="spin hidden w-3 h-3 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></span>
+              <span id="trackerRefreshBtnLabel">↻ Check for updates</span>
+           </button>
         </div>
-        
-        <div class="relative nav-dropdown">
-          <button class="pop-btn bg-yellow-300 font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center gap-2" id="trackerIntakeToggle" onclick="toggleNavDropdownPanel('trackerIntakeForm')">
-            <span>➕</span> Add Custom Item
-          </button>
-          
-          <div class="absolute right-0 top-full mt-2 w-72 sm:w-96 pop-card bg-white p-4 rounded-2xl z-50 hidden nav-dropdown-panel" id="trackerIntakeForm">
-            <h3 class="font-heading font-bold mb-3">Add Custom Opportunity</h3>
-            <label class="block font-bold text-[10px] uppercase text-slate-500 mb-1" for="trackerIntakeUrl">URL of the opportunity</label>
-            <input type="url" id="trackerIntakeUrl" class="w-full border-2 border-slate-900 rounded-lg p-2 text-sm mb-3 font-medium" placeholder="https://example.com/apply">
-            
-            <label class="block font-bold text-[10px] uppercase text-slate-500 mb-1" for="trackerIntakeNotes">Extra context (optional)</label>
-            <textarea id="trackerIntakeNotes" rows="2" class="w-full border-2 border-slate-900 rounded-lg p-2 text-sm mb-3 font-medium" placeholder="Anything you already know..."></textarea>
-            
-            <button class="w-full pop-btn bg-indigo-500 text-white font-bold py-2 rounded-lg flex items-center justify-center gap-2" id="trackerIntakeSubmit" onclick="trackerAnalyzeAndAdd()">
-              <span class="spin hidden w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-              <span id="trackerIntakeSubmitLabel">Analyze &amp; add</span>
+
+        <div class="flex items-center gap-2">
+          <!-- View Toggle (icons only) -->
+          <div class="flex gap-2 view-toggle">
+            <button class="pop-btn bg-white font-bold text-sm px-3 py-2.5 rounded-lg active view-toggle-btn" id="oppViewCalendarBtn" onclick="setOppView('calendar')" title="Calendar view">📅</button>
+            <button class="pop-btn bg-white font-bold text-sm px-3 py-2.5 rounded-lg view-toggle-btn" id="oppViewListBtn" onclick="setOppView('list')" title="List view">📋</button>
+          </div>
+
+          <div class="relative nav-dropdown">
+            <button class="pop-btn bg-yellow-300 font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center gap-2" id="trackerIntakeToggle" onclick="toggleNavDropdownPanel('trackerIntakeForm')">
+              <span>➕</span> Add Custom Item
             </button>
-            <span id="trackerIntakeStatus" class="block text-center text-xs font-bold text-indigo-600 mt-2"></span>
-            <div class="mt-2 bg-rose-100 text-rose-900 p-2 rounded-lg border-2 border-rose-900 font-bold text-xs intake-error" id="trackerIntakeError"></div>
+
+            <div class="absolute right-0 top-full mt-2 w-72 sm:w-96 pop-card bg-white p-4 rounded-2xl z-50 hidden nav-dropdown-panel" id="trackerIntakeForm">
+              <h3 class="font-heading font-bold mb-3">Add Custom Opportunity</h3>
+              <label class="block font-bold text-[10px] uppercase text-slate-500 mb-1" for="trackerIntakeUrl">URL of the opportunity</label>
+              <input type="url" id="trackerIntakeUrl" class="w-full border-2 border-slate-900 rounded-lg p-2 text-sm mb-3 font-medium" placeholder="https://example.com/apply">
+
+              <label class="block font-bold text-[10px] uppercase text-slate-500 mb-1" for="trackerIntakeNotes">Extra context (optional)</label>
+              <textarea id="trackerIntakeNotes" rows="2" class="w-full border-2 border-slate-900 rounded-lg p-2 text-sm mb-3 font-medium" placeholder="Anything you already know..."></textarea>
+
+              <button class="w-full pop-btn bg-indigo-500 text-white font-bold py-2 rounded-lg flex items-center justify-center gap-2" id="trackerIntakeSubmit" onclick="trackerAnalyzeAndAdd()">
+                <span class="spin hidden w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                <span id="trackerIntakeSubmitLabel">Analyze &amp; add</span>
+              </button>
+              <span id="trackerIntakeStatus" class="block text-center text-xs font-bold text-indigo-600 mt-2"></span>
+              <div class="mt-2 bg-rose-100 text-rose-900 p-2 rounded-lg border-2 border-rose-900 font-bold text-xs intake-error" id="trackerIntakeError"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -364,75 +394,56 @@
       <div class="bg-emerald-100 border-2 border-emerald-900 text-emerald-900 p-4 rounded-xl font-bold text-sm change-banner" id="trackerChangeBanner"></div>
       <div class="bg-rose-100 border-2 border-rose-900 text-rose-900 p-4 rounded-xl font-bold text-sm error-banner" id="trackerErrorBanner"></div>
 
-      <!-- View Toggle -->
-      <div class="flex gap-2 view-toggle">
-        <button class="pop-btn bg-white font-bold text-xs px-4 py-2 rounded-lg active view-toggle-btn" id="oppViewCalendarBtn" onclick="setOppView('calendar')">📅 Calendar</button>
-        <button class="pop-btn bg-white font-bold text-xs px-4 py-2 rounded-lg view-toggle-btn" id="oppViewListBtn" onclick="setOppView('list')">📋 Kanban Board</button>
-      </div>
-
       <!-- Calendar View -->
-      <div id="oppViewCalendar" class="space-y-8">
+      <div id="oppViewCalendar">
         <div class="calendar bg-white border-2 border-slate-900 p-6 rounded-3xl">
           <div class="flex justify-between items-end mb-4 calendar-title">
-            <h3 class="font-heading font-bold text-lg">Conference &amp; Journal deadlines</h3>
-            <div class="flex gap-2 text-[10px] font-bold calendar-legend" id="calendarLegend"></div>
+            <h3 class="font-heading font-bold text-lg">All deadlines</h3>
           </div>
-          <div class="flex gap-4 overflow-x-auto pb-4 calendar-strip" id="calendarStrip"></div>
-        </div>
-        
-        <div class="calendar bg-white border-2 border-slate-900 p-6 rounded-3xl">
-          <div class="flex justify-between items-end mb-4 calendar-title">
-            <h3 class="font-heading font-bold text-lg">Competition deadlines</h3>
-            <div class="flex gap-2 text-[10px] font-bold calendar-legend" id="competitionsCalendarLegend"></div>
-          </div>
-          <div class="flex gap-4 overflow-x-auto pb-4 calendar-strip" id="competitionsCalendarStrip"></div>
-        </div>
-        
-        <div class="calendar bg-white border-2 border-slate-900 p-6 rounded-3xl">
-          <div class="flex justify-between items-end mb-4 calendar-title">
-            <h3 class="font-heading font-bold text-lg">Summer Program &amp; Internship deadlines</h3>
-            <div class="flex gap-2 text-[10px] font-bold calendar-legend" id="summerCalendarLegend"></div>
-          </div>
-          <div class="flex gap-4 overflow-x-auto pb-4 calendar-strip" id="summerCalendarStrip"></div>
+          <div class="space-y-5" id="calendarSwimlanes"></div>
         </div>
       </div>
 
-      <!-- Kanban Board View -->
+      <!-- List View -->
       <div id="oppViewList" class="hidden">
-        <div class="flex flex-wrap gap-2 mb-6 type-filter-row" id="typeFilterRow"></div>
+        <!-- Active / Saved Tabs -->
+        <div class="flex gap-2 mb-6 view-toggle">
+          <button class="pop-btn bg-indigo-200 font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center gap-2 tracker-tab-btn active" id="trackerTabActiveBtn" onclick="setTrackerListTab('active')">
+            📋 Active Tracked <span class="bg-white border-2 border-slate-900 text-xs font-bold px-2.5 py-1 rounded-full count" id="allOppCount">00</span>
+          </button>
+          <button class="pop-btn bg-amber-200 font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center gap-2 tracker-tab-btn" id="trackerTabSavedBtn" onclick="setTrackerListTab('saved')">
+            ⭐ Wishlist <span class="bg-white border-2 border-slate-900 text-xs font-bold px-2.5 py-1 rounded-full count" id="savedDrawerCount">00</span>
+          </button>
+        </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-          
-          <!-- Column 1: Tracked List -->
-          <div class="space-y-4">
-            <div class="bg-indigo-200 border-2 border-slate-900 px-4 py-3 rounded-2xl flex justify-between items-center">
-              <span class="font-heading font-bold">📋 Active Tracked</span>
-              <span class="bg-white border-2 border-slate-900 text-xs font-bold px-2.5 py-1 rounded-full count" id="allOppCount">00</span>
-            </div>
-            <div class="space-y-4 cards" id="allOppCards"></div>
-          </div>
+        <!-- Active Tracked pane -->
+        <div id="trackerTabActivePane">
+          <div class="space-y-4 cards" id="allOppCards"></div>
+        </div>
 
-          <!-- Column 2: Saved / Wishlist -->
-          <div class="space-y-4">
-            <div class="bg-amber-200 border-2 border-slate-900 px-4 py-3 rounded-2xl flex justify-between items-center">
-              <span class="font-heading font-bold">⭐ Wishlist</span>
-              <span class="bg-white border-2 border-slate-900 text-xs font-bold px-2.5 py-1 rounded-full count" id="savedDrawerCount">00</span>
-            </div>
-            <!-- We replaced the details drawer with a Kanban column -->
-            <p class="text-xs font-bold text-slate-500">Items set aside. Their deadlines are hidden from the calendar.</p>
-            <div class="space-y-4 cards" id="savedCards"></div>
-            
-            <details class="hidden saved-drawer" id="savedDrawer">
-               <summary class="saved-drawer-summary"></summary>
-            </details>
-          </div>
-
+        <!-- Wishlist / Saved pane -->
+        <div id="trackerTabSavedPane" class="hidden space-y-4">
+          <div class="space-y-4 cards" id="savedCards"></div>
         </div>
       </div>
       
     </section>
 
   </main>
+
+  <!-- To-Do Detail Modal (Home) -->
+  <div class="modal-overlay hidden" id="todoModal" onclick="if(event.target === this) closeTodoModal();">
+    <div class="modal-panel p-6 sm:p-8 space-y-4">
+      <div class="flex items-center justify-between gap-3">
+        <h2 class="font-heading font-bold text-xl">Tasks to complete this month and next</h2>
+        <button class="font-bold text-slate-500 hover:text-slate-900 text-lg" onclick="closeTodoModal()">✕</button>
+      </div>
+      <div class="space-y-3" id="todoModalBody"></div>
+    </div>
+  </div>
+
+  </div>
+  <!-- /#appShell -->
 
 <script src="script.js"></script>
 </body>

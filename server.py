@@ -175,7 +175,9 @@ MOCK_CHAT_QUESTIONS = [
 
 
 def mock_profile_chat_starters():
-    return json.dumps(MOCK_CHAT_QUESTIONS[:3])
+    # random.sample (not a fixed [:3] slice) so clicking "Regenerate" in MOCK mode still
+    # visibly swaps in a different trio instead of returning the exact same 3 every time.
+    return json.dumps(random.sample(MOCK_CHAT_QUESTIONS, 3))
 
 
 def mock_profile_chat_question(user_content):
@@ -408,7 +410,14 @@ class Handler(SimpleHTTPRequestHandler):
     def mock_response(self, raw_body):
         try:
             payload = json.loads(raw_body)
-            system = payload.get("system", "")
+            system_raw = payload.get("system", "")
+            # system is now sent as a list of content blocks (with cache_control)
+            # rather than a plain string, to enable prompt caching — flatten it
+            # back to text so the pattern-matching in generate_mock_text still works.
+            if isinstance(system_raw, list):
+                system = "".join(b.get("text", "") for b in system_raw if isinstance(b, dict))
+            else:
+                system = system_raw
             user_content = payload.get("messages", [{}])[0].get("content", "")
         except Exception:
             system, user_content = "", ""

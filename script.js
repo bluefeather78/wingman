@@ -473,7 +473,10 @@ async function callClaude(system, userContent, useWebSearch){
   const body = {
     model: "claude-sonnet-4-6",
     max_tokens: 1000,
-    system: system,
+    // Each call site's system prompt is fixed, reused verbatim on every request
+    // (only userContent varies) — marking it cacheable lets Anthropic skip
+    // re-billing/re-processing the full prompt on repeat calls within the TTL.
+    system: [ { type: "text", text: system, cache_control: { type: "ephemeral" } } ],
     messages: [ { role: "user", content: userContent } ]
   };
   if(useWebSearch){
@@ -630,9 +633,6 @@ const ACTIVE_KINDS = Object.keys(KIND_CONFIG).filter(k => !KIND_CONFIG[k].coming
 
 let studentProfile = { synthesized: '', updatedAt: null, chatRounds: 0 };
 
-function newEntryId(){
-  return 'entry-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
-}
 async function loadProfile(){
   try{
     const result = await AppStorage.get('student-profile');
@@ -819,6 +819,12 @@ function withTimeout(promise, ms, message){
 
 function initProfileChat(){
   if(!document.getElementById('profileChatMessages')) return;
+  // Land on the Profile page with no chat in progress? Toss out any stale starters from an
+  // earlier visit so we always regenerate fresh ones against the latest profile summary,
+  // rather than reusing questions generated before the student's profile last changed.
+  if(!profileChatHistory.length && !profileChatStartersLoading){
+    profileChatStarters = null;
+  }
   renderProfileChatMessages();
   if(!profileChatHistory.length && !profileChatStarters && !profileChatStartersLoading){
     loadProfileChatStarters();
@@ -841,9 +847,12 @@ function renderProfileChatMessages(){
   // just launching into one, per the "ask the user where they want to start" behavior.
   if(profileChatStarters && profileChatStarters.length){
     wrap.innerHTML = `
-      <p class="text-xs font-bold text-slate-500 mb-1">Pick a place to start:</p>
+      <div class="flex items-center justify-between gap-2 mb-1">
+        <p class="text-xs font-bold text-slate-500">Pick a place to start:</p>
+        <button type="button" class="text-xs font-bold text-indigo-600 hover:underline disabled:opacity-50 disabled:cursor-not-allowed shrink-0" onclick="regenerateProfileChatStarters()" ${profileChatStartersLoading ? 'disabled' : ''}>${profileChatStartersLoading ? 'Regenerating…' : '🔄 Regenerate'}</button>
+      </div>
       ${profileChatStarters.map((q, i) => `
-        <button type="button" class="chat-starter-btn" onclick="pickProfileChatStarter(${i})">${escapeHtmlTracker(q)}</button>
+        <button type="button" class="chat-starter-btn" ${profileChatStartersLoading ? 'disabled' : ''} onclick="pickProfileChatStarter(${i})">${escapeHtmlTracker(q)}</button>
       `).join('')}
     `;
     return;
@@ -853,11 +862,16 @@ function renderProfileChatMessages(){
 }
 
 // Fetches 3 fresh, profile-aware icebreakers to kick off a brand-new chat session.
-async function profileChatStarterQuestionsFromAI(){
-  const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY (may be empty). Come up with exactly THREE distinct, short, fun, wacky-but-meaningful icebreaker questions to kick off a chat session that probes for details the profile is missing or only has shallowly — think music, sports/athletics, hobbies, what they do purely for fun, leadership, part-time jobs, quirks of personality, or deeper specifics on things already mentioned. Keep each one playful and casual, like a clever friend riffing with them, not a form — but each must serve a real purpose in understanding this student for extracurricular/college-application matching. This is chat round ${studentProfile.chatRounds + 1} of them returning to this page — the higher that number, the more specific and creative the questions should get. Respond with ONLY a JSON array of exactly 3 short question strings, e.g. ["...", "...", "..."] — no markdown, no preamble, no numbering.`;
+// `regenerate` — set when the student clicked "Regenerate" on an already-loaded set of
+// starters (see regenerateProfileChatStarters) — swaps in a directive that explicitly
+// prioritizes breadth (new, untouched areas of their life) over depth (drilling further
+// into interests the profile already covers well).
+async function profileChatStarterQuestionsFromAI(regenerate){
+  const breadthDirective = regenerate ? ` The student explicitly asked to regenerate these — swap in a fresh set. Prioritize BREADTH over depth: favor surfacing entirely new areas of their life the profile hasn't touched at all (academics, social life, jobs, family, random obsessions, sports, art, gaming, etc.) over drilling further into what's already well-covered. Where a question does build on something they've already mentioned, use it only as a springboard to go one layer deeper on that specific thing — but most of the three should open up completely uncovered territory rather than deepen existing ones.` : '';
+  const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY (may be empty). Come up with exactly THREE distinct, short, fun, wacky-but-meaningful icebreaker questions to kick off a chat session that probes for details the profile is missing or only has shallowly — think music, sports/athletics, hobbies, what they do purely for fun, leadership, part-time jobs, quirks of personality, or deeper specifics on things already mentioned.${breadthDirective} Keep each one playful and casual, like a clever friend riffing with them, not a form — but each must serve a real purpose in understanding this student for extracurricular/college-application matching. This is chat round ${studentProfile.chatRounds + 1} of them returning to this page — the higher that number, the more specific and creative the questions should get. Respond with ONLY a JSON array of exactly 3 short question strings, e.g. ["...", "...", "..."] — no markdown, no preamble, no numbering.`;
   const userContent = `CURRENT PROFILE SUMMARY:\n${studentProfile.synthesized || '(empty)'}\n\nRespond with a JSON array of exactly 3 starter questions only.`;
   const raw = await withTimeout(callClaude(system, userContent, false), 20000, 'Timed out waiting for starter questions');
-  const parsed = JSON.parse(extractJSON(raw));
+  const parsed = extractJSON(raw);
   if(!Array.isArray(parsed) || !parsed.length) throw new Error('Unexpected starter question format');
   return parsed.slice(0, 3).map(String);
 }
@@ -870,6 +884,22 @@ async function loadProfileChatStarters(){
   }catch(e){
     console.error('Profile chat starters failed, using fallback:', e);
     profileChatStarters = FALLBACK_STARTER_QUESTIONS.slice();
+  }
+  profileChatStartersLoading = false;
+  renderProfileChatMessages();
+}
+
+// Student clicked "Regenerate" on an already-loaded set of starters — keeps the old set
+// visible (disabled) while fetching, so a slow/flaky call doesn't blank the panel, and
+// leaves the old set in place on failure rather than losing them.
+async function regenerateProfileChatStarters(){
+  if(profileChatStartersLoading) return;
+  profileChatStartersLoading = true;
+  renderProfileChatMessages();
+  try{
+    profileChatStarters = await profileChatStarterQuestionsFromAI(true);
+  }catch(e){
+    console.error('Regenerating profile chat starters failed, keeping previous set:', e);
   }
   profileChatStartersLoading = false;
   renderProfileChatMessages();
@@ -961,10 +991,6 @@ async function finishProfileChatSession(){
 
 // Used by empty-profile prompts elsewhere in the app to send the student to the one
 // place the profile now lives: the Profile tab.
-function jumpToProfile(){
-  goToProfileChat();
-}
-
 // ============================================================
 // "Suggest opportunities for me" — profile-based discovery. Skips straight
 // to matching using the synthesized profile, asking clarifying questions
@@ -1581,11 +1607,6 @@ function showPage(name){
   if(name === 'profile'){ renderProfile(); renderProfileFit(); initProfileChat(); }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
-function jumpToKind(kind){
-  showPage('wizard');
-  selectKind(kind);
-}
-
 // ---------- Calendar/List toggle + type filter within the Tracker page ----------
 function toggleNavDropdownPanel(panelId){
   const panel = document.getElementById(panelId);
@@ -1617,32 +1638,9 @@ function updateOppViewUI(){
   document.getElementById('oppViewListBtn').classList.toggle('active', trackerOppView === 'list');
 }
 
-// Active / Saved shown as two full-page tabs within List view, rather than a
-// cramped side-by-side split, so each gets full width to itself.
-let trackerListTab = 'active';
-function setTrackerListTab(tab){
-  trackerListTab = tab;
-  updateTrackerListTabUI();
-}
-function updateTrackerListTabUI(){
-  const activeBtn = document.getElementById('trackerTabActiveBtn');
-  const savedBtn = document.getElementById('trackerTabSavedBtn');
-  if(activeBtn) activeBtn.classList.toggle('active', trackerListTab === 'active');
-  if(savedBtn) savedBtn.classList.toggle('active', trackerListTab === 'saved');
-  const activePane = document.getElementById('trackerTabActivePane');
-  const savedPane = document.getElementById('trackerTabSavedPane');
-  if(activePane) activePane.classList.toggle('hidden', trackerListTab !== 'active');
-  if(savedPane) savedPane.classList.toggle('hidden', trackerListTab !== 'saved');
-}
-
 function goToTrackerCard(id){
   if(!id) return;
   setOppView('list');
-  if(trackerSavedState[id]){
-    setTrackerListTab('saved');
-  }else{
-    setTrackerListTab('active');
-  }
   requestAnimationFrame(() => {
     const card = document.getElementById('tracker-card-' + id);
     if(!card) return;
@@ -1734,6 +1732,28 @@ function hashColor(seed){
   for(let i = 0; i < seed.length; i++){ hash = seed.charCodeAt(i) + ((hash << 5) - hash); }
   const hue = Math.abs(hash * GOLDEN_ANGLE) % 360;
   return { bg:`hsl(${hue}, 78%, 88%)`, border:`hsl(${hue}, 75%, 42%)`, text:`hsl(${hue}, 80%, 24%)` };
+}
+// Curated, maximally-spread-apart hues (picked by hand, not evenly stepped, so
+// even neighboring palette slots stay visually distinguishable) for calendar
+// entry colors. Even with golden-angle spacing, hashColor() picks a hue
+// per-opportunity independently, so with enough items on screen at once two
+// unrelated opportunities can still land on the same or a near-identical hue.
+// assignCalendarColors() instead hands out these hues in first-appearance
+// order across everything currently visible in the calendar, guaranteeing no
+// two simultaneously-displayed opportunities collide until the palette itself
+// runs out (at which point it falls back to hashColor for the overflow).
+const CALENDAR_PALETTE_HUES = [210, 20, 150, 280, 45, 340, 170, 265, 5, 195, 320, 95, 240, 60, 300, 130];
+const CALENDAR_PALETTE = CALENDAR_PALETTE_HUES.map(hue => (
+  { bg:`hsl(${hue}, 78%, 88%)`, border:`hsl(${hue}, 75%, 42%)`, text:`hsl(${hue}, 80%, 24%)` }
+));
+function assignCalendarColors(venueIds){
+  const map = new Map();
+  let next = 0;
+  venueIds.forEach(id => {
+    if(map.has(id)) return;
+    map.set(id, next < CALENDAR_PALETTE.length ? CALENDAR_PALETTE[next++] : hashColor(id));
+  });
+  return map;
 }
 const MONTH_NAMES = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
 
@@ -1863,14 +1883,14 @@ function deriveKeyDatesForItems(items){
   });
   return dates;
 }
-function monthCardHTML(ym, entries, isCurrent){
+function monthCardHTML(ym, entries, isCurrent, colorMap){
   const [y, m] = ym.split('-');
   return `
     <div class="month-card${isCurrent ? ' current-month' : ''}">
       <div class="month-head">${MONTH_NAMES[parseInt(m,10)-1]} ${y}</div>
       <div class="month-entries">
         ${entries.map(e => {
-          const c = hashColor(e.venueId);
+          const c = colorMap.get(e.venueId) || hashColor(e.venueId);
           return `
           <div class="month-entry" style="background:${c.bg};border-left-color:${c.border};cursor:pointer;" onclick="goToTrackerCard('${e.venueId}')" title="Jump to ${e.label}">
             <span class="day" style="color:${c.text};">${parseInt(e.date.slice(8,10),10)}</span>
@@ -1903,11 +1923,18 @@ function renderCalendarSwimlanes(){
     return;
   }
 
+  // Build one color map across every lane so the same opportunity gets the same
+  // color everywhere it appears, and no two different opportunities visible at
+  // once share a color (see assignCalendarColors above).
+  const allVenueIds = [];
+  lanes.forEach(lane => lane.dates.forEach(d => allVenueIds.push(d.venueId)));
+  const colorMap = assignCalendarColors(allVenueIds);
+
   container.innerHTML = lanes.map(lane => {
     const byMonth = {};
     lane.dates.forEach(d => { const ym = d.date.slice(0,7); (byMonth[ym] = byMonth[ym] || []).push(d); });
     const months = Object.keys(byMonth).sort();
-    const monthsHTML = months.map(ym => monthCardHTML(ym, byMonth[ym].sort((a,b) => a.date.localeCompare(b.date)), ym === currentYM)).join('');
+    const monthsHTML = months.map(ym => monthCardHTML(ym, byMonth[ym].sort((a,b) => a.date.localeCompare(b.date)), ym === currentYM, colorMap)).join('');
     return `
       <div class="calendar-swimlane">
         <div class="swimlane-head text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">${lane.label}</div>
@@ -2100,12 +2127,12 @@ function renderHomeProfileTeaser(){
   }
 
   wrap.innerHTML = `
-    <div class="pop-card bg-white p-5 rounded-3xl flex flex-wrap items-center justify-between gap-4">
-      <div class="min-w-0">
-        <p class="font-heading font-bold text-lg flex items-center gap-2">Your Story So Far</p>
-        <p class="text-xs text-slate-500 font-medium mt-1 line-clamp-3">${escapeHtmlTracker(studentProfile.synthesized)}</p>
+    <div class="pop-card bg-white p-6 rounded-3xl space-y-4">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h2 class="font-heading font-bold text-xl">Your Story So Far</h2>
+        <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="goToProfile()">View &amp; deepen it →</button>
       </div>
-      <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="goToProfile()">View &amp; deepen it →</button>
+      <p class="text-sm text-slate-500 font-medium line-clamp-3">${escapeHtmlTracker(studentProfile.synthesized)}</p>
     </div>
   `;
 }
@@ -2121,20 +2148,16 @@ function renderProfileFit(){
 
   if(!studentProfile.synthesized){
     wrap.innerHTML = `
-      <div class="bg-slate-50 border-2 border-slate-200 border-dashed rounded-2xl p-6 text-center">
-        <p class="text-sm font-bold text-slate-400 mb-4">Nothing here yet — chat with the bot below to build your profile.</p>
-        <button class="pop-btn bg-white text-slate-900 font-bold px-4 py-2 rounded-xl text-sm" onclick="focusProfileChat()">↓ Start chatting</button>
-      </div>
+      <p class="empty-state">Nothing here yet — chat with the bot below to build your profile.</p>
+      <button class="w-full pop-btn bg-orange-500 text-slate-900 font-extrabold text-sm px-5 py-3.5 rounded-2xl flex items-center justify-center gap-2" onclick="focusProfileChat()">↓ Start chatting</button>
     `;
     return;
   }
 
   wrap.innerHTML = `
-    <div class="bg-indigo-50 border-2 border-slate-900 rounded-2xl p-4 sm:p-6">
-      ${profileSummaryBodyHTML(studentProfile.synthesized)}
-      <div class="flex gap-3 pt-4 border-t-2 border-indigo-200">
-        <button class="text-xs font-bold text-rose-600 hover:underline" onclick="clearProfile(this)">🗑 Clear profile</button>
-      </div>
+    ${profileSummaryBodyHTML(studentProfile.synthesized)}
+    <div class="flex gap-3 pt-4 border-t-2 border-slate-100">
+      <button class="text-xs font-bold text-rose-600 hover:underline" onclick="clearProfile(this)">🗑 Clear profile</button>
     </div>
   `;
 }
@@ -2268,7 +2291,6 @@ function renderTrackerPage(){
   document.getElementById('allOppCards').innerHTML = sortedItems.length
     ? sortedItems.map(i => trackerCardHTML(i, BUCKET_LABELS[bucketByItemId[i.id]])).join('')
     : '<p class="empty-state">Nothing tracked here yet — add opportunities via the Finder or the button above.</p>';
-  document.getElementById('allOppCount').textContent = String(sortedItems.length).padStart(2, '0');
 
   const savedEntries = [];
   ALL_BUCKETS.forEach(bucket => {

@@ -97,19 +97,19 @@
       <nav class="flex items-center gap-1 sm:gap-1.5 app-nav-inner">
         <button onclick="showPage('home')" id="navHomeBtn" class="nav-tab-btn active flex items-center gap-1.5 font-bold text-xs sm:text-sm px-3 sm:px-4 py-2 rounded-full">
           <svg class="w-[18px] h-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg>
-          <span class="hidden sm:inline">Dashboard</span>
+          <span class="hidden sm:inline">Home Base</span>
         </button>
         <button onclick="showPage('profile')" id="navProfileBtn" class="nav-tab-btn flex items-center gap-1.5 font-bold text-xs sm:text-sm px-3 sm:px-4 py-2 rounded-full">
           <svg class="w-[18px] h-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
-          <span class="hidden sm:inline">Profile</span>
+          <span class="hidden sm:inline">My Vibe</span>
         </button>
         <button onclick="showPage('wizard')" id="navWizardBtn" class="nav-tab-btn flex items-center gap-1.5 font-bold text-xs sm:text-sm px-3 sm:px-4 py-2 rounded-full">
           <svg class="w-[18px] h-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <span class="hidden sm:inline">Finder</span>
+          <span class="hidden sm:inline">Scout</span>
         </button>
         <button onclick="showPage('tracker')" id="navTrackerBtn" class="nav-tab-btn flex items-center gap-1.5 font-bold text-xs sm:text-sm px-3 sm:px-4 py-2 rounded-full">
           <svg class="w-[18px] h-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="16" y1="3" x2="16" y2="7"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-          <span class="hidden sm:inline">Tracker</span>
+          <span class="hidden sm:inline">Your Grind</span>
         </button>
       </nav>
 
@@ -406,7 +406,7 @@
           </div>
 
           <div class="relative nav-dropdown">
-            <button class="pop-btn bg-orange-500 text-slate-900 font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center gap-2" id="trackerIntakeToggle" onclick="toggleNavDropdownPanel('trackerIntakeForm')">
+            <button class="pop-btn bg-white text-slate-900 font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center gap-2" id="trackerIntakeToggle" onclick="toggleNavDropdownPanel('trackerIntakeForm')">
               <span>➕</span> Add Opportunity
             </button>
 
@@ -441,23 +441,16 @@
 
       <!-- List View -->
       <div id="oppViewList" class="hidden">
-        <!-- Active / Saved Tabs -->
-        <div class="flex gap-2 mb-6 view-toggle">
-          <button class="pop-btn bg-indigo-200 font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center gap-2 tracker-tab-btn active" id="trackerTabActiveBtn" onclick="setTrackerListTab('active')">
-            📋 Active Tracked <span class="bg-white border-2 border-slate-900 text-xs font-bold px-2.5 py-1 rounded-full count" id="allOppCount">00</span>
-          </button>
-          <button class="pop-btn bg-amber-200 font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center gap-2 tracker-tab-btn" id="trackerTabSavedBtn" onclick="setTrackerListTab('saved')">
-            ⭐ Wishlist <span class="bg-white border-2 border-slate-900 text-xs font-bold px-2.5 py-1 rounded-full count" id="savedDrawerCount">00</span>
-          </button>
-        </div>
+        <!-- Actively tracked -->
+        <div class="space-y-4 cards" id="allOppCards"></div>
 
-        <!-- Active Tracked pane -->
-        <div id="trackerTabActivePane">
-          <div class="space-y-4 cards" id="allOppCards"></div>
-        </div>
-
-        <!-- Wishlist / Saved pane -->
-        <div id="trackerTabSavedPane" class="hidden space-y-4">
+        <!-- Saved for later — sits below the actively tracked cards; a card moves down
+             here automatically (via renderTrackerPage's re-render) as soon as its ☆ is clicked. -->
+        <div class="mt-10">
+          <div class="flex items-center gap-2 mb-4">
+            <h2 class="font-heading font-bold text-xl">⭐ Saved for Later</h2>
+            <span class="bg-white border-2 border-slate-900 text-xs font-bold px-2.5 py-1 rounded-full count" id="savedDrawerCount">00</span>
+          </div>
           <div class="space-y-4 cards" id="savedCards"></div>
         </div>
       </div>
@@ -467,7 +460,7 @@
     <!-- ============== PAGE: PROFILE ============== -->
     <section id="page-profile" class="hidden space-y-6">
 
-      <div class="pop-card bg-white p-6 rounded-3xl space-y-2">
+      <div class="pop-card bg-white p-6 rounded-3xl space-y-4">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <h2 class="font-heading font-bold text-xl">Your Story So Far</h2>
           <span class="text-xs font-bold px-3 py-1.5 rounded-full whitespace-nowrap" id="profileUpdated"></span>
@@ -478,11 +471,9 @@
       </div>
 
       <div class="pop-card bg-white p-6 rounded-3xl space-y-4" id="profileChatCard">
-        <div>
-          <h2 class="font-heading font-bold text-xl">Spill the Tea</h2>
-          <p class="text-xs text-slate-500 font-medium mt-1">A few fun questions to round out your profile — music, sports, weird hobbies, side projects, whatever makes you <em>you</em>. Answer as many as you like, then hit "I'm done for now" and I'll fold it all into your profile summary above.</p>
-        </div>
-        <div class="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 space-y-3 max-h-[420px] overflow-y-auto" id="profileChatMessages"></div>
+        <h2 class="font-heading font-bold text-xl">Spill the Tea</h2>
+        <p class="text-xs text-slate-500 font-medium">A few fun questions to round out your profile — music, sports, weird hobbies, side projects, whatever makes you <em>you</em>. Answer as many as you like, then hit "I'm done for now" and I'll fold it all into your profile summary above.</p>
+        <div class="bg-slate-50 border-2 border-slate-900 rounded-2xl p-4 space-y-3 max-h-[420px] overflow-y-auto" id="profileChatMessages"></div>
         <p class="text-xs font-bold text-indigo-600 min-h-[1em]" id="profileChatStatus"></p>
         <div class="flex flex-col sm:flex-row gap-2">
           <input type="text" id="profileChatInput" class="flex-1 border-2 border-slate-900 rounded-xl p-3 text-sm font-medium" placeholder="Type your answer..." onkeydown="if(event.key==='Enter'){event.preventDefault(); sendProfileChatMessage();}">

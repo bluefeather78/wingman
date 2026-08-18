@@ -829,6 +829,102 @@ function initProfileChat(){
   if(!profileChatHistory.length && !profileChatStarters && !profileChatStartersLoading){
     loadProfileChatStarters();
   }
+  initProfileChatVoiceUI();
+}
+
+// ============================================================
+// Profile builder chat — voice input/output (Web Speech API)
+// ============================================================
+// SpeechRecognition (dictating an answer) and speechSynthesis (the bot reading its
+// question aloud) are two unrelated browser APIs with independent support — each control
+// is feature-detected and hidden individually rather than gating on one combined
+// "voice mode", so e.g. a browser with TTS but no STT still gets the speaker toggle.
+const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+let voiceRecognition = null; // lazily constructed on first mic tap, then reused
+let voiceListening = false;
+let voiceOutputEnabled = false; // off by default — opt-in per session, resets on reload
+
+function initProfileChatVoiceUI(){
+  const micBtn = document.getElementById('profileChatMicBtn');
+  const speakerBtn = document.getElementById('profileChatSpeakerBtn');
+  if(micBtn) micBtn.classList.toggle('hidden', !SpeechRecognitionCtor);
+  if(speakerBtn) speakerBtn.classList.toggle('hidden', !('speechSynthesis' in window));
+}
+
+// Toggles dictation on/off. Interim results stream live into the text input as the student
+// talks so they can see it working (and edit before sending); the final transcript is
+// auto-submitted the moment recognition naturally ends, mirroring hitting Enter on a typed
+// answer — voice shouldn't need its own separate "send" step.
+function toggleVoiceInput(){
+  if(!SpeechRecognitionCtor) return;
+  if(voiceListening){
+    voiceRecognition && voiceRecognition.stop();
+    return;
+  }
+  if(!voiceRecognition){
+    voiceRecognition = new SpeechRecognitionCtor();
+    voiceRecognition.lang = 'en-US';
+    voiceRecognition.interimResults = true;
+    voiceRecognition.maxAlternatives = 1;
+    voiceRecognition.onresult = (e) => {
+      const input = document.getElementById('profileChatInput');
+      if(!input) return;
+      let transcript = '';
+      for(let i = 0; i < e.results.length; i++){ transcript += e.results[i][0].transcript; }
+      input.value = transcript;
+    };
+    voiceRecognition.onend = () => {
+      voiceListening = false;
+      updateVoiceMicUI();
+      const input = document.getElementById('profileChatInput');
+      if(input && input.value.trim()) sendProfileChatMessage();
+    };
+    voiceRecognition.onerror = (e) => {
+      console.error('Speech recognition error:', e.error);
+      voiceListening = false;
+      updateVoiceMicUI();
+    };
+  }
+  try{
+    voiceRecognition.start();
+    voiceListening = true;
+    updateVoiceMicUI();
+  }catch(e){
+    console.error('Could not start speech recognition:', e);
+  }
+}
+
+function updateVoiceMicUI(){
+  const micBtn = document.getElementById('profileChatMicBtn');
+  if(!micBtn) return;
+  micBtn.classList.toggle('mic-listening', voiceListening);
+  micBtn.textContent = voiceListening ? '⏺' : '🎤';
+  micBtn.title = voiceListening ? 'Stop recording' : 'Speak your answer';
+}
+
+// Mutes/unmutes the bot reading its questions aloud. Flipping it on mid-chat immediately
+// reads the most recent bot question so it doesn't feel broken/inert until the next turn.
+function toggleVoiceOutput(){
+  voiceOutputEnabled = !voiceOutputEnabled;
+  const btn = document.getElementById('profileChatSpeakerBtn');
+  if(btn){
+    btn.textContent = voiceOutputEnabled ? '🔊' : '🔇';
+    btn.title = voiceOutputEnabled ? 'Voice replies on — click to mute' : 'Turn on spoken questions';
+    btn.classList.toggle('bg-indigo-100', voiceOutputEnabled);
+  }
+  if(voiceOutputEnabled){
+    const lastBot = [...profileChatHistory].reverse().find(m => m.role === 'bot');
+    if(lastBot) speakProfileChatText(lastBot.text);
+  }else if('speechSynthesis' in window){
+    window.speechSynthesis.cancel();
+  }
+}
+
+function speakProfileChatText(text){
+  if(!voiceOutputEnabled || !('speechSynthesis' in window) || !text) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  window.speechSynthesis.speak(utter);
 }
 
 function renderProfileChatMessages(){
@@ -913,6 +1009,7 @@ function pickProfileChatStarter(i){
   profileChatHistory.push({ role: 'bot', text: q });
   profileChatStarters = null;
   renderProfileChatMessages();
+  speakProfileChatText(q);
   const input = document.getElementById('profileChatInput');
   if(input) input.focus();
 }
@@ -931,15 +1028,18 @@ async function profileChatNextQuestion(){
 async function sendProfileChatBotTurn(){
   profileChatBusy = true;
   renderProfileChatMessages();
+  let botText;
   try{
     const question = await profileChatNextQuestion();
-    profileChatHistory.push({ role: 'bot', text: question || "What's something you're into that might surprise people?" });
+    botText = question || "What's something you're into that might surprise people?";
   }catch(e){
     console.error('Profile chat question failed:', e);
-    profileChatHistory.push({ role: 'bot', text: "Hmm, I couldn't think of a question just now — want to just tell me something about yourself?" });
+    botText = "Hmm, I couldn't think of a question just now — want to just tell me something about yourself?";
   }
+  profileChatHistory.push({ role: 'bot', text: botText });
   profileChatBusy = false;
   renderProfileChatMessages();
+  speakProfileChatText(botText);
 }
 
 async function sendProfileChatMessage(){
@@ -2156,8 +2256,9 @@ function renderProfileFit(){
 
   wrap.innerHTML = `
     ${profileSummaryBodyHTML(studentProfile.synthesized)}
-    <div class="flex gap-3 pt-4 border-t-2 border-slate-100">
+    <div class="flex items-center justify-between gap-3 pt-4 border-t-2 border-slate-100">
       <button class="text-xs font-bold text-rose-600 hover:underline" onclick="clearProfile(this)">🗑 Clear profile</button>
+      <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2 rounded-xl text-xs" onclick="focusProfileChat()">Go deeper on your story →</button>
     </div>
   `;
 }

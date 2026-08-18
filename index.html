@@ -105,11 +105,11 @@
         </button>
         <button onclick="showPage('wizard')" id="navWizardBtn" class="nav-tab-btn flex items-center gap-1.5 font-bold text-xs sm:text-sm px-3 sm:px-4 py-2 rounded-full">
           <svg class="w-[18px] h-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <span class="hidden sm:inline">Scout</span>
+          <span class="hidden sm:inline">Fresh Finds</span>
         </button>
         <button onclick="showPage('tracker')" id="navTrackerBtn" class="nav-tab-btn flex items-center gap-1.5 font-bold text-xs sm:text-sm px-3 sm:px-4 py-2 rounded-full">
           <svg class="w-[18px] h-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="16" y1="3" x2="16" y2="7"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-          <span class="hidden sm:inline">Your Grind</span>
+          <span class="hidden sm:inline">Quest Log</span>
         </button>
       </nav>
 
@@ -471,12 +471,18 @@
       </div>
 
       <div class="pop-card bg-white p-6 rounded-3xl space-y-4" id="profileChatCard">
-        <h2 class="font-heading font-bold text-xl">Spill the Tea</h2>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="font-heading font-bold text-xl">Spill the Tea</h2>
+          <button type="button" id="profileChatSpeakerBtn" class="pop-btn bg-white text-slate-900 font-bold w-10 h-10 rounded-xl text-base shrink-0 hidden" onclick="toggleVoiceOutput()" title="Turn on spoken questions">🔇</button>
+        </div>
         <p class="text-xs text-slate-500 font-medium">A few fun questions to round out your profile — music, sports, weird hobbies, side projects, whatever makes you <em>you</em>. Answer as many as you like, then hit "I'm done for now" and I'll fold it all into your profile summary above.</p>
         <div class="bg-slate-50 border-2 border-slate-900 rounded-2xl p-4 space-y-3 max-h-[420px] overflow-y-auto" id="profileChatMessages"></div>
         <p class="text-xs font-bold text-indigo-600 min-h-[1em]" id="profileChatStatus"></p>
         <div class="flex flex-col sm:flex-row gap-2">
-          <input type="text" id="profileChatInput" class="flex-1 border-2 border-slate-900 rounded-xl p-3 text-sm font-medium" placeholder="Type your answer..." onkeydown="if(event.key==='Enter'){event.preventDefault(); sendProfileChatMessage();}">
+          <div class="flex-1 flex gap-2">
+            <input type="text" id="profileChatInput" class="flex-1 border-2 border-slate-900 rounded-xl p-3 text-sm font-medium" placeholder="Type your answer..." onkeydown="if(event.key==='Enter'){event.preventDefault(); sendProfileChatMessage();}">
+            <button type="button" id="profileChatMicBtn" class="pop-btn bg-white text-slate-900 font-bold w-12 rounded-xl text-base shrink-0 hidden" onclick="toggleVoiceInput()" title="Speak your answer">🎤</button>
+          </div>
           <div class="flex gap-2">
             <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" id="profileChatSendBtn" onclick="sendProfileChatMessage()">Send</button>
             <button class="pop-btn bg-white font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="finishProfileChatSession()">I'm done for now</button>

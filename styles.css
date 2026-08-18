@@ -301,3 +301,14 @@ textarea:focus, input:focus, select:focus {
   transition: background-color 0.15s;
 }
 .chat-starter-btn:hover { background: #EEF2FF; }
+
+/* ---------- Profile builder chat: voice input (mic) ---------- */
+@keyframes micPulse {
+  0%, 100% { box-shadow: 3px 3px 0px #0F172A; }
+  50% { box-shadow: 3px 3px 0px #0F172A, 0 0 0 6px rgba(225, 29, 72, 0.25); }
+}
+.mic-listening {
+  background: #E11D48 !important;
+  color: #fff !important;
+  animation: micPulse 1.2s ease-in-out infinite;
+}

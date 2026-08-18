@@ -339,7 +339,7 @@ function renderKindGrid(){
     const c = KIND_CONFIG[key];
     if(c.comingSoon){
       return `
-        <div class="pop-card bg-slate-50 border-2 border-slate-300 p-4 rounded-2xl opacity-60 text-left">
+        <div class="bg-slate-50 border-2 border-slate-300 p-4 rounded-2xl opacity-60 text-left">
           <div class="flex justify-between items-start gap-2">
             <span class="font-heading font-bold text-slate-500">${c.name}</span>
             <span class="bg-amber-100 text-amber-800 font-bold text-[10px] uppercase px-2 py-0.5 rounded-full border border-amber-800">Soon</span>
@@ -349,7 +349,7 @@ function renderKindGrid(){
       `;
     }
     return `
-      <button class="pop-card bg-white p-4 rounded-2xl hover:bg-slate-50 text-left w-full transition-colors" onclick="selectKind('${key}')">
+      <button class="border-2 border-slate-900 bg-white p-4 rounded-2xl hover:bg-slate-50 text-left w-full transition-colors" onclick="selectKind('${key}')">
         <span class="block font-heading font-bold text-slate-900">${c.name}</span>
         <span class="block text-xs text-slate-500 mt-1">${c.desc}</span>
       </button>
@@ -428,7 +428,7 @@ function quizAnswer(value){
     <p class="font-heading font-bold text-lg mb-4 quiz-question">${branch.question}</p>
     <div class="space-y-3 quiz-options">
       ${branch.options.map(o => `
-        <button class="pop-card w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="selectKind('${o.kind}')">
+        <button class="border-2 border-slate-900 w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="selectKind('${o.kind}')">
           <strong class="block font-heading text-lg">${o.title}</strong>
           <span class="text-sm text-slate-500">${o.desc}</span>
         </button>
@@ -485,7 +485,10 @@ function preFilter(description, subjectHints, typeFilter){
   });
   scored.sort((a, b) => b.score - a.score);
   const withScore = scored.filter(s => s.score > 0);
-  const pool = (withScore.length >= 60 ? withScore : scored).slice(0, 180).map(s => s.opp);
+  // Capped at 100 (was 180) — rankCandidates only ever keeps the best 10-12 anyway,
+  // and a smaller candidate payload means Claude has less to read before it can
+  // respond, which was a real chunk of the wait on a search.
+  const pool = (withScore.length >= 60 ? withScore : scored).slice(0, 100).map(s => s.opp);
   return pool;
 }
 
@@ -1272,21 +1275,29 @@ async function runProfileSuggestSearch(){
     return;
   }
   try{
-    const merged = [];
-    for(const kind of kinds){
+    statusEl.textContent = 'Understanding your profile…';
+    // Subject inference only depends on the profile text, not which kind is being
+    // searched — compute it once and reuse across every kind below instead of
+    // re-asking Claude the same question once per kind (this used to be the
+    // slowest part of a multi-kind Suggest search: up to 2 sequential API calls
+    // per kind, one-at-a-time).
+    const subjects = await inferSubjects(description);
+
+    statusEl.textContent = kinds.length > 1 ? 'Searching every opportunity type…' : `Searching ${KIND_CONFIG[kinds[0]] ? KIND_CONFIG[kinds[0]].name.toLowerCase() + 's' : 'opportunities'}…`;
+    // Each kind's ranking call is independent of the others — run them concurrently
+    // instead of one at a time, so wall-clock time is bounded by the slowest single
+    // call instead of the sum of all of them.
+    const perKind = await Promise.all(kinds.map(async kind => {
       const cfg = KIND_CONFIG[kind];
-      if(!cfg) continue;
-      statusEl.textContent = `Searching ${cfg.name.toLowerCase()}s…`;
-      const subjects = await inferSubjects(description);
+      if(!cfg) return [];
       let pool = preFilter(description, subjects, cfg.dbTypes);
       if(pool.length < 20){ pool = preFilter(description, subjects, cfg.dbTypes); }
       const ranked = await rankCandidates(description, pool, '');
       const byId = {};
       pool.forEach(o => { byId[o.id] = o; });
-      ranked.filter(r => byId[r.id]).forEach(r => {
-        merged.push({ opp: byId[r.id], reason: r.reason || '', tier: ['strong','look'].includes(r.tier) ? r.tier : 'look', kind });
-      });
-    }
+      return ranked.filter(r => byId[r.id]).map(r => ({ opp: byId[r.id], reason: r.reason || '', tier: ['strong','look'].includes(r.tier) ? r.tier : 'look', kind }));
+    }));
+    const merged = perKind.flat();
     if(!merged.length){
       throw new Error('No matches came back — try adding more detail to your profile, or browse by type instead.');
     }
@@ -1496,7 +1507,7 @@ function renderResultFilterBar(list){
         <button class="pop-btn bg-white font-bold text-xs px-3 py-2 rounded-xl flex items-center gap-1" onclick="toggleNavDropdownPanel('${panelId}')">
           <span>▾</span> ${f.label}${activeCount ? ` (${activeCount})` : ''}
         </button>
-        <div class="absolute left-0 top-full mt-2 w-56 pop-card bg-white p-3 rounded-2xl z-50 hidden nav-dropdown-panel" id="${panelId}">
+        <div class="absolute left-0 top-full mt-2 w-56 bg-white p-3 rounded-2xl z-50 hidden nav-dropdown-panel border-2 border-slate-900" id="${panelId}">
           <div class="space-y-1">
             ${values.map(v => `
               <label class="flex items-center gap-2 text-xs font-medium py-1 cursor-pointer">
@@ -1833,13 +1844,13 @@ function computeProgressStatus(item){
   if(daysUntil(lastStep) < 0) return 'completed'; // last known milestone for the cycle has passed
   return 'in_progress';
 }
-// Opportunity event-timing state pill — always green/blue/grey for Happening Now /
+// Opportunity event-timing state pill — always green/orange/red for Happening Now /
 // Future Event / Past Event, everywhere in the app (see .status-pill.status-opp-* in styles.css).
 function statusPillHTML(status){
   return `<span class="status-pill status-opp-${status}">${PROGRESS_STATUS_LABEL[status]}</span>`;
 }
 // Shared segmented progress bar + legend, used by the Home "Opportunities you are tracking" card
-// (kind:'opp' — green/blue/grey) and the "Coming up" to-do list (kind:'task' — red/orange/green).
+// (kind:'opp' — green/orange/red) and the "Coming up" to-do list (kind:'task' — red/orange/green).
 function progressBarHTML(counts, total, labels = PROGRESS_STATUS_LABEL, order = ['in_progress', 'not_started', 'completed'], kind = 'opp'){
   if(!total){
     return { track: '', legend: '<p class="empty-state">Nothing here yet.</p>' };
@@ -2096,7 +2107,7 @@ function renderStats(){
   if(ctaEl){
     ctaEl.innerHTML = s.total === 0
       ? `<button class="w-full pop-btn bg-orange-500 text-slate-900 font-extrabold text-sm px-5 py-3.5 rounded-2xl flex items-center justify-center gap-2" onclick="showPage('wizard')">🔍 Find your first opportunity to track →</button>`
-      : `<button class="pop-btn bg-white text-slate-900 font-bold text-xs px-4 py-2 rounded-xl" onclick="showPage('wizard')">+ Find more opportunities to track</button>`;
+      : `<button class="pop-btn bg-white text-slate-900 font-bold text-xs px-4 py-2 rounded-xl" onclick="showPage('wizard')">Look for Fresh Finds</button>`;
   }
 }
 
@@ -2151,7 +2162,7 @@ function renderHomeTodo(){
       </div>
     `;
   }).join('');
-  listEl.insertAdjacentHTML('beforeend', `<button class="w-full text-center text-xs font-bold text-indigo-600 hover:underline pt-2" onclick="event.stopPropagation(); openTodoModal();">View all tasks →</button>`);
+  listEl.insertAdjacentHTML('beforeend', `<div class="text-left pt-2"><button class="pop-btn bg-white text-slate-900 font-bold text-xs px-4 py-2 rounded-xl" onclick="event.stopPropagation(); openTodoModal();">See all tasks</button></div>`);
 }
 
 // ---------- Home to-do expand modal ----------
@@ -2226,7 +2237,7 @@ function renderHomeProfileTeaser(){
 
   if(!hasProfile){
     wrap.innerHTML = `
-      <div class="pop-card urgent-pulse bg-gradient-to-br from-orange-400 to-rose-500 text-white p-6 rounded-3xl flex flex-wrap items-center justify-between gap-4">
+      <div class="urgent-pulse bg-gradient-to-br from-orange-400 to-rose-500 text-white p-6 rounded-3xl flex flex-wrap items-center justify-between gap-4 border-2 border-slate-900">
         <div>
           <p class="font-heading font-extrabold text-lg">⚡ Your profile is empty!</p>
           <p class="text-sm font-medium opacity-90 mt-1 max-w-md">Every match in the Finder gets better once we know you. Takes 2 minutes — go build it now.</p>
@@ -2239,7 +2250,7 @@ function renderHomeProfileTeaser(){
 
   if(isStale){
     wrap.innerHTML = `
-      <div class="pop-card urgent-pulse bg-amber-100 border-2 border-amber-500 p-6 rounded-3xl flex flex-wrap items-center justify-between gap-4">
+      <div class="urgent-pulse bg-amber-100 border-2 border-amber-500 p-6 rounded-3xl flex flex-wrap items-center justify-between gap-4">
         <div>
           <p class="font-heading font-extrabold text-lg text-amber-900">⏰ Your profile is ${days} days old</p>
           <p class="text-sm font-medium text-amber-800 mt-1 max-w-md">Stale profiles mean stale matches — a quick refresh keeps your suggestions sharp.</p>
@@ -2251,7 +2262,7 @@ function renderHomeProfileTeaser(){
   }
 
   wrap.innerHTML = `
-    <div class="pop-card bg-white p-6 rounded-3xl space-y-4">
+    <div class="bg-white p-6 rounded-3xl space-y-4 border-2 border-slate-900">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h2 class="font-heading font-bold text-xl">Your Story So Far</h2>
         <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="goToProfile()">View &amp; deepen it →</button>

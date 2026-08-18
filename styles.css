@@ -147,26 +147,27 @@ textarea:focus, input:focus, select:focus {
   background: #F1F5F9;
 }
 .progress-seg { height: 100%; transition: width 0.3s ease; }
-/* Opportunity event-timing state (Happening Now / Future Event / Past Event) — green /
-   blue / grey — used consistently for this state everywhere in the app. */
-.progress-seg.seg-opp-in_progress { background: #10B981; }
-.progress-seg.seg-opp-not_started { background: #3B82F6; }
-.progress-seg.seg-opp-completed { background: #94A3B8; }
-/* Task (action-item) state (Not Started / In Progress / Completed) — red / orange /
-   green — a separate color code from the opportunity state above, even though the
-   underlying keys are the same three names. */
-.progress-seg.seg-task-not_started { background: #EF4444; }
-.progress-seg.seg-task-in_progress { background: #F97316; }
-.progress-seg.seg-task-completed { background: #10B981; }
+/* Shared soft palette across both status systems below — sage green = Happening Now /
+   Completed, soft red = Past Event / Not Started, soft orange = Future Event / In
+   Progress. The sage green matches the welcome banner's bg-emerald-100. */
+/* Opportunity event-timing state (Happening Now / Future Event / Past Event). */
+.progress-seg.seg-opp-in_progress { background: #6EE7B7; }
+.progress-seg.seg-opp-not_started { background: #FDBA74; }
+.progress-seg.seg-opp-completed { background: #FDA4AF; }
+/* Task (action-item) state (Not Started / In Progress / Completed) — same three colors,
+   remapped since a task's own progress runs the opposite direction of event timing. */
+.progress-seg.seg-task-not_started { background: #FDA4AF; }
+.progress-seg.seg-task-in_progress { background: #FDBA74; }
+.progress-seg.seg-task-completed { background: #6EE7B7; }
 
 .progress-legend-item { display: flex; align-items: center; gap: 6px; }
 .progress-legend-dot { width: 10px; height: 10px; border-radius: 999px; flex-shrink: 0; }
-.progress-legend-dot.seg-opp-in_progress { background: #10B981; }
-.progress-legend-dot.seg-opp-not_started { background: #3B82F6; }
-.progress-legend-dot.seg-opp-completed { background: #94A3B8; }
-.progress-legend-dot.seg-task-not_started { background: #EF4444; }
-.progress-legend-dot.seg-task-in_progress { background: #F97316; }
-.progress-legend-dot.seg-task-completed { background: #10B981; }
+.progress-legend-dot.seg-opp-in_progress { background: #6EE7B7; }
+.progress-legend-dot.seg-opp-not_started { background: #FDBA74; }
+.progress-legend-dot.seg-opp-completed { background: #FDA4AF; }
+.progress-legend-dot.seg-task-not_started { background: #FDA4AF; }
+.progress-legend-dot.seg-task-in_progress { background: #FDBA74; }
+.progress-legend-dot.seg-task-completed { background: #6EE7B7; }
 
 /* ---------- Status pills (system-controlled, Tracker + Home to-do) ---------- */
 .status-pill {
@@ -179,12 +180,13 @@ textarea:focus, input:focus, select:focus {
   white-space: nowrap;
   flex-shrink: 0;
 }
-/* Opportunity event-timing state: green = Happening Now, blue = Future Event, grey = Past Event. */
+/* Opportunity event-timing state: sage green = Happening Now, soft orange = Future Event,
+   soft red = Past Event. */
 .status-pill.status-opp-in_progress { background: #D1FAE5; color: #065F46; }
-.status-pill.status-opp-not_started { background: #DBEAFE; color: #1E3A8A; }
-.status-pill.status-opp-completed { background: #E2E8F0; color: #334155; }
-/* Task state: red = Not Started, orange = In Progress, green = Completed. */
-.status-pill.status-task-not_started { background: #FEE2E2; color: #991B1B; }
+.status-pill.status-opp-not_started { background: #FFEDD5; color: #9A3412; }
+.status-pill.status-opp-completed { background: #FFE4E6; color: #9F1239; }
+/* Task state: soft red = Not Started, soft orange = In Progress, sage green = Completed. */
+.status-pill.status-task-not_started { background: #FFE4E6; color: #9F1239; }
 .status-pill.status-task-in_progress { background: #FFEDD5; color: #9A3412; }
 .status-pill.status-task-completed { background: #D1FAE5; color: #065F46; }
 

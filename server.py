@@ -72,11 +72,14 @@ _opportunities_cache_lock = threading.Lock()
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 # ---------- Conversation logging (Supabase-backed, server-side only) ----------
-# Every /api/messages exchange (both live Anthropic calls and MOCK-mode fabricated
-# ones) is persisted to a `conversations` table, purely for backend visibility —
-# nothing in script.js changes or is even aware this happens. There's no session
-# concept in this server (no cookies/auth tokens on /api/messages requests), so
-# rows are NOT attributed to a specific userid; client_ip is stored as the closest
+# Only actual profile-chat Q&A turns are persisted to the `conversations` table,
+# purely for backend visibility — nothing in script.js changes or is even aware
+# this happens. Every other /api/messages call (ranking, web search, tracker
+# extraction, chat-starter generation, session summarization, ...) is a one-shot
+# completion with no real "student answered a question" moment, so it's skipped
+# entirely rather than logged with an empty response. There's no session concept
+# in this server (no cookies/auth tokens on /api/messages requests), so rows are
+# NOT attributed to a specific userid; client_ip is stored as the closest
 # available correlation key. Logging is fire-and-forget on a background thread and
 # swallows its own errors so a logging hiccup can never break the actual API
 # response the user is waiting on.
@@ -87,11 +90,32 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 #       created_at     timestamptz not null default now(),
 #       client_ip      text,
 #       mode           text,   -- 'live' or 'mock'
-#       system_prompt  text,
-#       user_content   text,
-#       response_text  text
+#       system_prompt  text,   -- reused to hold just the bot's question for this turn
+#       user_content   text    -- reused to hold just the student's answer to it
 #   );
-def log_conversation(client_ip, mode, system_prompt, user_content, response_text):
+def extract_qa_pair(user_content):
+    """Pulls the most recent <bot question, student answer> pair out of a profile-chat
+    'CONVERSATION SO FAR' transcript (see profileChatNextQuestion in script.js) — the
+    only /api/messages call site where a real student answer is present in the prompt.
+    Returns (question, answer), or (None, None) if there's no student answer yet (e.g.
+    the very first question of a session, or any non-chat AI call)."""
+    m = re.search(r'CONVERSATION SO FAR:\s*(.*?)\s*Respond', user_content, re.S)
+    if not m:
+        return None, None
+    convo = m.group(1).strip()
+    if convo in ('', '(nothing yet)'):
+        return None, None
+    lines = [l for l in convo.split('\n') if l.strip()]
+    if not lines or not lines[-1].lower().startswith('student:'):
+        return None, None
+    answer = lines[-1].split(':', 1)[1].strip()
+    if not answer:
+        return None, None
+    question = lines[-2].split(':', 1)[1].strip() if len(lines) >= 2 and lines[-2].lower().startswith('you:') else None
+    return question, answer
+
+
+def log_conversation(client_ip, mode, system_question, user_response):
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return
     try:
@@ -100,9 +124,8 @@ def log_conversation(client_ip, mode, system_prompt, user_content, response_text
             data=json.dumps([{
                 "client_ip": client_ip,
                 "mode": mode,
-                "system_prompt": system_prompt,
-                "user_content": user_content,
-                "response_text": response_text,
+                "system_prompt": system_question,
+                "user_content": user_response,
             }]).encode(),
             method="POST",
             headers={
@@ -119,9 +142,15 @@ def log_conversation(client_ip, mode, system_prompt, user_content, response_text
 
 
 def log_conversation_async(client_ip, mode, system_prompt, user_content, response_text):
+    # system_prompt/response_text are unused now (kept in the signature so both call
+    # sites below don't need to change) — only a real <question, answer> pair from the
+    # transcript embedded in user_content gets logged.
+    question, answer = extract_qa_pair(user_content)
+    if not answer:
+        return
     threading.Thread(
         target=log_conversation,
-        args=(client_ip, mode, system_prompt, user_content, response_text),
+        args=(client_ip, mode, question, answer),
         daemon=True,
     ).start()
 

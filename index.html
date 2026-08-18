@@ -18,7 +18,7 @@
   <!-- Shown until sign-in/registration completes; the rest of the app (#appShell) stays
        hidden until then. See loginUser()/registerUser() in script.js. -->
   <section id="page-login" class="min-h-screen flex items-center justify-center px-4">
-    <div class="pop-card bg-white p-8 sm:p-10 rounded-3xl max-w-sm w-full space-y-6 border-4 border-slate-900 shadow-[6px_6px_0px_#0F172A]">
+    <div class="bg-white p-8 sm:p-10 rounded-3xl max-w-sm w-full space-y-6 border-2 border-slate-900">
       <div class="text-center">
         <img src="favicon.svg" alt="" class="w-16 h-16 rounded-2xl mx-auto mb-2">
         <div class="flex items-center justify-center gap-2">
@@ -175,7 +175,7 @@
     <section id="page-home" class="space-y-6">
       
       <!-- Welcome Banner -->
-      <div class="pop-card bg-[#39FF14] p-5 sm:p-6 rounded-3xl flex items-center justify-between gap-4">
+      <div class="bg-emerald-100 p-5 sm:p-6 rounded-3xl flex items-center justify-between gap-4 border-2 border-slate-900">
         <div class="flex items-center gap-3 min-w-0">
           <svg viewBox="0 0 24 24" class="w-8 h-8 shrink-0" fill="none">
             <rect x="2" y="14" width="4" height="8" rx="1" fill="#F97316"/>
@@ -195,7 +195,7 @@
       <div id="homeProfileTeaser"></div>
 
       <!-- Progress Overview -->
-      <div class="pop-card bg-white p-6 rounded-3xl space-y-4" id="homeProgressCard">
+      <div class="bg-white p-6 rounded-3xl space-y-4 border-2 border-slate-900" id="homeProgressCard">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="font-heading font-bold text-xl">What You're Chasing</h2>
           <div class="flex flex-wrap gap-2">
@@ -208,7 +208,7 @@
       </div>
 
       <!-- Coming Up To-Do List -->
-      <div class="pop-card bg-white p-6 rounded-3xl space-y-4" id="homeTodoCard" onclick="openTodoModal()">
+      <div class="bg-white p-6 rounded-3xl space-y-4 border-2 border-slate-900" id="homeTodoCard" onclick="openTodoModal()">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 class="font-heading font-bold text-xl">Your Next Moves</h2>
@@ -227,7 +227,7 @@
       <!-- STAGE 0: CHOOSE KIND -->
       <div class="stage active space-y-6" id="stage-0">
 
-        <div class="pop-card hero-suggest-card bg-white p-8 sm:p-10 rounded-3xl" id="suggestEntryCard">
+        <div class="hero-suggest-card bg-white p-8 sm:p-10 rounded-3xl border-2 border-slate-900" id="suggestEntryCard">
           <!-- Will be populated by JS -->
         </div>
 
@@ -238,7 +238,7 @@
         </div>
 
         <div class="hidden space-y-6" id="browsePanel">
-          <div class="pop-card bg-white p-6 sm:p-8 rounded-3xl form-card">
+          <div class="bg-white p-6 sm:p-8 rounded-3xl form-card border-2 border-slate-900">
             <h2 class="font-heading font-bold text-xl mb-6">What kind of opportunity are you looking for?</h2>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 kind-grid" id="kindGrid"></div>
 
@@ -255,7 +255,7 @@
           <span>←</span> Back to opportunity type
         </button>
         
-        <div class="pop-card bg-white p-6 sm:p-8 rounded-3xl form-card">
+        <div class="bg-white p-6 sm:p-8 rounded-3xl form-card border-2 border-slate-900">
           <h2 class="font-heading font-bold text-xl mb-6">Here's what we know about you</h2>
           <div id="suggestProfileSummary" class="profile-fit-grid mb-4"></div>
 
@@ -280,21 +280,21 @@
           <span>←</span> Back to opportunity type
         </button>
 
-        <div class="pop-card bg-white p-6 sm:p-8 rounded-3xl form-card">
+        <div class="bg-white p-6 sm:p-8 rounded-3xl form-card border-2 border-slate-900">
           <h2 class="font-heading font-bold text-xl mb-6">Let's figure out what fits</h2>
           
           <div class="quiz-step" id="quizStep1">
             <p class="font-heading font-bold text-lg mb-4 quiz-question">Which of these sounds most like you right now?</p>
             <div class="space-y-3 quiz-options">
-              <button class="pop-card w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="quizAnswer('project')">
+              <button class="border-2 border-slate-900 w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="quizAnswer('project')">
                 <strong class="block font-heading text-lg">I already have a research paper or project</strong>
                 <span class="text-sm text-slate-500">In progress or already completed</span>
               </button>
-              <button class="pop-card w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="quizAnswer('timeoff')">
+              <button class="border-2 border-slate-900 w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="quizAnswer('timeoff')">
                 <strong class="block font-heading text-lg">I'm looking for something to do when school is out</strong>
                 <span class="text-sm text-slate-500">Camps, programs, or work experience</span>
               </button>
-              <button class="pop-card w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="quizAnswer('compete')">
+              <button class="border-2 border-slate-900 w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="quizAnswer('compete')">
                 <strong class="block font-heading text-lg">I enjoy competing directly with my peers</strong>
                 <span class="text-sm text-slate-500">Tests, exams, head-to-head challenges</span>
               </button>
@@ -310,7 +310,7 @@
           <span>←</span> Back to opportunity type
         </button>
 
-        <div class="pop-card bg-white p-6 sm:p-8 rounded-3xl form-card">
+        <div class="bg-white p-6 sm:p-8 rounded-3xl form-card border-2 border-slate-900">
           <h2 class="font-heading font-bold text-xl mb-6" id="stage1Heading">Tell us about it </h2>
 
           <div class="space-y-4">
@@ -390,7 +390,7 @@
 
         <!-- Sticky Selection Bar -->
         <div class="sticky bottom-4 z-40 selection-bar" id="selectionBar" style="display:none;">
-          <div class="pop-card bg-slate-900 text-white p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div class="bg-slate-900 text-white p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
             <span class="font-bold text-sm" id="selectionCount">0 selected</span>
             <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-2.5 rounded-xl primary-btn" id="buildTrackerBtn" onclick="buildTracker()">
               <span class="spin hidden w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></span>
@@ -427,7 +427,7 @@
               <span>➕</span> Add Opportunity
             </button>
 
-            <div class="absolute right-0 top-full mt-2 w-72 sm:w-96 pop-card bg-white p-4 rounded-2xl z-50 hidden nav-dropdown-panel" id="trackerIntakeForm">
+            <div class="absolute right-0 top-full mt-2 w-72 sm:w-96 bg-white p-4 rounded-2xl z-50 hidden nav-dropdown-panel border-2 border-slate-900" id="trackerIntakeForm">
               <h3 class="font-heading font-bold mb-3">Add Custom Opportunity</h3>
               <label class="block font-bold text-[10px] uppercase text-slate-500 mb-1" for="trackerIntakeUrl">URL of the opportunity</label>
               <input type="url" id="trackerIntakeUrl" class="w-full border-2 border-slate-900 rounded-lg p-2 text-sm mb-3 font-medium" placeholder="https://example.com/apply">
@@ -477,7 +477,7 @@
     <!-- ============== PAGE: PROFILE ============== -->
     <section id="page-profile" class="hidden space-y-6">
 
-      <div class="pop-card bg-white p-6 rounded-3xl space-y-4">
+      <div class="bg-white p-6 rounded-3xl space-y-4 border-2 border-slate-900">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <h2 class="font-heading font-bold text-xl">Your Story So Far</h2>
           <span class="text-xs font-bold px-3 py-1.5 rounded-full whitespace-nowrap" id="profileUpdated"></span>
@@ -487,7 +487,7 @@
         <div id="profileFitSection" class="space-y-4"></div>
       </div>
 
-      <div class="pop-card bg-white p-6 rounded-3xl space-y-4" id="profileChatCard">
+      <div class="bg-white p-6 rounded-3xl space-y-4 border-2 border-slate-900" id="profileChatCard">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="font-heading font-bold text-xl">Spill the Tea</h2>
           <button type="button" id="profileChatSpeakerBtn" class="pop-btn bg-white text-slate-900 font-bold w-10 h-10 rounded-xl text-base shrink-0 hidden" onclick="toggleVoiceOutput()" title="Turn on spoken questions">🔇</button>

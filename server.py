@@ -11,8 +11,10 @@ import os
 import re
 import random
 import threading
-import urllib.request
+import time
 import urllib.error
+import urllib.parse
+import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -29,6 +31,8 @@ def load_dotenv(path=".env"):
                 continue
             key, _, value = line.partition("=")
             key, value = key.strip(), value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                value = value[1:-1]
             # Only skip a key that's already set to a *non-empty* value in the
             # environment — an empty-string env var (e.g. left over from an earlier
             # inline `ANTHROPIC_API_KEY="" python3 server.py`) should not shadow a
@@ -43,33 +47,150 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 PORT = 8000
 
-# ---------- Persistent user account database ----------
-# A plain JSON file next to this script. Not a "real" database, but it's a real
-# file on disk, so accounts created via /api/register survive server restarts
-# and page reloads — unlike the client-side-only storage the rest of the app
-# uses. Keyed by lowercased userid -> {firstName, lastName, email, passwordHash}.
+# ---------- Opportunities catalog (Supabase-backed) ----------
+# The opportunity catalog lives in a Supabase (hosted Postgres) table rather than
+# the old static opportunities.json — see migrate_to_supabase.py for the one-time
+# migration and CLAUDE.md for the rationale (scalability + free tier vs local SQLite).
+# The anon key is safe to hold server-side here: it's rate-limited by Supabase and
+# the table's Row Level Security policy only allows reading is_active=true rows.
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject,type,price,state,location,intl,season"
+OPPORTUNITIES_CACHE_TTL = 300  # seconds
+_opportunities_cache = {"data": None, "fetched_at": 0.0}
+_opportunities_cache_lock = threading.Lock()
+
+# ---------- Persistent user account database (Supabase-backed) ----------
+# Account records live in a Supabase `users` table rather than the old flat
+# users_db.json file — see migrate_users_to_supabase.py for the one-time
+# migration. Unlike the opportunities table, this table has NO RLS policies at
+# all, so the anon key gets zero access; every request here uses the
+# service_role key, which bypasses RLS. That key must never be sent to the
+# browser — it's only ever used from this server process.
 # passwordHash arrives already SHA-256-hashed client-side; the server never
 # sees or stores a plaintext password.
-USERS_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users_db.json")
-USERS_LOCK = threading.Lock()
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+# ---------- Conversation logging (Supabase-backed, server-side only) ----------
+# Every /api/messages exchange (both live Anthropic calls and MOCK-mode fabricated
+# ones) is persisted to a `conversations` table, purely for backend visibility —
+# nothing in script.js changes or is even aware this happens. There's no session
+# concept in this server (no cookies/auth tokens on /api/messages requests), so
+# rows are NOT attributed to a specific userid; client_ip is stored as the closest
+# available correlation key. Logging is fire-and-forget on a background thread and
+# swallows its own errors so a logging hiccup can never break the actual API
+# response the user is waiting on.
+#
+# Run this SQL once in the Supabase SQL editor before conversations start logging:
+#   create table conversations (
+#       id             bigint generated always as identity primary key,
+#       created_at     timestamptz not null default now(),
+#       client_ip      text,
+#       mode           text,   -- 'live' or 'mock'
+#       system_prompt  text,
+#       user_content   text,
+#       response_text  text
+#   );
+def log_conversation(client_ip, mode, system_prompt, user_content, response_text):
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
+    try:
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/rest/v1/conversations",
+            data=json.dumps([{
+                "client_ip": client_ip,
+                "mode": mode,
+                "system_prompt": system_prompt,
+                "user_content": user_content,
+                "response_text": response_text,
+            }]).encode(),
+            method="POST",
+            headers={
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+    except Exception as e:
+        print(f"[WARN] Failed to log conversation: {e}")
 
 
-def load_users_db():
-    if os.path.exists(USERS_DB_PATH):
-        try:
-            with open(USERS_DB_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+def log_conversation_async(client_ip, mode, system_prompt, user_content, response_text):
+    threading.Thread(
+        target=log_conversation,
+        args=(client_ip, mode, system_prompt, user_content, response_text),
+        daemon=True,
+    ).start()
 
 
-def save_users_db(users):
-    with open(USERS_DB_PATH, "w", encoding="utf-8") as f:
-        json.dump(users, f, indent=2)
+def _flatten_system(system_raw):
+    # /api/messages sends system as a list of content blocks (with cache_control)
+    # rather than a plain string — flatten to text for storage/pattern-matching.
+    if isinstance(system_raw, list):
+        return "".join(b.get("text", "") for b in system_raw if isinstance(b, dict))
+    return system_raw or ""
 
 
-USERS_DB = load_users_db()
+def _users_request(method, query="", data=None):
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+    }
+    if method == "POST":
+        headers["Prefer"] = "return=minimal"
+    elif method == "PATCH":
+        headers["Prefer"] = "return=minimal"
+    req = urllib.request.Request(
+        f"{SUPABASE_URL}/rest/v1/users{query}",
+        data=json.dumps(data).encode() if data is not None else None,
+        method=method,
+        headers=headers,
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        raw = resp.read()
+        return json.loads(raw) if raw else None
+
+
+def get_user(userid):
+    query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}", "select": "*"})
+    rows = _users_request("GET", query)
+    return rows[0] if rows else None
+
+
+def create_user(userid, first_name, last_name, email, password_hash, location=""):
+    _users_request("POST", "", data=[{
+        "userid": userid,
+        "first_name": first_name,
+        "last_name": last_name,
+        "email": email,
+        "password_hash": password_hash,
+        "location": location,
+        "data": {},
+    }])
+
+
+def update_user_location(userid, location):
+    record = get_user(userid)
+    if not record:
+        return False
+    query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
+    _users_request("PATCH", query, data={"location": location})
+    return True
+
+
+def update_user_data(userid, key, value):
+    record = get_user(userid)
+    if not record:
+        return False
+    data = record.get("data") or {}
+    data[key] = value
+    query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
+    _users_request("PATCH", query, data={"data": data})
+    return True
 
 VALID_SUBJECTS = ['Mixed','STEM','Medicine','Humanities','Art','Business','Engineering',
                    'Computer Science','Mathematics','Biology','Physics','Astronomy',
@@ -309,7 +430,56 @@ def generate_mock_text(system, user_content):
     return json.dumps({})
 
 
+def fetch_opportunities():
+    """Returns the cached opportunities list, refreshing from Supabase if the
+    TTL has expired. Raises on the first-ever fetch failure (nothing to serve
+    yet); a stale cache is served on subsequent failures rather than erroring."""
+    with _opportunities_cache_lock:
+        age = time.time() - _opportunities_cache["fetched_at"]
+        if _opportunities_cache["data"] is not None and age < OPPORTUNITIES_CACHE_TTL:
+            return _opportunities_cache["data"]
+
+        query = urllib.parse.urlencode({
+            "select": OPPORTUNITIES_FIELDS,
+            "is_active": "eq.true",
+            "order": "id",
+        })
+        page_size = 1000  # PostgREST's default max-rows cap — paginate past it via Range
+        try:
+            data = []
+            offset = 0
+            while True:
+                req = urllib.request.Request(
+                    f"{SUPABASE_URL}/rest/v1/opportunities?{query}",
+                    headers={
+                        "apikey": SUPABASE_ANON_KEY,
+                        "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+                        "Range": f"{offset}-{offset + page_size - 1}",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    page = json.loads(resp.read())
+                data.extend(page)
+                if len(page) < page_size:
+                    break
+                offset += page_size
+        except Exception:
+            if _opportunities_cache["data"] is not None:
+                return _opportunities_cache["data"]  # serve stale on transient failure
+            raise
+
+        _opportunities_cache["data"] = data
+        _opportunities_cache["fetched_at"] = time.time()
+        return data
+
+
 class Handler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path.startswith("/api/opportunities"):
+            self.handle_opportunities()
+        else:
+            super().do_GET()
+
     def do_POST(self):
         if self.path == "/api/messages":
             self.handle_messages()
@@ -321,6 +491,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.handle_data_save()
         elif self.path == "/api/data/load":
             self.handle_data_load()
+        elif self.path == "/api/account/location":
+            self.handle_update_location()
         else:
             self.send_error(404)
 
@@ -339,19 +511,18 @@ class Handler(SimpleHTTPRequestHandler):
         email = (body.get("email") or "").strip()
         userid = (body.get("userid") or "").strip()
         password_hash = body.get("passwordHash") or ""
-        if not all([first_name, last_name, email, userid, password_hash]):
+        location = (body.get("location") or "").strip()
+        if not all([first_name, last_name, email, userid, password_hash, location]):
             return self.send_json_error(400, "Missing required fields.")
         key = userid.lower()
-        with USERS_LOCK:
-            if key in USERS_DB:
+        try:
+            create_user(key, first_name, last_name, email, password_hash, location)
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
                 return self.send_json_error(409, "That user ID is already taken.")
-            USERS_DB[key] = {
-                "firstName": first_name,
-                "lastName": last_name,
-                "email": email,
-                "passwordHash": password_hash,
-            }
-            save_users_db(USERS_DB)
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
         self._relay(200, json.dumps({"ok": True}).encode())
 
     def handle_login(self):
@@ -359,45 +530,74 @@ class Handler(SimpleHTTPRequestHandler):
         userid = (body.get("userid") or "").strip()
         password_hash = body.get("passwordHash") or ""
         key = userid.lower()
-        with USERS_LOCK:
-            record = USERS_DB.get(key)
+        try:
+            record = get_user(key)
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
         if not record:
             return self.send_json_error(404, "No account found with that user ID.")
-        if record.get("passwordHash") != password_hash:
+        if record.get("password_hash") != password_hash:
             return self.send_json_error(401, "Incorrect password.")
         self._relay(200, json.dumps({
             "ok": True,
-            "firstName": record["firstName"],
-            "lastName": record["lastName"],
+            "firstName": record["first_name"],
+            "lastName": record["last_name"],
             "email": record["email"],
+            "location": record.get("location") or "",
         }).encode())
 
+    def handle_update_location(self):
+        body = self._read_json_body()
+        userid = (body.get("userid") or "").strip().lower()
+        location = (body.get("location") or "").strip()
+        if not userid or not location:
+            return self.send_json_error(400, "Missing userid or location.")
+        try:
+            ok = update_user_location(userid, location)
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+        if not ok:
+            return self.send_json_error(404, "No account found with that user ID.")
+        self._relay(200, json.dumps({"ok": True}).encode())
+
     # ---------- Per-account app data (profile, tracker, saved items) ----------
-    # A generic key/value blob per user, stored alongside their account record so
-    # it survives logout/login and server restarts — unlike the client-only
-    # window.storage the rest of the app was built around (see script.js).
+    # A generic key/value blob per user, stored in the `data` jsonb column of the
+    # same Supabase row so it survives logout/login and server restarts — unlike
+    # the client-only window.storage the rest of the app was built around (see
+    # script.js).
     def handle_data_save(self):
         body = self._read_json_body()
         userid = (body.get("userid") or "").strip().lower()
         key = body.get("key")
         if not userid or not key:
             return self.send_json_error(400, "Missing userid or key.")
-        with USERS_LOCK:
-            record = USERS_DB.get(userid)
-            if not record:
-                return self.send_json_error(404, "No account found with that user ID.")
-            record.setdefault("data", {})[key] = body.get("value")
-            save_users_db(USERS_DB)
+        try:
+            ok = update_user_data(userid, key, body.get("value"))
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+        if not ok:
+            return self.send_json_error(404, "No account found with that user ID.")
         self._relay(200, json.dumps({"ok": True}).encode())
 
     def handle_data_load(self):
         body = self._read_json_body()
         userid = (body.get("userid") or "").strip().lower()
         key = body.get("key")
-        with USERS_LOCK:
-            record = USERS_DB.get(userid)
-            value = record.get("data", {}).get(key) if record else None
+        try:
+            record = get_user(userid)
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+        value = (record.get("data") or {}).get(key) if record else None
         self._relay(200, json.dumps({"value": value}).encode())
+
+    def handle_opportunities(self):
+        if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+            return self.send_json_error(500, "SUPABASE_URL/SUPABASE_ANON_KEY not configured.")
+        try:
+            data = fetch_opportunities()
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+        self._relay(200, json.dumps(data).encode())
 
     def handle_messages(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -410,20 +610,19 @@ class Handler(SimpleHTTPRequestHandler):
     def mock_response(self, raw_body):
         try:
             payload = json.loads(raw_body)
-            system_raw = payload.get("system", "")
-            # system is now sent as a list of content blocks (with cache_control)
-            # rather than a plain string, to enable prompt caching — flatten it
-            # back to text so the pattern-matching in generate_mock_text still works.
-            if isinstance(system_raw, list):
-                system = "".join(b.get("text", "") for b in system_raw if isinstance(b, dict))
-            else:
-                system = system_raw
+            # system is sent as a list of content blocks (with cache_control) rather
+            # than a plain string, to enable prompt caching — flatten it back to text
+            # so the pattern-matching in generate_mock_text still works.
+            system = _flatten_system(payload.get("system", ""))
             user_content = payload.get("messages", [{}])[0].get("content", "")
         except Exception:
             system, user_content = "", ""
         text = generate_mock_text(system, user_content)
         data = json.dumps({"content": [{"type": "text", "text": text}]}).encode()
         self._relay(200, data)
+        log_conversation_async(self.client_address[0], "mock", system,
+                                user_content if isinstance(user_content, str) else json.dumps(user_content),
+                                text)
 
     def proxy_to_anthropic(self, raw_body):
         req = urllib.request.Request(
@@ -438,11 +637,29 @@ class Handler(SimpleHTTPRequestHandler):
         )
         try:
             with urllib.request.urlopen(req) as resp:
-                self._relay(resp.status, resp.read())
+                data = resp.read()
+                self._relay(resp.status, data)
         except urllib.error.HTTPError as e:
             self._relay(e.code, e.read())
+            return
         except Exception as e:
             self.send_json_error(502, str(e))
+            return
+        # Logging happens after the real response is already relayed to the
+        # browser, and is best-effort — a parse hiccup here must never affect the
+        # actual API call the user is waiting on.
+        try:
+            payload = json.loads(raw_body)
+            system = _flatten_system(payload.get("system", ""))
+            user_content = payload.get("messages", [{}])[0].get("content", "")
+            user_content = user_content if isinstance(user_content, str) else json.dumps(user_content)
+            resp_json = json.loads(data)
+            response_text = "\n".join(
+                b.get("text", "") for b in resp_json.get("content", []) if b.get("type") == "text"
+            )
+        except Exception:
+            system, user_content, response_text = "", "", ""
+        log_conversation_async(self.client_address[0], "live", system, user_content, response_text)
 
     def _relay(self, status, data):
         self.send_response(status)

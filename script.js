@@ -1,9 +1,10 @@
-// Opportunities database is loaded asynchronously from opportunities.json.
+// Opportunities database is loaded asynchronously from Supabase, via the
+// server-side proxy/cache at /api/opportunities (see server.py).
 let OPPORTUNITIES = [];
-fetch('opportunities.json')
+fetch('/api/opportunities')
   .then(res => res.json())
   .then(data => { OPPORTUNITIES = Array.isArray(data) ? data : []; })
-  .catch(err => console.error('Failed to load opportunities.json:', err));
+  .catch(err => console.error('Failed to load /api/opportunities:', err));
 
 // ============================================================
 // Auth — plain userid/password sign-in + registration. Accounts are persisted
@@ -15,7 +16,7 @@ fetch('opportunities.json')
 // production-grade (no salting, no HTTPS enforcement, no rate limiting).
 // ============================================================
 
-let currentUser = null; // { userid, firstName, lastName, email } — the signed-in session, cached locally
+let currentUser = null; // { userid, firstName, lastName, email, location } — the signed-in session, cached locally
 
 // ============================================================
 // Persistence layer for profile/tracker data. Prefers window.storage when the
@@ -115,10 +116,11 @@ async function registerUser(event){
   const lastName = document.getElementById('regLastName').value.trim();
   const email = document.getElementById('regEmail').value.trim();
   const userid = document.getElementById('regUserid').value.trim();
+  const location = document.getElementById('regLocation').value.trim();
   const password = document.getElementById('regPassword').value;
   const passwordConfirm = document.getElementById('regPasswordConfirm').value;
 
-  if(!firstName || !lastName || !email || !userid || !password || !passwordConfirm){
+  if(!firstName || !lastName || !email || !userid || !location || !password || !passwordConfirm){
     if(errorEl) errorEl.textContent = 'Please fill in every field.';
     return;
   }
@@ -137,7 +139,7 @@ async function registerUser(event){
     const res = await fetch('/api/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ firstName, lastName, email, userid, passwordHash })
+      body: JSON.stringify({ firstName, lastName, email, userid, location, passwordHash })
     });
     data = await res.json().catch(() => ({}));
     if(!res.ok){
@@ -149,7 +151,7 @@ async function registerUser(event){
     return;
   }
 
-  currentUser = { userid, firstName, lastName, email };
+  currentUser = { userid, firstName, lastName, email, location };
   await saveUser();
   await showApp();
 }
@@ -183,7 +185,7 @@ async function loginUser(event){
     return;
   }
 
-  currentUser = { userid, firstName: data.firstName, lastName: data.lastName, email: data.email };
+  currentUser = { userid, firstName: data.firstName, lastName: data.lastName, email: data.email, location: data.location || '' };
   await saveUser();
   await showApp();
 }
@@ -204,10 +206,12 @@ async function showApp(){
   const nameEl = document.getElementById('accountName');
   const emailEl = document.getElementById('accountEmail');
   const greetingEl = document.getElementById('homeGreetingName');
+  const locationInputEl = document.getElementById('accountLocationInput');
   const fullName = [currentUser.firstName, currentUser.lastName].filter(Boolean).join(' ');
   if(nameEl) nameEl.textContent = fullName || currentUser.email;
   if(emailEl) emailEl.textContent = currentUser.email || '';
   if(greetingEl) greetingEl.textContent = currentUser.firstName || 'there';
+  if(locationInputEl) locationInputEl.value = currentUser.location || '';
 
   // Profile/tracker data is scoped to this account (see AppStorage) — load it fresh
   // on every sign-in rather than trusting whatever's still sitting in memory from a
@@ -226,6 +230,32 @@ async function logoutUser(){
   trackerSavedState = {};
   toggleProfile(); // close the drawer on the way out
   showLoginGate();
+}
+async function saveAccountLocation(){
+  const inputEl = document.getElementById('accountLocationInput');
+  const statusEl = document.getElementById('accountLocationStatus');
+  if(!inputEl || !currentUser) return;
+  const location = inputEl.value.trim();
+  if(!location){
+    if(statusEl) statusEl.textContent = 'Location cannot be empty.';
+    return;
+  }
+  try{
+    const res = await fetch('/api/account/location', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userid: currentUser.userid, location })
+    });
+    if(!res.ok) throw new Error('request failed');
+    currentUser.location = location;
+    await saveUser();
+    if(statusEl){
+      statusEl.textContent = 'Saved!';
+      setTimeout(() => { if(statusEl.textContent === 'Saved!') statusEl.textContent = ''; }, 2000);
+    }
+  }catch(e){
+    if(statusEl) statusEl.textContent = 'Could not save — please try again.';
+  }
 }
 
 // ============================================================
@@ -1864,27 +1894,9 @@ function toggleTrackerSaved(id){
   renderTrackerPage();
 }
 // Permanently removes an item from whichever bucket holds it (and clears its saved-for-later
-// flag, if any). Uses the same same-button double-click-confirm pattern as clearProfile/
-// resetChecklist, since native confirm() is silently blocked in this artifact environment.
-// Keyed per item id (not a single shared flag) so arming one card's delete button doesn't
-// affect any other card.
-let trackerDeleteArmed = {};
+// flag, if any). Deletes immediately on click — no second confirmation step, unlike
+// clearProfile which stays double-click-armed since it wipes the whole profile at once.
 function deleteTrackerItem(id, btn){
-  if(!trackerDeleteArmed[id]){
-    trackerDeleteArmed[id] = true;
-    if(!btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
-    btn.textContent = 'Click again to delete';
-    btn.classList.add('confirm-armed');
-    setTimeout(() => {
-      if(trackerDeleteArmed[id]){
-        trackerDeleteArmed[id] = false;
-        btn.textContent = btn.dataset.originalText;
-        btn.classList.remove('confirm-armed');
-      }
-    }, 3000);
-    return;
-  }
-  delete trackerDeleteArmed[id];
   for(const bucket of ALL_BUCKETS){
     const idx = trackerData[bucket].findIndex(i => i.id === id);
     if(idx !== -1){ trackerData[bucket].splice(idx, 1); break; }
@@ -2042,6 +2054,18 @@ function renderCalendarSwimlanes(){
       </div>
     `;
   }).join('');
+
+  // Months are laid out oldest-first (left to right) so users can scroll left/back
+  // to see past months, but the default viewport should open on the current month
+  // rather than the oldest one — so scroll each strip forward to the current-month
+  // card right after paint. Falls back to leaving scroll at 0 (leftmost = oldest)
+  // when a lane has no current-month card, e.g. all its dates are in the past.
+  requestAnimationFrame(() => {
+    container.querySelectorAll('.calendar-strip').forEach(strip => {
+      const currentCard = strip.querySelector('.month-card.current-month');
+      if(currentCard) strip.scrollLeft = currentCard.offsetLeft;
+    });
+  });
 }
 
 // ============================================================

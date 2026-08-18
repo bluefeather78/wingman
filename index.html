@@ -67,6 +67,10 @@
           <input type="text" id="regUserid" autocomplete="username" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="Pick a user ID">
         </div>
         <div>
+          <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2" for="regLocation">Location</label>
+          <input type="text" id="regLocation" autocomplete="address-level2" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="e.g. Seattle, WA">
+        </div>
+        <div>
           <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2" for="regPassword">Password</label>
           <input type="password" id="regPassword" autocomplete="new-password" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="At least 8 characters">
         </div>
@@ -128,12 +132,22 @@
         <button onclick="toggleProfile()" class="font-bold text-slate-500 hover:text-slate-900 text-lg">✕</button>
       </div>
 
-      <div class="bg-slate-50 border-2 border-slate-200 rounded-2xl p-3 flex items-center justify-between gap-2" id="accountSection">
-        <div class="min-w-0">
-          <p class="font-bold text-sm text-slate-900 truncate" id="accountName"></p>
-          <p class="text-xs text-slate-500 truncate" id="accountEmail"></p>
+      <div class="bg-slate-50 border-2 border-slate-200 rounded-2xl p-3 space-y-2" id="accountSection">
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <p class="font-bold text-sm text-slate-900 truncate" id="accountName"></p>
+            <p class="text-xs text-slate-500 truncate" id="accountEmail"></p>
+          </div>
+          <button class="text-xs font-bold text-rose-600 hover:underline shrink-0" onclick="logoutUser()">Log out</button>
         </div>
-        <button class="text-xs font-bold text-rose-600 hover:underline shrink-0" onclick="logoutUser()">Log out</button>
+        <div class="border-t border-slate-200 pt-2">
+          <label class="block font-bold text-[10px] uppercase tracking-wide text-slate-500 mb-1" for="accountLocationInput">Location</label>
+          <div class="flex gap-2">
+            <input type="text" id="accountLocationInput" class="flex-1 border-2 border-slate-300 rounded-lg px-2 py-1.5 text-xs font-medium" placeholder="e.g. Seattle, WA">
+            <button class="pop-btn bg-white text-slate-900 font-bold text-xs px-3 py-1.5 rounded-lg shrink-0" onclick="saveAccountLocation()">Save</button>
+          </div>
+          <p class="text-[10px] font-bold text-emerald-600 min-h-[1em] mt-1" id="accountLocationStatus"></p>
+        </div>
       </div>
 
       <div class="bg-amber-50 border-2 border-amber-200 rounded-2xl p-3">
@@ -161,7 +175,7 @@
     <section id="page-home" class="space-y-6">
       
       <!-- Welcome Banner -->
-      <div class="pop-card bg-white p-5 sm:p-6 rounded-3xl flex items-center justify-between gap-4">
+      <div class="pop-card bg-[#39FF14] p-5 sm:p-6 rounded-3xl flex items-center justify-between gap-4">
         <div class="flex items-center gap-3 min-w-0">
           <svg viewBox="0 0 24 24" class="w-8 h-8 shrink-0" fill="none">
             <rect x="2" y="14" width="4" height="8" rx="1" fill="#F97316"/>
@@ -196,7 +210,10 @@
       <!-- Coming Up To-Do List -->
       <div class="pop-card bg-white p-6 rounded-3xl space-y-4" id="homeTodoCard" onclick="openTodoModal()">
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <h2 class="font-heading font-bold text-xl">Your Next Moves</h2>
+          <div>
+            <h2 class="font-heading font-bold text-xl">Your Next Moves</h2>
+            <p class="text-xs text-slate-400 font-medium">Tasks due this month & next — not everything you're tracking</p>
+          </div>
           <div class="flex flex-wrap gap-2" id="todoStatCounts"></div>
         </div>
         <div class="progress-track" id="todoProgressTrack"></div>
@@ -465,7 +482,7 @@
           <h2 class="font-heading font-bold text-xl">Your Story So Far</h2>
           <span class="text-xs font-bold px-3 py-1.5 rounded-full whitespace-nowrap" id="profileUpdated"></span>
         </div>
-        <p class="text-xs text-slate-500 font-medium">Powers every match in the Finder — the more detailed and current it is, the better your suggestions. The more specific you are (real projects, real interests, real quirks — not just "I like science"), the easier it is to find opportunities that are actually a fit, not just generic ones anyone could get. Chat with the bot below any time to go deeper.</p>
+        <p class="text-xs text-slate-400 font-normal italic">Powers every match in the Finder — the more detailed and current it is, the better your suggestions. The more specific you are (real projects, real interests, real quirks — not just "I like science"), the easier it is to find opportunities that are actually a fit, not just generic ones anyone could get. Chat with the bot below any time to go deeper.</p>
         <div id="profileStaleBanner"></div>
         <div id="profileFitSection" class="space-y-4"></div>
       </div>
@@ -475,7 +492,7 @@
           <h2 class="font-heading font-bold text-xl">Spill the Tea</h2>
           <button type="button" id="profileChatSpeakerBtn" class="pop-btn bg-white text-slate-900 font-bold w-10 h-10 rounded-xl text-base shrink-0 hidden" onclick="toggleVoiceOutput()" title="Turn on spoken questions">🔇</button>
         </div>
-        <p class="text-xs text-slate-500 font-medium">A few fun questions to round out your profile — music, sports, weird hobbies, side projects, whatever makes you <em>you</em>. Answer as many as you like, then hit "I'm done for now" and I'll fold it all into your profile summary above.</p>
+        <p class="text-xs text-slate-400 font-normal italic">A few fun questions to round out your profile — music, sports, weird hobbies, side projects, whatever makes you <em>you</em>. Answer as many as you like, then hit "I'm done for now" and I'll fold it all into your profile summary above.</p>
         <div class="bg-slate-50 border-2 border-slate-900 rounded-2xl p-4 space-y-3 max-h-[420px] overflow-y-auto" id="profileChatMessages"></div>
         <p class="text-xs font-bold text-indigo-600 min-h-[1em]" id="profileChatStatus"></p>
         <div class="flex flex-col sm:flex-row gap-2">
@@ -498,7 +515,10 @@
   <div class="modal-overlay hidden" id="todoModal" onclick="if(event.target === this) closeTodoModal();">
     <div class="modal-panel p-6 sm:p-8 space-y-4">
       <div class="flex items-center justify-between gap-3">
-        <h2 class="font-heading font-bold text-xl">Your Next Moves</h2>
+        <div>
+          <h2 class="font-heading font-bold text-xl">Your Next Moves</h2>
+          <p class="text-xs text-slate-400 font-medium">Tasks due this month & next — not everything you're tracking</p>
+        </div>
         <button class="font-bold text-slate-500 hover:text-slate-900 text-lg" onclick="closeTodoModal()">✕</button>
       </div>
       <div class="space-y-3" id="todoModalBody"></div>

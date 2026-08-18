@@ -21,22 +21,28 @@
     <div class="pop-card bg-white p-8 sm:p-10 rounded-3xl max-w-sm w-full space-y-6 border-4 border-slate-900 shadow-[6px_6px_0px_#0F172A]">
       <div class="text-center">
         <img src="favicon.svg" alt="" class="w-16 h-16 rounded-2xl mx-auto mb-2">
-        <h1 class="font-heading font-extrabold text-2xl">Highschool Wingman</h1>
-        <p class="text-sm text-slate-500 mt-2" id="loginTagline">Sign in to find and track opportunities built around your projects.</p>
+        <div class="flex items-center justify-center gap-2">
+          <h1 class="font-heading font-extrabold text-2xl">Highschool Wingman</h1>
+          <span class="bg-amber-300 text-slate-900 font-extrabold text-[10px] uppercase px-2 py-0.5 rounded-full border-2 border-slate-900">Beta</span>
+        </div>
+        <p class="font-heading font-extrabold text-lg mt-3 leading-snug">Main Quest: Build amazing stuff. Side Quest: Get into college.</p>
+        <p class="text-sm text-slate-500 mt-1">Find elite research venues, summer programs, internships, and competitions for your builds.</p>
+        <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">🚧 This app is in beta — features are actively evolving and results may occasionally be incomplete or inaccurate.</p>
+        <p class="hidden" id="loginTagline"></p>
       </div>
 
       <!-- Sign In form -->
       <form id="signInForm" class="space-y-4" onsubmit="loginUser(event)">
         <div>
-          <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="signInUserid">User ID</label>
+          <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2" for="signInUserid">User ID</label>
           <input type="text" id="signInUserid" autocomplete="username" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="e.g. sid2028">
         </div>
         <div>
-          <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="signInPassword">Password</label>
+          <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2" for="signInPassword">Password</label>
           <input type="password" id="signInPassword" autocomplete="current-password" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="••••••••">
         </div>
         <p class="text-xs font-bold text-rose-600" id="signInError"></p>
-        <button type="submit" class="w-full pop-btn bg-lime-300 text-slate-900 font-extrabold px-6 py-3 rounded-xl">Sign In</button>
+        <button type="submit" class="w-full pop-btn bg-orange-500 text-slate-900 font-extrabold px-6 py-3 rounded-xl">Sign In</button>
         <p class="text-xs text-slate-500 text-center">Don't have an account? <a href="#" class="font-bold text-indigo-600 hover:underline" onclick="event.preventDefault(); showLoginMode('register');">Register</a></p>
       </form>
 
@@ -44,32 +50,32 @@
       <form id="registerForm" class="space-y-4 hidden" onsubmit="registerUser(event)">
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="regFirstName">First name</label>
+            <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2" for="regFirstName">First name</label>
             <input type="text" id="regFirstName" autocomplete="given-name" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium">
           </div>
           <div>
-            <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="regLastName">Last name</label>
+            <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2" for="regLastName">Last name</label>
             <input type="text" id="regLastName" autocomplete="family-name" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium">
           </div>
         </div>
         <div>
-          <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="regEmail">Email</label>
+          <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2" for="regEmail">Email</label>
           <input type="email" id="regEmail" autocomplete="email" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="you@example.com">
         </div>
         <div>
-          <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="regUserid">User ID</label>
+          <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2" for="regUserid">User ID</label>
           <input type="text" id="regUserid" autocomplete="username" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="Pick a user ID">
         </div>
         <div>
-          <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="regPassword">Password</label>
+          <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2" for="regPassword">Password</label>
           <input type="password" id="regPassword" autocomplete="new-password" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="At least 8 characters">
         </div>
         <div>
-          <label class="block font-bold text-xs uppercase text-slate-500 mb-2" for="regPasswordConfirm">Confirm password</label>
+          <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2" for="regPasswordConfirm">Confirm password</label>
           <input type="password" id="regPasswordConfirm" autocomplete="new-password" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="••••••••">
         </div>
         <p class="text-xs font-bold text-rose-600" id="registerError"></p>
-        <button type="submit" class="w-full pop-btn bg-lime-300 text-slate-900 font-extrabold px-6 py-3 rounded-xl">Create Account</button>
+        <button type="submit" class="w-full pop-btn bg-orange-500 text-slate-900 font-extrabold px-6 py-3 rounded-xl">Create Account</button>
         <p class="text-xs text-slate-500 text-center">Already have an account? <a href="#" class="font-bold text-indigo-600 hover:underline" onclick="event.preventDefault(); showLoginMode('signin');">Sign In</a></p>
       </form>
     </div>
@@ -80,38 +86,45 @@
 
   <!-- Top Floating Pill Navigation -->
   <header class="sticky top-4 z-50 max-w-4xl mx-auto px-4">
-    <div class="bg-white/90 backdrop-blur-md border-3 border-slate-900 rounded-full p-2 px-4 shadow-[4px_4px_0px_#0F172A] flex items-center justify-between">
-      <div class="flex items-center gap-2">
+    <div class="bg-slate-900 rounded-full pl-3 pr-2 py-2 shadow-[0_10px_25px_-5px_rgba(15,23,42,0.45)] flex items-center justify-between gap-2">
+      <div class="flex items-center gap-2 shrink-0">
         <img src="favicon.svg" alt="" class="w-8 h-8 rounded-lg">
-        <span class="font-heading font-bold text-xl tracking-tight hidden sm:inline">Highschool Wingman</span>
+        <span class="font-heading font-extrabold text-lg text-white tracking-tight hidden sm:inline">Wingman</span>
+        <span class="bg-amber-300 text-slate-900 font-extrabold text-[9px] uppercase px-2 py-0.5 rounded-full">Beta</span>
       </div>
 
       <!-- Nav Tabs -->
-      <nav class="flex gap-1 sm:gap-2 app-nav-inner">
-        <button onclick="showPage('home')" id="navHomeBtn" class="pop-btn bg-yellow-300 font-bold text-xs sm:text-sm px-3 sm:px-4 py-1.5 rounded-full flex items-center gap-1.5 active">
-          <img src="icon-dashboard.svg" alt="" class="w-[18px] h-[18px] rounded-md"> Dashboard
+      <nav class="flex items-center gap-1 sm:gap-1.5 app-nav-inner">
+        <button onclick="showPage('home')" id="navHomeBtn" class="nav-tab-btn active flex items-center gap-1.5 font-bold text-xs sm:text-sm px-3 sm:px-4 py-2 rounded-full">
+          <svg class="w-[18px] h-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg>
+          <span class="hidden sm:inline">Dashboard</span>
         </button>
-        <button onclick="showPage('wizard')" id="navWizardBtn" class="pop-btn bg-white font-bold text-xs sm:text-sm px-3 sm:px-4 py-1.5 rounded-full flex items-center gap-1.5">
-          <img src="icon-finder.svg" alt="" class="w-[18px] h-[18px] rounded-md"> Finder
+        <button onclick="showPage('profile')" id="navProfileBtn" class="nav-tab-btn flex items-center gap-1.5 font-bold text-xs sm:text-sm px-3 sm:px-4 py-2 rounded-full">
+          <svg class="w-[18px] h-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
+          <span class="hidden sm:inline">Profile</span>
         </button>
-        <button onclick="showPage('tracker')" id="navTrackerBtn" class="pop-btn bg-white font-bold text-xs sm:text-sm px-3 sm:px-4 py-1.5 rounded-full flex items-center gap-1.5">
-          <img src="icon-tracker.svg" alt="" class="w-[18px] h-[18px] rounded-md"> Tracker
+        <button onclick="showPage('wizard')" id="navWizardBtn" class="nav-tab-btn flex items-center gap-1.5 font-bold text-xs sm:text-sm px-3 sm:px-4 py-2 rounded-full">
+          <svg class="w-[18px] h-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <span class="hidden sm:inline">Finder</span>
+        </button>
+        <button onclick="showPage('tracker')" id="navTrackerBtn" class="nav-tab-btn flex items-center gap-1.5 font-bold text-xs sm:text-sm px-3 sm:px-4 py-2 rounded-full">
+          <svg class="w-[18px] h-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><line x1="16" y1="3" x2="16" y2="7"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span class="hidden sm:inline">Tracker</span>
         </button>
       </nav>
 
-      <!-- Profile Badge -->
-      <button onclick="toggleProfile()" id="profileToggle" class="pop-btn bg-indigo-500 text-white font-bold text-xs px-3 py-1.5 rounded-full flex items-center gap-2">
-        <span class="hidden sm:inline">Profile</span>
-        <span>👤</span>
+      <!-- Account Badge -->
+      <button onclick="toggleProfile()" id="profileToggle" class="shrink-0 w-9 h-9 rounded-full bg-indigo-500 border-2 border-white/30 flex items-center justify-center">
+        <svg class="w-[18px] h-[18px] text-white" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7Z"/></svg>
       </button>
     </div>
   </header>
 
-  <!-- Side Profile Drawer -->
+  <!-- Side Account Drawer -->
   <div id="profilePanel" class="fixed inset-y-0 right-0 w-80 bg-white border-l-4 border-slate-900 shadow-[0_0_20px_rgba(0,0,0,0.5)] transform translate-x-full transition-transform duration-300 z-[100] p-6 flex flex-col justify-between overflow-y-auto">
     <div class="space-y-4">
       <div class="flex items-center justify-between border-b-2 border-slate-900 pb-4">
-        <h3 class="font-heading font-bold text-lg">Your Profile 👤</h3>
+        <h3 class="font-heading font-bold text-lg flex items-center gap-2"><img src="icon-gear.svg" alt="" class="w-6 h-6">Your Account</h3>
         <button onclick="toggleProfile()" class="font-bold text-slate-500 hover:text-slate-900 text-lg">✕</button>
       </div>
 
@@ -123,11 +136,21 @@
         <button class="text-xs font-bold text-rose-600 hover:underline shrink-0" onclick="logoutUser()">Log out</button>
       </div>
 
-      <div id="profileFitSection" class="space-y-4"></div>
-    </div>
+      <div class="bg-amber-50 border-2 border-amber-200 rounded-2xl p-3">
+        <p class="text-xs font-bold text-amber-800">🚧 Beta product</p>
+        <p class="text-xs text-amber-700 mt-1">You're using an early, actively-evolving version of Highschool Wingman. Thanks for testing it out!</p>
+      </div>
 
-    <div class="space-y-4">
-      <div class="text-xs text-slate-500 text-center font-bold" id="profileUpdated"></div>
+      <div class="border-2 border-slate-200 rounded-2xl p-3">
+        <p class="font-bold text-sm text-slate-900 mb-1">Contact us</p>
+        <p class="text-xs text-slate-500 mb-2">Found a bug, or have feedback? We'd love to hear it.</p>
+        <a href="mailto:shamabildikar78@gmail.com?subject=Highschool%20Wingman%20Feedback" class="pop-btn bg-white text-slate-900 font-bold text-xs px-3 py-2 rounded-xl inline-flex items-center gap-1.5">✉️ Email us</a>
+      </div>
+
+      <div class="border-2 border-slate-200 rounded-2xl p-3">
+        <p class="font-bold text-sm text-slate-900 mb-1">About us</p>
+        <p class="text-xs text-slate-500">TBD</p>
+      </div>
     </div>
   </div>
 
@@ -137,20 +160,30 @@
     <!-- ============== PAGE: HOME ============== -->
     <section id="page-home" class="space-y-6">
       
-      <!-- Welcome Bento Banner -->
-      <div class="pop-card bg-gradient-to-r from-violet-500 to-indigo-600 text-white p-6 sm:p-8 rounded-3xl relative overflow-hidden">
-        <img src="favicon.svg" alt="" class="absolute -right-6 -bottom-6 w-40 h-40 opacity-20 pointer-events-none">
-        <div class="relative z-10 space-y-2">
-          <span class="bg-yellow-300 text-slate-900 font-bold text-xs uppercase px-3 py-1 rounded-full border-2 border-slate-900 inline-block mb-1" id="homeWelcomeBadge">Welcome</span>
-          <h1 class="font-heading text-3xl sm:text-5xl font-extrabold tracking-tight">Main Quest: Build amazing stuff. Side Quest: Get into college.</h1>
-          <p class="text-sm sm:text-base text-indigo-100 font-medium max-w-xl">Find elite research venues, summer programs, internships, and competitions for your builds.</p>
+      <!-- Welcome Banner -->
+      <div class="pop-card bg-white p-5 sm:p-6 rounded-3xl flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3 min-w-0">
+          <svg viewBox="0 0 24 24" class="w-8 h-8 shrink-0" fill="none">
+            <rect x="2" y="14" width="4" height="8" rx="1" fill="#F97316"/>
+            <rect x="9" y="9" width="4" height="13" rx="1" fill="#F97316"/>
+            <rect x="16" y="4" width="4" height="18" rx="1" fill="#F97316"/>
+            <circle cx="18" cy="3" r="2.5" fill="#FDE047" stroke="#0F172A" stroke-width="1"/>
+          </svg>
+          <h1 class="font-heading font-extrabold text-xl sm:text-2xl text-slate-900 truncate">Hey <span class="text-indigo-600" id="homeGreetingName">there</span> — ready?</h1>
+        </div>
+        <div class="bg-slate-900 rounded-2xl px-4 py-2 text-center shrink-0" id="homeDueSoonBadge">
+          <p class="font-heading font-extrabold text-lg leading-none text-white" id="homeDueSoonCount">0</p>
+          <p class="text-[9px] font-bold uppercase tracking-wider text-yellow-300 mt-0.5">Due Soon</p>
         </div>
       </div>
+
+      <!-- Your Profile — urgent teaser, full editor + chat live on the Profile tab -->
+      <div id="homeProfileTeaser"></div>
 
       <!-- Progress Overview -->
       <div class="pop-card bg-white p-6 rounded-3xl space-y-4" id="homeProgressCard">
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <h2 class="font-heading font-bold text-xl">Opportunities you are tracking</h2>
+          <h2 class="font-heading font-bold text-xl">What You're Chasing</h2>
           <div class="flex flex-wrap gap-2">
             <span class="bg-slate-900 text-white font-bold text-xs px-3 py-1.5 rounded-full cursor-pointer" id="statTotal" onclick="goToTrackerCalendar()" title="View in Tracker">0 tracked</span>
           </div>
@@ -163,7 +196,7 @@
       <!-- Coming Up To-Do List -->
       <div class="pop-card bg-white p-6 rounded-3xl space-y-4" id="homeTodoCard" onclick="openTodoModal()">
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <h2 class="font-heading font-bold text-xl">Tasks to complete this month and next</h2>
+          <h2 class="font-heading font-bold text-xl">Your Next Moves</h2>
           <div class="flex flex-wrap gap-2" id="todoStatCounts"></div>
         </div>
         <div class="progress-track" id="todoProgressTrack"></div>
@@ -177,7 +210,7 @@
       <!-- STAGE 0: CHOOSE KIND -->
       <div class="stage active space-y-6" id="stage-0">
 
-        <div class="pop-card hero-suggest-card bg-gradient-to-br from-indigo-600 to-violet-700 text-white p-8 sm:p-10 rounded-3xl" id="suggestEntryCard">
+        <div class="pop-card hero-suggest-card bg-white p-8 sm:p-10 rounded-3xl" id="suggestEntryCard">
           <!-- Will be populated by JS -->
         </div>
 
@@ -208,12 +241,17 @@
         <div class="pop-card bg-white p-6 sm:p-8 rounded-3xl form-card">
           <h2 class="font-heading font-bold text-xl mb-6">Here's what we know about you</h2>
           <div id="suggestProfileSummary" class="profile-fit-grid mb-4"></div>
-          
+
+          <div class="flex flex-wrap gap-3 mb-4" id="suggestConfirmWrap">
+            <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-3 rounded-xl primary-btn" onclick="confirmSuggestProfile()">Looks good — find opportunities →</button>
+            <button class="pop-btn bg-white font-bold px-6 py-3 rounded-xl" onclick="goToProfileChat()">Update my profile first</button>
+          </div>
+
           <p class="text-sm font-bold text-indigo-600 mb-4 form-status" id="suggestStatus"></p>
           <div id="suggestQuestionsWrap" class="space-y-4"></div>
           
           <div class="mt-6 form-actions">
-            <button class="pop-btn bg-lime-300 font-bold px-6 py-3 rounded-xl primary-btn" id="suggestContinueBtn" style="display:none;" onclick="submitSuggestQuestions()">Continue →</button>
+            <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-3 rounded-xl primary-btn" id="suggestContinueBtn" style="display:none;" onclick="submitSuggestQuestions()">Continue →</button>
           </div>
           <div class="mt-4 bg-rose-100 text-rose-900 p-4 rounded-xl border-2 border-rose-900 font-bold text-sm form-error" id="suggestError"></div>
         </div>
@@ -229,7 +267,7 @@
           <h2 class="font-heading font-bold text-xl mb-6">Let's figure out what fits</h2>
           
           <div class="quiz-step" id="quizStep1">
-            <p class="font-bold text-lg mb-4 quiz-question">Which of these sounds most like you right now?</p>
+            <p class="font-heading font-bold text-lg mb-4 quiz-question">Which of these sounds most like you right now?</p>
             <div class="space-y-3 quiz-options">
               <button class="pop-card w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="quizAnswer('project')">
                 <strong class="block font-heading text-lg">I already have a research paper or project</strong>
@@ -261,14 +299,14 @@
           <div class="space-y-4">
             <div>
               <p class="text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg p-2 mb-2 progress-note" id="stage1RecallNote"></p>
-              <label class="block font-bold text-xs uppercase text-slate-500 mb-2 field-label" id="stage1Label" for="pInterests">Details</label>
+              <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2 field-label" id="stage1Label" for="pInterests">Details</label>
               <textarea id="pInterests" class="w-full border-2 border-slate-900 rounded-xl p-4 min-h-[160px] font-medium" placeholder=""></textarea>
               <div class="text-right text-[10px] font-bold text-slate-400 mt-1 char-count" id="charCount">0 characters — aim for at least 200</div>
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 form-row">
               <div>
-                <label class="block font-bold text-xs uppercase text-slate-500 mb-2 field-label" for="pGrade">Grade level (optional)</label>
+                <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2 field-label" for="pGrade">Grade level (optional)</label>
                 <select id="pGrade" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium bg-white">
                   <option value="">Prefer not to say</option>
                   <option>Middle School</option>
@@ -279,21 +317,21 @@
                 </select>
               </div>
               <div>
-                <label class="block font-bold text-xs uppercase text-slate-500 mb-2 field-label" for="pState">Home state (optional)</label>
+                <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2 field-label" for="pState">Home state (optional)</label>
                 <input type="text" id="pState" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="e.g. Washington">
               </div>
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 form-row" id="prefsRow">
               <div>
-                <label class="block font-bold text-xs uppercase text-slate-500 mb-2 field-label" for="pPrice">Cost preference</label>
+                <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2 field-label" for="pPrice">Cost preference</label>
                 <select id="pPrice" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium bg-white">
                   <option value="any">No preference</option>
                   <option value="free">Free only</option>
                 </select>
               </div>
               <div>
-                <label class="block font-bold text-xs uppercase text-slate-500 mb-2 field-label" for="pFormat">Format preference</label>
+                <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2 field-label" for="pFormat">Format preference</label>
                 <select id="pFormat" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium bg-white">
                   <option value="any">No preference</option>
                   <option value="remote">Remote-friendly</option>
@@ -304,7 +342,7 @@
           </div>
 
           <div class="mt-8 flex items-center gap-4 form-actions">
-            <button class="pop-btn bg-yellow-300 font-bold px-6 py-3 rounded-xl flex items-center gap-2 primary-btn" id="findBtn" onclick="runSearch()">
+            <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-3 rounded-xl flex items-center gap-2 primary-btn" id="findBtn" onclick="runSearch()">
               <span class="spin hidden w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></span>
               <span id="findBtnLabel">Find matching opportunities</span>
             </button>
@@ -337,7 +375,7 @@
         <div class="sticky bottom-4 z-40 selection-bar" id="selectionBar" style="display:none;">
           <div class="pop-card bg-slate-900 text-white p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
             <span class="font-bold text-sm" id="selectionCount">0 selected</span>
-            <button class="pop-btn bg-lime-300 text-slate-900 font-bold px-6 py-2.5 rounded-xl primary-btn" id="buildTrackerBtn" onclick="buildTracker()">
+            <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-2.5 rounded-xl primary-btn" id="buildTrackerBtn" onclick="buildTracker()">
               <span class="spin hidden w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></span>
               <span id="buildTrackerLabel">Add to my tracker →</span>
             </button>
@@ -368,8 +406,8 @@
           </div>
 
           <div class="relative nav-dropdown">
-            <button class="pop-btn bg-yellow-300 font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center gap-2" id="trackerIntakeToggle" onclick="toggleNavDropdownPanel('trackerIntakeForm')">
-              <span>➕</span> Add Custom Item
+            <button class="pop-btn bg-orange-500 text-slate-900 font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center gap-2" id="trackerIntakeToggle" onclick="toggleNavDropdownPanel('trackerIntakeForm')">
+              <span>➕</span> Add Opportunity
             </button>
 
             <div class="absolute right-0 top-full mt-2 w-72 sm:w-96 pop-card bg-white p-4 rounded-2xl z-50 hidden nav-dropdown-panel" id="trackerIntakeForm">
@@ -380,9 +418,9 @@
               <label class="block font-bold text-[10px] uppercase text-slate-500 mb-1" for="trackerIntakeNotes">Extra context (optional)</label>
               <textarea id="trackerIntakeNotes" rows="2" class="w-full border-2 border-slate-900 rounded-lg p-2 text-sm mb-3 font-medium" placeholder="Anything you already know..."></textarea>
 
-              <button class="w-full pop-btn bg-indigo-500 text-white font-bold py-2 rounded-lg flex items-center justify-center gap-2" id="trackerIntakeSubmit" onclick="trackerAnalyzeAndAdd()">
+              <button class="w-full pop-btn bg-orange-500 text-slate-900 font-bold py-2 rounded-lg flex items-center justify-center gap-2" id="trackerIntakeSubmit" onclick="trackerAnalyzeAndAdd()">
                 <span class="spin hidden w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                <span id="trackerIntakeSubmitLabel">Analyze &amp; add</span>
+                <span id="trackerIntakeSubmitLabel">Add</span>
               </button>
               <span id="trackerIntakeStatus" class="block text-center text-xs font-bold text-indigo-600 mt-2"></span>
               <div class="mt-2 bg-rose-100 text-rose-900 p-2 rounded-lg border-2 border-rose-900 font-bold text-xs intake-error" id="trackerIntakeError"></div>
@@ -397,9 +435,6 @@
       <!-- Calendar View -->
       <div id="oppViewCalendar">
         <div class="calendar bg-white border-2 border-slate-900 p-6 rounded-3xl">
-          <div class="flex justify-between items-end mb-4 calendar-title">
-            <h3 class="font-heading font-bold text-lg">All deadlines</h3>
-          </div>
           <div class="space-y-5" id="calendarSwimlanes"></div>
         </div>
       </div>
@@ -426,7 +461,38 @@
           <div class="space-y-4 cards" id="savedCards"></div>
         </div>
       </div>
-      
+
+    </section>
+
+    <!-- ============== PAGE: PROFILE ============== -->
+    <section id="page-profile" class="hidden space-y-6">
+
+      <div class="pop-card bg-white p-6 rounded-3xl space-y-2">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <h2 class="font-heading font-bold text-xl">Your Story So Far</h2>
+          <span class="text-xs font-bold px-3 py-1.5 rounded-full whitespace-nowrap" id="profileUpdated"></span>
+        </div>
+        <p class="text-xs text-slate-500 font-medium">Powers every match in the Finder — the more detailed and current it is, the better your suggestions. The more specific you are (real projects, real interests, real quirks — not just "I like science"), the easier it is to find opportunities that are actually a fit, not just generic ones anyone could get. Chat with the bot below any time to go deeper.</p>
+        <div id="profileStaleBanner"></div>
+        <div id="profileFitSection" class="space-y-4"></div>
+      </div>
+
+      <div class="pop-card bg-white p-6 rounded-3xl space-y-4" id="profileChatCard">
+        <div>
+          <h2 class="font-heading font-bold text-xl">Spill the Tea</h2>
+          <p class="text-xs text-slate-500 font-medium mt-1">A few fun questions to round out your profile — music, sports, weird hobbies, side projects, whatever makes you <em>you</em>. Answer as many as you like, then hit "I'm done for now" and I'll fold it all into your profile summary above.</p>
+        </div>
+        <div class="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 space-y-3 max-h-[420px] overflow-y-auto" id="profileChatMessages"></div>
+        <p class="text-xs font-bold text-indigo-600 min-h-[1em]" id="profileChatStatus"></p>
+        <div class="flex flex-col sm:flex-row gap-2">
+          <input type="text" id="profileChatInput" class="flex-1 border-2 border-slate-900 rounded-xl p-3 text-sm font-medium" placeholder="Type your answer..." onkeydown="if(event.key==='Enter'){event.preventDefault(); sendProfileChatMessage();}">
+          <div class="flex gap-2">
+            <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" id="profileChatSendBtn" onclick="sendProfileChatMessage()">Send</button>
+            <button class="pop-btn bg-white font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="finishProfileChatSession()">I'm done for now</button>
+          </div>
+        </div>
+      </div>
+
     </section>
 
   </main>
@@ -435,7 +501,7 @@
   <div class="modal-overlay hidden" id="todoModal" onclick="if(event.target === this) closeTodoModal();">
     <div class="modal-panel p-6 sm:p-8 space-y-4">
       <div class="flex items-center justify-between gap-3">
-        <h2 class="font-heading font-bold text-xl">Tasks to complete this month and next</h2>
+        <h2 class="font-heading font-bold text-xl">Your Next Moves</h2>
         <button class="font-bold text-slate-500 hover:text-slate-900 text-lg" onclick="closeTodoModal()">✕</button>
       </div>
       <div class="space-y-3" id="todoModalBody"></div>

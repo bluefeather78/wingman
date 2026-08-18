@@ -88,7 +88,7 @@ body {
 
 /* ---------- Calendar strip ---------- */
 .month-card {
-  min-width: 160px;
+  width: 200px;
   background: #F8FAFC;
   border: 2px solid #CBD5E1;
   border-radius: 16px;
@@ -147,15 +147,26 @@ textarea:focus, input:focus, select:focus {
   background: #F1F5F9;
 }
 .progress-seg { height: 100%; transition: width 0.3s ease; }
-.progress-seg.seg-not_started { background: #CBD5E1; }
-.progress-seg.seg-in_progress { background: #6366F1; }
-.progress-seg.seg-completed { background: #10B981; }
+/* Opportunity event-timing state (Happening Now / Future Event / Past Event) — green /
+   blue / grey — used consistently for this state everywhere in the app. */
+.progress-seg.seg-opp-in_progress { background: #10B981; }
+.progress-seg.seg-opp-not_started { background: #3B82F6; }
+.progress-seg.seg-opp-completed { background: #94A3B8; }
+/* Task (action-item) state (Not Started / In Progress / Completed) — red / orange /
+   green — a separate color code from the opportunity state above, even though the
+   underlying keys are the same three names. */
+.progress-seg.seg-task-not_started { background: #EF4444; }
+.progress-seg.seg-task-in_progress { background: #F97316; }
+.progress-seg.seg-task-completed { background: #10B981; }
 
 .progress-legend-item { display: flex; align-items: center; gap: 6px; }
 .progress-legend-dot { width: 10px; height: 10px; border-radius: 999px; flex-shrink: 0; }
-.progress-legend-dot.seg-not_started { background: #CBD5E1; }
-.progress-legend-dot.seg-in_progress { background: #6366F1; }
-.progress-legend-dot.seg-completed { background: #10B981; }
+.progress-legend-dot.seg-opp-in_progress { background: #10B981; }
+.progress-legend-dot.seg-opp-not_started { background: #3B82F6; }
+.progress-legend-dot.seg-opp-completed { background: #94A3B8; }
+.progress-legend-dot.seg-task-not_started { background: #EF4444; }
+.progress-legend-dot.seg-task-in_progress { background: #F97316; }
+.progress-legend-dot.seg-task-completed { background: #10B981; }
 
 /* ---------- Status pills (system-controlled, Tracker + Home to-do) ---------- */
 .status-pill {
@@ -168,9 +179,14 @@ textarea:focus, input:focus, select:focus {
   white-space: nowrap;
   flex-shrink: 0;
 }
-.status-pill.status-not_started { background: #E2E8F0; color: #334155; }
-.status-pill.status-in_progress { background: #E0E7FF; color: #3730A3; }
-.status-pill.status-completed { background: #D1FAE5; color: #065F46; }
+/* Opportunity event-timing state: green = Happening Now, blue = Future Event, grey = Past Event. */
+.status-pill.status-opp-in_progress { background: #D1FAE5; color: #065F46; }
+.status-pill.status-opp-not_started { background: #DBEAFE; color: #1E3A8A; }
+.status-pill.status-opp-completed { background: #E2E8F0; color: #334155; }
+/* Task state: red = Not Started, orange = In Progress, green = Completed. */
+.status-pill.status-task-not_started { background: #FEE2E2; color: #991B1B; }
+.status-pill.status-task-in_progress { background: #FFEDD5; color: #9A3412; }
+.status-pill.status-task-completed { background: #D1FAE5; color: #065F46; }
 
 /* ---------- Hero suggest card (Finder stage 0) ---------- */
 .hero-suggest-card { position: relative; overflow: hidden; }
@@ -221,3 +237,67 @@ textarea:focus, input:focus, select:focus {
 
 /* ---------- Finder result cards (clickable to expand) ---------- */
 .result-card-clickable { cursor: pointer; }
+
+/* ---------- Dark header nav tabs ---------- */
+.nav-tab-btn {
+  color: #CBD5E1;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.nav-tab-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+.nav-tab-btn.active,
+.nav-tab-btn.active:hover {
+  background: #BEF264;
+  color: #0F172A;
+}
+
+/* ---------- Dashboard profile teaser: urgency pulse ---------- */
+@keyframes urgentPulse {
+  0%, 100% { box-shadow: 4px 4px 0px #0F172A; }
+  50% { box-shadow: 4px 4px 0px #0F172A, 0 0 0 6px rgba(249, 115, 22, 0.25); }
+}
+.urgent-pulse { animation: urgentPulse 1.8s ease-in-out infinite; }
+
+/* ---------- Profile builder chat ---------- */
+.chat-bubble-bot {
+  background: #fff;
+  border: 2px solid #0F172A;
+  border-radius: 14px 14px 14px 2px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  max-width: 85%;
+  align-self: flex-start;
+}
+.chat-bubble-user {
+  background: #E0E7FF;
+  border: 2px solid #0F172A;
+  border-radius: 14px 14px 2px 14px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  max-width: 85%;
+  align-self: flex-end;
+  margin-left: auto;
+}
+#profileChatMessages { display: flex; flex-direction: column; gap: 10px; }
+
+/* ---------- Profile builder chat: starter-question picker buttons ---------- */
+/* Distinct from .chat-bubble-bot (which is capped at 85% width for message bubbles) —
+   these need to span the full messages panel so all 3 options are easy to scan/tap. */
+.chat-starter-btn {
+  background: #fff;
+  border: 2px solid #0F172A;
+  border-radius: 14px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  width: 100%;
+  align-self: stretch;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+.chat-starter-btn:hover { background: #EEF2FF; }

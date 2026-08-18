@@ -15,7 +15,58 @@ fetch('opportunities.json')
 // production-grade (no salting, no HTTPS enforcement, no rate limiting).
 // ============================================================
 
-let currentUser = null; // { firstName, lastName, email } — the signed-in session, cached locally
+let currentUser = null; // { userid, firstName, lastName, email } — the signed-in session, cached locally
+
+// ============================================================
+// Persistence layer for profile/tracker data. Prefers window.storage when the
+// hosting runtime provides it (e.g. the Claude.ai artifact preview); otherwise
+// falls back to server-side per-account storage via /api/data/*, scoped to the
+// signed-in user's ID. Without this fallback, none of it survives logout/login
+// or a page reload when just running `python server.py` in a plain browser tab
+// — window.storage doesn't exist there, so every get/set silently no-ops.
+// Mirrors window.storage's { value } get / (key, jsonString) set shape so
+// existing call sites barely change.
+// ============================================================
+const AppStorage = {
+  async get(key){
+    if(window.storage){
+      try{ return await window.storage.get(key); }catch(e){ return null; }
+    }
+    if(!currentUser || !currentUser.userid) return null;
+    try{
+      const res = await fetch('/api/data/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userid: currentUser.userid, key })
+      });
+      if(!res.ok) return null;
+      const data = await res.json();
+      return (data && data.value !== undefined && data.value !== null) ? { value: JSON.stringify(data.value) } : null;
+    }catch(e){ return null; }
+  },
+  async set(key, value){
+    if(window.storage){
+      try{ await window.storage.set(key, value); }catch(e){}
+      return;
+    }
+    if(!currentUser || !currentUser.userid) return;
+    try{
+      await fetch('/api/data/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userid: currentUser.userid, key, value: JSON.parse(value) })
+      });
+    }catch(e){ /* best-effort — worst case this save is lost */ }
+  }
+};
+
+// Loads everything scoped to the signed-in account (profile, tracker items, saved
+// state) and re-renders. Called on every successful login/register — see showApp().
+async function loadAccountData(){
+  await Promise.all([loadProfile(), loadTrackerData(), loadTrackerSaved()]);
+  renderProfile();
+  renderSuggestEntryCard();
+}
 
 async function loadUser(){
   try{
@@ -98,9 +149,9 @@ async function registerUser(event){
     return;
   }
 
-  currentUser = { firstName, lastName, email };
+  currentUser = { userid, firstName, lastName, email };
   await saveUser();
-  showApp();
+  await showApp();
 }
 
 async function loginUser(event){
@@ -132,9 +183,9 @@ async function loginUser(event){
     return;
   }
 
-  currentUser = { firstName: data.firstName, lastName: data.lastName, email: data.email };
+  currentUser = { userid, firstName: data.firstName, lastName: data.lastName, email: data.email };
   await saveUser();
-  showApp();
+  await showApp();
 }
 
 function showLoginGate(){
@@ -144,7 +195,7 @@ function showLoginGate(){
   if(appShell) appShell.classList.add('hidden');
   showLoginMode('signin');
 }
-function showApp(){
+async function showApp(){
   const loginPage = document.getElementById('page-login');
   const appShell = document.getElementById('appShell');
   if(loginPage) loginPage.classList.add('hidden');
@@ -152,17 +203,27 @@ function showApp(){
 
   const nameEl = document.getElementById('accountName');
   const emailEl = document.getElementById('accountEmail');
-  const welcomeEl = document.getElementById('homeWelcomeBadge');
+  const greetingEl = document.getElementById('homeGreetingName');
   const fullName = [currentUser.firstName, currentUser.lastName].filter(Boolean).join(' ');
   if(nameEl) nameEl.textContent = fullName || currentUser.email;
   if(emailEl) emailEl.textContent = currentUser.email || '';
-  if(welcomeEl) welcomeEl.textContent = currentUser.firstName ? `Welcome, ${currentUser.firstName}` : 'Welcome';
+  if(greetingEl) greetingEl.textContent = currentUser.firstName || 'there';
 
+  // Profile/tracker data is scoped to this account (see AppStorage) — load it fresh
+  // on every sign-in rather than trusting whatever's still sitting in memory from a
+  // previous session in this tab.
+  await loadAccountData();
   showPage('home');
 }
 async function logoutUser(){
   currentUser = null;
   await saveUser();
+  // Clear in-memory app data so it can't leak into a different account that signs
+  // in next in this same tab — the next login re-fetches everything fresh via
+  // loadAccountData().
+  studentProfile = { synthesized: '', updatedAt: null, chatRounds: 0 };
+  trackerData = { summerPrograms: [], internships: [], researchCompetitions: [], pureCompetitions: [], conferences: [], journals: [] };
+  trackerSavedState = {};
   toggleProfile(); // close the drawer on the way out
   showLoginGate();
 }
@@ -275,17 +336,11 @@ function selectKind(kind){
   document.getElementById('stage1Label').textContent = cfg.label;
   const box = document.getElementById('pInterests');
   box.placeholder = cfg.placeholder;
+  // Browsing by type is a deliberately from-scratch search — unlike "Suggest
+  // opportunities for me", it must never be prepopulated with the saved profile.
+  box.value = '';
   const recallNote = document.getElementById('stage1RecallNote');
-  if(studentProfile.synthesized){
-    box.value = studentProfile.synthesized;
-    if(recallNote){
-      recallNote.textContent = `Here's what we already know about you — feel free to edit or add more below before searching.`;
-      recallNote.classList.add('show');
-    }
-  }else{
-    box.value = '';
-    if(recallNote) recallNote.classList.remove('show');
-  }
+  if(recallNote) recallNote.classList.remove('show');
   const len = box.value.length;
   charCountEl.textContent = `${len} characters` + (len < 200 ? ' — aim for at least 200' : '');
   document.getElementById('prefsRow').style.display = cfg.source === 'web' ? 'none' : 'grid';
@@ -340,7 +395,7 @@ function quizAnswer(value){
   if(!branch) return;
   const step2 = document.getElementById('quizStep2');
   step2.innerHTML = `
-    <p class="font-bold text-lg mb-4 quiz-question">${branch.question}</p>
+    <p class="font-heading font-bold text-lg mb-4 quiz-question">${branch.question}</p>
     <div class="space-y-3 quiz-options">
       ${branch.options.map(o => `
         <button class="pop-card w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="selectKind('${o.kind}')">
@@ -569,59 +624,53 @@ Only include opportunities that are a genuinely good fit — omit weak or generi
 // of individual entries. New information (from the Finder, clarifying
 // questions, or a direct edit) is merged into it via an API call that adds,
 // updates, or drops details as appropriate, so there is only ever one
-// current version, carried across sessions via window.storage.
+// current version, carried across sessions via AppStorage (per-account, see top of file).
 // ============================================================
 const ACTIVE_KINDS = Object.keys(KIND_CONFIG).filter(k => !KIND_CONFIG[k].comingSoon);
 
-let studentProfile = { synthesized: '', updatedAt: null };
-let editingProfile = false; // true while the profile drawer's "add to profile" textarea is open
+let studentProfile = { synthesized: '', updatedAt: null, chatRounds: 0 };
 
 function newEntryId(){
   return 'entry-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
 }
 async function loadProfile(){
   try{
-    if(window.storage){
-      const result = await window.storage.get('student-profile');
-      if(result && result.value){
-        const parsed = JSON.parse(result.value);
-        if(typeof parsed.synthesized === 'string'){
-          studentProfile.synthesized = parsed.synthesized;
-        }else{
-          // Migrate the old per-category-entries shape into one readable paragraph,
-          // so nothing from before this change is lost. Re-synthesizing properly
-          // happens the next time the student adds something via Edit.
-          const cats = ['passionProjects','researchInterests','interests'];
-          const labels = { passionProjects: 'Passion projects', researchInterests: 'Research interests', interests: 'Interests' };
-          const parts = cats
-            .filter(c => Array.isArray(parsed[c]) && parsed[c].length)
-            .map(c => `${labels[c]}: ` + parsed[c].map(e => e.text).join('; '));
-          studentProfile.synthesized = parts.join('. ');
-        }
-        studentProfile.updatedAt = parsed.updatedAt || null;
+    const result = await AppStorage.get('student-profile');
+    if(result && result.value){
+      const parsed = JSON.parse(result.value);
+      if(typeof parsed.synthesized === 'string'){
+        studentProfile.synthesized = parsed.synthesized;
+      }else{
+        // Migrate the old per-category-entries shape into one readable paragraph,
+        // so nothing from before this change is lost. Re-synthesizing properly
+        // happens the next time the student adds something via Edit.
+        const cats = ['passionProjects','researchInterests','interests'];
+        const labels = { passionProjects: 'Passion projects', researchInterests: 'Research interests', interests: 'Interests' };
+        const parts = cats
+          .filter(c => Array.isArray(parsed[c]) && parsed[c].length)
+          .map(c => `${labels[c]}: ` + parsed[c].map(e => e.text).join('; '));
+        studentProfile.synthesized = parts.join('. ');
       }
+      studentProfile.updatedAt = parsed.updatedAt || null;
+      studentProfile.chatRounds = typeof parsed.chatRounds === 'number' ? parsed.chatRounds : 0;
     }
   }catch(e){ /* nothing saved yet, or storage unavailable — start fresh */ }
 }
 async function saveProfile(){
-  try{
-    if(window.storage){
-      await window.storage.set('student-profile', JSON.stringify(studentProfile));
-    }
-  }catch(e){ /* storage unavailable in this environment — profile stays in-memory only for this session */ }
+  try{ await AppStorage.set('student-profile', JSON.stringify(studentProfile)); }
+  catch(e){ /* storage unavailable — profile stays in-memory only for this session */ }
 }
 
 function toggleProfile(){
   document.getElementById('profilePanel').classList.toggle('translate-x-full');
 }
 document.addEventListener('click', (e) => {
-  if(editingProfile) return; // stay open while the student is mid-edit, until Save/Cancel
   const panel = document.getElementById('profilePanel');
   const toggle = document.getElementById('profileToggle');
   if(!panel || !toggle) return;
   // Use composedPath() (captured at dispatch time) instead of .contains(e.target):
-  // clicking "+ Add to profile" re-renders the panel's innerHTML synchronously, which
-  // detaches the clicked button from the DOM before this bubbled listener runs — making
+  // clicking inside the drawer can re-render its innerHTML synchronously, which
+  // detaches the clicked element from the DOM before this bubbled listener runs — making
   // panel.contains(e.target) wrongly report "outside" and slam the drawer shut.
   const path = e.composedPath();
   if(!path.includes(panel) && !path.includes(toggle)){
@@ -629,23 +678,58 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Updates the "last updated" stamp in the profile drawer footer. The synthesized text
-// itself, plus editing, lives in renderProfileFit() — the drawer is the only place the
-// profile is shown and edited.
+// Profile updates are expected periodically as a student's interests/projects evolve —
+// past this many days without an update, the Dashboard nudges them to refresh it.
+const PROFILE_STALE_DAYS = 14;
+function daysSince(iso){
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+}
+// Updates the "last updated" badge and staleness nudge banner on the Profile tab's
+// summary card. The synthesized text itself, plus editing, lives in renderProfileFit()
+// — the Profile tab is the one place the profile is shown and edited in full.
 function renderProfile(){
   const updatedEl = document.getElementById('profileUpdated');
+  const bannerEl = document.getElementById('profileStaleBanner');
+  const hasProfile = !!studentProfile.synthesized;
+  const days = studentProfile.updatedAt ? daysSince(studentProfile.updatedAt) : null;
+  const isStale = hasProfile && days !== null && days >= PROFILE_STALE_DAYS;
+
   if(updatedEl){
-    updatedEl.textContent = studentProfile.updatedAt
-      ? `Last updated ${new Date(studentProfile.updatedAt).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'})}`
-      : '';
+    const base = 'text-xs font-bold px-3 py-1.5 rounded-full whitespace-nowrap';
+    if(!hasProfile){
+      updatedEl.textContent = '';
+      updatedEl.className = base;
+    }else{
+      updatedEl.textContent = days === 0 ? 'Updated today' : days === 1 ? 'Updated yesterday' : `Updated ${days} days ago`;
+      updatedEl.className = base + ' ' + (isStale ? 'bg-rose-100 text-rose-700' : 'bg-lime-100 text-lime-700');
+    }
+  }
+  if(bannerEl){
+    bannerEl.innerHTML = isStale ? `
+      <div class="bg-amber-50 border-2 border-amber-400 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2">
+        <p class="text-xs font-bold text-amber-900">It's been ${days} days since you updated your profile — refresh it for the best matches.</p>
+        <button class="pop-btn bg-white text-slate-900 font-bold px-3 py-1.5 rounded-xl text-xs shrink-0" onclick="focusProfileChat()">↓ Update via chat</button>
+      </div>
+    ` : '';
   }
 }
-function openProfileDrawer(){
-  // Deferred: the click that triggers this (e.g. the Finder's "Go to Your Profile"
-  // button) still bubbles up to the document-level listener below, which would
-  // otherwise immediately re-close the drawer since the click target isn't inside
-  // the panel or toggle. Opening on the next tick lets that bubbling finish first.
-  setTimeout(() => document.getElementById('profilePanel').classList.remove('translate-x-full'), 0);
+// Sends the student to the dedicated Profile tab, where the profile builder lives.
+function goToProfile(){
+  showPage('profile');
+}
+// Sends the student to the Profile tab and scrolls/focuses straight into the chat —
+// used by every "update my profile" entry point elsewhere in the app (the Finder's
+// pre-search prompt, the empty/stale-profile nudges), since the chat is now the only
+// way to add, update, or correct anything in the profile.
+function goToProfileChat(){
+  showPage('profile');
+  setTimeout(focusProfileChat, 150);
+}
+function focusProfileChat(){
+  const card = document.getElementById('profileChatCard');
+  if(card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const input = document.getElementById('profileChatInput');
+  if(input) setTimeout(() => input.focus(), 300);
 }
 
 let clearProfileArmed = false;
@@ -663,12 +747,18 @@ async function clearProfile(btn){
     return;
   }
   clearProfileArmed = false;
-  studentProfile = { synthesized: '', updatedAt: null };
-  editingProfile = false;
+  studentProfile = { synthesized: '', updatedAt: null, chatRounds: 0 };
   await saveProfile();
+  // The in-progress chat session was talking about the profile that just got wiped —
+  // start fresh so the next question isn't referencing details that no longer exist.
+  profileChatHistory = [];
+  profileChatStarters = null;
+  profileChatStartersLoading = false;
   renderProfile();
   renderProfileFit();
   renderSuggestEntryCard();
+  renderHomeProfileTeaser();
+  if(document.getElementById('profileChatMessages')) initProfileChat();
 }
 
 // Merges a block of new text into the single synthesized profile via the API — adding,
@@ -676,7 +766,7 @@ async function clearProfile(btn){
 // version ever exists. Falls back to a plain append if the API is unavailable, so
 // nothing the student wrote is lost even without live access.
 async function synthesizeProfile(existing, newText){
-  const system = `You maintain a single, coherent running profile of a high school student's academic and extracurricular interests, built up over multiple sessions. You'll be given the student's CURRENT profile (may be empty) and NEW information they just added. Merge the new information in: add genuinely new details, and update or remove anything the new information supersedes or contradicts. Do not drop specific, still-relevant details from the current profile just because they weren't repeated in the new information. Write it as concise factual statements in third person (not addressed to the student, not a bulleted list, no markdown). Structure the output as short paragraphs separated by a blank line (double newline). General paragraphs (no prefix) should cover academic interests, extracurriculars, and goals — 1-3 such paragraphs is typical. If the student has described any larger, longer-term "marquee" projects they're personally driving (as opposed to one-off activities or classes), describe EACH one in its OWN separate paragraph prefixed with the literal text "Passion Project: " — one such paragraph per distinct project, never combining multiple projects into one paragraph. Separately, if the student has described any independent research projects (research, papers, studies they're conducting), describe EACH one in its OWN separate paragraph prefixed with the literal text "Research Project: ", same rule — one per project. A project that fits both categories should be listed under whichever one fits best, not both. Only include these prefixed paragraphs for projects actually described — don't fabricate any. Respond with ONLY the updated profile text — no preamble, no quotes around it.`;
+  const system = `You maintain a single, coherent running profile of a high school student's academic and extracurricular interests, built up over multiple sessions. You'll be given the student's CURRENT profile (may be empty) and NEW information they just added. Merge the new information in: add genuinely new details, and update or remove anything the new information supersedes or contradicts. Do not drop specific, still-relevant details from the current profile just because they weren't repeated in the new information. Write it as concise statements in FIRST PERSON, as if the student is describing themself (e.g. "I'm interested in...", "I've been working on...", "My goal is..." — not third person, not addressed to the student, not a bulleted list, no markdown). Structure the output as short paragraphs separated by a blank line (double newline). General paragraphs (no prefix) should cover academic interests, extracurriculars, and goals — 1-3 such paragraphs is typical. If the student has described any larger, longer-term "marquee" projects they're personally driving (as opposed to one-off activities or classes), describe EACH one in its OWN separate paragraph prefixed with the literal text "Passion Project: " — one such paragraph per distinct project, never combining multiple projects into one paragraph. Separately, if the student has described any independent research projects (research, papers, studies they're conducting), describe EACH one in its OWN separate paragraph prefixed with the literal text "Research Project: ", same rule — one per project. A project that fits both categories should be listed under whichever one fits best, not both. Only include these prefixed paragraphs for projects actually described — don't fabricate any. Respond with ONLY the updated profile text — no preamble, no quotes around it.`;
   const userContent = `CURRENT PROFILE:\n${existing || '(empty — nothing recorded yet)'}\n\nNEW INFORMATION TO ADD:\n${newText}\n\nRespond with the updated, merged profile text only.`;
   const raw = await callClaude(system, userContent, false);
   return raw.trim();
@@ -694,36 +784,185 @@ async function mergeIntoProfile(text){
   renderProfile();
   renderProfileFit();
   renderSuggestEntryCard();
+  renderHomeProfileTeaser();
 }
 
-// ---------- Profile drawer: single synthesized profile card (edit / delete) ----------
-function startProfileEdit(){
-  editingProfile = true;
-  renderProfileFit();
-  const box = document.getElementById('profileEditBox');
-  if(box) box.focus();
+// ============================================================
+// Profile Builder Chat — a live, playful back-and-forth on the Profile tab that probes
+// for details the synthesized profile is missing (or only has shallowly), rather than
+// asking the student to write another essay. Each visit escalates in depth via
+// studentProfile.chatRounds. The transcript itself is never persisted — only the
+// distilled findings, semantically merged into the one running profile when the
+// student signals they're done for now (see finishProfileChatSession).
+// ============================================================
+let profileChatHistory = []; // [{ role: 'bot'|'user', text }], reset each time a session is finished
+let profileChatBusy = false;
+let profileChatStarters = null; // array of 3 kickoff questions, shown once per fresh session
+let profileChatStartersLoading = false;
+
+// Generic fallback starters, used only if the AI call for fresh-session starters fails
+// (or times out) — so a flaky connection never leaves the chat stuck with nothing to show.
+const FALLBACK_STARTER_QUESTIONS = [
+  "If your extracurriculars had a theme song, what would it be — and why does that fit you?",
+  "What's something you're weirdly good at that has nothing to do with school?",
+  "If you had one free Saturday with zero obligations, what would you actually do with it?"
+];
+
+// Races a promise against a plain timeout so a hung network call can never leave the
+// chat stuck in a loading state forever — it just falls back instead.
+function withTimeout(promise, ms, message){
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message || 'Timed out')), ms))
+  ]);
 }
-function cancelProfileEdit(){
-  editingProfile = false;
-  renderProfileFit();
+
+function initProfileChat(){
+  if(!document.getElementById('profileChatMessages')) return;
+  renderProfileChatMessages();
+  if(!profileChatHistory.length && !profileChatStarters && !profileChatStartersLoading){
+    loadProfileChatStarters();
+  }
 }
-async function saveProfileEdit(){
-  const box = document.getElementById('profileEditBox');
-  const text = box ? box.value.trim() : '';
-  if(!text){ cancelProfileEdit(); return; }
-  const statusEl = document.getElementById('profileEditStatus');
-  const saveBtn = document.getElementById('profileEditSaveBtn');
-  if(saveBtn) saveBtn.disabled = true;
-  if(statusEl) statusEl.textContent = 'Updating your profile…';
-  await mergeIntoProfile(text);
-  editingProfile = false;
-  renderProfileFit();
+
+function renderProfileChatMessages(){
+  const wrap = document.getElementById('profileChatMessages');
+  if(!wrap) return;
+
+  if(profileChatHistory.length){
+    wrap.innerHTML = profileChatHistory.map(m =>
+      `<div class="${m.role === 'bot' ? 'chat-bubble-bot' : 'chat-bubble-user'}">${escapeHtmlTracker(m.text)}</div>`
+    ).join('') + (profileChatBusy ? `<div class="chat-bubble-bot text-slate-400">…</div>` : '');
+    wrap.scrollTop = wrap.scrollHeight;
+    return;
+  }
+
+  // Fresh session, no messages yet — offer 3 starter questions to choose from instead of
+  // just launching into one, per the "ask the user where they want to start" behavior.
+  if(profileChatStarters && profileChatStarters.length){
+    wrap.innerHTML = `
+      <p class="text-xs font-bold text-slate-500 mb-1">Pick a place to start:</p>
+      ${profileChatStarters.map((q, i) => `
+        <button type="button" class="chat-starter-btn" onclick="pickProfileChatStarter(${i})">${escapeHtmlTracker(q)}</button>
+      `).join('')}
+    `;
+    return;
+  }
+
+  wrap.innerHTML = `<p class="empty-state">Cooking up a few conversation starters…</p>`;
 }
+
+// Fetches 3 fresh, profile-aware icebreakers to kick off a brand-new chat session.
+async function profileChatStarterQuestionsFromAI(){
+  const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY (may be empty). Come up with exactly THREE distinct, short, fun, wacky-but-meaningful icebreaker questions to kick off a chat session that probes for details the profile is missing or only has shallowly — think music, sports/athletics, hobbies, what they do purely for fun, leadership, part-time jobs, quirks of personality, or deeper specifics on things already mentioned. Keep each one playful and casual, like a clever friend riffing with them, not a form — but each must serve a real purpose in understanding this student for extracurricular/college-application matching. This is chat round ${studentProfile.chatRounds + 1} of them returning to this page — the higher that number, the more specific and creative the questions should get. Respond with ONLY a JSON array of exactly 3 short question strings, e.g. ["...", "...", "..."] — no markdown, no preamble, no numbering.`;
+  const userContent = `CURRENT PROFILE SUMMARY:\n${studentProfile.synthesized || '(empty)'}\n\nRespond with a JSON array of exactly 3 starter questions only.`;
+  const raw = await withTimeout(callClaude(system, userContent, false), 20000, 'Timed out waiting for starter questions');
+  const parsed = JSON.parse(extractJSON(raw));
+  if(!Array.isArray(parsed) || !parsed.length) throw new Error('Unexpected starter question format');
+  return parsed.slice(0, 3).map(String);
+}
+
+async function loadProfileChatStarters(){
+  profileChatStartersLoading = true;
+  renderProfileChatMessages();
+  try{
+    profileChatStarters = await profileChatStarterQuestionsFromAI();
+  }catch(e){
+    console.error('Profile chat starters failed, using fallback:', e);
+    profileChatStarters = FALLBACK_STARTER_QUESTIONS.slice();
+  }
+  profileChatStartersLoading = false;
+  renderProfileChatMessages();
+}
+
+// The student picked one of the 3 opening options — that becomes the bot's first message,
+// and the conversation proceeds normally (free text answer, then follow-up questions).
+function pickProfileChatStarter(i){
+  const q = profileChatStarters && profileChatStarters[i];
+  if(!q) return;
+  profileChatHistory.push({ role: 'bot', text: q });
+  profileChatStarters = null;
+  renderProfileChatMessages();
+  const input = document.getElementById('profileChatInput');
+  if(input) input.focus();
+}
+
+// Calls Claude for the bot's next question, given the profile-so-far, the transcript so
+// far, and how many prior chat rounds (visits) this student has already completed —
+// deeper rounds are prompted to dig further/get weirder instead of repeating ground.
+async function profileChatNextQuestion(){
+  const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY (may be empty) and the CONVERSATION SO FAR in this session. Ask exactly ONE short, fun, wacky-but-meaningful question that helps fill in gaps — especially topics not yet covered, like music, sports/athletics, hobbies, what they do purely for fun, family or community involvement, leadership moments, part-time jobs, or quirks of personality — as well as digging deeper into things already mentioned (ask for specifics: what exactly did you build, what was your role, what surprised you, what would you change). This is chat round ${studentProfile.chatRounds + 1} of them returning to this page — the more rounds, the more specific and creative your questions should get; don't repeat ground already covered in earlier rounds or earlier in this conversation. Keep your tone playful and casual, like a clever friend riffing with them, not a form — but every question must serve a real purpose in understanding this student for extracurricular/college-application matching. Ask exactly one question, 1-2 sentences, no lists, no markdown, no preamble, no "Great!" acknowledgments of their last answer beyond at most a short playful reaction folded into the same sentence.`;
+  const transcript = profileChatHistory.map(m => `${m.role === 'bot' ? 'You' : 'Student'}: ${m.text}`).join('\n') || '(nothing yet)';
+  const userContent = `CURRENT PROFILE SUMMARY:\n${studentProfile.synthesized || '(empty)'}\n\nCONVERSATION SO FAR:\n${transcript}\n\nRespond with your next single question only — no preamble, no quotes around it.`;
+  const raw = await withTimeout(callClaude(system, userContent, false), 20000, 'Timed out waiting for the next question');
+  return raw.trim();
+}
+
+async function sendProfileChatBotTurn(){
+  profileChatBusy = true;
+  renderProfileChatMessages();
+  try{
+    const question = await profileChatNextQuestion();
+    profileChatHistory.push({ role: 'bot', text: question || "What's something you're into that might surprise people?" });
+  }catch(e){
+    console.error('Profile chat question failed:', e);
+    profileChatHistory.push({ role: 'bot', text: "Hmm, I couldn't think of a question just now — want to just tell me something about yourself?" });
+  }
+  profileChatBusy = false;
+  renderProfileChatMessages();
+}
+
+async function sendProfileChatMessage(){
+  if(profileChatBusy) return;
+  const input = document.getElementById('profileChatInput');
+  const text = input ? input.value.trim() : '';
+  if(!text) return;
+  profileChatHistory.push({ role: 'user', text });
+  if(input) input.value = '';
+  renderProfileChatMessages();
+  await sendProfileChatBotTurn();
+}
+
+// Distills the chat transcript into plain findings text, then folds it into the single
+// running profile via the same semantic merge used everywhere else (mergeIntoProfile).
+async function summarizeProfileChat(){
+  const system = `You help distill a casual chat conversation into new facts learned about a high school student, so they can be merged into their profile. Given the CONVERSATION, extract only the new, concrete details the student actually shared — interests, activities, projects, personality, hobbies, and so on. Ignore the chatbot's own questions and any small talk. Write it as a few short first-person-compatible factual notes (plain text, no markdown, no preamble, no bullet points) describing what was learned, ready to be merged into a first-person profile summary.`;
+  const transcript = profileChatHistory.map(m => `${m.role === 'bot' ? 'Bot' : 'Student'}: ${m.text}`).join('\n');
+  const userContent = `CONVERSATION:\n${transcript}\n\nRespond with the distilled findings only.`;
+  const raw = await callClaude(system, userContent, false);
+  return raw.trim();
+}
+
+async function finishProfileChatSession(){
+  const statusEl = document.getElementById('profileChatStatus');
+  const hasAnswers = profileChatHistory.some(m => m.role === 'user');
+  if(!hasAnswers){
+    if(statusEl) statusEl.textContent = 'Answer at least one question first, then hit this again.';
+    return;
+  }
+  if(statusEl) statusEl.textContent = 'Folding what you shared into your profile…';
+  try{
+    const findings = await summarizeProfileChat();
+    await mergeIntoProfile(findings);
+    studentProfile.chatRounds += 1;
+    await saveProfile();
+    profileChatHistory = [];
+    profileChatStarters = null;
+    profileChatStartersLoading = false;
+    renderProfileChatMessages();
+    loadProfileChatStarters();
+    if(statusEl) statusEl.textContent = 'Profile updated! Come back any time for more questions.';
+  }catch(e){
+    console.error('Profile chat summarize/merge failed:', e);
+    if(statusEl) statusEl.textContent = "Couldn't update your profile just now — try again in a moment.";
+  }
+}
+
 
 // Used by empty-profile prompts elsewhere in the app to send the student to the one
-// place the profile now lives: the drawer.
+// place the profile now lives: the Profile tab.
 function jumpToProfile(){
-  openProfileDrawer();
+  goToProfileChat();
 }
 
 // ============================================================
@@ -744,9 +983,9 @@ function renderSuggestEntryCard(){
     el.innerHTML = `
       <div class="max-w-xl">
         <h2 class="font-heading font-extrabold text-3xl mb-3">Suggest opportunities for me</h2>
-        <p class="text-sm text-indigo-100">Based on everything in your profile. Add a few things to your profile first and this option unlocks.</p>
+        <p class="text-sm text-slate-600">Based on everything in your profile. Add a few things to your profile first and this option unlocks.</p>
       </div>
-      <button class="mt-6 pop-btn bg-white text-slate-900 font-bold px-6 py-3 rounded-xl" onclick="openProfileDrawer()">Go to Your Profile →</button>
+      <button class="mt-6 pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-3 rounded-xl" onclick="goToProfileChat()">Go to Your Profile →</button>
     `;
     return;
   }
@@ -754,10 +993,10 @@ function renderSuggestEntryCard(){
   el.innerHTML = `
     <div class="max-w-xl">
       <h2 class="font-heading font-extrabold text-3xl mb-3">Suggest opportunities for me</h2>
-      <p class="text-sm text-indigo-100 mb-3">Skip straight to matches based on your profile — the fastest way to get started.</p>
-      <p class="text-xs text-white/90 font-medium italic border-l-2 border-white/50 pl-3">"${escapeHtmlTracker(preview)}"</p>
+      <p class="text-sm text-slate-600 mb-3">Skip straight to matches based on your profile — the fastest way to get started.</p>
+      <p class="text-xs text-slate-500 font-medium italic border-l-2 border-slate-300 pl-3">"${escapeHtmlTracker(preview)}"</p>
     </div>
-    <button class="mt-6 pop-btn bg-lime-300 text-slate-900 font-bold px-6 py-3 rounded-xl" onclick="startProfileSuggest()">Suggest opportunities →</button>
+    <button class="mt-6 pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-3 rounded-xl" onclick="startProfileSuggest()">Suggest opportunities →</button>
   `;
 }
 function toggleBrowsePanel(){
@@ -772,15 +1011,30 @@ function toggleBrowsePanel(){
 
 let suggestPendingQuestions = [];
 let suggestAssessedKinds = [];
+// Read-only preview of the synthesized profile on the Finder's "Here's what we know
+// about you" card. Editing no longer happens in place here — the profile is only ever
+// changed via the chat on the Profile tab (see goToProfileChat).
+function renderSuggestProfileSummary(){
+  const el = document.getElementById('suggestProfileSummary');
+  if(!el) return;
+  el.innerHTML = `<div class="bg-indigo-50 border-2 border-slate-900 rounded-2xl p-4 sm:p-6">${profileSummaryBodyHTML(studentProfile.synthesized)}</div>`;
+}
 async function startProfileSuggest(){
   if(!studentProfile.synthesized) return;
   goStage('suggest');
-  document.getElementById('suggestProfileSummary').innerHTML = `<div class="bg-indigo-50 border-2 border-slate-900 rounded-2xl p-4 sm:p-6">${profileSummaryBodyHTML(studentProfile.synthesized)}</div>`;
+  renderSuggestProfileSummary();
   document.getElementById('suggestQuestionsWrap').innerHTML = '';
   document.getElementById('suggestContinueBtn').style.display = 'none';
   document.getElementById('suggestError').classList.remove('show');
+  // Give the student a chance to review/update their profile before we spend an API
+  // call and lock in a search against it — see confirmSuggestProfile() for the
+  // actual readiness-check + search, which only fires once they confirm.
+  document.getElementById('suggestConfirmWrap').style.display = '';
+  document.getElementById('suggestStatus').textContent = '';
+}
+async function confirmSuggestProfile(){
+  document.getElementById('suggestConfirmWrap').style.display = 'none';
   const statusEl = document.getElementById('suggestStatus');
-
   statusEl.textContent = 'Reviewing your profile…';
   try{
     const assessment = await assessProfileReadiness(studentProfile.synthesized);
@@ -895,8 +1149,6 @@ async function runProfileSuggestSearch(){
   }
 }
 
-loadProfile().then(() => { renderProfile(); renderSuggestEntryCard(); });
-
 // ---------- Stage 1 → 2: run search ----------
 let currentResults = []; // [{opp, reason, tier, kind?}] — kind is set for multi-kind Suggest results
 let selectedIds = new Set();
@@ -947,8 +1199,8 @@ async function runSearch(){
     if(formatWant === 'remote') prefsParts.push('prefers remote-friendly opportunities');
     if(formatWant === 'inperson') prefsParts.push('prefers in-person opportunities');
   }
-  // Prior sessions' synthesized profile, if any, adds continuity to the ranking.
-  if(studentProfile.synthesized) prefsParts.push(`previously expressed interest (from past visits): ${studentProfile.synthesized}`);
+  // Browsing by type is independent of the saved profile by design (see selectKind) —
+  // no profile text is folded into ranking here, unlike the profile-based Suggest flow.
   const prefsText = prefsParts.join('; ');
 
   try{
@@ -987,6 +1239,9 @@ async function runSearch(){
       throw new Error('No matches came back — try adding more specific detail to your description.');
     }
 
+    // A fresh search is a new "turn" — any selections from a prior search shouldn't
+    // carry over into this result set's selected count.
+    selectedIds = new Set();
     resetResultFilters();
     renderResults();
     unlocked[2] = true;
@@ -1013,13 +1268,13 @@ function resultCardHTML(r){
   const metaParts = [o.org, o.type, o.price, o.location, o.state && o.state !== 'All States' ? o.state : null, o.season].filter(Boolean);
   const kindBadge = r.kind ? KIND_CONFIG[r.kind].name : (o.type || 'Opportunity');
   const bgClass = r.tier === 'strong' ? 'bg-emerald-50' : 'bg-white';
-  const dateNote = o.nextDeadlineISO ? `<span class="bg-indigo-100 text-indigo-900 border border-slate-900 px-2.5 py-1 rounded-md">Next: ${shortDate(o.nextDeadlineISO)}${o.wasEstimated ? ' (est.)' : ''}</span>` : '';
+  const dateNote = o.nextDeadlineISO ? `<span class="bg-white border-2 border-indigo-200 text-slate-900 px-3 py-1.5 rounded-full">Next: ${shortDate(o.nextDeadlineISO)}${o.wasEstimated ? ' (est.)' : ''}</span>` : '';
   // Already-tracked opportunities can't be re-selected — clicking "Save Match" on one
   // would just be silently dropped as a duplicate at add time, so instead we surface a
   // tag pointing back to the Tracker, where any edits belong.
   const actionControl = tracked
-    ? `<span class="bg-slate-800 text-white font-bold text-xs px-4 py-2 rounded-xl cursor-pointer" onclick="event.stopPropagation(); goToTrackerCard('${tracked.item.id}')">📌 Tracking currently. Make edits in tracker.</span>`
-    : `<button class="pop-btn font-extrabold text-xs px-4 py-2 rounded-xl flex items-center justify-center gap-2 ${isSelected ? 'bg-lime-400 text-slate-900' : 'bg-white text-slate-900'}" onclick="event.stopPropagation(); toggleSelect('${o.id}')">
+    ? `<span class="bg-slate-800 text-white font-bold text-xs px-4 py-2 rounded-full cursor-pointer" onclick="event.stopPropagation(); goToTrackerCard('${tracked.item.id}')">📌 Tracking currently. Make edits in tracker.</span>`
+    : `<button class="pop-btn font-extrabold text-xs px-5 py-2.5 rounded-full flex items-center justify-center gap-2 border-2 border-slate-900 ${isSelected ? 'bg-lime-400 text-slate-900' : 'bg-white text-slate-900'}" onclick="event.stopPropagation(); toggleSelect('${o.id}')">
             ${isSelected ? '⭐ Saved Match' : '⭐ Save Match'}
          </button>`;
 
@@ -1027,20 +1282,26 @@ function resultCardHTML(r){
     <div class="pop-card result-card-clickable ${bgClass} rounded-3xl p-5 sm:p-6 space-y-4 ${isSelected ? 'border-4 border-lime-400 bg-lime-50' : 'border-4 border-slate-900'}" id="result-${o.id}" onclick="window.open('${o.url}', '_blank')">
       <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
          <div class="flex flex-wrap gap-2">
-            <span class="bg-violet-200 text-violet-900 border-2 border-slate-900 font-bold text-[10px] uppercase px-3 py-1 rounded-full">${kindBadge}</span>
-            ${r.tier === 'strong' ? `<span class="bg-yellow-300 border-2 border-slate-900 font-extrabold text-[10px] uppercase px-3 py-1 rounded-full">⭐ Strong Fit</span>` : `<span class="bg-slate-100 border-2 border-slate-900 font-bold text-[10px] uppercase px-3 py-1 rounded-full">Worth a look</span>`}
+            <span class="bg-violet-200 text-violet-900 border-2 border-slate-900 font-bold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full">${kindBadge}</span>
+            ${r.tier === 'strong' ? `<span class="bg-yellow-300 border-2 border-slate-900 font-extrabold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full">⭐ Strong Fit</span>` : `<span class="bg-slate-100 border-2 border-slate-900 font-bold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full">Worth a look</span>`}
          </div>
          ${actionControl}
       </div>
       <div>
-        <h3 class="font-heading text-xl sm:text-2xl font-bold text-slate-900"><a href="${o.url}" target="_blank" class="hover:underline" onclick="event.stopPropagation()">${o.name}</a></h3>
+        <h3 class="font-heading text-2xl sm:text-3xl font-extrabold text-slate-900"><a href="${o.url}" target="_blank" class="hover:underline" onclick="event.stopPropagation()">${o.name}</a></h3>
       </div>
+      ${r.reason ? `<div class="flex gap-3 items-stretch">
+        <div class="w-1 rounded-full bg-yellow-400 shrink-0"></div>
+        <div>
+          <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Why it fits</p>
+          <p class="font-heading text-lg sm:text-xl font-bold text-slate-900 leading-snug">${r.reason}</p>
+        </div>
+      </div>` : ''}
       <div class="flex flex-wrap gap-2 text-xs font-bold">
-         ${metaParts.map(m => `<span class="bg-slate-100 border border-slate-900 px-2.5 py-1 rounded-md">${m}</span>`).join('')}
+         ${metaParts.map(m => `<span class="bg-white border-2 border-indigo-200 text-slate-900 px-3 py-1.5 rounded-full">${m}</span>`).join('')}
          ${dateNote}
       </div>
-      ${r.reason ? `<div class="bg-slate-50 border-2 border-slate-200 p-3 rounded-2xl"><p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Why it fits</p><p class="text-xs text-slate-700 font-medium">${r.reason}</p></div>` : ''}
-      ${o.summary ? `<p class="text-slate-600 text-sm leading-relaxed line-clamp-3">${o.summary}</p>` : ''}
+      ${o.summary ? `<p class="text-sm text-slate-500 font-medium leading-relaxed line-clamp-3">${o.summary}</p>` : ''}
     </div>
   `;
 }
@@ -1183,6 +1444,11 @@ Multiple deadline milestones — this matters a lot:
 - Many programs have MORE THAN ONE deadline — e.g. an early-bird/early registration deadline well before a later regular or final deadline (AMC 12's early-bird registration deadline is a good example: it lands weeks before the exam itself). Find and list EVERY distinct deadline milestone you can, each with a short specific label (e.g. "Early Bird Registration", "Regular Registration", "Final Deadline", "Application Deadline", "Late Registration") and its own date, in chronological order. Do not collapse them into just one "final" date — the earliest one is often the one a student needs to act on first.
 - If there's genuinely only one deadline, list just that one entry.
 
+Registration/application OPENS date — pay particular, deliberate attention to this:
+- Actively search for the date applications/registration OPEN, not just when they close — this is often the single most useful date for a student trying to plan ahead, and it's easy to miss because it's mentioned less prominently than the deadline. Check the program page, past years' timelines, and any "key dates" or "timeline" section specifically for an opens/launch date.
+- If you can't find an explicit opens date but the program is recurring, ESTIMATE it from the prior cycle's opens date the same way you'd estimate a deadline (e.g. applications opened January 10 last cycle, program is annual → estimate a similar date this cycle) and set was_estimated true if any part of the dates you're returning is estimated.
+- Only leave opens_iso null if you genuinely found no opens date and have no reasonable prior-cycle basis to estimate one — don't skip searching for it just because you already found a deadline.
+
 Date reasoning:
 - If every deadline you found has already passed relative to today, and the program appears to run on a regular annual/recurring cycle, ESTIMATE next cycle's dates from the prior cycle's timing (e.g. last deadline was March 15 2025, program is annual → estimate a 2026 date near March 15, or later if you can't confirm the exact next date). Set was_estimated to true and say what it's based on in note (e.g. "Estimated from the 2025 cycle; 2027 dates not yet posted").
 - Only mark status "running" if you found real evidence the program is currently active or has a future confirmed/estimated date. Use "unknown" if you found genuinely nothing usable after searching both the URL and the base site.
@@ -1242,54 +1508,50 @@ function findTrackedItem(opp){
   return null;
 }
 
-// ---------- Persistence ----------
+// ---------- Persistence (per-account, via AppStorage — see top of file) ----------
 async function loadTrackerData(){
   try{
-    if(window.storage){
-      const r = await window.storage.get('hs-tracker-data');
-      if(r && r.value){
-        const parsed = JSON.parse(r.value);
-        // One-time migration from the old 4-bucket shape (competitions, summerPrograms combined
-        // internships+summer) into the new 6-bucket shape. Best-effort — old items land in a
-        // reasonable default bucket since we don't have per-item origin metadata to split them precisely.
-        if(Array.isArray(parsed.competitions) && !Array.isArray(parsed.researchCompetitions)){
-          parsed.researchCompetitions = parsed.competitions;
-        }
-        trackerData = {
-          summerPrograms: Array.isArray(parsed.summerPrograms) ? parsed.summerPrograms : [],
-          internships: Array.isArray(parsed.internships) ? parsed.internships : [],
-          researchCompetitions: Array.isArray(parsed.researchCompetitions) ? parsed.researchCompetitions : [],
-          pureCompetitions: Array.isArray(parsed.pureCompetitions) ? parsed.pureCompetitions : [],
-          conferences: Array.isArray(parsed.conferences) ? parsed.conferences : [],
-          journals: Array.isArray(parsed.journals) ? parsed.journals : []
-        };
-        // Migration: older saved items predate the action-items feature — default to empty.
-        ALL_BUCKETS.forEach(b => trackerData[b].forEach(item => {
-          if(!Array.isArray(item.actionItems)) item.actionItems = [];
-        }));
+    const r = await AppStorage.get('hs-tracker-data');
+    if(r && r.value){
+      const parsed = JSON.parse(r.value);
+      // One-time migration from the old 4-bucket shape (competitions, summerPrograms combined
+      // internships+summer) into the new 6-bucket shape. Best-effort — old items land in a
+      // reasonable default bucket since we don't have per-item origin metadata to split them precisely.
+      if(Array.isArray(parsed.competitions) && !Array.isArray(parsed.researchCompetitions)){
+        parsed.researchCompetitions = parsed.competitions;
       }
+      trackerData = {
+        summerPrograms: Array.isArray(parsed.summerPrograms) ? parsed.summerPrograms : [],
+        internships: Array.isArray(parsed.internships) ? parsed.internships : [],
+        researchCompetitions: Array.isArray(parsed.researchCompetitions) ? parsed.researchCompetitions : [],
+        pureCompetitions: Array.isArray(parsed.pureCompetitions) ? parsed.pureCompetitions : [],
+        conferences: Array.isArray(parsed.conferences) ? parsed.conferences : [],
+        journals: Array.isArray(parsed.journals) ? parsed.journals : []
+      };
+      // Migration: older saved items predate the action-items feature — default to empty.
+      ALL_BUCKETS.forEach(b => trackerData[b].forEach(item => {
+        if(!Array.isArray(item.actionItems)) item.actionItems = [];
+      }));
     }
   }catch(e){ /* nothing saved yet, or storage unavailable — start fresh */ }
 }
 async function saveTrackerData(){
-  try{ if(window.storage) await window.storage.set('hs-tracker-data', JSON.stringify(trackerData)); }
+  try{ await AppStorage.set('hs-tracker-data', JSON.stringify(trackerData)); }
   catch(e){ /* storage unavailable — stays in-memory only for this session */ }
 }
 async function loadTrackerSaved(){
   try{
-    if(window.storage){
-      const r = await window.storage.get('hs-tracker-saved');
-      if(r && r.value){ trackerSavedState = JSON.parse(r.value); }
-    }
+    const r = await AppStorage.get('hs-tracker-saved');
+    if(r && r.value){ trackerSavedState = JSON.parse(r.value); }
   }catch(e){}
 }
 async function saveTrackerSaved(){
-  try{ if(window.storage) await window.storage.set('hs-tracker-saved', JSON.stringify(trackerSavedState)); }catch(e){}
+  try{ await AppStorage.set('hs-tracker-saved', JSON.stringify(trackerSavedState)); }catch(e){}
 }
 
 // ---------- Page switching (Finder wizard <-> persistent Tracker) ----------
 function showPage(name){
-  ['home','wizard','tracker'].forEach(p => {
+  ['home','wizard','tracker','profile'].forEach(p => {
     const el = document.getElementById('page-' + p);
     if(el) {
       if(p === name) {
@@ -1301,22 +1563,10 @@ function showPage(name){
     }
   });
 
-  const activeColors = { home: 'bg-yellow-300', wizard: 'bg-lime-300', tracker: 'bg-white' }; // Inspiration uses bg-white for all except Home initially, but active gets highlighted. Let's stick to simple:
-  // Tracker btn is #navTrackerBtn
-  
-  ['home','wizard','tracker'].forEach(p => {
+  ['home','wizard','tracker','profile'].forEach(p => {
     const btnId = 'nav' + p.charAt(0).toUpperCase() + p.slice(1) + 'Btn';
     const btn = document.getElementById(btnId);
-    if(btn) {
-      if(p === name) {
-        if(p === 'home') { btn.classList.add('bg-yellow-300'); btn.classList.remove('bg-white'); }
-        if(p === 'wizard') { btn.classList.add('bg-lime-300'); btn.classList.remove('bg-white'); }
-        if(p === 'tracker') { btn.classList.add('bg-indigo-300'); btn.classList.remove('bg-white'); }
-      } else {
-        btn.classList.add('bg-white');
-        btn.classList.remove('bg-yellow-300', 'bg-lime-300', 'bg-indigo-300');
-      }
-    }
+    if(btn) btn.classList.toggle('active', p === name);
   });
 
   // The "New" banner on freshly-added tracker cards only lasts until the user leaves
@@ -1328,6 +1578,7 @@ function showPage(name){
   // outside — otherwise it'd resume whatever stage (results, quiz, etc.) was last left
   // active, which is confusing when you're starting a fresh search.
   if(name === 'wizard'){ renderSuggestEntryCard(); goStage(0); }
+  if(name === 'profile'){ renderProfile(); renderProfileFit(); initProfileChat(); }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 function jumpToKind(kind){
@@ -1454,47 +1705,35 @@ function computeProgressStatus(item){
   if(daysUntil(lastStep) < 0) return 'completed'; // last known milestone for the cycle has passed
   return 'in_progress';
 }
+// Opportunity event-timing state pill — always green/blue/grey for Happening Now /
+// Future Event / Past Event, everywhere in the app (see .status-pill.status-opp-* in styles.css).
 function statusPillHTML(status){
-  return `<span class="status-pill status-${status}">${PROGRESS_STATUS_LABEL[status]}</span>`;
+  return `<span class="status-pill status-opp-${status}">${PROGRESS_STATUS_LABEL[status]}</span>`;
 }
 // Shared segmented progress bar + legend, used by the Home "Opportunities you are tracking" card
-// and the "Coming up" to-do list.
-function progressBarHTML(counts, total, labels = PROGRESS_STATUS_LABEL){
+// (kind:'opp' — green/blue/grey) and the "Coming up" to-do list (kind:'task' — red/orange/green).
+function progressBarHTML(counts, total, labels = PROGRESS_STATUS_LABEL, order = ['in_progress', 'not_started', 'completed'], kind = 'opp'){
   if(!total){
     return { track: '', legend: '<p class="empty-state">Nothing here yet.</p>' };
   }
-  const order = ['not_started', 'in_progress', 'completed'];
-  const track = order.map(k => `<div class="progress-seg seg-${k}" style="width:${(counts[k] / total * 100)}%"></div>`).join('');
+  const track = order.map(k => `<div class="progress-seg seg-${kind}-${k}" style="width:${(counts[k] / total * 100)}%"></div>`).join('');
   const legend = order.map(k => `
     <span class="progress-legend-item text-xs font-bold text-slate-600">
-      <span class="progress-legend-dot seg-${k}"></span> ${labels[k]} (${counts[k]})
+      <span class="progress-legend-dot seg-${kind}-${k}"></span> ${labels[k]} (${counts[k]})
     </span>
   `).join('');
   return { track, legend };
 }
-function trackerBadge(item){
-  if(item.status === 'not_running'){
-    return {cls:'notrunning-b', top:'NOT', bottom:'RUNNING'};
-  }
-  const next = earliestUpcoming(item);
-  if(!next){
-    return {cls:'rolling-b', top:item.deadlineLabel || 'ROLLING', bottom:''};
-  }
-  const days = daysUntil(next.date);
-  const top = shortDate(next.date);
-  const estSuffix = item.wasEstimated ? ' (est.)' : '';
-  const isGenericLabel = !next.label || /^deadline$/i.test(next.label);
-  const labelSuffix = next.kind === 'opens' ? ' · opens' : (isGenericLabel ? '' : ' · ' + next.label);
-  if(days < 0) return {cls:'rolling-b', top:top, bottom:'passed'};
-  if(days <= 14) return {cls:'urgent-b', top:top, bottom: days + ' days' + labelSuffix + estSuffix};
-  if(days <= 45) return {cls:'soon-b', top:top, bottom: days + ' days' + labelSuffix + estSuffix};
-  return {cls:'later-b', top:top, bottom: days + ' days' + labelSuffix + estSuffix};
-}
+// Golden-angle hue spacing keeps colors for different opportunities visually far
+// apart on the wheel (unlike a plain hash-mod-360, which tends to cluster nearby
+// hues for similar-looking seeds) while still being fully deterministic per seed —
+// same opportunity always gets the same color, across every month it appears in.
+const GOLDEN_ANGLE = 137.508;
 function hashColor(seed){
   let hash = 0;
   for(let i = 0; i < seed.length; i++){ hash = seed.charCodeAt(i) + ((hash << 5) - hash); }
-  const hue = Math.abs(hash) % 360;
-  return { bg:`hsl(${hue}, 38%, 90%)`, border:`hsl(${hue}, 42%, 38%)`, text:`hsl(${hue}, 45%, 22%)` };
+  const hue = Math.abs(hash * GOLDEN_ANGLE) % 360;
+  return { bg:`hsl(${hue}, 78%, 88%)`, border:`hsl(${hue}, 75%, 42%)`, text:`hsl(${hue}, 80%, 24%)` };
 }
 const MONTH_NAMES = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
 
@@ -1536,21 +1775,21 @@ function deleteTrackerItem(id, btn){
   renderTrackerPage();
 }
 function trackerCardHTML(item, sourceLabel){
-  const b = trackerBadge(item);
   const notRunningBadge = item.status === 'not_running'
-    ? `<span class="bg-rose-100 text-rose-900 border border-slate-900 font-bold text-[10px] uppercase px-2 py-0.5 rounded-full">Not running</span>`
+    ? `<span class="bg-rose-100 text-rose-900 border-2 border-slate-900 font-bold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full">Not running</span>`
     : '';
-  const typeBadge = sourceLabel ? `<span class="bg-purple-200 text-purple-900 border border-slate-900 font-bold text-[10px] uppercase px-2 py-0.5 rounded-full">${sourceLabel}</span>` : '';
+  const typeBadge = sourceLabel ? `<span class="bg-violet-200 text-violet-900 border-2 border-slate-900 font-bold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full">${sourceLabel}</span>` : '';
   const estimatedNote = item.wasEstimated && item.status !== 'not_running'
-    ? `<p class="text-xs text-amber-700 bg-amber-50 p-2 rounded-lg border border-amber-200">Predicted dates from past cycle.</p>`
+    ? `<div class="bg-yellow-200 border-2 border-slate-900 rounded-xl px-4 py-2.5"><p class="text-xs font-bold text-amber-800">Predicted dates from past cycle.</p></div>`
     : '';
   const deadlineRows = (item.deadlines && item.deadlines.length)
-    ? `<div class="space-y-1 mt-2">
-         ${item.deadlines.map(d => `<div class="flex items-center gap-2 text-xs font-medium text-slate-700"><span class="bg-slate-200 px-1.5 rounded">${shortDate(d.dateISO)}</span> ${d.label}</div>`).join('')}
+    ? `<div class="space-y-2">
+         ${item.deadlines.map(d => `<div class="flex items-center gap-3 text-xs font-bold text-slate-800"><span class="bg-white border-2 border-slate-900 px-2.5 py-1 rounded-lg uppercase tracking-wide shrink-0">${shortDate(d.dateISO)}</span> ${d.label}</div>`).join('')}
        </div>`
     : '';
   const isSaved = !!trackerSavedState[item.id];
   const progress = computeProgressStatus(item);
+  const bgClass = progress === 'in_progress' ? 'bg-emerald-50' : 'bg-white';
   // Shown only for the batch of opportunities added in the current session (cleared
   // as soon as the user navigates away from the Tracker screen — see showPage).
   const newBanner = newlyAddedTrackerIds.has(item.id)
@@ -1558,39 +1797,39 @@ function trackerCardHTML(item, sourceLabel){
     : '';
 
   return `
-    <div class="pop-card bg-white p-4 rounded-2xl space-y-3 relative ${item.status === 'not_running' ? 'opacity-60' : ''}" id="tracker-card-${item.id}">
+    <div class="pop-card ${bgClass} rounded-3xl p-5 sm:p-6 space-y-4 border-4 border-slate-900 relative ${item.status === 'not_running' ? 'opacity-60' : ''}" id="tracker-card-${item.id}">
       ${newBanner}
       <div class="flex justify-between items-start gap-2">
-        <div class="flex flex-wrap gap-1">
+        <div class="flex flex-wrap gap-2">
           ${typeBadge}
           ${notRunningBadge}
         </div>
-        <div class="flex items-center gap-1">
-          <button onclick="event.stopPropagation(); toggleTrackerSaved('${item.id}')" class="text-lg hover:scale-110 transition-transform" title="${isSaved ? 'Restore' : 'Save'}">${isSaved ? '★' : '☆'}</button>
-          <button onclick="event.stopPropagation(); deleteTrackerItem('${item.id}', this)" class="text-xs font-bold text-slate-400 hover:text-rose-600 transition-colors" title="Delete">✕</button>
+        <div class="flex items-center gap-2 shrink-0">
+          <button onclick="event.stopPropagation(); toggleTrackerSaved('${item.id}')" class="w-9 h-9 rounded-full bg-white border-2 border-slate-900 flex items-center justify-center hover:scale-105 transition-transform" title="${isSaved ? 'Restore' : 'Save'}">${isSaved ? '★' : '☆'}</button>
+          <button onclick="event.stopPropagation(); deleteTrackerItem('${item.id}', this)" class="w-9 h-9 rounded-full bg-white border-2 border-slate-900 flex items-center justify-center text-slate-500 hover:text-rose-600 transition-colors" title="Delete">✕</button>
         </div>
       </div>
-      
+
       <div>
-        <h4 class="font-bold text-sm text-slate-900 leading-tight"><a href="${item.url}" target="_blank" class="hover:underline">${item.name}</a></h4>
-        <p class="text-xs text-slate-500 mt-0.5 line-clamp-1">${item.meta || ''}</p>
+        <h3 class="font-heading text-2xl sm:text-3xl font-extrabold text-slate-900 leading-tight"><a href="${item.url}" target="_blank" class="hover:underline">${item.name}</a></h3>
+        <p class="text-sm text-slate-500 font-medium mt-1 line-clamp-1">${item.meta || ''}</p>
       </div>
 
       ${estimatedNote}
       ${deadlineRows}
-      
-      <details class="text-xs text-slate-500 cursor-pointer marker:text-indigo-500">
-        <summary class="font-bold hover:text-indigo-600">Show details</summary>
-        <div class="mt-2 bg-slate-50 p-2 rounded-lg border border-slate-200">
+
+      <details class="text-xs text-slate-500 cursor-pointer">
+        <summary class="font-bold text-indigo-600 hover:underline list-none">▶ Show details</summary>
+        <div class="mt-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
           <p class="mb-1">${item.fit}</p>
           ${item.requirements ? item.requirements.map(r => `<div class="flex gap-2 mb-1"><span class="font-bold">${r.date}</span><span>${r.text}</span></div>`).join('') : ''}
           <p class="italic text-[10px] mt-1">${item.note}</p>
         </div>
       </details>
 
-      <div class="flex justify-between items-center text-xs font-bold pt-1 border-t border-slate-100">
+      <div class="flex flex-wrap justify-between items-center gap-3 pt-3 border-t-2 border-slate-100">
         ${statusPillHTML(progress)}
-        <a href="${item.applyUrl}" target="_blank" class="text-indigo-600 hover:underline bg-indigo-50 px-2 py-1 rounded-md">${item.applyLabel}</a>
+        <a href="${item.applyUrl}" target="_blank" class="pop-btn bg-orange-500 text-slate-900 border-2 border-slate-900 font-extrabold text-xs px-5 py-2.5 rounded-full">${item.applyLabel}</a>
       </div>
     </div>
   `;
@@ -1631,7 +1870,7 @@ function monthCardHTML(ym, entries, isCurrent){
       <div class="month-head">${MONTH_NAMES[parseInt(m,10)-1]} ${y}</div>
       <div class="month-entries">
         ${entries.map(e => {
-          const c = hashColor(e.label);
+          const c = hashColor(e.venueId);
           return `
           <div class="month-entry" style="background:${c.bg};border-left-color:${c.border};cursor:pointer;" onclick="goToTrackerCard('${e.venueId}')" title="Jump to ${e.label}">
             <span class="day" style="color:${c.text};">${parseInt(e.date.slice(8,10),10)}</span>
@@ -1705,7 +1944,7 @@ function renderStats(){
   const ctaEl = document.getElementById('homeTrackCTA');
   if(ctaEl){
     ctaEl.innerHTML = s.total === 0
-      ? `<button class="w-full pop-btn bg-yellow-300 text-slate-900 font-extrabold text-sm px-5 py-3.5 rounded-2xl flex items-center justify-center gap-2" onclick="showPage('wizard')">🔍 Find your first opportunity to track →</button>`
+      ? `<button class="w-full pop-btn bg-orange-500 text-slate-900 font-extrabold text-sm px-5 py-3.5 rounded-2xl flex items-center justify-center gap-2" onclick="showPage('wizard')">🔍 Find your first opportunity to track →</button>`
       : `<button class="pop-btn bg-white text-slate-900 font-bold text-xs px-4 py-2 rounded-xl" onclick="showPage('wizard')">+ Find more opportunities to track</button>`;
   }
 }
@@ -1730,13 +1969,17 @@ function renderHomeTodo(){
   if(!listEl || !trackEl) return;
   const upcoming = getUpcomingDeadlineItems();
   const { counts, total } = allTodoUnitCounts(upcoming);
-  const bars = progressBarHTML(counts, total, ACTION_ITEM_STATUS_LABEL);
+  const bars = progressBarHTML(counts, total, ACTION_ITEM_STATUS_LABEL, ['not_started', 'in_progress', 'completed'], 'task');
   trackEl.innerHTML = bars.track;
   const statCountsEl = document.getElementById('todoStatCounts');
   if(statCountsEl){
-    const order = ['not_started', 'in_progress', 'completed'];
-    statCountsEl.innerHTML = order.map(k => `<span class="status-pill status-${k}">${counts[k]} ${ACTION_ITEM_STATUS_LABEL[k]}</span>`).join('');
+    const statOrder = ['not_started', 'in_progress', 'completed'];
+    statCountsEl.innerHTML = statOrder.map(k => `<span class="status-pill status-task-${k}">${counts[k]} ${ACTION_ITEM_STATUS_LABEL[k]}</span>`).join('');
   }
+  // "Due soon" badge in the welcome banner — outstanding (not-yet-completed) tasks
+  // among this-month-and-next upcoming items, so it reflects real work still ahead.
+  const dueSoonEl = document.getElementById('homeDueSoonCount');
+  if(dueSoonEl) dueSoonEl.textContent = counts.not_started + counts.in_progress;
 
   if(!upcoming.length){
     listEl.innerHTML = `<p class="empty-state">Nothing due this month or next — you're all caught up.</p>`;
@@ -1790,7 +2033,7 @@ function renderTodoModalContent(){
     const actionRows = (item.actionItems || []).map(ai => `
       <div class="flex items-center justify-between gap-3 py-1.5">
         <span class="text-xs font-medium text-slate-700 ${ai.state === 'completed' ? 'line-through text-slate-400' : ''}">${ai.text}</span>
-        <button class="status-pill status-${ai.state} cursor-pointer" onclick="cycleActionItemState('${item.id}','${ai.id}')" title="Click to change status">${ACTION_ITEM_STATUS_LABEL[ai.state]}</button>
+        <button class="status-pill status-task-${ai.state} cursor-pointer" onclick="cycleActionItemState('${item.id}','${ai.id}')" title="Click to change status">${ACTION_ITEM_STATUS_LABEL[ai.state]}</button>
       </div>
     `).join('');
     return `
@@ -1818,30 +2061,69 @@ function closeTodoModal(){
   unlockBodyScroll();
 }
 
-// ---------- Profile drawer: single synthesized profile card ----------
-function renderProfileFit(){
-  const wrap = document.getElementById('profileFitSection');
+// ---------- Dashboard profile teaser: urgent nudge toward the Profile tab ----------
+// Deliberately lightweight — the full summary + editor + chat live on the Profile tab
+// (renderProfileFit below). This card's only job is to make "go build your profile" feel
+// urgent and immediate: pulsing/bright when there's nothing (or stale info) to work with,
+// calmer once there's a fresh profile, but always a one-click jump via goToProfile().
+function renderHomeProfileTeaser(){
+  const wrap = document.getElementById('homeProfileTeaser');
   if(!wrap) return;
+  const hasProfile = !!studentProfile.synthesized;
+  const days = studentProfile.updatedAt ? daysSince(studentProfile.updatedAt) : null;
+  const isStale = hasProfile && days !== null && days >= PROFILE_STALE_DAYS;
 
-  if(editingProfile){
+  if(!hasProfile){
     wrap.innerHTML = `
-      <div class="space-y-3">
-        <textarea class="w-full border-2 border-slate-900 rounded-xl p-4 text-sm font-medium focus:outline-none focus:shadow-[2px_2px_0px_#0F172A]" id="profileEditBox" rows="4" placeholder="Add anything new..."></textarea>
-        <div class="flex gap-2">
-          <button class="pop-btn bg-lime-300 text-slate-900 font-bold px-4 py-2 rounded-xl" id="profileEditSaveBtn" onclick="saveProfileEdit()">Save Profile</button>
-          <button class="pop-btn bg-white text-slate-900 font-bold px-4 py-2 rounded-xl" onclick="cancelProfileEdit()">Cancel</button>
+      <div class="pop-card urgent-pulse bg-gradient-to-br from-orange-400 to-rose-500 text-white p-6 rounded-3xl flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p class="font-heading font-extrabold text-lg">⚡ Your profile is empty!</p>
+          <p class="text-sm font-medium opacity-90 mt-1 max-w-md">Every match in the Finder gets better once we know you. Takes 2 minutes — go build it now.</p>
         </div>
-        <p class="text-xs font-bold text-slate-500" id="profileEditStatus"></p>
+        <button class="pop-btn bg-white text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="goToProfile()">Build my profile →</button>
       </div>
     `;
     return;
   }
 
+  if(isStale){
+    wrap.innerHTML = `
+      <div class="pop-card urgent-pulse bg-amber-100 border-2 border-amber-500 p-6 rounded-3xl flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p class="font-heading font-extrabold text-lg text-amber-900">⏰ Your profile is ${days} days old</p>
+          <p class="text-sm font-medium text-amber-800 mt-1 max-w-md">Stale profiles mean stale matches — a quick refresh keeps your suggestions sharp.</p>
+        </div>
+        <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="goToProfile()">Update my profile →</button>
+      </div>
+    `;
+    return;
+  }
+
+  wrap.innerHTML = `
+    <div class="pop-card bg-white p-5 rounded-3xl flex flex-wrap items-center justify-between gap-4">
+      <div class="min-w-0">
+        <p class="font-heading font-bold text-lg flex items-center gap-2">Your Story So Far</p>
+        <p class="text-xs text-slate-500 font-medium mt-1 line-clamp-3">${escapeHtmlTracker(studentProfile.synthesized)}</p>
+      </div>
+      <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="goToProfile()">View &amp; deepen it →</button>
+    </div>
+  `;
+}
+
+// ---------- Profile tab: single synthesized profile (read-only summary) ----------
+// Static by design — the summary itself is never directly editable. The only action
+// available here is clearing it completely; every add/update/correction happens through
+// the chat below (see the Profile Builder Chat block), which is the sole source of truth
+// for what gets merged into this summary.
+function renderProfileFit(){
+  const wrap = document.getElementById('profileFitSection');
+  if(!wrap) return;
+
   if(!studentProfile.synthesized){
     wrap.innerHTML = `
       <div class="bg-slate-50 border-2 border-slate-200 border-dashed rounded-2xl p-6 text-center">
-        <p class="text-sm font-bold text-slate-400 mb-4">Nothing here yet — describe yourself in the Finder or add it directly.</p>
-        <button class="pop-btn bg-white text-slate-900 font-bold px-4 py-2 rounded-xl text-sm" onclick="startProfileEdit()">+ Add to profile</button>
+        <p class="text-sm font-bold text-slate-400 mb-4">Nothing here yet — chat with the bot below to build your profile.</p>
+        <button class="pop-btn bg-white text-slate-900 font-bold px-4 py-2 rounded-xl text-sm" onclick="focusProfileChat()">↓ Start chatting</button>
       </div>
     `;
     return;
@@ -1851,8 +2133,7 @@ function renderProfileFit(){
     <div class="bg-indigo-50 border-2 border-slate-900 rounded-2xl p-4 sm:p-6">
       ${profileSummaryBodyHTML(studentProfile.synthesized)}
       <div class="flex gap-3 pt-4 border-t-2 border-indigo-200">
-        <button class="text-xs font-bold text-indigo-700 hover:underline" onclick="startProfileEdit()">✎ Edit</button>
-        <button class="text-xs font-bold text-rose-600 hover:underline" onclick="clearProfile(this)">🗑 Delete</button>
+        <button class="text-xs font-bold text-rose-600 hover:underline" onclick="clearProfile(this)">🗑 Clear profile</button>
       </div>
     </div>
   `;
@@ -1861,7 +2142,7 @@ function renderProfileFit(){
 // Splits a synthesized profile into readable paragraphs, pulling out any
 // "Passion Project: " / "Research Project: " paragraphs into their own separate,
 // individually-numbered sections rather than letting them blend in with the general
-// interests text (or with each other). Shared by the profile drawer (renderProfileFit)
+// interests text (or with each other). Shared by the Dashboard profile card (renderProfileFit)
 // and the Finder's "Here's what we know about you" card, so both render identically.
 function profileSummaryBodyHTML(text){
   const allParagraphs = (text || '').split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
@@ -1942,7 +2223,13 @@ function getUpcomingDeadlineItems(){
     });
   });
   if(backfilled) saveTrackerData();
-  results.sort((a, b) => a.nextDate.localeCompare(b.nextDate));
+  // Grouped by event timing first — Happening Now, then Future Event, then Past
+  // Event — then by soonest deadline within each group (mirrors sortedByTrackerDeadline).
+  results.sort((a, b) => {
+    const statusDiff = TRACKER_STATUS_ORDER[computeProgressStatus(a.item)] - TRACKER_STATUS_ORDER[computeProgressStatus(b.item)];
+    if(statusDiff !== 0) return statusDiff;
+    return a.nextDate.localeCompare(b.nextDate);
+  });
   return results;
 }
 // ---------- Full Home page render ----------
@@ -1950,7 +2237,7 @@ function renderHomePage(){
   if(!document.getElementById('statTotal')) return; // page not in DOM yet
   renderStats();
   renderHomeTodo();
-  renderProfileFit();
+  renderHomeProfileTeaser();
 }
 
 // Dismisses a status banner (either via the ✕ button, or automatically — banners are
@@ -2188,6 +2475,8 @@ First determine 'section': 'conferences' for academic conferences/workshops that
 
 Search thoroughly with web_search: start with the given URL; if stale or missing, also check the base site (${root}). Look for language indicating the program is discontinued/not running this cycle — set status to "not_running" if so. Find EVERY distinct deadline milestone (e.g. early-bird vs. regular), each with a short label, in chronological order. If every deadline found has passed and the program is recurring, estimate the next cycle's date and set was_estimated true. Never invent a date with no basis.
 
+Pay particular, deliberate attention to the registration/application OPENS date, not just the deadline — actively search for it (check any "key dates" or "timeline" section), and if not found but the program is recurring, estimate it from the prior cycle's opens date the same way you'd estimate a deadline. Only leave opens_iso null if there's genuinely no basis to find or estimate one.
+
 Also think through 3-5 short, concrete action items a student would need to do to meet the nearest deadline (e.g. request a recommendation letter, draft an essay, gather transcripts) — infer these from requirements and what's typical for this type of opportunity. Keep every item tactical and administrative — the logistics of applying, never advice about the student's own project or its substance, since you don't know the specifics of their work and must not assume or invent any. Skip if status is not_running.
 
 Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","opens_iso":"YYYY-MM-DD or null","deadlines":[{"label":"short label","date_iso":"YYYY-MM-DD"}],"deadline_label":"short text like ROLLING, only if deadlines is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null","action_items":["short concrete task, under 10 words", "..."]}. Stay well within 1000 tokens: at most 3 deadlines, 3 requirements, and 5 action_items.`;
@@ -2258,7 +2547,7 @@ async function trackerAnalyzeAndAdd(){
   }finally{
     btn.disabled = false;
     btn.classList.remove('loading');
-    label.textContent = 'Analyze & add';
+    label.textContent = 'Add';
   }
 }
 
@@ -2269,15 +2558,10 @@ function escapeHtmlTracker(str){
   return div.innerHTML;
 }
 
-// ---------- Initial load ----------
-Promise.all([loadTrackerData(), loadTrackerSaved()]).then(() => {
-  renderTrackerPage();
-});
-
 // ---------- Auth gate ----------
-// Everything above populates in-memory data structures regardless of login state, but
 // #appShell stays hidden (and #page-login shown) until a returning session is found or
-// the student signs in / registers — see showApp()/showLoginGate().
+// the student signs in / registers. Profile/tracker data is loaded fresh per-account
+// only once signed in — see showApp() -> loadAccountData().
 loadUser().then(() => {
   if(currentUser){ showApp(); } else { showLoginGate(); }
 });

@@ -29,7 +29,11 @@ def load_dotenv(path=".env"):
                 continue
             key, _, value = line.partition("=")
             key, value = key.strip(), value.strip()
-            if key and key not in os.environ:
+            # Only skip a key that's already set to a *non-empty* value in the
+            # environment — an empty-string env var (e.g. left over from an earlier
+            # inline `ANTHROPIC_API_KEY="" python3 server.py`) should not shadow a
+            # real value from .env, or the server silently stays in MOCK mode forever.
+            if key and not os.environ.get(key):
                 os.environ[key] = value
 
 
@@ -161,6 +165,37 @@ def mock_assess_profile_readiness():
     return json.dumps({"ready": True, "kinds": ACTIVE_KINDS})
 
 
+MOCK_CHAT_QUESTIONS = [
+    "If your extracurriculars had a theme song, what would it be — and why does that fit you?",
+    "What's something you're weirdly good at that has nothing to do with school?",
+    "Do you play any music, sport, or game seriously enough that people would be surprised how much time you put into it?",
+    "If you had one free Saturday with zero obligations, what would you actually do with it?",
+    "What's a small thing you've built, organized, or led that you're quietly proud of?",
+]
+
+
+def mock_profile_chat_starters():
+    return json.dumps(MOCK_CHAT_QUESTIONS[:3])
+
+
+def mock_profile_chat_question(user_content):
+    # Mock mode: cycle through a fixed bank of questions based on how long the
+    # conversation-so-far is, so repeated turns don't just repeat the same question.
+    m = re.search(r'CONVERSATION SO FAR:\s*(.*?)\s*Respond', user_content, re.S)
+    convo = m.group(1).strip() if m else ''
+    turns = 0 if convo in ('', '(nothing yet)') else convo.count('\n') + 1
+    return MOCK_CHAT_QUESTIONS[turns % len(MOCK_CHAT_QUESTIONS)]
+
+
+def mock_profile_chat_findings(user_content):
+    m = re.search(r'CONVERSATION:\s*(.*?)\s*Respond', user_content, re.S)
+    convo = m.group(1).strip() if m else ''
+    lines = [l.split(':', 1)[1].strip() for l in convo.split('\n') if l.lower().startswith('student:')]
+    if not lines:
+        return "(mock) no new details shared."
+    return "Additional details shared in chat: " + "; ".join(lines)
+
+
 def mock_venues_via_web():
     next_deadline = (datetime.date.today() + datetime.timedelta(days=75)).isoformat()
     return json.dumps([
@@ -259,6 +294,12 @@ def generate_mock_text(system, user_content):
         return mock_synthesize_profile(user_content)
     if "decide whether a student's profile has enough detail" in system:
         return mock_assess_profile_readiness()
+    if "exactly THREE distinct" in system:
+        return mock_profile_chat_starters()
+    if "helping a high schooler build a detailed personal profile" in system:
+        return mock_profile_chat_question(user_content)
+    if "distill a casual chat conversation into new facts" in system:
+        return mock_profile_chat_findings(user_content)
     if "classify and extract structured tracking data" in system:
         return mock_tracker_extract(user_content, with_section=True)
     if "extract structured tracking data" in system:
@@ -274,6 +315,10 @@ class Handler(SimpleHTTPRequestHandler):
             self.handle_register()
         elif self.path == "/api/login":
             self.handle_login()
+        elif self.path == "/api/data/save":
+            self.handle_data_save()
+        elif self.path == "/api/data/load":
+            self.handle_data_load()
         else:
             self.send_error(404)
 
@@ -324,6 +369,33 @@ class Handler(SimpleHTTPRequestHandler):
             "lastName": record["lastName"],
             "email": record["email"],
         }).encode())
+
+    # ---------- Per-account app data (profile, tracker, saved items) ----------
+    # A generic key/value blob per user, stored alongside their account record so
+    # it survives logout/login and server restarts — unlike the client-only
+    # window.storage the rest of the app was built around (see script.js).
+    def handle_data_save(self):
+        body = self._read_json_body()
+        userid = (body.get("userid") or "").strip().lower()
+        key = body.get("key")
+        if not userid or not key:
+            return self.send_json_error(400, "Missing userid or key.")
+        with USERS_LOCK:
+            record = USERS_DB.get(userid)
+            if not record:
+                return self.send_json_error(404, "No account found with that user ID.")
+            record.setdefault("data", {})[key] = body.get("value")
+            save_users_db(USERS_DB)
+        self._relay(200, json.dumps({"ok": True}).encode())
+
+    def handle_data_load(self):
+        body = self._read_json_body()
+        userid = (body.get("userid") or "").strip().lower()
+        key = body.get("key")
+        with USERS_LOCK:
+            record = USERS_DB.get(userid)
+            value = record.get("data", {}).get(key) if record else None
+        self._relay(200, json.dumps({"value": value}).encode())
 
     def handle_messages(self):
         length = int(self.headers.get("Content-Length", 0))

@@ -1,0 +1,93 @@
+[
+  {
+    "id": "ec17834",
+    "name": "Summer Scholar Program",
+    "url": "https://www.outreach.hawaii.edu/summer/summer-scholar-program/",
+    "previous_review_status": null,
+    "review_status": "insufficient_data",
+    "review_summary": "There is an absence of independent reviews or student feedback discussing the quality or experience of the University of Hawaii's Summer Scholar Program.",
+    "review_sources": [],
+    "web_searches": 0,
+    "cost_usd": 0.0007
+  },
+  {
+    "id": "ec17272",
+    "name": "Summer Session",
+    "url": "https://summer.ucla.edu/courses/approved-summer-courses-for-high-school-students/",
+    "previous_review_status": null,
+    "review_status": "mixed",
+    "review_summary": "Students appreciate earning real UC college credit and getting a taste of campus life, but point out that courses are expensive open-enrollment offerings that carry little prestige in admissions compared to selective programs.",
+    "review_sources": [
+      {
+        "url": "https://www.reddit.com/r/ApplyingToCollege/comments/v8fbf8/are_the_ucla_summer_sessions_worth_it/",
+        "note": "Users note the high cost and lack of admissions prestige compared to community college credits."
+      },
+      {
+        "url": "https://www.reddit.com/r/summerprogramresults/comments/1c31fvd/ucla_summer_sessions/",
+        "note": "Participants call it pay-to-play and non-selective, though fine for taking college-level classes."
+      },
+      {
+        "url": "https://www.reddit.com/r/ApplyingToCollege/comments/12wfmdj/are_the_ucla_summer_programs_any_good_such_as/",
+        "note": "Parents and students praise the academic rigor, college experience, and transferable credit."
+      }
+    ],
+    "web_searches": 0,
+    "cost_usd": 0.0014
+  },
+  {
+    "id": "ec17383",
+    "name": "Biotechnology Sequencing (BTS) Camp",
+    "url": "https://www.mircore.org/2024-summer-camp/2024-bts-camp/",
+    "previous_review_status": null,
+    "review_status": "positive",
+    "review_summary": "Students and parents report that miRcore camps provide legitimate, accessible instruction in bioinformatics and data analysis skills, though they lack college admissions prestige.",
+    "review_sources": [
+      {
+        "url": "https://www.reddit.com/r/summerprogramresults/comments/1bjvfvt/is_mircore_a_scam/",
+        "note": "Reddit users confirm miRcore is legitimate for learning computational biology skills."
+      },
+      {
+        "url": "https://www.reddit.com/r/summerprogramresults/comments/1c5m8s1/mircore_computational_biology_research_camp/",
+        "note": "Parent noted advanced camps provided useful genomic data analysis skills and year-round research opportunities."
+      }
+    ],
+    "web_searches": 0,
+    "cost_usd": 0.0011
+  },
+  {
+    "id": "ec17139",
+    "name": "Young Investigators",
+    "url": "https://sustainability.stanford.edu/admissions-education/k-12-outreach/young-investigators",
+    "previous_review_status": null,
+    "review_status": "positive",
+    "review_summary": "Former participants on student forums describe it as a highly recommended, real hands-on research program for Bay Area local students.",
+    "review_sources": [
+      {
+        "url": "https://www.reddit.com/r/summerprogramresults/comments/1ehymft/stanford_young_investigators/",
+        "note": "Student recommends the program for high schoolers looking to conduct sustainability research locally."
+      }
+    ],
+    "web_searches": 0,
+    "cost_usd": 0.0008
+  },
+  {
+    "id": "ec17632",
+    "name": "CAMINOS: Your Journey to College",
+    "url": "https://apply.ncsu.edu/register/precollege-program",
+    "previous_review_status": null,
+    "review_status": "insufficient_data",
+    "review_summary": "There is independent news coverage regarding the program's origins and status, but no student or parent reviews exist.",
+    "review_sources": [
+      {
+        "url": "https://www.hispanicoutlook.com/articles/caminos-your-journey-college",
+        "note": "Article describing the program's founding at NC State in 2018."
+      },
+      {
+        "url": "https://www.nubianmessage.com/nc-state-to-cut-pre-college-programs-for-minority-high-school-students-in-summer-2025-including-caminos/",
+        "note": "Student newspaper coverage reporting program discontinuation in 2025."
+      }
+    ],
+    "web_searches": 0,
+    "cost_usd": 0.0011
+  }
+]

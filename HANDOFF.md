@@ -185,3 +185,35 @@ seeds) has also not been touched under the Gemini migration — only national mo
 6. Once satisfied with data quality, the 85 rows written today (`source='scraper-national-20260818'`,
    all `is_active=false`) still need the manual spot-check + `UPDATE ... SET is_active = true`
    step described in `CLAUDE.md` before they go live.
+
+## Rate limiting & 429 error handling & parallel execution prevention (2026-08-19, v2)
+**Comprehensive quota management** for web-search scripts (was hitting HTTP 429 errors):
+- **Enforced 5-second minimum delay between ALL Gemini API calls** (per Gemini's documented policy).
+  Implemented via module-level rate limit enforcer in `gemini_common.py` — all callers get this
+  automatically with zero code changes.
+- **Simplified 429 error strategy**: on rate limit error, retry exactly once then abort. No more
+  exponential backoff with 5 retries — calling scripts now see a clear "this item failed, continue
+  to next" signal. Failed items are logged and the batch continues.
+- **Parallel execution prevention**: lockfile mechanism ensures only one web-search-enabled script can run
+  at a time (they share Google Search quota). On first `call_gemini(..., use_web_search=True)`, an
+  exclusive lock is acquired; fails fast if another instance is running. Lock auto-releases on exit or
+  after 24 hours if stale.
+- **Removed loop-level throttles** from `check_reviews.py` and `check_deadlines.py`. Rate limiting is
+  now enforced at the API call level, making per-item explicit sleeps redundant.
+
+## Future optimization: consider model swap for batch scripts
+**Evaluated 2026-08-19** (deferred, keeping as-is for now): Currently using `gemini-3.6-flash`
+(reasoning model with internal thinking tokens) for all three batch scripts (`scrape_opportunities`,
+`check_deadlines`, `check_reviews`). Investigated whether `gemini-3.5-flash-lite` (already in use
+for interactive UI calls) could be a viable, cheaper alternative. **Key finding**: 
+`gemini-3.6-flash-lite` does not yet exist (confirmed against live API 2026-08-18). If/when it
+ships, it should be the first target to test. Before then, **could consider**:
+- **`check_deadlines.py`**: Most straightforward task (structured extraction: status, deadlines, dates).
+  Already uses similar extraction logic in UI via `gemini-3.5-flash-lite` successfully. **Candidate
+  for trial swap** to save ~$0.01/item across 1200+ rows (~$12/full pass).
+- **`scrape_opportunities.py`**: Higher judgment/reasoning (relevance + legitimacy assessment). Likely
+  benefits from 3.6's reasoning tokens. **Keep as-is**.
+- **`check_reviews.py`**: Borderline (search + reputation judgment). Could test but worth keeping 3.6
+  if 3.6-lite ships. **Keep as-is for now**.
+Not implemented yet — only run the swap if you see unnecessary token overhead or cost pressures in 3.6 
+runs, or once 3.6-flash-lite becomes available.

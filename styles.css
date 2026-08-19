@@ -51,6 +51,21 @@ body {
 .nav-dropdown-panel { display: none; }
 .nav-dropdown-panel.open { display: block; }
 
+/* ---------- Review popover (anchored to the review status pill on opportunity cards) ----------
+   Absolutely positioned so revealing it overlaps the card content below instead of pushing
+   it down/growing the card. */
+.review-popover-panel {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 6px;
+  width: 240px;
+  z-index: 30;
+  box-shadow: 3px 3px 0px #0F172A;
+}
+.review-popover-panel.open { display: block; }
+
 /* ---------- Error / status boxes ---------- */
 .form-error { display: none; }
 .form-error.show { display: block; }
@@ -222,8 +237,8 @@ textarea:focus, input:focus, select:focus {
   width: 100%;
   flex-shrink: 0;
 }
-#homeTodoCard { cursor: pointer; }
-#homeTodoCard:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0px #0F172A; }
+#homeTodoCard { cursor: pointer; transition: background-color 0.15s ease; }
+#homeTodoCard:hover { background-color: #F8FAFC; }
 
 /* ---------- Tracker: Active / Saved tabs ---------- */
 .tracker-tab-btn.active { background: #E0E7FF !important; }

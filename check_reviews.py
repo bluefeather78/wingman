@@ -38,6 +38,7 @@ import json
 import os
 import random
 import sys
+import time
 import urllib.error
 import urllib.parse
 
@@ -113,12 +114,14 @@ def main():
     params = {
         "select": "id,name,org,url,summary,review_status,last_reviewed_at",
         "is_active": "eq.true",
+        "review_status": "is.null",  # TEMP: only rows without review status
+        "order": "id",  # TEMP: stable ordering
     }
     if not args.force:
         cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=STALE_AFTER_DAYS)).isoformat()
         params["or"] = f"(last_reviewed_at.is.null,last_reviewed_at.lt.{cutoff})"
 
-    print("[OK] Fetching active + stale/unchecked catalog rows from Supabase...")
+    print("[OK] Fetching all active + unchecked (review_status IS NULL) catalog rows from Supabase...")
     candidates = supabase_get(supabase_url, "opportunities", params, service_key)
     print(f"[OK] {len(candidates)} row(s) due for a review check"
           f"{' (staleness filter ignored)' if args.force else f' (unchecked or >{STALE_AFTER_DAYS} days stale)'}.")
@@ -197,6 +200,9 @@ def main():
         except Exception as e:
             errors += 1
             print(f"[ERROR] {e}")
+        # Rate limiting is now enforced at the API level in gemini_common.call_gemini()
+        # (minimum 5 seconds between calls per Gemini's documented rate limit policy),
+        # so explicit throttle here is no longer needed.
 
     print(f"\n[SUMMARY] checked: {len(items)}, changed: {updated}, errors: {errors}, "
           f"silent (no-search) checks: {silent_search_count}/{len(items)}, cost: ${total_cost:.4f}")

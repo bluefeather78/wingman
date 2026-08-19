@@ -459,6 +459,10 @@
       <!-- List View -->
       <div id="oppViewList" class="hidden">
         <!-- Actively tracked -->
+        <div class="flex items-center gap-2 mb-4">
+          <h2 class="font-heading font-bold text-xl">📌 Actively Tracked</h2>
+          <span class="bg-white border-2 border-slate-900 text-xs font-bold px-2.5 py-1 rounded-full count" id="activeDrawerCount">00</span>
+        </div>
         <div class="space-y-4 cards" id="allOppCards"></div>
 
         <!-- Saved for later — sits below the actively tracked cards; a card moves down
@@ -482,12 +486,12 @@
           <h2 class="font-heading font-bold text-xl">Your Story So Far</h2>
           <span class="text-xs font-bold px-3 py-1.5 rounded-full whitespace-nowrap" id="profileUpdated"></span>
         </div>
-        <p class="text-xs text-slate-400 font-normal italic">Powers every match in the Finder — the more detailed and current it is, the better your suggestions. The more specific you are (real projects, real interests, real quirks — not just "I like science"), the easier it is to find opportunities that are actually a fit, not just generic ones anyone could get. Chat with the bot below any time to go deeper.</p>
+        <p class="text-xs text-slate-400 font-normal italic">Powers every match in the Finder — the more detailed and current it is, the better your suggestions. The more specific you are (real projects, real interests, real quirks — not just "I like science"), the easier it is to find opportunities that are actually a fit, not just generic ones anyone could get. Click "deepen my story" below any time to chat with the bot and go deeper.</p>
         <div id="profileStaleBanner"></div>
         <div id="profileFitSection" class="space-y-4"></div>
       </div>
 
-      <div class="bg-white p-6 rounded-3xl space-y-4 border-2 border-slate-900" id="profileChatCard">
+      <div class="bg-white p-6 rounded-3xl space-y-4 border-2 border-slate-900 hidden" id="profileChatCard">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="font-heading font-bold text-xl">Spill the Tea</h2>
           <button type="button" id="profileChatSpeakerBtn" class="pop-btn bg-white text-slate-900 font-bold w-10 h-10 rounded-xl text-base shrink-0 hidden" onclick="toggleVoiceOutput()" title="Turn on spoken questions">🔇</button>

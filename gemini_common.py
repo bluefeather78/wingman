@@ -75,9 +75,81 @@ is what check_deadlines.py/check_reviews.py/scrape_opportunities.py already do: 
 `usage["server_tool_use"]["web_search_requests"]` after the fact and flag zero-search results,
 rather than trying to prevent them up front.
 """
+import atexit
 import json
+import os
 import re
+import sys
+import time
+import urllib.error
 import urllib.request
+
+# Rate limiting: Gemini API requires at least 5 seconds between calls.
+# Track the last call time globally to enforce this across all invocations.
+_last_call_time = 0.0
+_min_delay_secs = 5
+
+
+def _enforce_rate_limit():
+    """Ensures at least 5 seconds have passed since the last Gemini API call.
+    Sleeps if necessary to comply with Gemini's rate limit policy."""
+    global _last_call_time
+    now = time.time()
+    elapsed = now - _last_call_time
+    if elapsed < _min_delay_secs:
+        sleep_time = _min_delay_secs - elapsed
+        time.sleep(sleep_time)
+    _last_call_time = time.time()
+
+
+# Parallel execution prevention: scripts using web_search share the same quota.
+# Only one script can run at a time. Implemented via a lockfile that persists
+# for the duration of the script's execution.
+_lock_file = os.path.join(os.path.dirname(__file__), ".gemini_web_search.lock")
+_lock_acquired = False
+
+
+def _acquire_web_search_lock():
+    """Acquire an exclusive lock for web-search-enabled scripts. Fails fast if
+    another instance is already running. Called automatically on first
+    call_gemini(..., use_web_search=True). Registers cleanup on exit."""
+    global _lock_acquired
+    if _lock_acquired:
+        return  # Already acquired in this process
+
+    # Clean up stale lock (older than 24 hours) — handles crashed/killed scripts
+    try:
+        if os.path.exists(_lock_file):
+            age_secs = time.time() - os.path.getmtime(_lock_file)
+            if age_secs > 86400:  # 24 hours
+                os.remove(_lock_file)
+    except Exception:
+        pass  # Best-effort cleanup
+
+    # Try to acquire lock exclusively (fails if file already exists)
+    try:
+        fd = os.open(_lock_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        os.close(fd)
+        _lock_acquired = True
+        atexit.register(_release_web_search_lock)
+    except FileExistsError:
+        print("[ERROR] Another script using web_search is already running. "
+              f"Remove {_lock_file} manually if stale (>24h old).", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"[ERROR] Could not acquire web_search lock: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _release_web_search_lock():
+    """Release the web-search lock. Called automatically on exit."""
+    global _lock_acquired
+    if _lock_acquired:
+        try:
+            os.remove(_lock_file)
+        except Exception:
+            pass  # Best-effort cleanup
+
 
 GEMINI_URL_TMPL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 # gemini-2.5-flash (originally chosen as the "stable, best price-performance" model per
@@ -98,7 +170,7 @@ WEB_SEARCH_PRICE_PER_SEARCH = 14 / 1000
 
 
 def call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=4000, timeout=120,
-                 max_searches=None, thinking_level="low"):
+                 max_searches=None, thinking_level="low", model=None):
     """POSTs directly to the Gemini generateContent API. Returns (text, usage) — text is
     the concatenated text output with any ```json fences stripped, usage is a dict shaped
     like {"input_tokens", "output_tokens", "server_tool_use": {"web_search_requests"}} —
@@ -122,7 +194,19 @@ def call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=4
     producing a complete, well-formed answer. Defaults to "low" here since every current
     caller (scrape/deadlines/reviews) wants a fast structured-extraction answer, not deep
     reasoning; pass thinking_level=None to omit thinkingConfig entirely (legacy behavior,
-    Gemini's own default thinking level for the model)."""
+    Gemini's own default thinking level for the model).
+
+    `model` overrides the module-level MODEL pin for this call only — added for
+    server.py's /api/messages proxy (script.js's interactive UI calls), which uses the
+    cheaper/faster gemini-3.5-flash-lite instead of this module's gemini-3.6-flash, since
+    those calls are synchronous within a page interaction rather than an offline batch
+    job. Defaults to None (use MODEL) so scrape_opportunities.py/check_deadlines.py/
+    check_reviews.py are unaffected."""
+    # Parallel execution prevention: if this call uses web_search, acquire an exclusive lock
+    # to prevent multiple scripts from running simultaneously (they share the same quota).
+    if use_web_search:
+        _acquire_web_search_lock()
+
     body = {
         "contents": [{"role": "user", "parts": [{"text": user_content}]}],
         "systemInstruction": {"parts": [{"text": system}]},
@@ -155,7 +239,7 @@ def call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=4
                 f"reach that many."
             )
     req = urllib.request.Request(
-        GEMINI_URL_TMPL.format(model=MODEL),
+        GEMINI_URL_TMPL.format(model=model or MODEL),
         data=json.dumps(body).encode("utf-8"),
         method="POST",
         headers={
@@ -163,8 +247,28 @@ def call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=4
             "x-goog-api-key": api_key,
         },
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read())
+
+    # Enforce minimum 5-second delay between API calls (Gemini rate limit policy).
+    _enforce_rate_limit()
+
+    # Rate limit handling: on 429 error, try one more time then abort.
+    # Gemini's googleSearch quota can be exhausted during heavy batch runs.
+    # On first 429, sleep briefly and retry once. If it fails again, propagate
+    # the error — the calling script must handle the abort (typically logging
+    # the item as failed and continuing to the next one).
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            print(f"[WARN] HTTP 429 (rate limited), retrying once after delay...")
+            time.sleep(5)  # Wait before retry
+            _enforce_rate_limit()
+            # Retry exactly once — if this fails, let it propagate
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read())
+        else:
+            raise  # Other HTTP errors propagate immediately
 
     candidate = (data.get("candidates") or [{}])[0]
     parts = (candidate.get("content") or {}).get("parts") or []

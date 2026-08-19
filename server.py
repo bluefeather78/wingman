@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Local dev server: serves the static site and proxies /api/messages to the
-Anthropic API. If ANTHROPIC_API_KEY is not set, it fabricates plausible mock
-responses instead so the app is fully click-through-able without a real key
-or network access. Mock responses are pattern-matched against each system
-prompt used in script.js's callClaude() call sites.
+Gemini API (gemini-3.5-flash-lite — see MESSAGES_MODEL below), and /api/messages-claude
+to the Anthropic API (claude-haiku-4-5 — see CLAUDE_MODEL below; used only by the profile
+chat's next-question/starter-question calls). If the relevant API key is not set, each
+endpoint fabricates plausible mock responses instead so the app is fully click-through-able
+without a real key or network access. Mock responses are pattern-matched against each
+system prompt used in script.js's callGemini()/callClaude() call sites.
 """
 import datetime
 import json
@@ -17,10 +19,22 @@ import urllib.parse
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
+# gemini_common/check_deadlines are leaf modules (no argparse/CLI side effects at import
+# time — check_deadlines.py's main() is guarded by if __name__ == "__main__") — importing
+# their deadline-check logic here avoids re-implementing the same Gemini system prompt/
+# schema/thinking-budget handling a second time for the new on-demand endpoint below, and
+# call_gemini() itself is reused directly by /api/messages (see proxy_to_gemini) so the
+# request/response translation and web-search-nudge/thinking-budget handling only exist
+# in one place. Deliberately NOT importing supabase_common, though (see its own
+# docstring): server.py keeps its own tiny Supabase GET/PATCH helpers to minimize its
+# import surface for that specific piece.
+from check_deadlines import check_one as check_deadline_one, VALID_STATUS as DEADLINE_VALID_STATUS
+from gemini_common import call_gemini
+
 
 def load_dotenv(path=".env"):
     """Minimal stdlib-only .env loader — populates os.environ from KEY=VALUE
-    lines so secrets like ANTHROPIC_API_KEY never have to be typed inline in a
+    lines so secrets like GEMINI_API_KEY never have to be typed inline in a
     command (which is how one got leaked into shell history before)."""
     if not os.path.exists(path):
         return
@@ -35,7 +49,7 @@ def load_dotenv(path=".env"):
                 value = value[1:-1]
             # Only skip a key that's already set to a *non-empty* value in the
             # environment — an empty-string env var (e.g. left over from an earlier
-            # inline `ANTHROPIC_API_KEY="" python3 server.py`) should not shadow a
+            # inline `GEMINI_API_KEY="" python3 server.py`) should not shadow a
             # real value from .env, or the server silently stays in MOCK mode forever.
             if key and not os.environ.get(key):
                 os.environ[key] = value
@@ -43,9 +57,38 @@ def load_dotenv(path=".env"):
 
 load_dotenv()
 
+PORT = 8000
+
+# ---------- /api/messages (Gemini-backed) ----------
+# Interactive, in-page AI calls from script.js's callGemini() — ranking, profile chat,
+# tracker extraction, etc. Pinned to gemini-3.5-flash-lite: cheaper/faster than
+# gemini_common.MODEL ("gemini-3.6-flash", used by the offline batch scripts
+# check_deadlines.py/check_reviews.py/scrape_opportunities.py), which matters here since
+# these calls block a real page interaction instead of running unattended. Revisit
+# alongside gemini_common.MODEL — see that module's docstring on model ID churn.
+# NOTE: "gemini-3.6-flash-lite" (as literally requested) does not exist in the Gemini API —
+# there is no lite variant of the 3.6 generation yet (confirmed via ListModels against the
+# live key on 2026-08-18). Pinned to gemini-3.5-flash-lite instead, the closest existing
+# lite model, following the same "pin an exact version" convention as gemini_common.py's
+# MODEL constant. Swap this if/when a real gemini-3.6-flash-lite ships.
+MESSAGES_MODEL = "gemini-3.5-flash-lite"
+# Uniform cap across every /api/messages call site (mirrors the old Anthropic path's
+# uniform max_tokens=1000) — bumped above what each system prompt's own "stay well
+# within a 1000-token response" instruction asks for, to leave headroom for Gemini 3.x's
+# thinking tokens, which draw from this SAME budget (see gemini_common.py's "FOURTH
+# finding" docstring — at max_tokens=700 there, thinking alone consumed 673 of it).
+MESSAGES_MAX_TOKENS = 2000
+
+# ---------- /api/messages-claude (Anthropic-backed, profile chat only) ----------
+# profileChatNextQuestion/profileChatStarterQuestionsFromAI (script.js's callClaude())
+# deliberately stayed on Claude rather than moving to Gemini with the rest of the app on
+# 2026-08-18 — a separate endpoint from /api/messages so the Gemini path above is
+# untouched; client still sends the same plain {system, userContent, useWebSearch} body,
+# translated into Anthropic's content-block/messages shape here rather than on the client.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-PORT = 8000
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+CLAUDE_MAX_TOKENS = 1000
 
 # ---------- Opportunities catalog (Supabase-backed) ----------
 # The opportunity catalog lives in a Supabase (hosted Postgres) table rather than
@@ -55,7 +98,7 @@ PORT = 8000
 # the table's Row Level Security policy only allows reading is_active=true rows.
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
-OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject,type,price,state,location,intl,season"
+OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject,type,price,state,location,intl,season,review_status,review_summary"
 OPPORTUNITIES_CACHE_TTL = 300  # seconds
 _opportunities_cache = {"data": None, "fetched_at": 0.0}
 _opportunities_cache_lock = threading.Lock()
@@ -70,6 +113,89 @@ _opportunities_cache_lock = threading.Lock()
 # passwordHash arrives already SHA-256-hashed client-side; the server never
 # sees or stores a plaintext password.
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+# ---------- On-demand, shared/cached deadline check (Gemini-backed) ----------
+# Replaces check_deadlines.py's batch/cron model as the primary way status/deadlines data
+# gets populated: rather than proactively scanning the whole catalog on a schedule (which,
+# on 2026-08-18, burned through Gemini's daily grounding quota partway through a single
+# full pass), a check now only runs when a real user actually adds an opportunity to their
+# tracker, or loads the Tracker page with an already-tracked item whose cached data has
+# gone stale. See check_deadlines.py's docstring for the underlying Supabase columns
+# (status/deadlines/opens_date/was_estimated/deadline_note/last_checked_at) — this endpoint
+# reads/writes the exact same columns, so the two mechanisms share one cache. The batch
+# script still exists for bulk backfill/cleanup (e.g. after a big scrape), but is no longer
+# the primary way this data gets kept current — see the plan doc's "On-demand deadline
+# checking" section for the full rationale.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+DEADLINE_STALE_DAYS = 7
+DEADLINE_FIELDS = "id,name,org,url,summary,status,deadlines,opens_date,was_estimated,deadline_note,last_checked_at"
+
+
+def get_opportunity_for_deadline_check(opp_id):
+    query = urllib.parse.urlencode({"select": DEADLINE_FIELDS, "id": f"eq.{opp_id}"})
+    req = urllib.request.Request(
+        f"{SUPABASE_URL}/rest/v1/opportunities?{query}",
+        headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        rows = json.loads(resp.read())
+    return rows[0] if rows else None
+
+
+def patch_opportunity_deadline(opp_id, patch):
+    query = urllib.parse.urlencode({"id": f"eq.{opp_id}"})
+    req = urllib.request.Request(
+        f"{SUPABASE_URL}/rest/v1/opportunities?{query}",
+        data=json.dumps(patch).encode(),
+        method="PATCH",
+        headers={
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
+
+
+def deadline_cache_is_fresh(last_checked_at):
+    if not last_checked_at:
+        return False
+    try:
+        checked = datetime.datetime.fromisoformat(last_checked_at.replace("Z", "+00:00"))
+    except Exception:
+        return False
+    return datetime.datetime.now(datetime.timezone.utc) - checked < datetime.timedelta(days=DEADLINE_STALE_DAYS)
+
+
+def cached_deadline_payload(opp, source):
+    return {
+        "status": opp.get("status"),
+        "deadlines": opp.get("deadlines") or [],
+        "opens_date": opp.get("opens_date"),
+        "was_estimated": opp.get("was_estimated"),
+        "deadline_note": opp.get("deadline_note"),
+        "last_checked_at": opp.get("last_checked_at"),
+        "source": source,
+    }
+
+
+def mock_deadline_check_payload(opp):
+    # MOCK mode (no GEMINI_API_KEY): fabricate a plausible response, same spirit as
+    # generate_mock_text()'s GEMINI_API_KEY fallback, but deliberately does NOT write
+    # to Supabase — a mock value getting cached and served to real users for 7 days would
+    # be worse than just re-fabricating it every time mock mode is active.
+    deadline_iso = mock_deadline_iso((opp.get("name") or "") + (opp.get("url") or ""))
+    return {
+        "status": "running",
+        "deadlines": [{"label": "Application Deadline", "date_iso": deadline_iso}],
+        "opens_date": None,
+        "was_estimated": True,
+        "deadline_note": "Mock data — set GEMINI_API_KEY for a real, live-searched check.",
+        "last_checked_at": None,
+        "source": "mock",
+    }
 
 # ---------- Conversation logging (Supabase-backed, server-side only) ----------
 # Only actual profile-chat Q&A turns are persisted to the `conversations` table,
@@ -88,11 +214,14 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 #   create table conversations (
 #       id             bigint generated always as identity primary key,
 #       created_at     timestamptz not null default now(),
+#       userid         text,
 #       client_ip      text,
 #       mode           text,   -- 'live' or 'mock'
 #       system_prompt  text,   -- reused to hold just the bot's question for this turn
 #       user_content   text    -- reused to hold just the student's answer to it
 #   );
+# To add userid to existing table:
+#   alter table conversations add column userid text;
 def extract_qa_pair(user_content):
     """Pulls the most recent <bot question, student answer> pair out of a profile-chat
     'CONVERSATION SO FAR' transcript (see profileChatNextQuestion in script.js) — the
@@ -115,13 +244,14 @@ def extract_qa_pair(user_content):
     return question, answer
 
 
-def log_conversation(client_ip, mode, system_question, user_response):
+def log_conversation(userid, client_ip, mode, system_question, user_response):
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return
     try:
         req = urllib.request.Request(
             f"{SUPABASE_URL}/rest/v1/conversations",
             data=json.dumps([{
+                "userid": userid,
                 "client_ip": client_ip,
                 "mode": mode,
                 "system_prompt": system_question,
@@ -137,11 +267,12 @@ def log_conversation(client_ip, mode, system_question, user_response):
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             resp.read()
+        print(f"[INFO] Logged conversation for userid={userid}")
     except Exception as e:
-        print(f"[WARN] Failed to log conversation: {e}")
+        print(f"[WARN] Failed to log conversation for userid={userid}: {e}")
 
 
-def log_conversation_async(client_ip, mode, system_prompt, user_content, response_text):
+def log_conversation_async(userid, client_ip, mode, system_prompt, user_content, response_text):
     # system_prompt/response_text are unused now (kept in the signature so both call
     # sites below don't need to change) — only a real <question, answer> pair from the
     # transcript embedded in user_content gets logged.
@@ -150,17 +281,9 @@ def log_conversation_async(client_ip, mode, system_prompt, user_content, respons
         return
     threading.Thread(
         target=log_conversation,
-        args=(client_ip, mode, question, answer),
+        args=(userid, client_ip, mode, question, answer),
         daemon=True,
     ).start()
-
-
-def _flatten_system(system_raw):
-    # /api/messages sends system as a list of content blocks (with cache_control)
-    # rather than a plain string — flatten to text for storage/pattern-matching.
-    if isinstance(system_raw, list):
-        return "".join(b.get("text", "") for b in system_raw if isinstance(b, dict))
-    return system_raw or ""
 
 
 def _users_request(method, query="", data=None):
@@ -355,7 +478,7 @@ def mock_venues_via_web():
             "name": "Mock Student Research Symposium 2026",
             "url": "https://example.org/symposium",
             "org": "Example Research Council",
-            "summary": "Mock venue — set ANTHROPIC_API_KEY for real, live-searched results.",
+            "summary": "Mock venue — set GEMINI_API_KEY for real, live-searched results.",
             "reason": "Placeholder result generated without live web access.",
             "tier": "strong",
             "next_deadline_iso": next_deadline,
@@ -411,13 +534,13 @@ def mock_tracker_extract(user_content, with_section):
     url = fields["url"] or "#"
     summary = fields["summary"]
     deadline_iso = mock_deadline_iso(name + url)
-    meta_bits = [b for b in [org, "Mock data · set ANTHROPIC_API_KEY for live details"] if b]
+    meta_bits = [b for b in [org, "Mock data · set GEMINI_API_KEY for live details"] if b]
     fit = (summary[:140] + "…") if len(summary) > 140 else summary
     obj = {
         "status": "running",
         "meta": " · ".join(meta_bits),
-        "fit": fit or f"Placeholder fit summary for {name} — set ANTHROPIC_API_KEY for a real one.",
-        "note": "Mock data for local testing — set ANTHROPIC_API_KEY for real, live-searched details.",
+        "fit": fit or f"Placeholder fit summary for {name} — set GEMINI_API_KEY for a real one.",
+        "note": "Mock data for local testing — set GEMINI_API_KEY for real, live-searched details.",
         "noteType": "plain",
         "opens_iso": None,
         "deadlines": [{"label": "Application Deadline", "date_iso": deadline_iso}],
@@ -502,9 +625,15 @@ def fetch_opportunities():
         return data
 
 
+DEADLINE_PATH_RE = re.compile(r"^/api/opportunities/([^/]+)/deadline$")
+
+
 class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
-        if self.path.startswith("/api/opportunities"):
+        deadline_match = DEADLINE_PATH_RE.match(self.path)
+        if deadline_match:
+            self.handle_deadline_check(deadline_match.group(1))
+        elif self.path.startswith("/api/opportunities"):
             self.handle_opportunities()
         else:
             super().do_GET()
@@ -512,6 +641,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/api/messages":
             self.handle_messages()
+        elif self.path == "/api/messages-claude":
+            self.handle_messages_claude()
         elif self.path == "/api/register":
             self.handle_register()
         elif self.path == "/api/login":
@@ -628,7 +759,116 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json_error(502, f"Could not reach Supabase: {e}")
         self._relay(200, json.dumps(data).encode())
 
+    def handle_deadline_check(self, opp_id):
+        """GET /api/opportunities/<id>/deadline — on-demand, cross-user-cached deadline
+        check. See the module-level comment above GEMINI_API_KEY for the full rationale.
+        Serves cached status/deadlines straight from Supabase if last_checked_at is under
+        DEADLINE_STALE_DAYS old; otherwise runs a fresh Gemini web_search check (reusing
+        check_deadlines.py's check_one()), re-caches it, and returns the fresh result."""
+        if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+            return self.send_json_error(500, "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured.")
+        try:
+            opp = get_opportunity_for_deadline_check(opp_id)
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+        if not opp:
+            return self.send_json_error(404, "Opportunity not found.")
+
+        if deadline_cache_is_fresh(opp.get("last_checked_at")):
+            self._relay(200, json.dumps(cached_deadline_payload(opp, "cached")).encode())
+            return
+
+        if not GEMINI_API_KEY:
+            self._relay(200, json.dumps(mock_deadline_check_payload(opp)).encode())
+            return
+
+        try:
+            info, _cost, _searches = check_deadline_one(opp, GEMINI_API_KEY)
+            status = info.get("status") if info.get("status") in DEADLINE_VALID_STATUS else "unknown"
+            deadlines = info.get("deadlines") or []
+            if not isinstance(deadlines, list):
+                deadlines = []
+            deadlines = [d for d in deadlines if isinstance(d, dict) and d.get("date_iso")]
+            patch = {
+                "status": status,
+                "deadlines": deadlines,
+                "opens_date": info.get("opens_date"),
+                "was_estimated": bool(info.get("was_estimated")),
+                "deadline_note": info.get("deadline_note"),
+                "last_checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            }
+            patch_opportunity_deadline(opp_id, patch)
+            self._relay(200, json.dumps({**patch, "source": "fresh"}).encode())
+        except Exception as e:
+            # Gemini quota/network hiccup (a real, observed failure mode — see
+            # gemini_common.py's docstring): degrade to whatever was cached before, even if
+            # stale, rather than failing the tracker add/load outright. A stale-but-present
+            # deadline beats none when the live check can't complete right now.
+            print(f"[WARN] Deadline check failed for {opp_id}: {e}")
+            self._relay(200, json.dumps(cached_deadline_payload(opp, "stale-fallback")).encode())
+
     def handle_messages(self):
+        length = int(self.headers.get("Content-Length", 0))
+        raw_body = self.rfile.read(length)
+        if GEMINI_API_KEY:
+            self.proxy_to_gemini(raw_body)
+        else:
+            self.mock_response(raw_body)
+
+    def mock_response(self, raw_body):
+        try:
+            payload = json.loads(raw_body)
+            system = payload.get("system", "") or ""
+            user_content = payload.get("userContent", "")
+            userid = payload.get("userid")
+        except Exception:
+            system, user_content, userid = "", "", None
+        text = generate_mock_text(system, user_content)
+        data = json.dumps({"content": [{"type": "text", "text": text}]}).encode()
+        self._relay(200, data)
+        log_conversation_async(userid, self.client_address[0], "mock", system,
+                                user_content if isinstance(user_content, str) else json.dumps(user_content),
+                                text)
+
+    def proxy_to_gemini(self, raw_body):
+        # Client (script.js's callGemini()) sends {system, userContent, useWebSearch, userid} —
+        # a plain, backend-agnostic shape rather than Anthropic's content-block/messages
+        # envelope, since server.py is now the only place that needs to know the wire
+        # format of whichever model API it's actually calling. Reuses gemini_common's
+        # call_gemini() (same request-building, forced-search nudge, and thinking-budget
+        # handling as the offline batch scripts) rather than re-implementing it here.
+        try:
+            payload = json.loads(raw_body)
+        except Exception:
+            return self.send_json_error(400, "Malformed request body.")
+        system = payload.get("system", "") or ""
+        user_content = payload.get("userContent", "")
+        user_content = user_content if isinstance(user_content, str) else json.dumps(user_content)
+        userid = payload.get("userid")
+        use_web_search = bool(payload.get("useWebSearch"))
+        try:
+            text, _usage = call_gemini(
+                system, user_content, GEMINI_API_KEY,
+                use_web_search=use_web_search, max_tokens=MESSAGES_MAX_TOKENS,
+                model=MESSAGES_MODEL,
+            )
+        except urllib.error.HTTPError as e:
+            self._relay(e.code, e.read())
+            return
+        except Exception as e:
+            self.send_json_error(502, str(e))
+            return
+        # Re-wrapped into the same {"content":[{"type":"text","text":...}]} envelope
+        # mock_response() already produces, so callGemini()'s response parsing in
+        # script.js doesn't need to branch on live vs. mock mode.
+        data = json.dumps({"content": [{"type": "text", "text": text}]}).encode()
+        self._relay(200, data)
+        # Logging happens after the real response is already relayed to the browser,
+        # and is best-effort — a parse hiccup here must never affect the actual API
+        # call the user is waiting on.
+        log_conversation_async(userid, self.client_address[0], "live", system, user_content, text)
+
+    def handle_messages_claude(self):
         length = int(self.headers.get("Content-Length", 0))
         raw_body = self.rfile.read(length)
         if ANTHROPIC_API_KEY:
@@ -636,27 +876,30 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             self.mock_response(raw_body)
 
-    def mock_response(self, raw_body):
+    def proxy_to_anthropic(self, raw_body):
+        # Client (script.js's callClaude()) sends the same plain {system, userContent,
+        # useWebSearch, userid} shape as callGemini() — translated into Anthropic's content-block/
+        # messages envelope here, so the client stays backend-agnostic either way.
         try:
             payload = json.loads(raw_body)
-            # system is sent as a list of content blocks (with cache_control) rather
-            # than a plain string, to enable prompt caching — flatten it back to text
-            # so the pattern-matching in generate_mock_text still works.
-            system = _flatten_system(payload.get("system", ""))
-            user_content = payload.get("messages", [{}])[0].get("content", "")
         except Exception:
-            system, user_content = "", ""
-        text = generate_mock_text(system, user_content)
-        data = json.dumps({"content": [{"type": "text", "text": text}]}).encode()
-        self._relay(200, data)
-        log_conversation_async(self.client_address[0], "mock", system,
-                                user_content if isinstance(user_content, str) else json.dumps(user_content),
-                                text)
-
-    def proxy_to_anthropic(self, raw_body):
+            return self.send_json_error(400, "Malformed request body.")
+        system = payload.get("system", "") or ""
+        user_content = payload.get("userContent", "")
+        user_content = user_content if isinstance(user_content, str) else json.dumps(user_content)
+        userid = payload.get("userid")
+        use_web_search = bool(payload.get("useWebSearch"))
+        body = {
+            "model": CLAUDE_MODEL,
+            "max_tokens": CLAUDE_MAX_TOKENS,
+            "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            "messages": [{"role": "user", "content": user_content}],
+        }
+        if use_web_search:
+            body["tools"] = [{"type": "web_search_20250305", "name": "web_search"}]
         req = urllib.request.Request(
             ANTHROPIC_URL,
-            data=raw_body,
+            data=json.dumps(body).encode("utf-8"),
             method="POST",
             headers={
                 "Content-Type": "application/json",
@@ -674,21 +917,17 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_json_error(502, str(e))
             return
-        # Logging happens after the real response is already relayed to the
-        # browser, and is best-effort — a parse hiccup here must never affect the
-        # actual API call the user is waiting on.
+        # Logging happens after the real response is already relayed to the browser, and
+        # is best-effort — a parse hiccup here must never affect the actual API call the
+        # user is waiting on.
         try:
-            payload = json.loads(raw_body)
-            system = _flatten_system(payload.get("system", ""))
-            user_content = payload.get("messages", [{}])[0].get("content", "")
-            user_content = user_content if isinstance(user_content, str) else json.dumps(user_content)
             resp_json = json.loads(data)
             response_text = "\n".join(
                 b.get("text", "") for b in resp_json.get("content", []) if b.get("type") == "text"
             )
         except Exception:
-            system, user_content, response_text = "", "", ""
-        log_conversation_async(self.client_address[0], "live", system, user_content, response_text)
+            response_text = ""
+        log_conversation_async(userid, self.client_address[0], "live", system, user_content, response_text)
 
     def _relay(self, status, data):
         self.send_response(status)
@@ -703,7 +942,8 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    mode = "LIVE (using ANTHROPIC_API_KEY)" if ANTHROPIC_API_KEY else "MOCK (no ANTHROPIC_API_KEY set — fabricating responses)"
+    mode = "LIVE (using GEMINI_API_KEY)" if GEMINI_API_KEY else "MOCK (no GEMINI_API_KEY set — fabricating responses)"
+    claude_mode = "LIVE (using ANTHROPIC_API_KEY)" if ANTHROPIC_API_KEY else "MOCK (no ANTHROPIC_API_KEY set — fabricating responses)"
     server = ThreadingHTTPServer(("", PORT), Handler)
-    print(f"Serving http://localhost:{PORT}  [{mode}]")
+    print(f"Serving http://localhost:{PORT}  [messages: {mode}] [messages-claude: {claude_mode}]")
     server.serve_forever()

@@ -19,11 +19,12 @@ Serves the static site and API on `http://localhost:8000`. `server.py` is a Pyth
 stdlib-only (`http.server`) dev server — no dependencies to install, no build/lint/test
 tooling exists in this repo.
 
-- `.env` (gitignored) holds `ANTHROPIC_API_KEY`. If unset, the server runs in **MOCK mode**,
-  fabricating plausible pattern-matched responses (see `generate_mock_text` in
+- `.env` (gitignored) holds `GEMINI_API_KEY` and `ANTHROPIC_API_KEY`. If either is unset,
+  that endpoint (`/api/messages` or `/api/messages-claude` respectively) runs in **MOCK
+  mode**, fabricating plausible pattern-matched responses (see `generate_mock_text` in
   [server.py](server.py)) so the app is fully click-through-able offline.
-- Never pass the API key inline on the command line (e.g.
-  `ANTHROPIC_API_KEY=... python server.py`) — it gets recorded in shell history / Claude Code's
+- Never pass an API key inline on the command line (e.g.
+  `GEMINI_API_KEY=... python server.py`) — it gets recorded in shell history / Claude Code's
   local settings allowlist and has leaked before. Always put it in `.env`.
 
 ## Architecture
@@ -47,12 +48,25 @@ table (from this file plus a sibling `opportunity finder/` project's seed data);
 the regular dev loop.
 
 **Backend (`server.py`)** is a `ThreadingHTTPServer` with a `GET /api/opportunities` route
-plus four POST endpoints:
-- `/api/messages` — proxies to the real Anthropic Messages API (model
-  `claude-sonnet-4-6`, see `callClaude()` in script.js) when `ANTHROPIC_API_KEY` is set,
-  otherwise fabricates a mock response by pattern-matching the `system` prompt text
-  (`generate_mock_text`). When adding a new AI-backed feature, add a matching mock branch
-  here so the app stays usable without a live key.
+plus five POST endpoints:
+- `/api/messages` — proxies to the real Gemini API (model `gemini-3.5-flash-lite`, pinned
+  as `MESSAGES_MODEL` in server.py, see `callGemini()` in script.js) when `GEMINI_API_KEY`
+  is set, otherwise fabricates a mock response by pattern-matching the `system` prompt text
+  (`generate_mock_text`). Client sends a plain `{system, userContent, useWebSearch}` body
+  (not Anthropic's content-block/messages envelope); server.py reuses `gemini_common.
+  call_gemini()` — the same request-building, forced-search nudge, and thinking-budget
+  handling used by the offline batch scripts (`check_deadlines.py`/`check_reviews.py`) —
+  and re-wraps the result into a `{content:[{type:"text",text:...}]}` envelope so both live
+  and mock responses parse the same way client-side. When adding a new AI-backed feature,
+  add a matching mock branch here so the app stays usable without a live key.
+- `/api/messages-claude` — the one deliberate holdout from the Gemini migration: the
+  profile chat's `profileChatNextQuestion`/`profileChatStarterQuestionsFromAI` (see
+  `callClaude()` in script.js) still run on the real Anthropic API (model
+  `claude-haiku-4-5-20251001`, pinned as `CLAUDE_MODEL` in server.py) when
+  `ANTHROPIC_API_KEY` is set. Client sends the same plain `{system, userContent,
+  useWebSearch}` shape as `callGemini()`; `proxy_to_anthropic()` translates that into
+  Anthropic's content-block/messages envelope server-side, so the client stays
+  backend-agnostic regardless of which endpoint it's calling.
 - `/api/register`, `/api/login`, `/api/data/save`, `/api/data/load` — backed by a Supabase
   `users` table (`get_user`/`create_user`/`update_user_data` in server.py), queried with the
   `SUPABASE_SERVICE_KEY` (service_role — bypasses RLS). That table has RLS **enabled with no
@@ -75,14 +89,20 @@ plus four POST endpoints:
    — this is the only storage that actually persists accounts and per-user data (profile,
    tracker) across server restarts and different browsers/devices.
 
-**AI call flow**: all AI features funnel through `callClaude(system, userContent, useWebSearch)`
+**AI call flow**: most AI features funnel through `callGemini(system, userContent, useWebSearch)`
 in script.js, which POSTs to `/api/messages` and returns cleaned text; `extractJSON()` then
 pulls a JSON value out of that text via brace/bracket-depth scanning (handles trailing
 commentary and attempts best-effort repair of truncated/token-limited responses). Callers:
 `inferSubjects`, `rankCandidates`, `findVenuesViaWeb`, `synthesizeProfile`,
-`assessProfileReadiness`, `extractTrackerInfo`/tracker classification. Conferences/journals
-aren't in the local `opportunities.json` dataset, so those two "kinds" search the live web
-(`useWebSearch: true`) instead of ranking local candidates.
+`assessProfileReadiness`, `extractTrackerInfo`/tracker classification. `findVenuesViaWeb`
+(live `useWebSearch: true` search, bypassing local ranking) is currently unused by any
+`KIND_CONFIG` kind — Conference/Journal Venue used it until the Supabase `opportunities`
+table gained real `Conference`/`Journal`-typed rows and moved to the local-database path
+like every other kind; it's kept as a fallback for a future kind whose type is too sparse
+locally. The profile chat's `profileChatNextQuestion`/`profileChatStarterQuestionsFromAI`
+are the one exception — they call `callClaude(system, userContent, useWebSearch)` instead,
+POSTing to `/api/messages-claude` (Anthropic, `claude-haiku-4-5-20251001`), same response
+parsing either way.
 
 **App pages** (single-page, no router — `showPage(name)` toggles `#page-*` sections):
 Home/Dashboard (progress bars, todo counts), Wizard/Finder (quiz or free-text profile →

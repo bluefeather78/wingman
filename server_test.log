@@ -1,0 +1,6 @@
+127.0.0.1 - - [18/Aug/2026 19:31:17] "GET /api/opportunities/ec17823/deadline HTTP/1.1" 200 -
+127.0.0.1 - - [18/Aug/2026 19:31:20] "GET /api/opportunities/ec17212/deadline HTTP/1.1" 200 -
+127.0.0.1 - - [18/Aug/2026 19:31:28] "GET /api/opportunities/nonexistent999/deadline HTTP/1.1" 404 -
+127.0.0.1 - - [18/Aug/2026 19:31:29] "GET /api/opportunities/nonexistent999/deadline HTTP/1.1" 404 -
+127.0.0.1 - - [18/Aug/2026 19:34:56] "GET /api/opportunities/nonexistent999/deadline HTTP/1.1" 404 -
+127.0.0.1 - - [18/Aug/2026 19:35:00] "GET /api/opportunities/ec17212/deadline HTTP/1.1" 200 -

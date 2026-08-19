@@ -287,9 +287,13 @@ const KIND_CONFIG = {
   conference: {
     name: 'Conference Venue',
     desc: 'Academic workshops and conferences to submit a paper to',
-    source: 'web',
-    comingSoon: true,
-    venueKind: 'academic conferences or workshops that review and present papers',
+    source: 'local',
+    dbTypes: ['Conference'],
+    // Only a handful of Conference-typed rows exist in the catalog — always hard-filter
+    // to just those rather than falling back to the full database (see preFilter's
+    // strict param), since "closest keyword match among 1200 summer programs" is a
+    // worse result than "the 2 real conference venues we actually have".
+    strictType: true,
     heading: 'Describe your research',
     sub: 'Tell us what your research is about, the methods or approach you used, and what stage it\'s at (early idea, in progress, or a finished paper ready to submit).',
     label: 'Describe your research',
@@ -298,9 +302,9 @@ const KIND_CONFIG = {
   journal: {
     name: 'Journal Venue',
     desc: 'Academic and student journals to publish a paper in',
-    source: 'web',
-    comingSoon: true,
-    venueKind: 'academic or student research journals that accept manuscript submissions',
+    source: 'local',
+    dbTypes: ['Journal'],
+    strictType: true,
     heading: 'Describe your research',
     sub: 'Tell us what your research is about, the methods or approach you used, and what stage it\'s at (early idea, in progress, or a finished paper ready to submit).',
     label: 'Describe your research',
@@ -381,7 +385,9 @@ function selectKind(kind){
 
 // ---------- Stage navigation ----------
 
+let currentStage = 0; // Track which stage the Finder is on
 function goStage(n){
+  currentStage = n;
   document.querySelectorAll('.stage').forEach(s => s.classList.remove('active'));
   document.getElementById('stage-' + n).classList.add('active');
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -465,7 +471,7 @@ function keywordScore(tokens, opp){
   return score;
 }
 
-function preFilter(description, subjectHints, typeFilter){
+function preFilter(description, subjectHints, typeFilter, strict){
   const tokens = [...new Set(tokenize(description).filter(t => !STOPWORDS.has(t) && t.length >= 3))];
   const subjSet = new Set((subjectHints || []).map(s => s.toLowerCase()));
   const typeSet = typeFilter && typeFilter.length ? new Set(typeFilter) : null;
@@ -474,8 +480,11 @@ function preFilter(description, subjectHints, typeFilter){
   if(typeSet){
     const byType = OPPORTUNITIES.filter(o => typeSet.has(o.type));
     // Only hard-filter by type if it leaves a reasonable pool — otherwise the
-    // Type field for this kind is too sparse to be a useful constraint.
-    if(byType.length >= 15){ base = byType; }
+    // Type field for this kind is too sparse to be a useful constraint. `strict`
+    // (set by kinds like Conference/Journal Venue, whose Type is rare but exact)
+    // skips this size gate: an always-tiny, always-correct pool beats falling back
+    // to keyword-matching the entire 1200+ row catalog.
+    if(byType.length >= 15 || (strict && byType.length > 0)){ base = byType; }
   }
 
   const scored = base.map(opp => {
@@ -501,21 +510,36 @@ function slugify(text){
   return id;
 }
 
-// ---------- Claude API helpers ----------
-async function callClaude(system, userContent, useWebSearch){
-  const body = {
-    model: "claude-sonnet-4-6",
-    max_tokens: 1000,
-    // Each call site's system prompt is fixed, reused verbatim on every request
-    // (only userContent varies) — marking it cacheable lets Anthropic skip
-    // re-billing/re-processing the full prompt on repeat calls within the TTL.
-    system: [ { type: "text", text: system, cache_control: { type: "ephemeral" } } ],
-    messages: [ { role: "user", content: userContent } ]
-  };
-  if(useWebSearch){
-    body.tools = [ { type: "web_search_20250305", name: "web_search" } ];
-  }
+// ---------- Gemini API helpers ----------
+// Sends a plain, backend-agnostic {system, userContent, useWebSearch} body — server.py's
+// /api/messages owns the actual Gemini request shape (model pin, thinking-budget config,
+// forced-search nudge) via gemini_common.call_gemini(), so this client code doesn't need
+// to know or change if that wire format changes. Response is normalized server-side back
+// into a {content:[{type:"text",text:...}]} envelope (both live and mock modes), so the
+// parsing below stays the same either way.
+async function callGemini(system, userContent, useWebSearch){
+  const body = { system, userContent, useWebSearch: !!useWebSearch, userid: currentUser?.userid || null };
   const res = await fetch("/api/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if(!res.ok){ throw new Error(`API error ${res.status}`); }
+  const data = await res.json();
+  const textBlocks = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
+  const clean = textBlocks.replace(/```json|```/g, "").trim();
+  if(!clean){ throw new Error("Empty response from API"); }
+  return clean;
+}
+
+// ---------- Claude API helper (profile chat only) ----------
+// profileChatNextQuestion/profileChatStarterQuestionsFromAI deliberately stayed on Claude
+// (Haiku 4.5) rather than moving to Gemini with the rest of the app — same client body
+// shape as callGemini ({system, userContent, useWebSearch}), just posted to a separate
+// endpoint so server.py can translate it into Anthropic's request format internally.
+async function callClaude(system, userContent, useWebSearch){
+  const body = { system, userContent, useWebSearch: !!useWebSearch, userid: currentUser?.userid || null };
+  const res = await fetch("/api/messages-claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
@@ -601,25 +625,36 @@ const VALID_SUBJECTS = ['Mixed','STEM','Medicine','Humanities','Art','Business',
 
 async function inferSubjects(description){
   const system = `You infer which subject categories from a fixed list best match a student's passion-project description. Valid categories (use these exact strings): ${VALID_SUBJECTS.join(', ')}. Respond with ONLY a raw JSON array of 2-5 of the most relevant category strings, no markdown, no preamble. Example: ["Computer Science","STEM","Mathematics"]`;
-  const raw = await callClaude(system, description, false);
+  const raw = await callGemini(system, description, false);
   const arr = extractJSON(raw);
   return Array.isArray(arr) ? arr.filter(s => VALID_SUBJECTS.includes(s)) : [];
 }
 
-async function rankCandidates(description, candidates, prefs){
+async function rankCandidates(description, candidates, prefs, requireAll){
   const compact = candidates.map(c => ({ id: c.id, name: c.name, org: c.org, summary: c.summary, subject: c.subject, type: c.type, price: c.price, location: c.location, season: c.season }));
-  const system = "You are helping a student find the best-fit extracurricular opportunities (programs, internships, competitions, research positions) for their specific passion project, from a candidate list. Read their project description and preferences carefully and select ONLY the opportunities that would genuinely help them grow this specific project, build relevant skills, get recognition for it, or connect with the right community — not just anything thematically adjacent. Leave out weak or generic fits entirely; every opportunity you return must be a genuinely good match. Rank the best 10-12 matches only. For each, write a short specific reason (under 15 words) that names or clearly paraphrases an actual detail from THEIR description/preferences below (a subject, skill, project, goal, or interest they stated) — never write a generic reason that could apply to any student interested in this general field, and never invent details they didn't mention. Assign a tier: 'strong' (excellent, highly specific fit) or 'look' (solid, worth a look). Respond with ONLY a raw JSON array, no markdown, no preamble, no text after the array, matching: [{\"id\":\"...\",\"reason\":\"...\",\"tier\":\"strong|look\"}]. Stay well within a 1000-token response — 10-12 items is a hard cap.";
+  // requireAll (set for strict-type kinds like Conference/Journal Venue, where the
+  // candidate list IS the entire real catalog for that type, not a large pre-filtered
+  // pool) — tell Claude to rank every candidate instead of omitting weak fits. With
+  // only 2-3 real venues total, "omit anything that isn't a great fit" too easily
+  // zeroes out the whole result set and surfaces a misleading "no matches" error even
+  // though real venues exist; better to show them all, honestly tiered, and let the
+  // student judge.
+  const selectionRule = requireAll
+    ? "Rank and return EVERY candidate given — this is an exhaustive list of the only known real options of this type, so do not omit any even if the fit is loose."
+    : "Select ONLY the opportunities that would genuinely help them grow this specific project, build relevant skills, get recognition for it, or connect with the right community — not just anything thematically adjacent. Leave out weak or generic fits entirely; every opportunity you return must be a genuinely good match. Rank the best 10-12 matches only.";
+  const system = `You are Wingman, helping a student find the best-fit extracurricular opportunities (programs, internships, competitions, research positions) for their specific passion project, from a candidate list. Read their project description and preferences carefully. ${selectionRule} For each, write a short specific reason (under 15 words) that names or clearly paraphrases an actual detail from THEIR description/preferences below (a subject, skill, project, goal, or interest they stated) — never write a generic reason that could apply to any student interested in this general field, and never invent details they didn't mention. Write the reason as Wingman speaking directly TO the student in second person ("you"/"your") — e.g. "Great fit for your robotics build" not "Good fit for the student's robotics project" or "Good fit for their robotics project." Assign a tier: 'strong' (excellent, highly specific fit) or 'look' (solid, worth a look). Respond with ONLY a raw JSON array, no markdown, no preamble, no text after the array, matching: [{"id":"...","reason":"...","tier":"strong|look"}]. Stay well within a 1000-token response — 10-12 items is a hard cap.`;
   const prefsText = prefs ? `\n\nStudent preferences: ${prefs}` : '';
   const userContent = `Student's passion project:\n${description}${prefsText}\n\nCandidate opportunities (JSON):\n${JSON.stringify(compact)}\n\nSelect and rank the best matches per the schema.`;
-  const raw = await callClaude(system, userContent, false);
+  const raw = await callGemini(system, userContent, false);
   const arr = extractJSON(raw);
   return Array.isArray(arr) ? arr : [];
 }
 
-// ---------- Web-search path (Conference Venue / Journal Venue) ----------
-// This dataset is a directory of precollege programs, internships, and
-// competitions — it doesn't contain real academic conferences or journals.
-// For those two kinds, search the live web instead of the local database.
+// ---------- Web-search path (unused by any kind currently) ----------
+// Conference Venue / Journal Venue used this until the catalog gained real
+// Conference/Journal-typed rows and moved to the local-database path (see
+// KIND_CONFIG). Left in place as a fallback for any future kind whose type
+// isn't well represented locally.
 async function findVenuesViaWeb(description, cfg, prefsText){
   const today = todayLabel();
   const system = `You help a student researcher find real, current ${cfg.venueKind} that fit their specific research. Today's date is ${today}. Use web_search to find and verify actual venues — don't rely only on memorized knowledge, since deadlines and calls-for-papers change. Prefer venues realistically accessible to a high-school or early-career researcher (student research workshops, high-school-friendly journals, open/inclusive workshops), but you can include 1-2 more ambitious or competitive options too.
@@ -628,10 +663,10 @@ Screen out discontinued venues: if you find explicit signals a venue is disconti
 
 Date handling: if a venue's listed submission deadline has already passed but it runs on a regular annual/recurring cycle, estimate next cycle's deadline from the prior cycle's timing and set was_estimated to true. Only include a next_deadline_iso when you found or can reasonably estimate one; use null if genuinely unknown. Never invent a date with no basis.
 
-Only include opportunities that are a genuinely good fit — omit weak or generic matches entirely. For each, the "reason" must name or clearly paraphrase an actual detail from the student's research description/preferences below (a topic, method, skill, or goal they stated) — never a generic reason that could apply to any student in this broad field. For each of the best 6-8 matches, respond with ONLY a raw JSON array, no markdown, no preamble, no text after the array, matching: [{\"name\":\"official venue name, include year if known\",\"url\":\"the venue's official URL\",\"org\":\"organizing body, short\",\"summary\":\"under 18 words on scope/format\",\"reason\":\"under 15 words on why it fits THIS research specifically\",\"tier\":\"strong|look\",\"next_deadline_iso\":\"YYYY-MM-DD or null\",\"was_estimated\":true or false}]. Stay well within a 1000-token response — 6-8 items is a hard cap, keep every field short.`;
+Only include opportunities that are a genuinely good fit — omit weak or generic matches entirely. For each, the "reason" must name or clearly paraphrase an actual detail from the student's research description/preferences below (a topic, method, skill, or goal they stated) — never a generic reason that could apply to any student in this broad field. Write the reason as Wingman speaking directly TO the student in second person ("you"/"your") — e.g. "Great fit for your climate modeling work" not "Good fit for the student's climate modeling project." For each of the best 6-8 matches, respond with ONLY a raw JSON array, no markdown, no preamble, no text after the array, matching: [{\"name\":\"official venue name, include year if known\",\"url\":\"the venue's official URL\",\"org\":\"organizing body, short\",\"summary\":\"under 18 words on scope/format\",\"reason\":\"under 15 words on why it fits THIS research specifically, addressed directly to the student\",\"tier\":\"strong|look\",\"next_deadline_iso\":\"YYYY-MM-DD or null\",\"was_estimated\":true or false}]. Stay well within a 1000-token response — 6-8 items is a hard cap, keep every field short.`;
   const prefsPart = prefsText ? `\nStudent preferences: ${prefsText}` : '';
   const userContent = `Research description:\n${description}${prefsPart}\n\nSearch the web and find the best matching real, current ${cfg.name.toLowerCase()} options.`;
-  const raw = await callClaude(system, userContent, true);
+  const raw = await callGemini(system, userContent, true);
   const arr = extractJSON(raw);
   if(!Array.isArray(arr)) return [];
   return arr.map(item => {
@@ -758,9 +793,20 @@ function goToProfileChat(){
   showPage('profile');
   setTimeout(focusProfileChat, 150);
 }
+// The single entry point for "deepen my story" everywhere in the app (the Profile
+// page's own buttons, the stale-profile banner, the Home teaser, the Finder's
+// pre-search nudge). "Spill the Tea" starts hidden and its starter questions are never
+// fetched until the student explicitly asks to go deeper — this is the only place that
+// un-hides the card and calls initProfileChat() (which is what actually triggers the
+// profileChatStarterQuestionsFromAI API call), so simply visiting the Profile tab never
+// spends an API call on its own.
 function focusProfileChat(){
   const card = document.getElementById('profileChatCard');
-  if(card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if(card){
+    card.classList.remove('hidden');
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  initProfileChat();
   const input = document.getElementById('profileChatInput');
   if(input) setTimeout(() => input.focus(), 300);
 }
@@ -791,7 +837,10 @@ async function clearProfile(btn){
   renderProfileFit();
   renderSuggestEntryCard();
   renderHomeProfileTeaser();
-  if(document.getElementById('profileChatMessages')) initProfileChat();
+  // Only refresh the chat (and re-spend an API call on fresh starters) if "Spill the
+  // Tea" is already open — clearing the profile shouldn't be what opens it.
+  const chatCard = document.getElementById('profileChatCard');
+  if(chatCard && !chatCard.classList.contains('hidden')) initProfileChat();
 }
 
 // Merges a block of new text into the single synthesized profile via the API — adding,
@@ -801,7 +850,7 @@ async function clearProfile(btn){
 async function synthesizeProfile(existing, newText){
   const system = `You maintain a single, coherent running profile of a high school student's academic and extracurricular interests, built up over multiple sessions. You'll be given the student's CURRENT profile (may be empty) and NEW information they just added. Merge the new information in: add genuinely new details, and update or remove anything the new information supersedes or contradicts. Do not drop specific, still-relevant details from the current profile just because they weren't repeated in the new information. Write it as concise statements in FIRST PERSON, as if the student is describing themself (e.g. "I'm interested in...", "I've been working on...", "My goal is..." — not third person, not addressed to the student, not a bulleted list, no markdown). Structure the output as short paragraphs separated by a blank line (double newline). General paragraphs (no prefix) should cover academic interests, extracurriculars, and goals — 1-3 such paragraphs is typical. If the student has described any larger, longer-term "marquee" projects they're personally driving (as opposed to one-off activities or classes), describe EACH one in its OWN separate paragraph prefixed with the literal text "Passion Project: " — one such paragraph per distinct project, never combining multiple projects into one paragraph. Separately, if the student has described any independent research projects (research, papers, studies they're conducting), describe EACH one in its OWN separate paragraph prefixed with the literal text "Research Project: ", same rule — one per project. A project that fits both categories should be listed under whichever one fits best, not both. Only include these prefixed paragraphs for projects actually described — don't fabricate any. Respond with ONLY the updated profile text — no preamble, no quotes around it.`;
   const userContent = `CURRENT PROFILE:\n${existing || '(empty — nothing recorded yet)'}\n\nNEW INFORMATION TO ADD:\n${newText}\n\nRespond with the updated, merged profile text only.`;
-  const raw = await callClaude(system, userContent, false);
+  const raw = await callGemini(system, userContent, false);
   return raw.trim();
 }
 async function mergeIntoProfile(text){
@@ -1092,7 +1141,7 @@ async function summarizeProfileChat(){
   const system = `You help distill a casual chat conversation into new facts learned about a high school student, so they can be merged into their profile. Given the CONVERSATION, extract only the new, concrete details the student actually shared — interests, activities, projects, personality, hobbies, and so on. Ignore the chatbot's own questions and any small talk. Write it as a few short first-person-compatible factual notes (plain text, no markdown, no preamble, no bullet points) describing what was learned, ready to be merged into a first-person profile summary.`;
   const transcript = profileChatHistory.map(m => `${m.role === 'bot' ? 'Bot' : 'Student'}: ${m.text}`).join('\n');
   const userContent = `CONVERSATION:\n${transcript}\n\nRespond with the distilled findings only.`;
-  const raw = await callClaude(system, userContent, false);
+  const raw = await callGemini(system, userContent, false);
   return raw.trim();
 }
 
@@ -1218,7 +1267,7 @@ async function confirmSuggestProfile(){
 async function assessProfileReadiness(profileText){
   const kindList = ACTIVE_KINDS.map(k => `"${k}" (${KIND_CONFIG[k].name}: ${KIND_CONFIG[k].desc})`).join(', ');
   const system = `You help decide whether a student's profile has enough detail to confidently recommend extracurricular opportunities, and which types are relevant. Valid opportunity type keys: ${kindList}. Read the profile below. If it gives clear enough signal about what the student wants to do and why, respond with ONLY raw JSON, no markdown, no preamble: {"ready":true,"kinds":["one or more of the valid type keys, the ones genuinely relevant"]}. If it's too vague, sparse, or ambiguous to match well, respond with ONLY raw JSON matching: {"ready":false,"questions":["a short, specific clarifying question", "..."]}. Ask at most 3 questions, and only ones that would actually change which opportunities fit — don't ask generic questions the profile already answers.`;
-  const raw = await callClaude(system, profileText, false);
+  const raw = await callGemini(system, profileText, false);
   return extractJSON(raw);
 }
 function renderSuggestQuestions(questions){
@@ -1290,9 +1339,9 @@ async function runProfileSuggestSearch(){
     const perKind = await Promise.all(kinds.map(async kind => {
       const cfg = KIND_CONFIG[kind];
       if(!cfg) return [];
-      let pool = preFilter(description, subjects, cfg.dbTypes);
-      if(pool.length < 20){ pool = preFilter(description, subjects, cfg.dbTypes); }
-      const ranked = await rankCandidates(description, pool, '');
+      let pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType);
+      if(pool.length < 20){ pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType); }
+      const ranked = await rankCandidates(description, pool, '', cfg.strictType);
       const byId = {};
       pool.forEach(o => { byId[o.id] = o; });
       return ranked.filter(r => byId[r.id]).map(r => ({ opp: byId[r.id], reason: r.reason || '', tier: ['strong','look'].includes(r.tier) ? r.tier : 'look', kind }));
@@ -1372,8 +1421,9 @@ async function runSearch(){
 
   try{
     if(cfg.source === 'web'){
-      // Conference Venue / Journal Venue — this dataset has no real academic
-      // venues, so search the live web directly instead of the local database.
+      // No kind currently uses live-web search (Conference/Journal Venue moved to
+      // the local database once those types had real catalog rows) — kept as a
+      // fallback path in case a future kind needs it.
       progressNote.textContent = 'Searching the web for real venues…';
       findLabel.textContent = 'Searching the web…';
       currentResults = await findVenuesViaWeb(description, cfg, prefsText);
@@ -1382,19 +1432,19 @@ async function runSearch(){
       progressNote.textContent = `Searching ${OPPORTUNITIES.length.toLocaleString()} opportunities…`;
       findLabel.textContent = 'Searching database…';
 
-      let pool = preFilter(description, subjects, cfg.dbTypes);
+      let pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType);
       if(priceWant === 'free'){ pool = pool.filter(o => o.price === 'Free'); }
       if(formatWant === 'remote'){ pool = pool.filter(o => o.location === 'Remote' || o.location === 'In-Person and Remote'); }
       if(formatWant === 'inperson'){ pool = pool.filter(o => o.location === 'In-Person' || o.location === 'In-Person and Remote'); }
       if(pool.length < 20){
         // fallback: relax filters if too few remain
-        pool = preFilter(description, subjects, cfg.dbTypes);
+        pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType);
       }
 
       progressNote.textContent = `Ranking the ${pool.length} closest matches…`;
       findLabel.textContent = 'Ranking best fits…';
 
-      const ranked = await rankCandidates(description, pool, prefsText);
+      const ranked = await rankCandidates(description, pool, prefsText, cfg.strictType);
       const byId = {};
       pool.forEach(o => { byId[o.id] = o; });
       currentResults = ranked
@@ -1434,7 +1484,7 @@ function resultCardHTML(r){
   const tracked = findTrackedItem(o);
   const metaParts = [o.org, o.type, o.price, o.location, o.state && o.state !== 'All States' ? o.state : null, o.season].filter(Boolean);
   const kindBadge = r.kind ? KIND_CONFIG[r.kind].name : (o.type || 'Opportunity');
-  const bgClass = r.tier === 'strong' ? 'bg-emerald-50' : 'bg-white';
+  const bgClass = 'bg-white';
   const dateNote = o.nextDeadlineISO ? `<span class="bg-white border-2 border-indigo-200 text-slate-900 px-3 py-1.5 rounded-full">Next: ${shortDate(o.nextDeadlineISO)}${o.wasEstimated ? ' (est.)' : ''}</span>` : '';
   // Already-tracked opportunities can't be re-selected — clicking "Save Match" on one
   // would just be silently dropped as a duplicate at add time, so instead we surface a
@@ -1451,6 +1501,7 @@ function resultCardHTML(r){
          <div class="flex flex-wrap gap-2">
             <span class="bg-violet-200 text-violet-900 border-2 border-slate-900 font-bold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full">${kindBadge}</span>
             ${r.tier === 'strong' ? `<span class="bg-yellow-300 border-2 border-slate-900 font-extrabold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full">⭐ Strong Fit</span>` : `<span class="bg-slate-100 border-2 border-slate-900 font-bold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full">Worth a look</span>`}
+            ${reviewBadgeHTML(o.review_status, o.review_summary, `result-${o.id}`)}
          </div>
          ${actionControl}
       </div>
@@ -1597,6 +1648,35 @@ function baseDomain(url){
   }catch(e){ return url; }
 }
 
+// On-demand, cross-user-cached deadline check (see server.py's /api/opportunities/<id>/
+// deadline + check_deadlines.py). Server serves cached status/deadlines straight from
+// Supabase if last checked under 7 days ago; otherwise runs a fresh Gemini web_search check
+// and re-caches it. Never throws — callers fall back to extractTrackerInfo's own guess if
+// this fails for any reason (offline, Gemini quota, etc.), so a hiccup here never blocks
+// adding to or loading the tracker.
+async function fetchDeadlineCheck(oppId){
+  try{
+    const res = await fetch(`/api/opportunities/${encodeURIComponent(oppId)}/deadline`);
+    if(!res.ok) return null;
+    return await res.json();
+  }catch(err){
+    console.warn('Deadline check request failed:', err);
+    return null;
+  }
+}
+// Overlays a fetchDeadlineCheck() result onto an extractTrackerInfo()-shaped info object,
+// in place — the shared/cached deadline check is authoritative for status/deadlines/opens/
+// was_estimated when present, since (unlike extractTrackerInfo's own per-call guess) it's
+// verified server-side and shared across every user tracking the same opportunity.
+function applyDeadlineCheckToInfo(info, deadlineInfo){
+  if(!deadlineInfo) return;
+  if(['running','not_running','unknown'].includes(deadlineInfo.status)) info.status = deadlineInfo.status;
+  if(Array.isArray(deadlineInfo.deadlines) && deadlineInfo.deadlines.length) info.deadlines = deadlineInfo.deadlines;
+  if(deadlineInfo.opens_date) info.opens_iso = deadlineInfo.opens_date;
+  if(typeof deadlineInfo.was_estimated === 'boolean') info.was_estimated = deadlineInfo.was_estimated;
+  if(deadlineInfo.deadline_note) info.note = deadlineInfo.deadline_note;
+}
+
 async function extractTrackerInfo(opp){
   const today = todayLabel();
   const root = baseDomain(opp.url);
@@ -1625,7 +1705,7 @@ Action items — think through what a student would actually need to DO to meet 
 
 Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, matching exactly this schema: {"status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format, separated by ' · '","fit":"one sentence, under 25 words, on what this actually involves","note":"one sentence, under 25 words: status/estimate basis/caveat","noteType":"good, plain, or flag — use flag if not_running or a major caveat","opens_iso":"YYYY-MM-DD when applications open, or null if unknown","deadlines":[{"label":"short specific label, e.g. 'Early Bird Registration'","date_iso":"YYYY-MM-DD"}],"deadline_label":"short text like ROLLING or TBA — only used when the deadlines array is empty","was_estimated":true or false,"requirements":[{"date":"short date text","text":"under 12 words — what's needed, not a repeat of a deadlines entry"}],"apply_url":"the best URL for actually applying","apply_label":"short button label like 'Apply now'","calendar_events":[{"date":"YYYY-MM-DD","text":"under 8 words","type":"deadline, opens, notify, or conference"}],"action_items":["short concrete task, under 10 words", "..."]}. Stay well within a 1000-token response: at most 3 deadlines entries, 3 requirements items, 3 calendar_events, and 5 action_items. Never truncate mid-value or leave the JSON unclosed — shorten or drop optional arrays first, but keep at least the earliest deadline if one exists.`;
   const userContent = `Opportunity: ${opp.name} (${opp.org})\nURL: ${opp.url}\nKnown info: ${opp.summary}\n\nFetch this URL (and the base site if needed), and extract current tracking details per the schema. Look carefully for multiple deadline milestones (early bird vs. regular, etc.) — don't just report the final one.`;
-  const raw = await callClaude(system, userContent, true);
+  const raw = await callGemini(system, userContent, true);
   return extractJSON(raw);
 }
 
@@ -1741,11 +1821,18 @@ function showPage(name){
   if(name !== 'tracker' && newlyAddedTrackerIds.size){ newlyAddedTrackerIds.clear(); }
   if(name === 'tracker'){ renderTrackerPage(); }
   if(name === 'home'){ renderHomePage(); }
-  // Always land on step 1 (choose opportunity type) when entering the Finder from
-  // outside — otherwise it'd resume whatever stage (results, quiz, etc.) was last left
-  // active, which is confusing when you're starting a fresh search.
-  if(name === 'wizard'){ renderSuggestEntryCard(); goStage(0); }
-  if(name === 'profile'){ renderProfile(); renderProfileFit(); initProfileChat(); }
+  // When returning to the Finder (wizard), restore the last stage the user was on
+  // (e.g. results page) instead of always resetting to stage 0. This preserves
+  // search results when navigating away and coming back.
+  if(name === 'wizard'){
+    renderSuggestEntryCard();
+    // Restore the previous stage; if currentStage is 0, goStage(0) will re-show it as normal
+    goStage(currentStage);
+  }
+  // Deliberately no initProfileChat() call here — "Spill the Tea" (and the API call for
+  // its starter questions) only opens via focusProfileChat(), triggered by an explicit
+  // "deepen my story" action, not just by visiting this tab. See focusProfileChat().
+  if(name === 'profile'){ renderProfile(); renderProfileFit(); }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 // ---------- Calendar/List toggle + type filter within the Tracker page ----------
@@ -1849,6 +1936,47 @@ function computeProgressStatus(item){
 function statusPillHTML(status){
   return `<span class="status-pill status-opp-${status}">${PROGRESS_STATUS_LABEL[status]}</span>`;
 }
+// ---------- Review status badge (check_reviews.py's review_status/review_summary) ----------
+// Click-to-reveal: the badge alone just signals the verdict; the full review_summary string
+// only shows once the student taps it, as a floating popover anchored to the pill (position:
+// absolute, see .review-popover-panel in styles.css) that overlaps the card content below it
+// rather than pushing the card taller. Uses the same sage/orange/rose palette as the rest of
+// the app's status system (see .status-pill.status-opp-* in styles.css) so "positive" reads
+// as the identical sage green used for Finder's Strong Fit cards and Tracker's Happening Now
+// state — shown identically on both Finder result cards and Tracker cards. Deliberately built
+// from the exact same classes (border-2 border-slate-900, text-[10px], px-3 py-1, rounded-full)
+// as the neighboring type/tier badges, not the taller .status-pill class, so it sits at the
+// same height as the pills next to it. No icon — text-only, per design direction.
+const REVIEW_STATUS_META = {
+  positive: { label: 'Well reviewed', cls: 'bg-emerald-100 text-emerald-900' },
+  mixed: { label: 'Mixed reviews', cls: 'bg-orange-100 text-orange-900' },
+  negative: { label: 'Reported issues', cls: 'bg-rose-100 text-rose-900' }
+  // insufficient_data / null / undefined: no independent evidence either way — nothing worth
+  // surfacing, so no badge at all rather than a hollow "insufficient data" pill.
+};
+function reviewBadgeHTML(status, summary, uid){
+  const meta = REVIEW_STATUS_META[status];
+  if(!meta) return '';
+  const safeSummary = summary ? escapeHtmlTracker(summary) : 'No further detail available.';
+  return `
+    <div class="relative inline-block review-popover-wrap">
+      <button type="button" class="${meta.cls} border-2 border-slate-900 font-bold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full cursor-pointer" onclick="event.stopPropagation(); toggleReviewInfo('${uid}')" title="Tap to see why">${meta.label}</button>
+      <div class="review-popover-panel bg-white border-2 border-slate-900 rounded-xl p-3 text-xs text-slate-600 font-medium normal-case" id="review-info-${uid}" onclick="event.stopPropagation()">${safeSummary}</div>
+    </div>
+  `;
+}
+function toggleReviewInfo(uid){
+  const el = document.getElementById(`review-info-${uid}`);
+  if(!el) return;
+  const willOpen = !el.classList.contains('open');
+  document.querySelectorAll('.review-popover-panel.open').forEach(p => p.classList.remove('open'));
+  if(willOpen) el.classList.add('open');
+}
+document.addEventListener('click', (e) => {
+  if(!e.target.closest('.review-popover-wrap')){
+    document.querySelectorAll('.review-popover-panel.open').forEach(p => p.classList.remove('open'));
+  }
+});
 // Shared segmented progress bar + legend, used by the Home "Opportunities you are tracking" card
 // (kind:'opp' — green/orange/red) and the "Coming up" to-do list (kind:'task' — red/orange/green).
 function progressBarHTML(counts, total, labels = PROGRESS_STATUS_LABEL, order = ['in_progress', 'not_started', 'completed'], kind = 'opp'){
@@ -1932,7 +2060,6 @@ function trackerCardHTML(item, sourceLabel){
     : '';
   const isSaved = !!trackerSavedState[item.id];
   const progress = computeProgressStatus(item);
-  const bgClass = progress === 'in_progress' ? 'bg-emerald-50' : 'bg-white';
   // Shown only for the batch of opportunities added in the current session (cleared
   // as soon as the user navigates away from the Tracker screen — see showPage).
   const newBanner = newlyAddedTrackerIds.has(item.id)
@@ -1940,12 +2067,13 @@ function trackerCardHTML(item, sourceLabel){
     : '';
 
   return `
-    <div class="pop-card ${bgClass} rounded-3xl p-5 sm:p-6 space-y-4 border-4 border-slate-900 relative ${item.status === 'not_running' ? 'opacity-60' : ''}" id="tracker-card-${item.id}">
+    <div class="pop-card bg-white rounded-3xl p-5 sm:p-6 space-y-4 border-4 border-slate-900 relative ${item.status === 'not_running' ? 'opacity-60' : ''}" id="tracker-card-${item.id}">
       ${newBanner}
       <div class="flex justify-between items-start gap-2">
         <div class="flex flex-wrap gap-2">
           ${typeBadge}
           ${notRunningBadge}
+          ${reviewBadgeHTML(item.reviewStatus, item.reviewSummary, `tracker-${item.id}`)}
         </div>
         <div class="flex items-center gap-2 shrink-0">
           <button onclick="event.stopPropagation(); toggleTrackerSaved('${item.id}')" class="w-9 h-9 rounded-full bg-white border-2 border-slate-900 flex items-center justify-center hover:scale-105 transition-transform" title="${isSaved ? 'Restore' : 'Save'}">${isSaved ? '★' : '☆'}</button>
@@ -2293,7 +2421,7 @@ function renderProfileFit(){
     ${profileSummaryBodyHTML(studentProfile.synthesized)}
     <div class="flex items-center justify-between gap-3 pt-4 border-t-2 border-slate-100">
       <button class="text-xs font-bold text-rose-600 hover:underline" onclick="clearProfile(this)">🗑 Clear profile</button>
-      <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2 rounded-xl text-xs" onclick="focusProfileChat()">Go deeper on your story →</button>
+      <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2 rounded-xl text-xs" onclick="focusProfileChat()">Deepen my story →</button>
     </div>
   `;
 }
@@ -2427,6 +2555,7 @@ function renderTrackerPage(){
   document.getElementById('allOppCards').innerHTML = sortedItems.length
     ? sortedItems.map(i => trackerCardHTML(i, BUCKET_LABELS[bucketByItemId[i.id]])).join('')
     : '<p class="empty-state">Nothing tracked here yet — add opportunities via the Finder or the button above.</p>';
+  document.getElementById('activeDrawerCount').textContent = String(sortedItems.length).padStart(2, '0');
 
   const savedEntries = [];
   ALL_BUCKETS.forEach(bucket => {
@@ -2486,6 +2615,12 @@ async function buildTracker(){
           console.warn(`Retrying ${opp.name} after error:`, firstErr.message);
           info = await extractTrackerInfo(opp);
         }
+        // Overlay the shared/cached, on-demand deadline check (server-side, cross-user,
+        // 7-day TTL — see server.py's /api/opportunities/<id>/deadline) on top of
+        // extractTrackerInfo()'s own guess. This is the trigger point the caching design
+        // is built around: adding an opportunity to the tracker is what causes the first
+        // real check (or reuses another user's still-fresh cached result) for it.
+        applyDeadlineCheckToInfo(info, await fetchDeadlineCheck(opp.id));
         trackerData[bucket].push({
           id: opp.id,
           name: opp.name,
@@ -2494,6 +2629,8 @@ async function buildTracker(){
           bucket: bucket,
           progressStatus: 'not_started',
           status: ['running','not_running','unknown'].includes(info.status) ? info.status : 'unknown',
+          reviewStatus: opp.review_status || null,
+          reviewSummary: opp.review_summary || null,
           meta: info.meta || [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · '),
           fit: info.fit || opp.summary,
           note: info.note || 'Details from the opportunities database — confirm on the official site.',
@@ -2518,6 +2655,8 @@ async function buildTracker(){
           id: opp.id, name: opp.name, url: opp.url, type: opp.type,
           bucket: bucket, progressStatus: 'not_started',
           status: 'unknown',
+          reviewStatus: opp.review_status || null,
+          reviewSummary: opp.review_summary || null,
           meta: [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · '),
           fit: opp.summary,
           note: 'Live details couldn\'t be fetched — showing database info only. Check the official site directly.',
@@ -2570,6 +2709,12 @@ async function refreshTracker(){
     label.textContent = `Checking ${item.name} (${i + 1}/${allItems.length})…`;
     try{
       const info = await extractTrackerInfo({ name: item.name, org: '', url: item.url, summary: item.fit });
+      // Overlay the shared/cached on-demand deadline check on top — same server endpoint
+      // buildTracker() uses. It internally no-ops into a cheap cache hit if this item was
+      // checked (by any user) within the last 7 days, and only runs a fresh web_search
+      // when actually stale, so "check for updates" no longer forces a live search for
+      // every tracked item on every click.
+      applyDeadlineCheckToInfo(info, await fetchDeadlineCheck(item.id));
       const oldStatus = item.status;
       const oldDeadlinesKey = JSON.stringify(item.deadlines);
       item.status = ['running','not_running','unknown'].includes(info.status) ? info.status : item.status;
@@ -2639,7 +2784,7 @@ Also think through 3-5 short, concrete action items a student would need to do t
 
 Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","opens_iso":"YYYY-MM-DD or null","deadlines":[{"label":"short label","date_iso":"YYYY-MM-DD"}],"deadline_label":"short text like ROLLING, only if deadlines is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null","action_items":["short concrete task, under 10 words", "..."]}. Stay well within 1000 tokens: at most 3 deadlines, 3 requirements, and 5 action_items.`;
   const userContent = `URL: ${url}\n${notes ? `Extra context: ${notes}\n` : ''}\nFetch this URL, classify it, and extract tracking details per the schema.`;
-  const raw = await callClaude(system, userContent, true);
+  const raw = await callGemini(system, userContent, true);
   return extractJSON(raw);
 }
 async function trackerAnalyzeAndAdd(){

@@ -11,6 +11,17 @@ site, discontinued-program detection, multi-deadline handling, opens-date estima
 "never invent a date" rule) — trimmed to just the catalog-relevant fields (drops the
 Tracker-only action_items/requirements/apply_url fields).
 
+NOTE (2026-08-18): this script's --all/batch mode is no longer the primary way deadline data
+stays current — a full-catalog pass previously tripped Gemini's googleSearch grounding quota
+partway through (see the plan doc's "on-demand deadline checking" update for the full
+incident writeup). The primary mechanism is now server.py's on-demand, cross-user-cached
+GET /api/opportunities/<id>/deadline endpoint, which reuses this module's check_one() and
+VALID_STATUS directly and triggers a check only when a real user adds/loads a tracked
+opportunity whose cached data (7-day TTL) has gone stale. This script remains useful as a
+manual bulk-backfill/cleanup tool — e.g. after a large scraper pass adds many new rows at
+once, or a deliberate full-catalog refresh — just run it with awareness that a full --all
+pass on a large catalog can still exhaust the same shared quota the on-demand endpoint uses.
+
 SETUP:
     .env needs SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY.
     Run this SQL once in the Supabase SQL editor before first use:
@@ -48,6 +59,7 @@ import datetime
 import os
 import random
 import sys
+import time
 import urllib.error
 
 from gemini_common import call_gemini, extract_json, estimate_cost
@@ -213,6 +225,9 @@ def main():
         except Exception as e:
             errors += 1
             print(f"[ERROR] {e}")
+        # Rate limiting is now enforced at the API level in gemini_common.call_gemini()
+        # (minimum 5 seconds between calls per Gemini's documented rate limit policy),
+        # so explicit throttle here is no longer needed.
 
     print(f"\n[SUMMARY] checked: {len(items)}, updated: {updated}, errors: {errors}, "
           f"silent (no-search) checks: {silent_search_count}/{len(items)}, cost: ${total_cost:.4f}")

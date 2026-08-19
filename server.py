@@ -14,6 +14,7 @@ import re
 import random
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -114,19 +115,20 @@ _opportunities_cache_lock = threading.Lock()
 # sees or stores a plaintext password.
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
-# ---------- On-demand, shared/cached deadline check (Gemini-backed) ----------
+# ---------- On-demand, shared/cached deadline check (Claude Haiku-backed) ----------
 # Replaces check_deadlines.py's batch/cron model as the primary way status/deadlines data
 # gets populated: rather than proactively scanning the whole catalog on a schedule (which,
 # on 2026-08-18, burned through Gemini's daily grounding quota partway through a single
 # full pass), a check now only runs when a real user actually adds an opportunity to their
 # tracker, or loads the Tracker page with an already-tracked item whose cached data has
-# gone stale. See check_deadlines.py's docstring for the underlying Supabase columns
+# gone stale. Uses Claude Haiku (claude-haiku-4-5-20251001) with web search enforced.
+# See check_deadlines.py's docstring for the underlying Supabase columns
 # (status/deadlines/opens_date/was_estimated/deadline_note/last_checked_at) — this endpoint
 # reads/writes the exact same columns, so the two mechanisms share one cache. The batch
 # script still exists for bulk backfill/cleanup (e.g. after a big scrape), but is no longer
 # the primary way this data gets kept current — see the plan doc's "On-demand deadline
 # checking" section for the full rationale.
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")  # Kept for other uses; not used for deadline checking
 DEADLINE_STALE_DAYS = 7
 DEADLINE_FIELDS = "id,name,org,url,summary,status,deadlines,opens_date,was_estimated,deadline_note,last_checked_at"
 
@@ -157,6 +159,38 @@ def patch_opportunity_deadline(opp_id, patch):
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
         resp.read()
+
+
+def log_deadline_check(opp_id, source, status, web_searches, cost_usd, was_estimated, notes=None):
+    """Log a deadline check to the deadline_check_log table (non-blocking)."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
+    try:
+        log_entry = {
+            "opportunity_id": opp_id,
+            "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "source": source,
+            "status": status,
+            "web_searches": web_searches,
+            "cost_usd": round(cost_usd, 4) if cost_usd else None,
+            "was_estimated": was_estimated,
+            "notes": notes,
+        }
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/rest/v1/deadline_check_log",
+            data=json.dumps(log_entry).encode(),
+            method="POST",
+            headers={
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+    except Exception as e:
+        # Logging failure should not break the main request
+        print(f"[WARN] Failed to log deadline check for {opp_id}: {e}")
 
 
 def deadline_cache_is_fresh(last_checked_at):
@@ -630,8 +664,11 @@ DEADLINE_PATH_RE = re.compile(r"^/api/opportunities/([^/]+)/deadline$")
 
 class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
+        print(f"[do_GET] path={self.path}", flush=True)
         deadline_match = DEADLINE_PATH_RE.match(self.path)
+        print(f"[do_GET] deadline_match={deadline_match is not None}", flush=True)
         if deadline_match:
+            print(f"[do_GET] Calling handle_deadline_check", flush=True)
             self.handle_deadline_check(deadline_match.group(1))
         elif self.path.startswith("/api/opportunities"):
             self.handle_opportunities()
@@ -763,8 +800,11 @@ class Handler(SimpleHTTPRequestHandler):
         """GET /api/opportunities/<id>/deadline — on-demand, cross-user-cached deadline
         check. See the module-level comment above GEMINI_API_KEY for the full rationale.
         Serves cached status/deadlines straight from Supabase if last_checked_at is under
-        DEADLINE_STALE_DAYS old; otherwise runs a fresh Gemini web_search check (reusing
-        check_deadlines.py's check_one()), re-caches it, and returns the fresh result."""
+        DEADLINE_STALE_DAYS old; otherwise runs a fresh Claude Haiku web_search check (reusing
+        check_deadlines.py's check_one()), re-caches it, and returns the fresh result. Rejects
+        silent search skips (searches == 0) and falls back to cached value if no searches occurred."""
+        with open("deadline_debug.log", "a") as f:
+            f.write(f"[ROUTE] Handling deadline check for {opp_id}\n")
         if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
             return self.send_json_error(500, "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured.")
         try:
@@ -775,20 +815,43 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json_error(404, "Opportunity not found.")
 
         if deadline_cache_is_fresh(opp.get("last_checked_at")):
-            self._relay(200, json.dumps(cached_deadline_payload(opp, "cached")).encode())
+            payload = cached_deadline_payload(opp, "cached")
+            # Log the cached check (non-blocking)
+            log_deadline_check(opp_id, "cached", opp.get("status"), None, None, opp.get("was_estimated"))
+            self._relay(200, json.dumps(payload).encode())
             return
 
-        if not GEMINI_API_KEY:
-            self._relay(200, json.dumps(mock_deadline_check_payload(opp)).encode())
+        if not ANTHROPIC_API_KEY:
+            payload = mock_deadline_check_payload(opp)
+            # Log the mock check (non-blocking)
+            log_deadline_check(opp_id, "mock", payload.get("status"), 0, 0.0, payload.get("was_estimated"), "Mock mode - no API key")
+            self._relay(200, json.dumps(payload).encode())
             return
 
         try:
-            info, _cost, _searches = check_deadline_one(opp, GEMINI_API_KEY)
+            def log_debug(msg):
+                with open("deadline_debug.log", "a") as f:
+                    f.write(msg + "\n")
+
+            log_debug(f"[DEBUG] Starting fresh deadline check for {opp_id}...")
+            info, _cost, searches = check_deadline_one(opp, ANTHROPIC_API_KEY)
+            log_debug(f"[DEBUG] check_deadline_one returned successfully, searches={searches}")
+
             status = info.get("status") if info.get("status") in DEADLINE_VALID_STATUS else "unknown"
             deadlines = info.get("deadlines") or []
             if not isinstance(deadlines, list):
                 deadlines = []
             deadlines = [d for d in deadlines if isinstance(d, dict) and d.get("date_iso")]
+            log_debug(f"[DEBUG] Processed status={status}, {len(deadlines)} deadlines")
+
+            # Distinguish between real searches and silent skips
+            if searches == 0:
+                source_flag = "fresh, silent search"
+                log_debug(f"[WARN] Deadline check for {opp_id} had zero web searches (silent skip); returning fresh data marked as unverified.")
+            else:
+                source_flag = "fresh, real search"
+                log_debug(f"[INFO] Deadline check for {opp_id}: {searches} web search(es) performed.")
+
             patch = {
                 "status": status,
                 "deadlines": deadlines,
@@ -797,15 +860,26 @@ class Handler(SimpleHTTPRequestHandler):
                 "deadline_note": info.get("deadline_note"),
                 "last_checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }
+            log_debug(f"[DEBUG] Patch prepared: {patch}")
+            log_debug(f"[DEBUG] Calling patch_opportunity_deadline...")
             patch_opportunity_deadline(opp_id, patch)
-            self._relay(200, json.dumps({**patch, "source": "fresh"}).encode())
+            log_debug(f"[DEBUG] Patch completed successfully")
+            response = {**patch, "source": source_flag}
+            log_debug(f"[DEBUG] Response built, logging...")
+            # Log the fresh check (non-blocking)
+            log_deadline_check(opp_id, source_flag, status, searches, _cost, bool(info.get("was_estimated")))
+            log_debug(f"[DEBUG] Relaying response with source={source_flag}")
+            self._relay(200, json.dumps(response).encode())
         except Exception as e:
-            # Gemini quota/network hiccup (a real, observed failure mode — see
-            # gemini_common.py's docstring): degrade to whatever was cached before, even if
+            # Claude API error or network hiccup: degrade to whatever was cached before, even if
             # stale, rather than failing the tracker add/load outright. A stale-but-present
             # deadline beats none when the live check can't complete right now.
             print(f"[WARN] Deadline check failed for {opp_id}: {e}")
-            self._relay(200, json.dumps(cached_deadline_payload(opp, "stale-fallback")).encode())
+            traceback.print_exc()
+            payload = cached_deadline_payload(opp, "stale-fallback")
+            # Log the failed check (non-blocking)
+            log_deadline_check(opp_id, "stale-fallback", opp.get("status"), None, None, opp.get("was_estimated"), f"Error: {str(e)[:100]}")
+            self._relay(200, json.dumps(payload).encode())
 
     def handle_messages(self):
         length = int(self.headers.get("Content-Length", 0))

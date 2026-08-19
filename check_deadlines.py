@@ -56,16 +56,64 @@ USAGE:
 """
 import argparse
 import datetime
+import json
 import os
 import random
 import sys
 import time
 import urllib.error
+import urllib.request
 
-from gemini_common import call_gemini, extract_json, estimate_cost
+from gemini_common import extract_json, estimate_cost
 from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
 
 VALID_STATUS = {"running", "not_running", "unknown"}
+
+# ---------- Claude Haiku API call (for deadline checking) ----------
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+CLAUDE_MAX_TOKENS = 1200
+
+
+def call_claude(system, user_content, api_key, use_web_search=False):
+    """Call Claude Haiku with web search enforced for deadline extraction.
+    Returns (text, usage) tuple matching the shape of call_gemini() for compatibility."""
+    body = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": CLAUDE_MAX_TOKENS,
+        "system": system,
+        "messages": [{"role": "user", "content": user_content}],
+    }
+    if use_web_search:
+        body["tools"] = [{"type": "web_search_20250305", "name": "web_search"}]
+
+    req = urllib.request.Request(
+        ANTHROPIC_URL,
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+    )
+
+    with urllib.request.urlopen(req) as resp:
+        response_data = json.loads(resp.read())
+
+    # Extract text content from response
+    text = "\n".join(b.get("text", "") for b in response_data.get("content", []) if b.get("type") == "text")
+
+    # Build usage dict in same format as gemini_common for compatibility
+    usage = {
+        "input_tokens": response_data.get("usage", {}).get("input_tokens", 0),
+        "output_tokens": response_data.get("usage", {}).get("output_tokens", 0),
+        "server_tool_use": {
+            "web_search_requests": len([b for b in response_data.get("content", []) if b.get("type") == "tool_use" and b.get("name") == "web_search"])
+        }
+    }
+
+    return text, usage
 
 
 def today_label():
@@ -87,6 +135,9 @@ def build_system(opp):
     return f"""You extract current status/deadline data for an extracurricular opportunity (program, \
 internship, competition, or research position), for a catalog used by high school students. Today's \
 date is {today}.
+
+YOU MUST use the web_search tool to gather current information before answering. Do not rely on \
+training data alone — always search for live, current deadline/status information.
 
 Search thoroughly with web_search:
 - Start with the given URL.
@@ -110,6 +161,18 @@ cycle's opens date (e.g. applications opened January 10 last cycle, program is a
 similar date this cycle) and set was_estimated true if any part of what you're returning is estimated.
 - Only leave opens_date null if you genuinely found no opens date and have no reasonable prior-cycle \
 basis to estimate one.
+
+**Estimation Logic** — when explicit deadline info for this year is NOT clearly available:
+- Check for historical patterns from past years (if visible on the site or in search results).
+- Note when similar programs in the same category typically open/close (e.g., summer programs often \
+close Jan-Mar, internships close rolling, academic competitions typically deadline in fall).
+- Look for clues in the site content (e.g., "Applications open in fall" or "Rolling admissions until \
+April" or "Next cycle opens in January").
+- If you find a clear pattern or reasonable basis, estimate and set was_estimated=true, explaining \
+the basis in deadline_note.
+- If no clear pattern emerges and no explicit deadlines are found, set status to "unknown" and explain \
+why in deadline_note.
+- DO NOT guess without basis — every date must come from real evidence you found.
 
 Date reasoning:
 - If every deadline you found has already passed relative to today, and the program appears to run on \
@@ -137,14 +200,15 @@ def check_one(opp, api_key):
                      f"URL: {opp['url']}\nKnown info: {opp.get('summary') or ''}\n\n"
                      f"Fetch this URL (and the base site if needed), and extract current status/deadline "
                      f"details per the schema. Look carefully for multiple deadline milestones.")
-    # max_tokens raised from 800 -> 1200 and thinking_level defaults to "low" in
-    # call_gemini() as of 2026-08-18: same silent-truncation root cause found and fixed in
-    # check_reviews.py (thinking tokens were starving the visible JSON output at low
-    # budgets). This script had never been run live, so the bug was unconfirmed here, but
-    # the architecture is identical — see gemini_common.py's "FOURTH finding" docstring.
-    text, usage = call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=1200)
+    # Using Claude Haiku (claude-haiku-4-5-20251001) with web search enforced in prompt.
+    # max_tokens set to 1200 to allow web search results without token starvation.
+    text, usage = call_claude(system, user_content, api_key, use_web_search=True)
     info = extract_json(text)
     searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
+
+    # Note: searches may be 0 if Claude answers from training data (silent skip).
+    # This is tracked via the "source" flag in server.py ("fresh, real search" vs "fresh, silent search")
+    # so users can see whether the result was live-verified or not.
     return info, estimate_cost(usage), searches
 
 

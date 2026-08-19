@@ -14,7 +14,6 @@ import re
 import random
 import threading
 import time
-import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -664,11 +663,8 @@ DEADLINE_PATH_RE = re.compile(r"^/api/opportunities/([^/]+)/deadline$")
 
 class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
-        print(f"[do_GET] path={self.path}", flush=True)
         deadline_match = DEADLINE_PATH_RE.match(self.path)
-        print(f"[do_GET] deadline_match={deadline_match is not None}", flush=True)
         if deadline_match:
-            print(f"[do_GET] Calling handle_deadline_check", flush=True)
             self.handle_deadline_check(deadline_match.group(1))
         elif self.path.startswith("/api/opportunities"):
             self.handle_opportunities()
@@ -803,8 +799,6 @@ class Handler(SimpleHTTPRequestHandler):
         DEADLINE_STALE_DAYS old; otherwise runs a fresh Claude Haiku web_search check (reusing
         check_deadlines.py's check_one()), re-caches it, and returns the fresh result. Rejects
         silent search skips (searches == 0) and falls back to cached value if no searches occurred."""
-        with open("deadline_debug.log", "a") as f:
-            f.write(f"[ROUTE] Handling deadline check for {opp_id}\n")
         if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
             return self.send_json_error(500, "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured.")
         try:
@@ -829,28 +823,21 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
         try:
-            def log_debug(msg):
-                with open("deadline_debug.log", "a") as f:
-                    f.write(msg + "\n")
-
-            log_debug(f"[DEBUG] Starting fresh deadline check for {opp_id}...")
             info, _cost, searches = check_deadline_one(opp, ANTHROPIC_API_KEY)
-            log_debug(f"[DEBUG] check_deadline_one returned successfully, searches={searches}")
 
             status = info.get("status") if info.get("status") in DEADLINE_VALID_STATUS else "unknown"
             deadlines = info.get("deadlines") or []
             if not isinstance(deadlines, list):
                 deadlines = []
             deadlines = [d for d in deadlines if isinstance(d, dict) and d.get("date_iso")]
-            log_debug(f"[DEBUG] Processed status={status}, {len(deadlines)} deadlines")
 
             # Distinguish between real searches and silent skips
             if searches == 0:
                 source_flag = "fresh, silent search"
-                log_debug(f"[WARN] Deadline check for {opp_id} had zero web searches (silent skip); returning fresh data marked as unverified.")
+                print(f"[WARN] Deadline check for {opp_id} had zero web searches (silent skip); returning fresh data marked as unverified.")
             else:
                 source_flag = "fresh, real search"
-                log_debug(f"[INFO] Deadline check for {opp_id}: {searches} web search(es) performed.")
+                print(f"[INFO] Deadline check for {opp_id}: {searches} web search(es) performed.")
 
             patch = {
                 "status": status,
@@ -860,22 +847,16 @@ class Handler(SimpleHTTPRequestHandler):
                 "deadline_note": info.get("deadline_note"),
                 "last_checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }
-            log_debug(f"[DEBUG] Patch prepared: {patch}")
-            log_debug(f"[DEBUG] Calling patch_opportunity_deadline...")
             patch_opportunity_deadline(opp_id, patch)
-            log_debug(f"[DEBUG] Patch completed successfully")
             response = {**patch, "source": source_flag}
-            log_debug(f"[DEBUG] Response built, logging...")
             # Log the fresh check (non-blocking)
             log_deadline_check(opp_id, source_flag, status, searches, _cost, bool(info.get("was_estimated")))
-            log_debug(f"[DEBUG] Relaying response with source={source_flag}")
             self._relay(200, json.dumps(response).encode())
         except Exception as e:
             # Claude API error or network hiccup: degrade to whatever was cached before, even if
             # stale, rather than failing the tracker add/load outright. A stale-but-present
             # deadline beats none when the live check can't complete right now.
             print(f"[WARN] Deadline check failed for {opp_id}: {e}")
-            traceback.print_exc()
             payload = cached_deadline_payload(opp, "stale-fallback")
             # Log the failed check (non-blocking)
             log_deadline_check(opp_id, "stale-fallback", opp.get("status"), None, None, opp.get("was_estimated"), f"Error: {str(e)[:100]}")

@@ -10,27 +10,11 @@ USAGE:
 """
 import json
 import os
-import urllib.parse
-import urllib.request
+
+from supabase_common import load_dotenv, supabase_get
 
 OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opportunities.json")
 FIELDS = "id,name,org,summary,url,subject,type,price,state,location,intl,season"
-
-
-def load_dotenv(path=".env"):
-    if not os.path.exists(path):
-        return
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key, value = key.strip(), value.strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-                value = value[1:-1]
-            if key and not os.environ.get(key):
-                os.environ[key] = value
 
 
 def main():
@@ -40,13 +24,11 @@ def main():
     if not supabase_url or not anon_key:
         raise SystemExit("[ERROR] SUPABASE_URL / SUPABASE_ANON_KEY not set in .env.")
 
-    query = urllib.parse.urlencode({"select": FIELDS, "is_active": "eq.true", "order": "id"})
-    req = urllib.request.Request(
-        f"{supabase_url}/rest/v1/opportunities?{query}",
-        headers={"apikey": anon_key, "Authorization": f"Bearer {anon_key}"},
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.load(resp)
+    # Paginated (via supabase_common.supabase_get) — a single unpaginated request
+    # silently truncates at PostgREST's 1000-row default cap, which undercounted
+    # this snapshot (1207 active rows) until this fix.
+    data = supabase_get(supabase_url, "opportunities",
+                         {"select": FIELDS, "is_active": "eq.true", "order": "id"}, anon_key)
 
     with open(OUT_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)

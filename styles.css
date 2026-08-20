@@ -4,11 +4,30 @@
 
 /* ---------- Fonts & Base ---------- */
 body {
-  font-family: 'Plus Jakarta Sans', sans-serif;
-  background-color: #F8FAFC;
+  font-family: 'Poppins', sans-serif;
+  font-weight: 400;
+  background-color: #f4f5f9;
 }
 .font-heading {
-  font-family: 'Space Grotesk', sans-serif;
+  font-family: 'Poppins', sans-serif;
+  font-weight: 800;
+}
+
+/* ---------- Color Palette ---------- */
+:root {
+  --navy-dark: #0e1830;
+  --navy-text: #1a2540;
+  --lime-accent: #d7f542;
+  --orange-accent: #f4791d;
+  --purple-accent: #6a63e8;
+  --yellow-badge: #f4b400;
+  --red-destructive: #d64545;
+  --gray-muted: #8a93a6;
+  --gray-light: #c7cdda;
+  --gray-lighter: #aab3c9;
+  --page-bg: #f4f5f9;
+  --card-bg: #ffffff;
+  --border-light: #c9c9f0;
 }
 
 /* ---------- Pop Card ---------- */
@@ -28,6 +47,7 @@ body {
   box-shadow: 3px 3px 0px #0F172A;
   cursor: pointer;
   transition: all 0.15s ease;
+  font-weight: 700;
 }
 .pop-btn:hover {
   transform: translate(-1px, -1px);
@@ -110,8 +130,27 @@ body {
   padding: 12px;
   flex-shrink: 0;
 }
-.month-card.current-month { border-color: #6366F1; background: #EEF2FF; }
-.month-head { font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748B; margin-bottom: 8px; }
+.month-card.current-month {
+  border: 3px solid #6366F1;
+  background: #EEF2FF;
+  box-shadow: 3px 3px 0px #6366F1;
+}
+.month-card.next-month {
+  border: 3px solid #A5B4FC;
+  background: #F5F5FF;
+  box-shadow: 3px 3px 0px #A5B4FC;
+}
+.month-head { font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748B; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.month-head .now-badge {
+  background: #6366F1;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+.month-head .now-badge.next-badge { background: #A5B4FC; color: #1E1B4B; }
 .month-entries { display: flex; flex-direction: column; gap: 6px; }
 .month-entry { border-radius: 8px; padding: 6px 8px; border-left: 3px solid; display: flex; align-items: flex-start; gap: 8px; }
 .month-entry .day { font-weight: 800; font-size: 18px; line-height: 1; flex-shrink: 0; }
@@ -328,4 +367,51 @@ textarea:focus, input:focus, select:focus {
   background: #E11D48 !important;
   color: #fff !important;
   animation: micPulse 1.2s ease-in-out infinite;
+}
+
+/* ---------- Result card hover expansion ---------- */
+.no-clamp {
+  overflow: visible;
+  -webkit-line-clamp: unset;
+  display: block;
+}
+
+/* ---------- Profile page specific styles ---------- */
+#profileCtaBanner a {
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  border-radius: 16px;
+  padding: 20px 26px;
+  box-shadow: 0 6px 20px rgba(16, 28, 54, 0.18);
+  transition: transform 0.2s ease;
+}
+
+#profileCtaBanner a:hover {
+  transform: translateY(-2px);
+}
+
+#profileContent p {
+  color: #1a2540;
+  font-size: 16px;
+  line-height: 1.8;
+  margin-bottom: 20px;
+}
+
+#researchList {
+  display: flex;
+  gap: 12px;
+  flex-direction: column;
+}
+
+#researchList > div {
+  display: flex;
+  gap: 12px;
+}
+
+#researchList .research-number {
+  color: #6a63e8;
+  font-weight: 700;
+  flex-shrink: 0;
 }

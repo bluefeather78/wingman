@@ -18,6 +18,13 @@ fetch('/api/opportunities')
 
 let currentUser = null; // { userid, firstName, lastName, email, location } — the signed-in session, cached locally
 
+// App state for tracking data sync status (deadlines, etc.)
+let appState = {
+  lastDeadlineSync: null,      // ISO timestamp of last successful deadline sync
+  syncInProgress: false,        // Boolean flag while sync is running
+  deadlineSyncError: null       // Error message if last sync failed
+};
+
 // ============================================================
 // Persistence layer for profile/tracker data. Prefers window.storage when the
 // hosting runtime provides it (e.g. the Claude.ai artifact preview); otherwise
@@ -67,6 +74,81 @@ async function loadAccountData(){
   await Promise.all([loadProfile(), loadTrackerData(), loadTrackerSaved()]);
   renderProfile();
   renderSuggestEntryCard();
+}
+
+// Syncs deadlines for all tracked opportunities from the server cache. Runs in the
+// background after login without blocking the UI. Updates tracker items with fresh
+// deadline data and persists. Tracks sync state (timestamp, error) for UI indicators.
+async function syncTrackerDeadlines(){
+  if(appState.syncInProgress) return; // Avoid duplicate syncs
+  appState.syncInProgress = true;
+  appState.deadlineSyncError = null;
+
+  try{
+    // Collect all opportunity IDs across all tracker buckets
+    const allIds = [];
+    Object.values(trackerData).forEach(bucket => {
+      if(Array.isArray(bucket)){
+        bucket.forEach(item => { if(item.id) allIds.push(item.id); });
+      }
+    });
+
+    if(!allIds.length){
+      appState.syncInProgress = false;
+      return;
+    }
+
+    // Fetch deadline data for each opportunity (uses server 7-day cache)
+    const deadlinePromises = allIds.map(id =>
+      fetch(`/api/opportunities/${id}/deadline`)
+        .then(res => res.ok ? res.json() : null)
+        .catch(() => null)
+    );
+
+    const results = await Promise.all(deadlinePromises);
+
+    // Apply updates to tracker items
+    let updatedCount = 0;
+    const buckets = Object.values(trackerData);
+    for(let i = 0; i < allIds.length; i++){
+      const id = allIds[i];
+      const deadlineData = results[i];
+      if(!deadlineData) continue;
+
+      // Find and update the item across all buckets
+      for(const bucket of buckets){
+        if(!Array.isArray(bucket)) continue;
+        const item = bucket.find(it => it.id === id);
+        if(!item) continue;
+
+        // Merge fresh deadline info into the item
+        if(deadlineData.status) item.status = deadlineData.status;
+        if(deadlineData.deadlines) item.deadlines = deadlineData.deadlines;
+        if(deadlineData.opens_date) item.opensISO = deadlineData.opens_date;
+        if(deadlineData.deadline_note) item.note = deadlineData.deadline_note;
+        if(deadlineData.was_estimated !== undefined) item.wasEstimated = deadlineData.was_estimated;
+        if(deadlineData.last_checked_at) item.lastCheckedAt = deadlineData.last_checked_at;
+        updatedCount++;
+        break;
+      }
+    }
+
+    // Persist updates and re-render if anything changed
+    if(updatedCount > 0){
+      await saveTrackerData();
+      if(currentStage === 'tracker' || document.getElementById('page-tracker').classList.contains('active')){
+        renderTrackerPage();
+      }
+    }
+
+    // Mark sync as complete
+    appState.lastDeadlineSync = new Date().toISOString();
+    appState.syncInProgress = false;
+  }catch(err){
+    console.error('Deadline sync failed:', err);
+    appState.deadlineSyncError = err.message;
+    appState.syncInProgress = false;
+  }
 }
 
 async function loadUser(){
@@ -218,6 +300,8 @@ async function showApp(){
   // previous session in this tab.
   await loadAccountData();
   showPage('home');
+  // Sync deadlines in background (non-blocking) for all tracked opportunities
+  syncTrackerDeadlines();
 }
 async function logoutUser(){
   currentUser = null;
@@ -1183,10 +1267,18 @@ async function finishProfileChatSession(){
 // ============================================================
 
 // Renders the "Suggest opportunities for me" entry card on stage 0. Disabled with a
-// prompt to update the profile when there's nothing to work with yet — otherwise active.
+// prompt to update the profile when there's nothing to work with yet — otherwise shows
+// the full profile summary up front (with the confirm/edit CTAs above it) so the student
+// can review everything without an extra click before searching. See startProfileSuggest()
+// for what "Profile looks good" kicks off.
 function renderSuggestEntryCard(){
   const el = document.getElementById('suggestEntryCard');
   if(!el) return;
+  const panel = document.getElementById('browsePanel');
+  const browseOpen = !!(panel && !panel.classList.contains('hidden'));
+  const btn = document.getElementById('browseToggleBtn');
+  if(btn) btn.textContent = browseOpen ? 'Hide opportunity types ↑' : 'Prefer to browse opportunities? Click here';
+
   if(!studentProfile.synthesized){
     el.innerHTML = `
       <div class="max-w-xl">
@@ -1197,14 +1289,16 @@ function renderSuggestEntryCard(){
     `;
     return;
   }
-  const preview = studentProfile.synthesized.length > 160 ? studentProfile.synthesized.slice(0, 160) + '…' : studentProfile.synthesized;
   el.innerHTML = `
-    <div class="max-w-xl">
-      <h2 class="font-heading font-extrabold text-3xl mb-3">Suggest opportunities for me</h2>
-      <p class="text-sm text-slate-600 mb-3">Skip straight to matches based on your profile — the fastest way to get started.</p>
-      <p class="text-xs text-slate-500 font-medium italic border-l-2 border-slate-300 pl-3">"${escapeHtmlTracker(preview)}"</p>
+    <div>
+      <h2 class="font-heading font-extrabold text-3xl mb-2">Suggest opportunities for me</h2>
+      <p class="text-sm text-slate-600 mb-4">The fastest way to find tailored opportunities. Review your profile below to ensure matches are accurate, or add more details if needed.</p>
     </div>
-    <button class="mt-6 pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-3 rounded-xl" onclick="startProfileSuggest()">Suggest opportunities →</button>
+    <div class="flex flex-wrap gap-3 mb-6">
+      <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-3 rounded-xl primary-btn" onclick="startProfileSuggest()">Profile looks good</button>
+      <button class="pop-btn bg-white font-bold px-6 py-3 rounded-xl" onclick="goToProfileChat()">Add to my profile</button>
+    </div>
+    <div class="bg-indigo-50 border-2 border-slate-900 rounded-2xl p-4 sm:p-6">${profileSummaryBodyHTML(studentProfile.synthesized)}</div>
   `;
 }
 function toggleBrowsePanel(){
@@ -1219,48 +1313,74 @@ function toggleBrowsePanel(){
 
 let suggestPendingQuestions = [];
 let suggestAssessedKinds = [];
-// Read-only preview of the synthesized profile on the Finder's "Here's what we know
-// about you" card. Editing no longer happens in place here — the profile is only ever
-// changed via the chat on the Profile tab (see goToProfileChat).
-function renderSuggestProfileSummary(){
-  const el = document.getElementById('suggestProfileSummary');
-  if(!el) return;
-  el.innerHTML = `<div class="bg-indigo-50 border-2 border-slate-900 rounded-2xl p-4 sm:p-6">${profileSummaryBodyHTML(studentProfile.synthesized)}</div>`;
-}
+// Fires when the student hits "Profile looks good" on stage 0 — transitions to the
+// stage-suggest view where profile summary is displayed (for re-review if needed) and
+// progress status is shown as the readiness check + search runs.
 async function startProfileSuggest(){
   if(!studentProfile.synthesized) return;
   goStage('suggest');
+  const reviewSection = document.getElementById('suggestProfileReviewSection');
+  const progressSection = document.getElementById('suggestProgressSection');
+  if(reviewSection) reviewSection.style.display = '';
+  if(progressSection) progressSection.style.display = 'none';
   renderSuggestProfileSummary();
   document.getElementById('suggestQuestionsWrap').innerHTML = '';
   document.getElementById('suggestContinueBtn').style.display = 'none';
   document.getElementById('suggestError').classList.remove('show');
-  // Give the student a chance to review/update their profile before we spend an API
-  // call and lock in a search against it — see confirmSuggestProfile() for the
-  // actual readiness-check + search, which only fires once they confirm.
-  document.getElementById('suggestConfirmWrap').style.display = '';
-  document.getElementById('suggestStatus').textContent = '';
-}
-async function confirmSuggestProfile(){
-  document.getElementById('suggestConfirmWrap').style.display = 'none';
   const statusEl = document.getElementById('suggestStatus');
-  statusEl.textContent = 'Reviewing your profile…';
+  if(statusEl) statusEl.textContent = 'Reviewing your profile…';
   try{
     const assessment = await assessProfileReadiness(studentProfile.synthesized);
     if(assessment && assessment.ready === false && Array.isArray(assessment.questions) && assessment.questions.length){
-      statusEl.textContent = 'A couple quick questions will help narrow this down:';
+      if(statusEl) statusEl.textContent = 'A couple quick questions will help narrow this down:';
       renderSuggestQuestions(assessment.questions.slice(0, 3));
     }else{
       suggestAssessedKinds = (assessment && Array.isArray(assessment.kinds) && assessment.kinds.length)
         ? assessment.kinds.filter(k => ACTIVE_KINDS.includes(k))
         : ACTIVE_KINDS.slice();
-      statusEl.textContent = '';
+      if(statusEl) statusEl.textContent = '';
       await runProfileSuggestSearch();
     }
   }catch(err){
     console.error('Profile readiness check failed:', err);
     // Graceful fallback — don't block the student on a failed assessment call, search all active kinds.
     suggestAssessedKinds = ACTIVE_KINDS.slice();
-    statusEl.textContent = '';
+    if(statusEl) statusEl.textContent = '';
+    await runProfileSuggestSearch();
+  }
+}
+// Render profile summary in the stage-suggest review section so user can see what we're
+// about to search with (and have the option to go back and edit it).
+function renderSuggestProfileSummary(){
+  const el = document.getElementById('suggestProfileSummary');
+  if(!el) return;
+  el.innerHTML = `<div class="bg-indigo-50 border-2 border-slate-900 rounded-2xl p-4 sm:p-6">${profileSummaryBodyHTML(studentProfile.synthesized)}</div>`;
+}
+// Called from "Profile looks good — find opportunities →" button on stage-suggest's
+// profile review section to transition into progress view and kick off the search.
+async function confirmSuggestProfile(){
+  const reviewSection = document.getElementById('suggestProfileReviewSection');
+  const progressSection = document.getElementById('suggestProgressSection');
+  if(reviewSection) reviewSection.style.display = 'none';
+  if(progressSection) progressSection.style.display = '';
+  const statusEl = document.getElementById('suggestStatus');
+  if(statusEl) statusEl.textContent = 'Reviewing your profile…';
+  try{
+    const assessment = await assessProfileReadiness(studentProfile.synthesized);
+    if(assessment && assessment.ready === false && Array.isArray(assessment.questions) && assessment.questions.length){
+      if(statusEl) statusEl.textContent = 'A couple quick questions will help narrow this down:';
+      renderSuggestQuestions(assessment.questions.slice(0, 3));
+    }else{
+      suggestAssessedKinds = (assessment && Array.isArray(assessment.kinds) && assessment.kinds.length)
+        ? assessment.kinds.filter(k => ACTIVE_KINDS.includes(k))
+        : ACTIVE_KINDS.slice();
+      if(statusEl) statusEl.textContent = '';
+      await runProfileSuggestSearch();
+    }
+  }catch(err){
+    console.error('Profile readiness check failed:', err);
+    suggestAssessedKinds = ACTIVE_KINDS.slice();
+    if(statusEl) statusEl.textContent = '';
     await runProfileSuggestSearch();
   }
 }
@@ -1368,7 +1488,29 @@ async function runProfileSuggestSearch(){
 // ---------- Stage 1 → 2: run search ----------
 let currentResults = []; // [{opp, reason, tier, kind?}] — kind is set for multi-kind Suggest results
 let selectedIds = new Set();
+let cardHoverTimers = new Map(); // { [oppId]: timeoutId } for 2-second hover expansion
 
+// Called on mouseenter of a result card: starts 2-second timer to expand summary
+function startCardExpand(oppId){
+  if(cardHoverTimers.has(oppId)) return; // Timer already running
+  const timerId = setTimeout(() => {
+    const summaryEl = document.getElementById(`summary-${oppId}`);
+    if(summaryEl) summaryEl.classList.remove('line-clamp-3');
+    cardHoverTimers.delete(oppId);
+  }, 2000);
+  cardHoverTimers.set(oppId, timerId);
+}
+
+// Called on mouseleave of a result card: cancels timer and collapses summary back to 3 lines
+function cancelCardExpand(oppId){
+  const timerId = cardHoverTimers.get(oppId);
+  if(timerId){
+    clearTimeout(timerId);
+    cardHoverTimers.delete(oppId);
+  }
+  const summaryEl = document.getElementById(`summary-${oppId}`);
+  if(summaryEl) summaryEl.classList.add('line-clamp-3');
+}
 
 async function runSearch(){
   const cfg = KIND_CONFIG[selectedKind];
@@ -1490,13 +1632,13 @@ function resultCardHTML(r){
   // would just be silently dropped as a duplicate at add time, so instead we surface a
   // tag pointing back to the Tracker, where any edits belong.
   const actionControl = tracked
-    ? `<span class="bg-slate-800 text-white font-bold text-xs px-4 py-2 rounded-full cursor-pointer" onclick="event.stopPropagation(); goToTrackerCard('${tracked.item.id}')">📌 Tracking currently. Make edits in tracker.</span>`
+    ? `<span class="bg-slate-800 text-white font-bold text-xs px-4 py-2 rounded-full cursor-pointer" onclick="event.stopPropagation(); goToTrackerCard('${tracked.item.id}')">📌 In Quest Log. Make edits there.</span>`
     : `<button class="pop-btn font-extrabold text-xs px-5 py-2.5 rounded-full flex items-center justify-center gap-2 border-2 border-slate-900 ${isSelected ? 'bg-lime-400 text-slate-900' : 'bg-white text-slate-900'}" onclick="event.stopPropagation(); toggleSelect('${o.id}')">
             ${isSelected ? '⭐ Saved Match' : '⭐ Save Match'}
          </button>`;
 
   return `
-    <div class="pop-card result-card-clickable ${bgClass} rounded-3xl p-5 sm:p-6 space-y-4 ${isSelected ? 'border-4 border-lime-400 bg-lime-50' : 'border-4 border-slate-900'}" id="result-${o.id}" onclick="window.open('${o.url}', '_blank')">
+    <div class="pop-card result-card-clickable ${bgClass} rounded-3xl p-5 sm:p-6 space-y-4 ${isSelected ? 'border-4 border-lime-400 bg-lime-50' : 'border-4 border-slate-900'}" id="result-${o.id}" onmouseenter="startCardExpand('${o.id}')" onmouseleave="cancelCardExpand('${o.id}')" onclick="window.open('${o.url}', '_blank')">
       <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
          <div class="flex flex-wrap gap-2">
             <span class="bg-violet-200 text-violet-900 border-2 border-slate-900 font-bold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full">${kindBadge}</span>
@@ -1519,7 +1661,7 @@ function resultCardHTML(r){
          ${metaParts.map(m => `<span class="bg-white border-2 border-indigo-200 text-slate-900 px-3 py-1.5 rounded-full">${m}</span>`).join('')}
          ${dateNote}
       </div>
-      ${o.summary ? `<p class="text-sm text-slate-500 font-medium leading-relaxed line-clamp-3">${o.summary}</p>` : ''}
+      ${o.summary ? `<p id="summary-${o.id}" class="text-sm text-slate-500 font-medium leading-relaxed line-clamp-3">${o.summary}</p>` : ''}
     </div>
   `;
 }
@@ -2035,6 +2177,7 @@ function toggleTrackerSaved(id){
 // Permanently removes an item from whichever bucket holds it (and clears its saved-for-later
 // flag, if any). Deletes immediately on click — no second confirmation step, unlike
 // clearProfile which stays double-click-armed since it wipes the whole profile at once.
+// Also updates finder results so the "In Quest Log" tag disappears.
 function deleteTrackerItem(id, btn){
   for(const bucket of ALL_BUCKETS){
     const idx = trackerData[bucket].findIndex(i => i.id === id);
@@ -2044,6 +2187,8 @@ function deleteTrackerItem(id, btn){
   saveTrackerData();
   saveTrackerSaved();
   renderTrackerPage();
+  // Re-render finder results if they're currently visible to update "In Quest Log" tags
+  if(currentStage === 2) renderResults();
 }
 function trackerCardHTML(item, sourceLabel){
   const notRunningBadge = item.status === 'not_running'
@@ -2134,11 +2279,11 @@ function deriveKeyDatesForItems(items){
   });
   return dates;
 }
-function monthCardHTML(ym, entries, isCurrent, colorMap){
+function monthCardHTML(ym, entries, isCurrent, colorMap, isNext){
   const [y, m] = ym.split('-');
   return `
-    <div class="month-card${isCurrent ? ' current-month' : ''}">
-      <div class="month-head">${MONTH_NAMES[parseInt(m,10)-1]} ${y}</div>
+    <div class="month-card${isCurrent ? ' current-month' : (isNext ? ' next-month' : '')}">
+      <div class="month-head">${MONTH_NAMES[parseInt(m,10)-1]} ${y}${isCurrent ? '<span class="now-badge">NOW</span>' : (isNext ? '<span class="now-badge next-badge">NEXT</span>' : '')}</div>
       <div class="month-entries">
         ${entries.map(e => {
           const c = colorMap.get(e.venueId) || hashColor(e.venueId);
@@ -2162,6 +2307,7 @@ function renderCalendarSwimlanes(){
   if(!container) return;
   const now = new Date();
   const currentYM = now.toISOString().slice(0,7);
+  const nextYM = new Date(now.getFullYear(), now.getMonth()+1, 1).toISOString().slice(0,7);
 
   const lanes = ALL_BUCKETS.map(bucket => {
     const items = trackerData[bucket].filter(i => !trackerSavedState[i.id]);
@@ -2185,7 +2331,7 @@ function renderCalendarSwimlanes(){
     const byMonth = {};
     lane.dates.forEach(d => { const ym = d.date.slice(0,7); (byMonth[ym] = byMonth[ym] || []).push(d); });
     const months = Object.keys(byMonth).sort();
-    const monthsHTML = months.map(ym => monthCardHTML(ym, byMonth[ym].sort((a,b) => a.date.localeCompare(b.date)), ym === currentYM, colorMap)).join('');
+    const monthsHTML = months.map(ym => monthCardHTML(ym, byMonth[ym].sort((a,b) => a.date.localeCompare(b.date)), ym === currentYM, colorMap, ym === nextYM)).join('');
     return `
       <div class="calendar-swimlane">
         <div class="swimlane-head text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">${lane.label}</div>
@@ -2406,24 +2552,50 @@ function renderHomeProfileTeaser(){
 // the chat below (see the Profile Builder Chat block), which is the sole source of truth
 // for what gets merged into this summary.
 function renderProfileFit(){
-  const wrap = document.getElementById('profileFitSection');
-  if(!wrap) return;
+  const contentWrap = document.getElementById('profileContent');
+  const researchWrap = document.getElementById('researchSection');
+  const researchList = document.getElementById('researchList');
+  const ctaBanner = document.getElementById('profileCtaBanner');
+
+  if(!contentWrap) return;
 
   if(!studentProfile.synthesized){
-    wrap.innerHTML = `
+    contentWrap.innerHTML = `
       <p class="empty-state">Nothing here yet — chat with the bot below to build your profile.</p>
       <button class="w-full pop-btn bg-orange-500 text-slate-900 font-extrabold text-sm px-5 py-3.5 rounded-2xl flex items-center justify-center gap-2" onclick="focusProfileChat()">↓ Start chatting</button>
     `;
+    if(researchWrap) researchWrap.classList.add('hidden');
+    if(ctaBanner) ctaBanner.classList.add('hidden');
     return;
   }
 
-  wrap.innerHTML = `
-    ${profileSummaryBodyHTML(studentProfile.synthesized)}
-    <div class="flex items-center justify-between gap-3 pt-4 border-t-2 border-slate-100">
-      <button class="text-xs font-bold text-rose-600 hover:underline" onclick="clearProfile(this)">🗑 Clear profile</button>
-      <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2 rounded-xl text-xs" onclick="focusProfileChat()">Deepen my story →</button>
-    </div>
-  `;
+  // Split profile into sections
+  const allParagraphs = (studentProfile.synthesized || '').split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  const researchProjects = [];
+  const generalParagraphs = [];
+  allParagraphs.forEach(p => {
+    if(/^research projects?:/i.test(p)) researchProjects.push(p.replace(/^research projects?:\s*/i, ''));
+    else generalParagraphs.push(p);
+  });
+
+  // Populate main content paragraphs
+  contentWrap.innerHTML = generalParagraphs.map(p => `<p>${escapeHtmlTracker(p)}</p>`).join('');
+
+  // Populate research section
+  if(researchProjects.length && researchWrap && researchList){
+    researchWrap.classList.remove('hidden');
+    researchList.innerHTML = researchProjects.map((p, i) => `
+      <div>
+        <span class="research-number">${i + 1}.</span>
+        <p>${escapeHtmlTracker(p)}</p>
+      </div>
+    `).join('');
+  } else if(researchWrap){
+    researchWrap.classList.add('hidden');
+  }
+
+  // Show CTA banner
+  if(ctaBanner) ctaBanner.classList.remove('hidden');
 }
 
 // Splits a synthesized profile into readable paragraphs, pulling out any
@@ -2674,6 +2846,13 @@ async function buildTracker(){
   btn.disabled = false;
   btn.classList.remove('loading');
   label.textContent = 'Add to my tracker →';
+
+  // Re-render the results list now, while still on the Finder, so each newly-tracked
+  // card's "Save Match" button flips to the "In Quest Log" tag immediately. showPage('wizard')
+  // just toggles stage visibility without re-rendering (see goStage), so without this the
+  // stale "Save Match" buttons would still show if the user navigates back here later.
+  selectedIds = new Set();
+  renderResults();
 
   showPage('tracker');
   setOppView('list');

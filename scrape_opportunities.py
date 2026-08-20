@@ -84,6 +84,54 @@ NATIONAL_SEEDS = [
     ("Program", "arts intensives, conservatories, or portfolio-building summer programs for high schoolers"),
     ("Internship", "healthcare and medicine shadowing or pre-med pipeline programs for high schoolers"),
     ("Program", "computer science and engineering-focused summer camps, bootcamps, or hackathons for high schoolers"),
+    ("Program", "AI ethics, AI safety, and responsible AI programs for high schoolers, including coursework, "
+                 "research opportunities, and fellowships focused on beneficial AI and safety considerations"),
+    ("Program", "rationality, critical thinking, decision-making, metacognition, and forecasting programs "
+                 "for high schoolers (including game theory, applied reasoning workshops, and thinking-skills development)"),
+    ("Research", "research programs focused on direct social impact: biosecurity, pandemic preparedness, global health, "
+                 "climate science, clean energy, and environmental solutions open to high school researchers"),
+    ("Program", "international immersive residential programs and camps for high schoolers (10-21 days, overseas locations, "
+                 "typically including tuition, room, and board; cutting-edge academic or specialized topics)"),
+    ("Competition", "debate, speech, forensics, and argumentation competitions for high schoolers (parliamentary debate, "
+                     "policy debate, public forum, Lincoln-Douglas, dramatic interpretation, extemporaneous speaking)"),
+    ("Internship", "cybersecurity, cryptography, hacking competitions, and cybersecurity research programs for high schoolers "
+                   "(CTF competitions, bug bounties, security camps, penetration testing training)"),
+    ("Research", "environmental science, field research, marine biology, conservation, and ecological restoration programs "
+                 "for high schoolers with hands-on outdoor or lab-based research components"),
+    ("Program", "writing, creative writing, journalism, literary magazines, and publishing programs for high school students "
+                "(distinct from creative writing competitions — focused on skill-building, publication opportunities, and mentorship)"),
+    ("Internship", "policy analysis, government affairs, civic engagement internships, and political/advocacy organizations "
+                   "open to high schoolers (distinct from generic leadership programs — focused on policy work, advocacy, government offices)"),
+    ("Program", "robotics, maker spaces, fabrication labs, engineering challenges, and hardware-software integration programs "
+                "specifically for high schoolers (distinct from general CS/engineering — hands-on building, robotics competitions, invention)"),
+    ("Research", "psychology, neuroscience, cognitive science, and behavioral research programs and internships for high schoolers "
+                 "(lab-based research, behavioral studies, brain science, perception research)"),
+    ("Research", "sociology, anthropology, ethnography, and social sciences research programs for high schoolers "
+                 "(field research, community studies, cultural research, social dynamics)"),
+    ("Internship", "economics, finance, accounting, trading, and business analysis internships for high schoolers "
+                   "(financial services, banking, investment firms, business analysis, economics research)"),
+    ("Program", "graphic design, UX/UI design, digital design, web design, and product design programs for high schoolers "
+                "(portfolio-building, design thinking, prototyping, design competitions)"),
+    ("Program", "architecture, landscape architecture, urban design, and architectural visualization programs for high schoolers "
+                "(design studios, CAD training, architecture competitions, built environment)"),
+    ("Program", "fashion design, fashion business, apparel design, and fashion industry programs for high schoolers "
+                "(design, merchandising, styling, fashion competitions, industry internships)"),
+    ("Program", "dance, ballet, contemporary dance, hip-hop, and choreography programs for high schoolers "
+                "(intensive training, performances, choreography workshops, dance companies)"),
+    ("Program", "culinary arts, pastry, cooking, and hospitality management programs for high schoolers "
+                "(culinary bootcamps, chef mentorships, food service programs, kitchen experience)"),
+    ("Program", "sports management, kinesiology, sports science, athletic coaching, and sports medicine programs for high schoolers "
+                "(sports science labs, coaching certification, athletic training, sports business)"),
+    ("Program", "theology, religious studies, interfaith dialogue, and spiritual leadership programs for high schoolers "
+                "(seminary prep, religious organizations, faith-based leadership, spiritual retreats)"),
+    ("Program", "AI and machine learning immersive bootcamps, intensive training, and hands-on research opportunities for high schoolers "
+                "(practical ML projects, neural networks, model training, AI applications — distinct from theoretical AI ethics programs)"),
+    ("Program", "linguistics, language learning, language technology, computational linguistics, and translation programs for high schoolers "
+                "(endangered language documentation, multilingual NLP, language science, translation studies)"),
+    ("Program", "film, video production, documentary filmmaking, cinematography, and media arts programs for high schoolers "
+                "(production skills, editing, storytelling, filmmaking competitions, media labs)"),
+    ("Program", "music performance, composition, music production, music technology, and audio engineering programs for high schoolers "
+                "(instrument training, composition workshops, recording studios, music competitions, sound design)"),
 ]
 
 SEATTLE_SEEDS = [

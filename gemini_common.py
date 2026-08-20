@@ -79,6 +79,7 @@ import atexit
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -109,15 +110,53 @@ _lock_file = os.path.join(os.path.dirname(__file__), ".gemini_web_search.lock")
 _lock_acquired = False
 
 
-def _acquire_web_search_lock():
+def _pid_is_alive(pid):
+    """Best-effort liveness check for a PID recorded in a lock file. Stdlib-only (no
+    extra deps per CLAUDE.md); Windows-first since this repo runs on Windows, with a
+    POSIX fallback via os.kill(pid, 0). Any ambiguous/unknown result defaults to
+    "assume alive" — a false "dead" verdict would let two web-search calls race on
+    the shared quota, which is the exact thing this lock exists to prevent, so
+    failing safe here means falling back to the old fail-fast behavior, not silently
+    stealing a live lock."""
+    try:
+        if sys.platform == "win32":
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return str(pid) in result.stdout
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True  # unknown state -> assume alive, fail safe
+
+
+def _acquire_web_search_lock(_retried=False):
     """Acquire an exclusive lock for web-search-enabled scripts. Fails fast if
-    another instance is already running. Called automatically on first
-    call_gemini(..., use_web_search=True). Registers cleanup on exit."""
+    another *live* instance is already running. Called automatically on first
+    call_gemini(..., use_web_search=True). Registers cleanup on exit.
+
+    The lock file's content is the acquiring process's PID (previously it was empty)
+    so a process that finds an existing lock can check whether its creator is still
+    alive, rather than relying solely on the 24h age heuristic below. This matters
+    because server.py runs this same code inside a ThreadingHTTPServer request thread
+    on every web-search-enabled /api/messages call — if that thread died abnormally,
+    the old sys.exit(1) here (a SystemExit, which bypasses server.py's
+    `except Exception` handler around call_gemini()) produced an empty HTTP response
+    client-side and left the lock orphaned for up to 24h, blocking every subsequent
+    web-search call project-wide. PID-liveness lets a server restart (new PID) self-heal
+    immediately. Raises RuntimeError (instead of the old sys.exit(1)) on genuine,
+    live contention so callers like server.py's proxy_to_gemini() can catch it and
+    return a proper error response instead of the request thread dying silently."""
     global _lock_acquired
     if _lock_acquired:
         return  # Already acquired in this process
 
-    # Clean up stale lock (older than 24 hours) — handles crashed/killed scripts
+    # Clean up stale lock (older than 24 hours) — handles the case where the PID that
+    # created it has since been reused by an unrelated process (PID check alone can't
+    # catch that).
     try:
         if os.path.exists(_lock_file):
             age_secs = time.time() - os.path.getmtime(_lock_file)
@@ -129,16 +168,35 @@ def _acquire_web_search_lock():
     # Try to acquire lock exclusively (fails if file already exists)
     try:
         fd = os.open(_lock_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        os.write(fd, str(os.getpid()).encode())
         os.close(fd)
         _lock_acquired = True
         atexit.register(_release_web_search_lock)
+        return
     except FileExistsError:
-        print("[ERROR] Another script using web_search is already running. "
-              f"Remove {_lock_file} manually if stale (>24h old).", file=sys.stderr)
-        sys.exit(1)
+        pass  # existing lock -> check liveness below before treating as contention
     except Exception as e:
-        print(f"[ERROR] Could not acquire web_search lock: {e}", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError(f"Could not acquire web_search lock: {e}") from e
+
+    owner_pid = None
+    try:
+        with open(_lock_file, "r") as f:
+            owner_pid = int(f.read().strip())
+    except Exception:
+        owner_pid = None  # unreadable/empty (e.g. a pre-hardening lock file) -> treat as stale
+
+    if not _retried and (owner_pid is None or not _pid_is_alive(owner_pid)):
+        try:
+            os.remove(_lock_file)
+        except Exception:
+            pass
+        _acquire_web_search_lock(_retried=True)
+        return
+
+    msg = (f"Another script using web_search is already running (pid {owner_pid}). "
+           f"Remove {_lock_file} manually if you believe this is wrong.")
+    print(f"[ERROR] {msg}", file=sys.stderr)
+    raise RuntimeError(msg)
 
 
 def _release_web_search_lock():

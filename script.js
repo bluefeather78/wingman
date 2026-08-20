@@ -427,19 +427,19 @@ function renderKindGrid(){
     const c = KIND_CONFIG[key];
     if(c.comingSoon){
       return `
-        <div class="bg-slate-50 border-2 border-slate-300 p-4 rounded-2xl opacity-60 text-left">
-          <div class="flex justify-between items-start gap-2">
-            <span class="font-heading font-bold text-slate-500">${c.name}</span>
-            <span class="bg-amber-100 text-amber-800 font-bold text-[10px] uppercase px-2 py-0.5 rounded-full border border-amber-800">Soon</span>
+        <div style="background-color:#eef0fb;border-radius:16px;border:none;box-shadow:none;padding:16px;text-align:left;opacity:0.6">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+            <span class="font-heading font-bold" style="color:#8a93a6">${c.name}</span>
+            <span style="background-color:#f4b400;color:#92400e;font-weight:700;font-size:10px;text-transform:uppercase;padding:2px 8px;border-radius:999px">Soon</span>
           </div>
-          <p class="text-xs text-slate-400 mt-1">${c.desc}</p>
+          <p class="text-xs mt-1" style="color:#8a93a6;font-size:13px">${c.desc}</p>
         </div>
       `;
     }
     return `
-      <button class="border-2 border-slate-900 bg-white p-4 rounded-2xl hover:bg-slate-50 text-left w-full transition-colors" onclick="selectKind('${key}')">
-        <span class="block font-heading font-bold text-slate-900">${c.name}</span>
-        <span class="block text-xs text-slate-500 mt-1">${c.desc}</span>
+      <button style="background-color:#eef0fb;border-radius:16px;border:none;box-shadow:none;padding:16px;text-align:left;width:100%;transition:background-color 0.15s ease;cursor:pointer" onmouseover="this.style.backgroundColor='#dfe4f7'" onmouseout="this.style.backgroundColor='#eef0fb'" onclick="selectKind('${key}')">
+        <span class="block font-heading font-bold" style="color:#1a2540">${c.name}</span>
+        <span class="block text-xs mt-1" style="color:#8a93a6;font-size:13px">${c.desc}</span>
       </button>
     `;
   }).join('');
@@ -470,11 +470,34 @@ function selectKind(kind){
 // ---------- Stage navigation ----------
 
 let currentStage = 0; // Track which stage the Finder is on
+// Where stage-2's back-link should return to: 1 = manual "describe your project" flow
+// (stage-1), 0 = arrived via Fresh Finds' profile-based auto-match (back to stage-0).
+// Set right before each goStage(2) call — see runSearch() and runFreshFindsAutoSearch().
+let resultsBackTarget = 1;
 function goStage(n){
   currentStage = n;
   document.querySelectorAll('.stage').forEach(s => s.classList.remove('active'));
   document.getElementById('stage-' + n).classList.add('active');
+  if(n === 0) renderSuggestEntryCard();
+  if(n === 2) updateResultsBackLink();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+// Swaps stage-2's back-link (and the accompanying "prefer to browse" link, only relevant
+// coming from the profile-based flow) based on resultsBackTarget.
+function updateResultsBackLink(){
+  const browseLink = document.getElementById('resultsBrowseLink');
+  const deepenBanner = document.getElementById('resultsDeepen StoryBanner');
+  // Show browse link and deepen banner only on profile-based flow (results from Fresh Finds)
+  if(browseLink) browseLink.classList.toggle('hidden', resultsBackTarget !== 0);
+  if(deepenBanner) deepenBanner.classList.toggle('hidden', resultsBackTarget !== 0);
+}
+// "Prefer to browse opportunities? Click here" from the results view (stage-2) — only
+// shown when those results came from the profile-based Fresh Finds match, since the
+// manual describe-your-project flow already went through the kind picker.
+function browseFromResults(){
+  goStage(0);
+  const panel = document.getElementById('browsePanel');
+  if(panel && panel.classList.contains('hidden')) toggleBrowsePanel();
 }
 const unlocked = { 0: true, 1: false, 2: false };
 
@@ -833,6 +856,10 @@ document.addEventListener('click', (e) => {
 // Profile updates are expected periodically as a student's interests/projects evolve —
 // past this many days without an update, the Dashboard nudges them to refresh it.
 const PROFILE_STALE_DAYS = 14;
+// Threshold below which a profile is treated as "insufficient" for auto-matching on the
+// Fresh Finds landing (mirrors the "aim for at least 200 characters" guidance shown on the
+// manual describe-your-project textarea, so the bar is the same one students already see).
+const PROFILE_SUFFICIENT_LENGTH = 200;
 function daysSince(iso){
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
 }
@@ -863,6 +890,19 @@ function renderProfile(){
         <button class="pop-btn bg-white text-slate-900 font-bold px-3 py-1.5 rounded-xl text-xs shrink-0" onclick="focusProfileChat()">↓ Update via chat</button>
       </div>
     ` : '';
+  }
+  // Hide footer buttons and dividers when profile is empty
+  const footerButtons = document.getElementById('profileFooterButtons');
+  const footerDivider = document.getElementById('profileFooterDivider');
+  const contentDivider = document.getElementById('profileContentDivider');
+  if(footerButtons){
+    footerButtons.classList.toggle('hidden', !hasProfile);
+  }
+  if(footerDivider){
+    footerDivider.classList.toggle('hidden', !hasProfile);
+  }
+  if(contentDivider){
+    contentDivider.classList.toggle('hidden', !hasProfile);
   }
 }
 // Sends the student to the dedicated Profile tab, where the profile builder lives.
@@ -1266,11 +1306,13 @@ async function finishProfileChatSession(){
 // fall back on now that the profile is a single blob, not per-category lists.
 // ============================================================
 
-// Renders the "Suggest opportunities for me" entry card on stage 0. Disabled with a
-// prompt to update the profile when there's nothing to work with yet — otherwise shows
-// the full profile summary up front (with the confirm/edit CTAs above it) so the student
-// can review everything without an extra click before searching. See startProfileSuggest()
-// for what "Profile looks good" kicks off.
+// Renders the Fresh Finds landing card (stage 0). Reflects only the "nothing to show yet"
+// states — no profile, or a profile too thin to match well — styled to match the Profile
+// ("My Vibe") tab: white card-soft container, navy heading, gray-muted body copy, orange
+// pill CTA. When the profile IS sufficient this is intentionally a no-op (see
+// maybeAutoSuggestFreshFinds(), which is what actually renders results into stage-2) —
+// callers that just want stage-0's static content refreshed (login, profile edits) can
+// call this safely without triggering a search.
 function renderSuggestEntryCard(){
   const el = document.getElementById('suggestEntryCard');
   if(!el) return;
@@ -1279,27 +1321,118 @@ function renderSuggestEntryCard(){
   const btn = document.getElementById('browseToggleBtn');
   if(btn) btn.textContent = browseOpen ? 'Hide opportunity types ↑' : 'Prefer to browse opportunities? Click here';
 
-  if(!studentProfile.synthesized){
-    el.innerHTML = `
-      <div class="max-w-xl">
-        <h2 class="font-heading font-extrabold text-3xl mb-3">Suggest opportunities for me</h2>
-        <p class="text-sm text-slate-600">Based on everything in your profile. Add a few things to your profile first and this option unlocks.</p>
-      </div>
-      <button class="mt-6 pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-3 rounded-xl" onclick="goToProfileChat()">Go to Your Profile →</button>
-    `;
+  const hasProfile = !!studentProfile.synthesized;
+  const sufficient = hasProfile && studentProfile.synthesized.trim().length >= PROFILE_SUFFICIENT_LENGTH;
+  if(sufficient){
+    // Matches already found this session (e.g. the student clicked "Back to Fresh
+    // Finds" from stage-2) — offer a one-click way back instead of silently re-running
+    // the search, and instead of leaving a stale "Finding your matches…" spinner behind.
+    // If no results yet, maybeAutoSuggestFreshFinds() is already in flight (or about to
+    // be) and will overwrite this with the same loading card.
+    el.innerHTML = currentResults.length ? readyToViewCardHTML() : freshFindsLoadingCardHTML();
     return;
   }
-  el.innerHTML = `
-    <div>
-      <h2 class="font-heading font-extrabold text-3xl mb-2">Suggest opportunities for me</h2>
-      <p class="text-sm text-slate-600 mb-4">The fastest way to find tailored opportunities. Review your profile below to ensure matches are accurate, or add more details if needed.</p>
+
+  el.innerHTML = hasProfile ? insufficientProfileCardHTML() : emptyProfileCardHTML();
+}
+function readyToViewCardHTML(){
+  return `
+    <div class="max-w-xl w-full">
+      <h2 class="font-heading font-bold text-3xl" style="color: #1a2540;">Your matches are ready</h2>
+      <p class="text-base leading-relaxed italic mt-4 w-full" style="color: #8a93a6;">Based on everything in your profile.</p>
     </div>
-    <div class="flex flex-wrap gap-3 mb-6">
-      <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-3 rounded-xl primary-btn" onclick="startProfileSuggest()">Profile looks good</button>
-      <button class="pop-btn bg-white font-bold px-6 py-3 rounded-xl" onclick="goToProfileChat()">Add to my profile</button>
-    </div>
-    <div class="bg-indigo-50 border-2 border-slate-900 rounded-2xl p-4 sm:p-6">${profileSummaryBodyHTML(studentProfile.synthesized)}</div>
+    <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="goStage(2)">View my matches →</button>
   `;
+}
+// Shared by both "nothing to show yet" states — same visual pattern, different
+// heading/copy/CTA label depending on whether a (too-thin) profile exists at all.
+function emptyProfileCardHTML(){
+  return `
+    <div class="max-w-xl w-full">
+      <h2 class="font-heading font-bold text-3xl" style="color: #1a2540;">Your profile is empty</h2>
+      <p class="text-base leading-relaxed italic mt-4 w-full" style="color: #8a93a6;">Every match here gets better once we know you. Takes 2 minutes — add a few things and your matches will show up right here.</p>
+    </div>
+    <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="goToProfileChat()">Build my profile</button>
+  `;
+}
+function insufficientProfileCardHTML(){
+  return `
+    <div class="max-w-xl w-full">
+      <h2 class="font-heading font-extrabold text-3xl mb-3" style="color: #1a2540;">🌱 Your profile needs a bit more detail</h2>
+      <p class="text-sm w-full" style="color: #8a93a6;">We've got a start, but not quite enough to match you well yet. Add a few more specifics — real projects, real interests — and your matches will show up right here.</p>
+    </div>
+    <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="goToProfileChat()">Add to my profile →</button>
+  `;
+}
+function freshFindsLoadingCardHTML(){
+  return `
+    <div class="max-w-xl flex items-center gap-3">
+      <span class="spin inline-block w-6 h-6 border-2 rounded-full animate-spin shrink-0" style="border-color: #f4791d; border-top-color: transparent;"></span>
+      <div>
+        <h2 class="font-heading font-extrabold text-2xl" style="color: #1a2540;">Finding your matches…</h2>
+        <p class="text-sm mt-1" style="color: #8a93a6;">Searching based on everything in your profile.</p>
+      </div>
+    </div>
+  `;
+}
+function freshFindsErrorCardHTML(message){
+  return `
+    <div class="max-w-xl">
+      <h2 class="font-heading font-extrabold text-3xl mb-3" style="color: #1a2540;">Couldn't load your matches</h2>
+      <p class="text-sm" style="color: #8a93a6;">${escapeHtmlTracker(message || 'Something went wrong — try again, or browse opportunities by type below.')}</p>
+    </div>
+    <button class="mt-6 pop-btn bg-white font-bold px-6 py-3 rounded-xl" style="border: 2px solid #1a2540;" onclick="renderSuggestEntryCard()">Try again</button>
+  `;
+}
+// Called when landing on Fresh Finds (stage 0) with a fresh session (see showPage()).
+// If the profile is sufficient, silently runs the same multi-kind match used by the old
+// "Profile looks good" confirm step — no extra click — and lands directly on stage-2 with
+// the results. Otherwise leaves stage-0 showing the empty/insufficient card so the CTA to
+// build the profile (or the "prefer to browse" link right below it) stays front and center.
+async function maybeAutoSuggestFreshFinds(){
+  const hasProfile = !!studentProfile.synthesized;
+  const sufficient = hasProfile && studentProfile.synthesized.trim().length >= PROFILE_SUFFICIENT_LENGTH;
+  if(!sufficient) return;
+  // Already have matches from earlier this session (e.g. stepped back to stage-0 via
+  // "Back to Fresh Finds") — don't silently re-run the search, let the "ready" card
+  // rendered by renderSuggestEntryCard() offer a one-click way back to them instead.
+  if(currentResults.length) return;
+  await runFreshFindsAutoSearch();
+}
+// Core of the profile-based auto-match — mirrors runProfileSuggestSearch()'s search logic,
+// but reports progress/errors into stage-0's suggestEntryCard (runProfileSuggestSearch
+// reports into stage-suggest's own status/error elements, which aren't visible here since
+// this flow skips that intermediate review stage entirely).
+async function runFreshFindsAutoSearch(){
+  const el = document.getElementById('suggestEntryCard');
+  if(el) el.innerHTML = freshFindsLoadingCardHTML();
+  const description = studentProfile.synthesized;
+  try{
+    const subjects = await inferSubjects(description);
+    const perKind = await Promise.all(ACTIVE_KINDS.map(async kind => {
+      const cfg = KIND_CONFIG[kind];
+      if(!cfg) return [];
+      const pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType);
+      const ranked = await rankCandidates(description, pool, '', cfg.strictType);
+      const byId = {};
+      pool.forEach(o => { byId[o.id] = o; });
+      return ranked.filter(r => byId[r.id]).map(r => ({ opp: byId[r.id], reason: r.reason || '', tier: ['strong','look'].includes(r.tier) ? r.tier : 'look', kind }));
+    }));
+    const merged = perKind.flat();
+    if(!merged.length){
+      throw new Error('No matches came back — try adding more detail to your profile, or browse by type instead.');
+    }
+    currentResults = merged;
+    selectedIds = new Set();
+    resetResultFilters();
+    unlocked[2] = true;
+    resultsBackTarget = 0;
+    renderResults();
+    goStage(2);
+  }catch(err){
+    console.error('Fresh Finds auto-search failed:', err);
+    if(el) el.innerHTML = freshFindsErrorCardHTML(err.message);
+  }
 }
 function toggleBrowsePanel(){
   const panel = document.getElementById('browsePanel');
@@ -1476,6 +1609,7 @@ async function runProfileSuggestSearch(){
     statusEl.textContent = '';
     renderResults();
     unlocked[2] = true;
+    resultsBackTarget = 0;
     goStage(2);
   }catch(err){
     console.error('Profile-based search failed:', err);
@@ -1604,6 +1738,7 @@ async function runSearch(){
     resetResultFilters();
     renderResults();
     unlocked[2] = true;
+    resultsBackTarget = 1;
     goStage(2);
   }catch(err){
     console.error('Search failed:', err);
@@ -1967,9 +2102,20 @@ function showPage(name){
   // (e.g. results page) instead of always resetting to stage 0. This preserves
   // search results when navigating away and coming back.
   if(name === 'wizard'){
-    renderSuggestEntryCard();
-    // Restore the previous stage; if currentStage is 0, goStage(0) will re-show it as normal
-    goStage(currentStage);
+    if(currentStage === 0){
+      // Fresh landing (not restoring a prior search) — show stage-0 immediately (goStage
+      // renders the entry card), then silently upgrade to matched results if the profile
+      // is sufficient.
+      goStage(0);
+      maybeAutoSuggestFreshFinds();
+    }else{
+      // Restore the previous stage (e.g. results) instead of resetting on every visit.
+      // goStage() only re-renders the entry card for n===0, so refresh it explicitly here
+      // in case the profile changed while away (stage-2's card isn't visible but should
+      // stay in sync for when the user does navigate back to stage-0).
+      renderSuggestEntryCard();
+      goStage(currentStage);
+    }
   }
   // Deliberately no initProfileChat() call here — "Spill the Tea" (and the API call for
   // its starter questions) only opens via focusProfileChat(), triggered by an explicit
@@ -2380,7 +2526,7 @@ function renderStats(){
   const ctaEl = document.getElementById('homeTrackCTA');
   if(ctaEl){
     ctaEl.innerHTML = s.total === 0
-      ? `<button class="w-full pop-btn bg-orange-500 text-slate-900 font-extrabold text-sm px-5 py-3.5 rounded-2xl flex items-center justify-center gap-2" onclick="showPage('wizard')">🔍 Find your first opportunity to track →</button>`
+      ? `<button class="pop-btn font-bold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="showPage('wizard')">Find your first opportunity to track</button>`
       : `<button class="pop-btn bg-white text-slate-900 font-bold text-xs px-4 py-2 rounded-xl" onclick="showPage('wizard')">Look for Fresh Finds</button>`;
   }
 }
@@ -2513,10 +2659,10 @@ function renderHomeProfileTeaser(){
     wrap.innerHTML = `
       <div class="urgent-pulse bg-gradient-to-br from-orange-400 to-rose-500 text-white p-6 flex flex-wrap items-center justify-between gap-4" style="border-radius: 22px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);">
         <div>
-          <p class="font-heading font-extrabold text-lg">⚡ Your profile is empty!</p>
+          <p class="font-heading font-extrabold text-lg">Your profile is empty</p>
           <p class="text-sm font-medium opacity-90 mt-1 max-w-md">Every match in the Finder gets better once we know you. Takes 2 minutes — go build it now.</p>
         </div>
-        <button class="pop-btn bg-white text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="goToProfile()">Build my profile →</button>
+        <button class="pop-btn font-bold px-6 py-3 text-white shrink-0" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="goToProfile()">Build my profile</button>
       </div>
     `;
     return;
@@ -2562,7 +2708,7 @@ function renderProfileFit(){
   if(!studentProfile.synthesized){
     contentWrap.innerHTML = `
       <p class="empty-state">Nothing here yet — chat with the bot below to build your profile.</p>
-      <button class="w-full pop-btn bg-orange-500 text-slate-900 font-extrabold text-sm px-5 py-3.5 rounded-2xl flex items-center justify-center gap-2" onclick="focusProfileChat()">↓ Start chatting</button>
+      <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="focusProfileChat()">Start chatting</button>
     `;
     if(researchWrap) researchWrap.classList.add('hidden');
     if(ctaBanner) ctaBanner.classList.add('hidden');

@@ -76,7 +76,14 @@ CLAUDE_MAX_TOKENS = 1200
 
 
 def call_claude(system, user_content, api_key, use_web_search=False):
-    """Call Claude Haiku with web search enforced for deadline extraction.
+    """Call Claude Haiku with web search AND web fetch enforced for deadline extraction.
+    web_search finds candidate pages (e.g. an org's FAQ/key-dates subpage); web_fetch then
+    retrieves the FULL text of a specific known URL (the given opportunity URL, or a URL
+    surfaced by a prior search/fetch) — search alone only returns short result snippets,
+    which is why deadline info buried on a subpage (not the top-level URL) was previously
+    getting missed even though the prompt told Claude to "fetch" the page. Both tools are
+    supported on Haiku and web_fetch carries no extra per-call charge (token cost only), so
+    this doesn't change per-check pricing model.
     Returns (text, usage) tuple matching the shape of call_gemini() for compatibility."""
     body = {
         "model": CLAUDE_MODEL,
@@ -85,7 +92,13 @@ def call_claude(system, user_content, api_key, use_web_search=False):
         "messages": [{"role": "user", "content": user_content}],
     }
     if use_web_search:
-        body["tools"] = [{"type": "web_search_20250305", "name": "web_search"}]
+        body["tools"] = [
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
+            # max_content_tokens bounds how much of any one fetched page counts against
+            # CLAUDE_MAX_TOKENS's shared input budget; a handful of subpage fetches per
+            # check is normal (main URL + org FAQ/dates page), max_uses caps runaway cases.
+            {"type": "web_fetch_20250910", "name": "web_fetch", "max_uses": 5, "max_content_tokens": 4000},
+        ]
 
     req = urllib.request.Request(
         ANTHROPIC_URL,
@@ -104,13 +117,18 @@ def call_claude(system, user_content, api_key, use_web_search=False):
     # Extract text content from response
     text = "\n".join(b.get("text", "") for b in response_data.get("content", []) if b.get("type") == "text")
 
-    # Build usage dict in same format as gemini_common for compatibility
+    # Build usage dict in same format as gemini_common for compatibility. NOTE: search/fetch
+    # calls come back as content blocks of type "server_tool_use" (not "tool_use" — a plain
+    # tool_use block is only ever a *client*-defined tool call, which this script has none
+    # of), so the previous code here — filtering for type=="tool_use" — always counted zero,
+    # meaning every check was mislabeled a "silent search" downstream regardless of whether a
+    # real search actually ran. The API's own usage.server_tool_use block is authoritative
+    # and already has the right counts (confirmed against a live response) — use that instead
+    # of re-deriving it from content blocks.
     usage = {
         "input_tokens": response_data.get("usage", {}).get("input_tokens", 0),
         "output_tokens": response_data.get("usage", {}).get("output_tokens", 0),
-        "server_tool_use": {
-            "web_search_requests": len([b for b in response_data.get("content", []) if b.get("type") == "tool_use" and b.get("name") == "web_search"])
-        }
+        "server_tool_use": response_data.get("usage", {}).get("server_tool_use") or {},
     }
 
     return text, usage
@@ -136,13 +154,22 @@ def build_system(opp):
 internship, competition, or research position), for a catalog used by high school students. Today's \
 date is {today}.
 
-YOU MUST use the web_search tool to gather current information before answering. Do not rely on \
-training data alone — always search for live, current deadline/status information.
+YOU MUST use the web_search and web_fetch tools to gather current information before answering. Do \
+not rely on training data alone — always search AND fetch for live, current deadline/status \
+information. These are two different tools with two different jobs:
+- web_search finds candidate pages (it only returns short snippets, not full page text).
+- web_fetch retrieves the FULL text of one specific URL you already know — the given opportunity URL, \
+or any URL a web_search result surfaced. Deadline/cycle details are very often on a subpage rather \
+than the main program page (an FAQ, "How to Apply," "Key Dates," "Timeline," or "Deadlines" page), and \
+that detail usually will NOT appear in a search snippet — you have to fetch the actual subpage to see it.
 
-Search thoroughly with web_search:
-- Start with the given URL.
-- If that page's deadline/cycle information looks stale (from a past year, or missing entirely), also \
-search the organization's base website (e.g. {root}) for a more current version of this program's page.
+Work thoroughly:
+- fetch the given URL directly first.
+- If that page's deadline/cycle information looks stale (from a past year) or missing, search the \
+organization's base website (e.g. {root}) for a more current or more specific page — explicitly try \
+queries like "site:{root} FAQ", "site:{root} how to apply", "site:{root} key dates" / "deadlines" / \
+"timeline" — then fetch the most promising result(s). Don't stop at the landing page's absence of a \
+date; a program's real deadline is frequently published only on one of these subpages.
 - Look explicitly for language indicating the program is discontinued, paused, cancelled, or not \
 accepting applications this cycle (e.g. "program has ended," "not running this year," "no longer \
 offered"). If you find this, set status to "not_running" — do not guess a future deadline for a program \
@@ -181,7 +208,7 @@ was_estimated to true and say what it's based on in deadline_note (e.g. "Estimat
 2027 dates not yet posted").
 - Only mark status "running" if you found real evidence the program is currently active or has a \
 future confirmed/estimated date. Use "unknown" if you found genuinely nothing usable after searching \
-both the URL and the base site.
+and fetching both the given URL and likely subpages of the base site.
 - Never invent a specific date with no basis — every date must come from something you actually found, \
 whether confirmed or reasonably estimated from a real prior cycle.
 
@@ -198,10 +225,11 @@ def check_one(opp, api_key):
     system = build_system(opp)
     user_content = (f"Opportunity: {opp['name']} ({opp.get('org') or 'unknown org'})\n"
                      f"URL: {opp['url']}\nKnown info: {opp.get('summary') or ''}\n\n"
-                     f"Fetch this URL (and the base site if needed), and extract current status/deadline "
-                     f"details per the schema. Look carefully for multiple deadline milestones.")
-    # Using Claude Haiku (claude-haiku-4-5-20251001) with web search enforced in prompt.
-    # max_tokens set to 1200 to allow web search results without token starvation.
+                     f"Fetch this URL directly, then search and fetch subpages of the org's site (FAQ, "
+                     f"how to apply, key dates) if needed, and extract current status/deadline details "
+                     f"per the schema. Look carefully for multiple deadline milestones.")
+    # Using Claude Haiku (claude-haiku-4-5-20251001) with web search + web fetch enforced in prompt.
+    # max_tokens set to 1200 to allow web search/fetch results without token starvation.
     text, usage = call_claude(system, user_content, api_key, use_web_search=True)
     info = extract_json(text)
     searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
@@ -222,9 +250,15 @@ def main():
     load_dotenv()
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     service_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
-    gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    if not supabase_url or not service_key or not gemini_key:
-        print("[ERROR] SUPABASE_URL / SUPABASE_SERVICE_KEY / GEMINI_API_KEY not set in .env.")
+    # NOTE: this script calls Claude (call_claude/check_one), not Gemini — it must read
+    # ANTHROPIC_API_KEY. It previously read GEMINI_API_KEY here (a leftover from before the
+    # Gemini->Claude migration for deadline checking) and passed that value as check_one()'s
+    # api_key, which would have sent a Gemini key to the Anthropic API and failed auth on
+    # every row. This mode is currently unused (see module docstring — on-demand checking via
+    # server.py is primary) so it likely went unnoticed, but it's fixed here for correctness.
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not supabase_url or not service_key or not anthropic_key:
+        print("[ERROR] SUPABASE_URL / SUPABASE_SERVICE_KEY / ANTHROPIC_API_KEY not set in .env.")
         sys.exit(1)
 
     print("[OK] Fetching active catalog from Supabase...")
@@ -256,13 +290,13 @@ def main():
     for i, opp in enumerate(items):
         print(f"[{i + 1}/{len(items)}] {opp['name'][:60]}...", end=" ")
         try:
-            info, cost, searches = check_one(opp, gemini_key)
+            info, cost, searches = check_one(opp, anthropic_key)
             total_cost += cost
             total_searches += searches
-            # Silent skip-search: use_web_search=True but Gemini answered from training data
-            # instead of invoking googleSearch (see gemini_common.py's docstring). For this
-            # script specifically, a 0-search result means status/deadlines were NOT verified
-            # live this run, even though last_checked_at still gets stamped with "now" below.
+            # Silent skip-search: use_web_search=True but Claude answered from training data
+            # instead of invoking web_search. A 0-search result means status/deadlines were
+            # NOT verified live this run, even though last_checked_at still gets stamped with
+            # "now" below.
             if searches == 0:
                 silent_search_count += 1
             status = info.get("status") if info.get("status") in VALID_STATUS else "unknown"

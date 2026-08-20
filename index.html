@@ -42,7 +42,7 @@
           <input type="password" id="signInPassword" autocomplete="current-password" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="••••••••">
         </div>
         <p class="text-xs font-bold text-rose-600" id="signInError"></p>
-        <button type="submit" class="w-full pop-btn bg-orange-500 text-slate-900 font-extrabold px-6 py-3 rounded-xl">Sign In</button>
+        <button type="submit" class="w-full pop-btn font-extrabold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;">Sign In</button>
         <p class="text-xs text-slate-500 text-center">Don't have an account? <a href="#" class="font-bold text-indigo-600 hover:underline" onclick="event.preventDefault(); showLoginMode('register');">Register</a></p>
       </form>
 
@@ -79,7 +79,7 @@
           <input type="password" id="regPasswordConfirm" autocomplete="new-password" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="••••••••">
         </div>
         <p class="text-xs font-bold text-rose-600" id="registerError"></p>
-        <button type="submit" class="w-full pop-btn bg-orange-500 text-slate-900 font-extrabold px-6 py-3 rounded-xl">Create Account</button>
+        <button type="submit" class="w-full pop-btn font-extrabold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;">Create Account</button>
         <p class="text-xs text-slate-500 text-center">Already have an account? <a href="#" class="font-bold text-indigo-600 hover:underline" onclick="event.preventDefault(); showLoginMode('signin');">Sign In</a></p>
       </form>
     </div>
@@ -232,8 +232,8 @@
         </div>
 
         <div class="text-center mt-4">
-          <button class="text-sm font-bold text-slate-500 hover:text-slate-900 hover:underline" onclick="toggleBrowsePanel()" id="browseToggleBtn">
-            Prefer to browse opportunities? Click here
+          <button class="text-sm font-bold hover:underline transition-colors" style="color: #6a63e8; background: none; border: none; cursor: pointer;" onmouseover="this.style.color='#5553d6'" onmouseout="this.style.color='#6a63e8'" onclick="toggleBrowsePanel()" id="browseToggleBtn">
+            Prefer to browse instead? →
           </button>
         </div>
 
@@ -260,7 +260,7 @@
             <p class="text-sm font-bold mb-4 form-status" id="suggestStatus" style="color: #6a63e8;"></p>
             <div id="suggestQuestionsWrap" class="space-y-4"></div>
             <div class="mt-6 form-actions">
-              <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-3 rounded-xl primary-btn" id="suggestContinueBtn" style="display:none;" onclick="submitSuggestQuestions()">Continue →</button>
+              <button class="pop-btn font-bold px-6 py-3 text-white" id="suggestContinueBtn" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px; display:none;" onclick="submitSuggestQuestions()">Continue →</button>
             </div>
             <div class="mt-4 text-rose-900 p-4 font-bold text-sm form-error" id="suggestError" style="background-color: #ffe4e6; border-radius: 12px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);"></div>
           </div>
@@ -268,8 +268,8 @@
             <h2 class="font-heading font-bold text-xl mb-6">Here's what we know about you</h2>
             <div id="suggestProfileSummary" class="profile-fit-grid mb-6"></div>
             <div class="flex flex-wrap gap-3" id="suggestConfirmWrap">
-              <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-3 rounded-xl primary-btn" onclick="confirmSuggestProfile()">Profile looks good — find opportunities →</button>
-              <button class="pop-btn bg-white font-bold px-6 py-3 rounded-xl" onclick="goToProfileChat()">Update my profile first</button>
+              <button class="pop-btn font-bold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="confirmSuggestProfile()">Profile looks good — find my matches →</button>
+              <button class="pop-btn bg-white font-bold px-6 py-3 rounded-xl" style="border: 2px solid #1a2540;" onclick="goToProfileChat()">Add to my profile</button>
             </div>
           </div>
         </div>
@@ -374,9 +374,18 @@
 
       <!-- STAGE 2: RESULTS -->
       <div class="stage hidden space-y-6" id="stage-2">
-        <button class="text-sm font-bold text-indigo-600 hover:underline flex items-center gap-1 back-link" onclick="goStage(1)">
-          <span>←</span> Back to project description
-        </button>
+        <!-- Deepen story banner (shown on results page) -->
+        <a href="#" class="hidden flex items-center gap-5 rounded-2xl px-7 py-5 text-decoration-none no-underline" id="resultsDeepen StoryBanner" style="background: linear-gradient(90deg, #101c36, #182750);" onclick="event.preventDefault(); goToProfileChat();">
+          <div class="flex-1 min-w-0">
+            <div class="font-bold text-base" style="color: #fff;">Want more matches like these?</div>
+            <div class="text-sm mt-0.5" style="color: #aab3c9;">Deepen your story by adding more details.</div>
+          </div>
+          <div class="flex items-center gap-2 px-5 py-2.5 rounded-full flex-shrink-0 font-bold text-sm text-white whitespace-nowrap" style="background-color: #f4791d;">Deepen your story</div>
+        </a>
+
+        <div class="hidden text-right">
+          <button class="text-sm font-bold hover:underline" id="resultsBrowseLink" style="color: #8a93a6; background: none; border: none; cursor: pointer;" onclick="browseFromResults()">Prefer to browse opportunities? Click here</button>
+        </div>
 
         <div class="hidden flex flex-wrap items-center gap-2 mb-4" id="resultFilterWrap">
           <span class="text-xs font-bold uppercase tracking-wide mr-1" style="color: #8a93a6;">Filter:</span>
@@ -393,7 +402,7 @@
         <div class="sticky bottom-4 z-40 selection-bar" id="selectionBar" style="display:none;">
           <div class="bg-slate-900 text-white p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
             <span class="font-bold text-sm" id="selectionCount">0 selected</span>
-            <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-2.5 rounded-xl primary-btn" id="buildTrackerBtn" onclick="buildTracker()">
+            <button class="pop-btn font-bold px-6 py-3 text-white" id="buildTrackerBtn" onclick="buildTracker()" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;">
               <span class="spin hidden w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></span>
               <span id="buildTrackerLabel">Add to my tracker →</span>
             </button>
@@ -424,9 +433,7 @@
           </div>
 
           <div class="relative nav-dropdown">
-            <button class="pop-btn bg-white text-slate-900 font-bold text-xs sm:text-sm px-4 py-2.5 rounded-xl flex items-center gap-2" id="trackerIntakeToggle" onclick="toggleNavDropdownPanel('trackerIntakeForm')">
-              <span>➕</span> Add Opportunity
-            </button>
+            <button class="pop-btn font-bold px-6 py-3 text-white" id="trackerIntakeToggle" onclick="toggleNavDropdownPanel('trackerIntakeForm')" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;">Add Opportunity</button>
 
             <div class="absolute right-0 top-full mt-2 w-72 sm:w-96 bg-white p-4 rounded-2xl z-50 hidden nav-dropdown-panel border-2 border-slate-900" id="trackerIntakeForm">
               <h3 class="font-heading font-bold mb-3">Add Custom Opportunity</h3>
@@ -436,7 +443,7 @@
               <label class="block font-bold text-[10px] uppercase text-slate-500 mb-1" for="trackerIntakeNotes">Extra context (optional)</label>
               <textarea id="trackerIntakeNotes" rows="2" class="w-full border-2 border-slate-900 rounded-lg p-2 text-sm mb-3 font-medium" placeholder="Anything you already know..."></textarea>
 
-              <button class="w-full pop-btn bg-orange-500 text-slate-900 font-bold py-2 rounded-lg flex items-center justify-center gap-2" id="trackerIntakeSubmit" onclick="trackerAnalyzeAndAdd()">
+              <button class="w-full pop-btn font-bold py-2 text-white flex items-center justify-center gap-2" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" id="trackerIntakeSubmit" onclick="trackerAnalyzeAndAdd()">
                 <span class="spin hidden w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
                 <span id="trackerIntakeSubmitLabel">Add</span>
               </button>
@@ -485,12 +492,11 @@
       <!-- CTA Banner -->
       <div id="profileCtaBanner" class="hidden">
         <a href="#fresh-finds" class="flex items-center gap-5 rounded-2xl px-7 py-5 text-decoration-none no-underline" style="background: linear-gradient(90deg, #101c36, #182750);">
-          <div class="w-11 h-11 rounded-full flex items-center justify-center flex-shrink-0" style="background-color: #d7f542; font-size: 20px;">🔍</div>
           <div class="flex-1 min-w-0">
             <div class="font-bold text-base" style="color: #fff;">Your story is ready to work for you</div>
             <div class="text-sm mt-0.5" style="color: #aab3c9;">Head to Fresh Finds to see opportunities matched to what you just told us.</div>
           </div>
-          <div class="flex items-center gap-2 px-5 py-2.5 rounded-full flex-shrink-0 font-bold text-sm text-white whitespace-nowrap" style="background-color: #f4791d;">See my matches →</div>
+          <div class="flex items-center gap-2 px-5 py-2.5 rounded-full flex-shrink-0 font-bold text-sm text-white whitespace-nowrap" style="background-color: #f4791d;">See my matches</div>
         </a>
       </div>
 
@@ -514,7 +520,7 @@
         </div>
 
         <!-- Divider -->
-        <hr class="border-0 border-t" style="border-color: #c9c9f0; margin: 28px 0 20px;">
+        <hr id="profileContentDivider" class="border-0 border-t" style="border-color: #c9c9f0; margin: 28px 0 20px;">
 
         <!-- Research Projects Section (if applicable) -->
         <div id="researchSection" class="hidden">
@@ -523,8 +529,8 @@
         </div>
 
         <!-- Footer actions -->
-        <hr class="border-0 border-t" style="border-color: #eef0f5; margin: 28px 0 20px;">
-        <div class="flex justify-between items-center gap-4 flex-wrap">
+        <hr id="profileFooterDivider" class="border-0 border-t" style="border-color: #eef0f5; margin: 28px 0 20px;">
+        <div id="profileFooterButtons" class="flex justify-between items-center gap-4 flex-wrap">
           <button class="text-sm font-bold flex items-center gap-1.5" style="color: #d64545; background: none; border: none; cursor: pointer;" onclick="clearProfile()">
             🗑️ Clear profile
           </button>

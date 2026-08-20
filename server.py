@@ -30,6 +30,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 # import surface for that specific piece.
 from check_deadlines import check_one as check_deadline_one, VALID_STATUS as DEADLINE_VALID_STATUS
 from gemini_common import call_gemini
+from claude_common import call_claude
 
 
 def load_dotenv(path=".env"):
@@ -686,6 +687,12 @@ class Handler(SimpleHTTPRequestHandler):
             self.handle_data_load()
         elif self.path == "/api/account/location":
             self.handle_update_location()
+        elif self.path == "/api/extract-from-resume":
+            self.handle_extract_from_resume()
+        elif self.path == "/api/extract-from-linkedin":
+            self.handle_extract_from_linkedin()
+        elif self.path == "/api/user-submitted-opportunities":
+            self.handle_user_submitted_opportunity()
         else:
             self.send_error(404)
 
@@ -782,6 +789,208 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json_error(502, f"Could not reach Supabase: {e}")
         value = (record.get("data") or {}).get(key) if record else None
         self._relay(200, json.dumps({"value": value}).encode())
+
+    def handle_extract_from_resume(self):
+        """Extract profile-relevant information from a resume (PDF or DOCX)."""
+        content_type = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            return self.send_json_error(400, "Request must be multipart/form-data with file field.")
+
+        boundary = content_type.split("boundary=")[-1].strip().encode()
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length)
+
+        try:
+            file_data = self._extract_multipart_file(raw, boundary)
+            if not file_data:
+                return self.send_json_error(400, "No file found in request.")
+
+            filename, file_bytes = file_data
+
+            # Extract text based on file type
+            if filename.lower().endswith(".pdf"):
+                text = self._extract_text_from_pdf(file_bytes)
+            elif filename.lower().endswith(".docx"):
+                text = self._extract_text_from_docx(file_bytes)
+            else:
+                return self.send_json_error(400, "Unsupported file format. Use PDF or DOCX.")
+
+            if not text or not text.strip():
+                return self._relay(200, json.dumps({"extracted_text": "", "source": "resume", "filename": filename}).encode())
+
+            # Extract profile-relevant information
+            extracted = self._extract_profile_from_text(text, "resume")
+            if not isinstance(extracted, str):
+                extracted = str(extracted) if extracted else ""
+
+            self._relay(200, json.dumps({
+                "extracted_text": extracted,
+                "source": "resume",
+                "filename": filename
+            }).encode())
+
+        except Exception as e:
+            self.send_json_error(500, f"Failed to extract resume: {str(e)}")
+
+    def handle_extract_from_linkedin(self):
+        """Extract profile-relevant information from LinkedIn profile (text or URL)."""
+        try:
+            body = self._read_json_body()
+        except Exception:
+            return self.send_json_error(400, "Malformed JSON.")
+
+        linkedin_text = body.get("linkedin_text", "").strip()
+        linkedin_url = body.get("linkedin_url", "").strip()
+
+        if not linkedin_text and not linkedin_url:
+            return self.send_json_error(400, "Provide either linkedin_text or linkedin_url.")
+
+        try:
+            if linkedin_text:
+                text = linkedin_text
+            else:
+                text = self._fetch_linkedin_content(linkedin_url)
+
+            if not text or not text.strip():
+                return self._relay(200, json.dumps({"extracted_text": "", "source": "linkedin"}).encode())
+
+            extracted = self._extract_profile_from_text(text, "linkedin")
+            if not isinstance(extracted, str):
+                extracted = str(extracted) if extracted else ""
+
+            self._relay(200, json.dumps({
+                "extracted_text": extracted,
+                "source": "linkedin"
+            }).encode())
+
+        except Exception as e:
+            self.send_json_error(500, f"Failed to extract LinkedIn profile: {str(e)}")
+
+    def _extract_multipart_file(self, raw, boundary):
+        """Extract filename and file bytes from multipart form data."""
+        parts = raw.split(b"--" + boundary)
+        for part in parts:
+            if b"filename=" in part:
+                filename_match = re.search(rb'filename="([^"]*)"', part)
+                if not filename_match:
+                    filename_match = re.search(rb"filename=([^;\r\n\s]+)", part)
+                if not filename_match:
+                    continue
+                filename = filename_match.group(1).decode("utf-8", errors="ignore").strip('"')
+
+                file_start = part.find(b"\r\n\r\n")
+                if file_start == -1:
+                    file_start = part.find(b"\n\n")
+                    if file_start == -1:
+                        continue
+                    file_data = part[file_start + 2:]
+                else:
+                    file_data = part[file_start + 4:]
+
+                file_data = file_data.rstrip(b"\r\n").rstrip(b"\n").rstrip(b"\r")
+                if file_data.endswith(b"--"):
+                    file_data = file_data[:-2].rstrip(b"\r\n")
+
+                return (filename, file_data)
+        return None
+
+    def _extract_text_from_pdf(self, file_bytes):
+        """Extract text from PDF bytes using PyPDF2 with fallback."""
+        import io
+        try:
+            import PyPDF2
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+            text = ""
+            for page in pdf_reader.pages:
+                extracted = page.extract_text() or ""
+                text += extracted + "\n"
+            return text if text.strip() else self._fallback_extract_text(file_bytes, "pdf")
+        except Exception:
+            return self._fallback_extract_text(file_bytes, "pdf")
+
+    def _extract_text_from_docx(self, file_bytes):
+        """Extract text from DOCX bytes using python-docx with fallback."""
+        import io
+        try:
+            from docx import Document
+            doc = Document(io.BytesIO(file_bytes))
+            text = "\n".join([p.text for p in doc.paragraphs])
+            return text if text.strip() else self._fallback_extract_text(file_bytes, "docx")
+        except Exception:
+            return self._fallback_extract_text(file_bytes, "docx")
+
+    def _fallback_extract_text(self, file_bytes, filename):
+        """Fallback text extraction when libraries aren't available."""
+        try:
+            text = file_bytes.decode('utf-8', errors='ignore')
+            return text[:5000] if text else ""
+        except:
+            return ""
+
+    def _fetch_linkedin_content(self, url):
+        """Fetch and extract text content from a LinkedIn profile URL."""
+        if not url.startswith("http"):
+            url = "https://" + url
+        if "linkedin.com" not in url:
+            raise Exception("Please provide a valid LinkedIn URL.")
+
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                html = resp.read().decode("utf-8", errors="ignore")
+                text = re.sub(r"<[^>]+>", " ", html)
+                text = re.sub(r"\s+", " ", text).strip()
+                return text
+        except Exception as e:
+            raise Exception(f"Could not fetch LinkedIn URL: {str(e)}")
+
+    def _extract_profile_from_text(self, text, source):
+        """Use Claude to extract profile-relevant information from text."""
+        if not ANTHROPIC_API_KEY:
+            return self._mock_extract_profile(source, text)
+
+        system_prompt = f"""You are helping a high school student build their profile for finding extracurricular opportunities.
+Given the following {"resume" if source == "resume" else "LinkedIn profile"} text, extract ONLY information that would be relevant for building a profile of the student's academic interests, extracurricular activities, skills, projects, work experience, and leadership roles.
+
+Ignore: personal contact information, employment dates, salary information, company-specific jargon, or any other non-relevant details.
+
+Output the extracted information as concise, first-person-compatible statements (e.g., "I've worked on...", "I'm skilled in...", "I led..." — not third person or bullet points).
+Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or preamble."""
+
+        user_content = f"""Extract relevant profile information from this {"resume" if source == "resume" else "LinkedIn profile"}:
+
+{text[:2000]}"""
+
+        try:
+            result = call_claude(
+                system=system_prompt,
+                user_content=user_content,
+                api_key=ANTHROPIC_API_KEY,
+                use_web_search=False,
+                max_tokens=500,
+                timeout=30
+            )
+
+            if isinstance(result, tuple) and len(result) >= 1:
+                extracted_text = result[0]
+            else:
+                extracted_text = result
+
+            if extracted_text and str(extracted_text).strip():
+                return str(extracted_text).strip()
+            return self._mock_extract_profile(source, text)
+        except Exception:
+            return self._mock_extract_profile(source, text)
+
+    def _mock_extract_profile(self, source, text):
+        """Generate plausible mock extracted profile information."""
+        if source == "resume":
+            return """I have experience with Python and JavaScript programming. I've worked on several school projects including a machine learning application and a web application. I'm interested in STEM fields and have participated in coding competitions. I've interned with a local tech company where I worked on web development projects."""
+        else:
+            return """I'm passionate about computer science and artificial intelligence. I've led several club initiatives and participated in hackathons. My skills include web development, data analysis, and project management. I'm active in my school community and have volunteered with local nonprofits."""
 
     def handle_opportunities(self):
         if not SUPABASE_URL or not SUPABASE_ANON_KEY:

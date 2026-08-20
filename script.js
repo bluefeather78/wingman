@@ -2511,7 +2511,7 @@ function renderHomeProfileTeaser(){
 
   if(!hasProfile){
     wrap.innerHTML = `
-      <div class="urgent-pulse bg-gradient-to-br from-orange-400 to-rose-500 text-white p-6 rounded-3xl flex flex-wrap items-center justify-between gap-4 border-2 border-slate-900">
+      <div class="urgent-pulse bg-gradient-to-br from-orange-400 to-rose-500 text-white p-6 flex flex-wrap items-center justify-between gap-4" style="border-radius: 22px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);">
         <div>
           <p class="font-heading font-extrabold text-lg">⚡ Your profile is empty!</p>
           <p class="text-sm font-medium opacity-90 mt-1 max-w-md">Every match in the Finder gets better once we know you. Takes 2 minutes — go build it now.</p>
@@ -2524,7 +2524,7 @@ function renderHomeProfileTeaser(){
 
   if(isStale){
     wrap.innerHTML = `
-      <div class="urgent-pulse bg-amber-100 border-2 border-amber-500 p-6 rounded-3xl flex flex-wrap items-center justify-between gap-4">
+      <div class="urgent-pulse bg-amber-100 p-6 flex flex-wrap items-center justify-between gap-4" style="border-radius: 22px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);">
         <div>
           <p class="font-heading font-extrabold text-lg text-amber-900">⏰ Your profile is ${days} days old</p>
           <p class="text-sm font-medium text-amber-800 mt-1 max-w-md">Stale profiles mean stale matches — a quick refresh keeps your suggestions sharp.</p>
@@ -2536,7 +2536,7 @@ function renderHomeProfileTeaser(){
   }
 
   wrap.innerHTML = `
-    <div class="bg-white p-6 rounded-3xl space-y-4 border-2 border-slate-900">
+    <div class="bg-white p-6 space-y-4" style="border-radius: 22px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h2 class="font-heading font-bold text-xl">Your Story So Far</h2>
         <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="goToProfile()">View &amp; deepen it →</button>

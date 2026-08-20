@@ -251,18 +251,18 @@
 
       <!-- STAGE SUGGEST: PROFILE-BASED DISCOVERY -->
       <div class="stage hidden space-y-6" id="stage-suggest">
-        <button class="text-sm font-bold text-indigo-600 hover:underline flex items-center gap-1 back-link" onclick="goStage(0)">
+        <button class="text-sm font-bold hover:underline flex items-center gap-1 back-link" style="color: #6a63e8;" onclick="goStage(0)">
           <span>←</span> Back to opportunity type
         </button>
 
         <div class="card-soft p-6 sm:p-8 form-card">
           <div id="suggestProgressSection" style="display:none;">
-            <p class="text-sm font-bold text-indigo-600 mb-4 form-status" id="suggestStatus"></p>
+            <p class="text-sm font-bold mb-4 form-status" id="suggestStatus" style="color: #6a63e8;"></p>
             <div id="suggestQuestionsWrap" class="space-y-4"></div>
             <div class="mt-6 form-actions">
               <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-6 py-3 rounded-xl primary-btn" id="suggestContinueBtn" style="display:none;" onclick="submitSuggestQuestions()">Continue →</button>
             </div>
-            <div class="mt-4 bg-rose-100 text-rose-900 p-4 rounded-xl border-2 border-rose-900 font-bold text-sm form-error" id="suggestError"></div>
+            <div class="mt-4 text-rose-900 p-4 font-bold text-sm form-error" id="suggestError" style="background-color: #ffe4e6; border-radius: 12px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);"></div>
           </div>
           <div id="suggestProfileReviewSection">
             <h2 class="font-heading font-bold text-xl mb-6">Here's what we know about you</h2>
@@ -277,7 +277,7 @@
 
       <!-- STAGE QUIZ: NOT SURE? -->
       <div class="stage hidden space-y-6" id="stage-quiz">
-        <button class="text-sm font-bold text-indigo-600 hover:underline flex items-center gap-1 back-link" onclick="goStage(0)">
+        <button class="text-sm font-bold hover:underline flex items-center gap-1 back-link" style="color: #6a63e8;" onclick="goStage(0)">
           <span>←</span> Back to opportunity type
         </button>
 
@@ -287,7 +287,7 @@
           <div class="quiz-step" id="quizStep1">
             <p class="font-heading font-bold text-lg mb-4 quiz-question">Which of these sounds most like you right now?</p>
             <div class="space-y-3 quiz-options">
-              <button class="border-2 border-slate-900 w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="quizAnswer('project')">
+              <button class="w-full text-left p-4 quiz-option" style="border-radius: 16px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06); background: white; border: none;" onclick="quizAnswer('project')">
                 <strong class="block font-heading text-lg">I already have a research paper or project</strong>
                 <span class="text-sm text-slate-500">In progress or already completed</span>
               </button>
@@ -307,7 +307,7 @@
 
       <!-- STAGE 1: DESCRIBE -->
       <div class="stage hidden space-y-6" id="stage-1">
-        <button class="text-sm font-bold text-indigo-600 hover:underline flex items-center gap-1 back-link" onclick="goStage(0)">
+        <button class="text-sm font-bold hover:underline flex items-center gap-1 back-link" style="color: #6a63e8;" onclick="goStage(0)">
           <span>←</span> Back to opportunity type
         </button>
 
@@ -316,16 +316,16 @@
 
           <div class="space-y-4">
             <div>
-              <p class="text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg p-2 mb-2 progress-note" id="stage1RecallNote"></p>
+              <p class="text-xs font-bold p-2 mb-2 progress-note" id="stage1RecallNote" style="color: #6a63e8; background-color: #f5f5ff; border-radius: 8px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);"></p>
               <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2 field-label" id="stage1Label" for="pInterests">Details</label>
-              <textarea id="pInterests" class="w-full border-2 border-slate-900 rounded-xl p-4 min-h-[160px] font-medium" placeholder=""></textarea>
-              <div class="text-right text-[10px] font-bold text-slate-400 mt-1 char-count" id="charCount">0 characters — aim for at least 200</div>
+              <textarea id="pInterests" class="w-full p-4 min-h-[160px] font-medium" style="border-radius: 12px; border: none; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06); font-family: 'Poppins', sans-serif;" placeholder=""></textarea>
+              <div class="text-right text-[10px] font-bold mt-1 char-count" id="charCount" style="color: #8a93a6;">0 characters — aim for at least 200</div>
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 form-row">
               <div>
-                <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2 field-label" for="pGrade">Grade level (optional)</label>
-                <select id="pGrade" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium bg-white">
+                <label class="block font-bold text-xs uppercase tracking-wide mb-2 field-label" for="pGrade" style="color: #8a93a6;">Grade level (optional)</label>
+                <select id="pGrade" class="w-full p-3 font-medium bg-white" style="border-radius: 12px; border: none; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06); font-family: 'Poppins', sans-serif;">
                   <option value="">Prefer not to say</option>
                   <option>Middle School</option>
                   <option>9th grade</option>
@@ -335,22 +335,22 @@
                 </select>
               </div>
               <div>
-                <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2 field-label" for="pState">Home state (optional)</label>
-                <input type="text" id="pState" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="e.g. Washington">
+                <label class="block font-bold text-xs uppercase tracking-wide mb-2 field-label" for="pState" style="color: #8a93a6;">Home state (optional)</label>
+                <input type="text" id="pState" class="w-full p-3 font-medium" placeholder="e.g. Washington" style="border-radius: 12px; border: none; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06); font-family: 'Poppins', sans-serif;">
               </div>
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 form-row" id="prefsRow">
               <div>
-                <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2 field-label" for="pPrice">Cost preference</label>
-                <select id="pPrice" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium bg-white">
+                <label class="block font-bold text-xs uppercase tracking-wide mb-2 field-label" for="pPrice" style="color: #8a93a6;">Cost preference</label>
+                <select id="pPrice" class="w-full p-3 font-medium bg-white" style="border-radius: 12px; border: none; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06); font-family: 'Poppins', sans-serif;">
                   <option value="any">No preference</option>
                   <option value="free">Free only</option>
                 </select>
               </div>
               <div>
-                <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2 field-label" for="pFormat">Format preference</label>
-                <select id="pFormat" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium bg-white">
+                <label class="block font-bold text-xs uppercase tracking-wide mb-2 field-label" for="pFormat" style="color: #8a93a6;">Format preference</label>
+                <select id="pFormat" class="w-full p-3 font-medium bg-white" style="border-radius: 12px; border: none; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06); font-family: 'Poppins', sans-serif;">
                   <option value="any">No preference</option>
                   <option value="remote">Remote-friendly</option>
                   <option value="inperson">In-person only</option>
@@ -364,11 +364,11 @@
               <span class="spin hidden w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></span>
               <span id="findBtnLabel">Find matching opportunities</span>
             </button>
-            <span class="text-sm font-bold text-slate-500 form-status" id="formStatus"></span>
+            <span class="text-sm font-bold form-status" id="formStatus" style="color: #8a93a6;"></span>
           </div>
           
-          <p class="mt-4 text-xs font-bold text-indigo-600 progress-note" id="progressNote"></p>
-          <div class="mt-4 bg-rose-100 text-rose-900 p-4 rounded-xl border-2 border-rose-900 font-bold text-sm form-error" id="formError"></div>
+          <p class="mt-4 text-xs font-bold progress-note" id="progressNote" style="color: #6a63e8;"></p>
+          <div class="mt-4 text-rose-900 p-4 font-bold text-sm form-error" id="formError" style="background-color: #ffe4e6; border-radius: 12px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);"></div>
         </div>
       </div>
 
@@ -379,7 +379,7 @@
         </button>
 
         <div class="hidden flex flex-wrap items-center gap-2 mb-4" id="resultFilterWrap">
-          <span class="text-xs font-bold text-slate-500 uppercase tracking-wide mr-1">Filter:</span>
+          <span class="text-xs font-bold uppercase tracking-wide mr-1" style="color: #8a93a6;">Filter:</span>
           <div class="flex flex-wrap gap-2" id="resultFilterBar"></div>
         </div>
 

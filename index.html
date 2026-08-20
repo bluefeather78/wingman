@@ -18,7 +18,7 @@
   <!-- Shown until sign-in/registration completes; the rest of the app (#appShell) stays
        hidden until then. See loginUser()/registerUser() in script.js. -->
   <section id="page-login" class="min-h-screen flex items-center justify-center px-4">
-    <div class="bg-white p-8 sm:p-10 rounded-3xl max-w-sm w-full space-y-6 border-2 border-slate-900">
+    <div class="card-soft p-8 sm:p-10 max-w-sm w-full space-y-6">
       <div class="text-center">
         <img src="favicon.svg" alt="" class="w-16 h-16 rounded-2xl mx-auto mb-2">
         <div class="flex items-center justify-center gap-2">
@@ -195,7 +195,7 @@
       <div id="homeProfileTeaser"></div>
 
       <!-- Progress Overview -->
-      <div class="bg-white p-6 rounded-3xl space-y-4 border-2 border-slate-900" id="homeProgressCard">
+      <div class="card-soft p-6 space-y-4" id="homeProgressCard">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="font-heading font-bold text-xl">What You're Chasing</h2>
           <div class="flex flex-wrap gap-2">
@@ -208,7 +208,7 @@
       </div>
 
       <!-- Coming Up To-Do List -->
-      <div class="bg-white p-6 rounded-3xl space-y-4 border-2 border-slate-900" id="homeTodoCard" onclick="openTodoModal()">
+      <div class="card-soft p-6 space-y-4" id="homeTodoCard" onclick="openTodoModal()">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 class="font-heading font-bold text-xl">Your Next Moves</h2>
@@ -227,7 +227,7 @@
       <!-- STAGE 0: CHOOSE KIND -->
       <div class="stage active space-y-6" id="stage-0">
 
-        <div class="hero-suggest-card bg-white p-8 sm:p-10 rounded-3xl border-2 border-slate-900" id="suggestEntryCard">
+        <div class="hero-suggest-card card-soft p-8 sm:p-10" id="suggestEntryCard">
           <!-- Will be populated by JS -->
         </div>
 
@@ -238,7 +238,7 @@
         </div>
 
         <div class="hidden space-y-6" id="browsePanel">
-          <div class="bg-white p-6 sm:p-8 rounded-3xl form-card border-2 border-slate-900">
+          <div class="card-soft p-6 sm:p-8 form-card">
             <h2 class="font-heading font-bold text-xl mb-6">What kind of opportunity are you looking for?</h2>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 kind-grid" id="kindGrid"></div>
 
@@ -255,7 +255,7 @@
           <span>←</span> Back to opportunity type
         </button>
 
-        <div class="bg-white p-6 sm:p-8 rounded-3xl form-card border-2 border-slate-900">
+        <div class="card-soft p-6 sm:p-8 form-card">
           <div id="suggestProgressSection" style="display:none;">
             <p class="text-sm font-bold text-indigo-600 mb-4 form-status" id="suggestStatus"></p>
             <div id="suggestQuestionsWrap" class="space-y-4"></div>
@@ -281,7 +281,7 @@
           <span>←</span> Back to opportunity type
         </button>
 
-        <div class="bg-white p-6 sm:p-8 rounded-3xl form-card border-2 border-slate-900">
+        <div class="card-soft p-6 sm:p-8 form-card">
           <h2 class="font-heading font-bold text-xl mb-6">Let's figure out what fits</h2>
           
           <div class="quiz-step" id="quizStep1">
@@ -311,7 +311,7 @@
           <span>←</span> Back to opportunity type
         </button>
 
-        <div class="bg-white p-6 sm:p-8 rounded-3xl form-card border-2 border-slate-900">
+        <div class="card-soft p-6 sm:p-8 form-card">
           <h2 class="font-heading font-bold text-xl mb-6" id="stage1Heading">Tell us about it </h2>
 
           <div class="space-y-4">
@@ -452,7 +452,7 @@
 
       <!-- Calendar View -->
       <div id="oppViewCalendar">
-        <div class="calendar bg-white border-2 border-slate-900 p-6 rounded-3xl">
+        <div class="calendar card-soft p-6">
           <div class="space-y-5" id="calendarSwimlanes"></div>
         </div>
       </div>
@@ -495,7 +495,7 @@
       </div>
 
       <!-- Main Profile Card -->
-      <div class="bg-white rounded-[22px] p-12 space-y-6 border-2 border-slate-900" style="box-shadow: 0 2px 18px rgba(20, 20, 50, 0.06);">
+      <div class="card-soft p-12 space-y-6">
 
         <!-- Header with status badge -->
         <div class="flex flex-wrap justify-between items-start gap-4">
@@ -535,7 +535,7 @@
       </div>
 
       <!-- Chat Card (for profile editing) -->
-      <div class="bg-white p-6 rounded-3xl space-y-4 border-2 border-slate-900 hidden" id="profileChatCard">
+      <div class="card-soft p-6 space-y-4 hidden" id="profileChatCard">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="font-heading font-bold text-xl">Spill the Tea</h2>
           <button type="button" id="profileChatSpeakerBtn" class="pop-btn bg-white text-slate-900 font-bold w-10 h-10 rounded-xl text-base shrink-0 hidden" onclick="toggleVoiceOutput()" title="Turn on spoken questions">🔇</button>

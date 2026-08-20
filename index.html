@@ -287,7 +287,7 @@
           <div class="quiz-step" id="quizStep1">
             <p class="font-heading font-bold text-lg mb-4 quiz-question">Which of these sounds most like you right now?</p>
             <div class="space-y-3 quiz-options">
-              <button class="w-full text-left p-4 quiz-option" style="border-radius: 16px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06); background: white; border: none;" onclick="quizAnswer('project')">
+              <button class="w-full text-left p-4 quiz-option" style="border-radius: 16px; background-color: #eef0fb; border: none;" onclick="quizAnswer('project')">
                 <strong class="block font-heading text-lg">I already have a research paper or project</strong>
                 <span class="text-sm text-slate-500">In progress or already completed</span>
               </button>
@@ -318,14 +318,14 @@
             <div>
               <p class="text-xs font-bold p-2 mb-2 progress-note" id="stage1RecallNote" style="color: #6a63e8; background-color: #f5f5ff; border-radius: 8px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);"></p>
               <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2 field-label" id="stage1Label" for="pInterests">Details</label>
-              <textarea id="pInterests" class="w-full p-4 min-h-[160px] font-medium" style="border-radius: 12px; border: none; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06); font-family: 'Poppins', sans-serif;" placeholder=""></textarea>
+              <textarea id="pInterests" class="w-full p-4 min-h-[160px] font-medium" style="border-radius: 16px; border: none; background-color: #eef0fb; font-family: 'Poppins', sans-serif;" placeholder=""></textarea>
               <div class="text-right text-[10px] font-bold mt-1 char-count" id="charCount" style="color: #8a93a6;">0 characters — aim for at least 200</div>
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 form-row">
               <div>
                 <label class="block font-bold text-xs uppercase tracking-wide mb-2 field-label" for="pGrade" style="color: #8a93a6;">Grade level (optional)</label>
-                <select id="pGrade" class="w-full p-3 font-medium bg-white" style="border-radius: 12px; border: none; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06); font-family: 'Poppins', sans-serif;">
+                <select id="pGrade" class="w-full p-3 font-medium" style="border-radius: 16px; border: none; background-color: #eef0fb; font-family: 'Poppins', sans-serif;">
                   <option value="">Prefer not to say</option>
                   <option>Middle School</option>
                   <option>9th grade</option>
@@ -336,21 +336,21 @@
               </div>
               <div>
                 <label class="block font-bold text-xs uppercase tracking-wide mb-2 field-label" for="pState" style="color: #8a93a6;">Home state (optional)</label>
-                <input type="text" id="pState" class="w-full p-3 font-medium" placeholder="e.g. Washington" style="border-radius: 12px; border: none; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06); font-family: 'Poppins', sans-serif;">
+                <input type="text" id="pState" class="w-full p-3 font-medium" placeholder="e.g. Washington" style="border-radius: 16px; border: none; background-color: #eef0fb; font-family: 'Poppins', sans-serif;">
               </div>
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 form-row" id="prefsRow">
               <div>
                 <label class="block font-bold text-xs uppercase tracking-wide mb-2 field-label" for="pPrice" style="color: #8a93a6;">Cost preference</label>
-                <select id="pPrice" class="w-full p-3 font-medium bg-white" style="border-radius: 12px; border: none; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06); font-family: 'Poppins', sans-serif;">
+                <select id="pPrice" class="w-full p-3 font-medium" style="border-radius: 16px; border: none; background-color: #eef0fb; font-family: 'Poppins', sans-serif;">
                   <option value="any">No preference</option>
                   <option value="free">Free only</option>
                 </select>
               </div>
               <div>
                 <label class="block font-bold text-xs uppercase tracking-wide mb-2 field-label" for="pFormat" style="color: #8a93a6;">Format preference</label>
-                <select id="pFormat" class="w-full p-3 font-medium bg-white" style="border-radius: 12px; border: none; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06); font-family: 'Poppins', sans-serif;">
+                <select id="pFormat" class="w-full p-3 font-medium" style="border-radius: 16px; border: none; background-color: #eef0fb; font-family: 'Poppins', sans-serif;">
                   <option value="any">No preference</option>
                   <option value="remote">Remote-friendly</option>
                   <option value="inperson">In-person only</option>

@@ -123,9 +123,8 @@ async function syncTrackerDeadlines(){
 
         // Merge fresh deadline info into the item
         if(deadlineData.status) item.status = deadlineData.status;
-        if(deadlineData.deadlines) item.deadlines = deadlineData.deadlines;
-        if(deadlineData.opens_date) item.opensISO = deadlineData.opens_date;
-        if(deadlineData.deadline_note) item.note = deadlineData.deadline_note;
+        if(deadlineData.important_dates) item.importantDates = deadlineData.important_dates;
+        if(deadlineData.important_date_note) item.note = deadlineData.important_date_note;
         if(deadlineData.was_estimated !== undefined) item.wasEstimated = deadlineData.was_estimated;
         if(deadlineData.last_checked_at) item.lastCheckedAt = deadlineData.last_checked_at;
         updatedCount++;
@@ -478,7 +477,9 @@ function goStage(n){
   currentStage = n;
   document.querySelectorAll('.stage').forEach(s => s.classList.remove('active'));
   document.getElementById('stage-' + n).classList.add('active');
-  if(n === 0) renderSuggestEntryCard();
+  if(n === 0) {
+    renderSuggestEntryCard();
+  }
   if(n === 2) updateResultsBackLink();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -1399,6 +1400,22 @@ async function maybeAutoSuggestFreshFinds(){
   if(currentResults.length) return;
   await runFreshFindsAutoSearch();
 }
+
+// Flag to track if we're searching from "My Vibes" — enables untracked filter by default
+let searchingFromMyVibes = false;
+
+// Triggered when user clicks "See my matches" CTA in profile page
+async function startProfileBasedSearch(){
+  searchingFromMyVibes = true;
+  // Force a fresh search instead of showing stale cached results (maybeAutoSuggestFreshFinds
+  // skips re-searching when currentResults is already populated, and showPage() skips it
+  // entirely when currentStage isn't 0) — otherwise the untracked-filter default below never
+  // gets applied because resetResultFilters() never runs.
+  currentResults = [];
+  currentStage = 0;
+  showPage('wizard');
+}
+
 // Core of the profile-based auto-match — mirrors runProfileSuggestSearch()'s search logic,
 // but reports progress/errors into stage-0's suggestEntryCard (runProfileSuggestSearch
 // reports into stage-suggest's own status/error elements, which aren't visible here since
@@ -1801,7 +1818,7 @@ function resultCardHTML(r){
   `;
 }
 // ---------- Result filters (type / cost / season / format) ----------
-let resultFilters = { type: new Set(), price: new Set(), location: new Set(), season: new Set() };
+let resultFilters = { type: new Set(), price: new Set(), location: new Set(), season: new Set(), untracked: false };
 let resultVisibleCount = 10;
 const RESULT_FILTER_FIELDS = [
   { key: 'type', field: 'type', label: 'Type' },
@@ -1810,27 +1827,45 @@ const RESULT_FILTER_FIELDS = [
   { key: 'location', field: 'location', label: 'Format' }
 ];
 function resetResultFilters(){
-  Object.values(resultFilters).forEach(s => s.clear());
+  Object.values(resultFilters).forEach(s => { if(s instanceof Set) s.clear(); });
+  resultFilters.untracked = searchingFromMyVibes; // Enable untracked filter by default when from My Vibes
+  searchingFromMyVibes = false; // Reset flag after using it
   resultVisibleCount = 10;
 }
 function filterResultList(list){
-  return list.filter(r => RESULT_FILTER_FIELDS.every(f => {
+  let filtered = list.filter(r => RESULT_FILTER_FIELDS.every(f => {
     const set = resultFilters[f.key];
     return !set.size || set.has(r.opp[f.field]);
   }));
+  // Apply untracked filter if enabled
+  if(resultFilters.untracked){
+    filtered = filtered.filter(r => !findTrackedItem(r.opp));
+  }
+  return filtered;
 }
 function renderResultFilterBar(list){
   const wrap = document.getElementById('resultFilterWrap');
   const bar = document.getElementById('resultFilterBar');
   if(!wrap || !bar) return;
   let anyFacet = false;
-  bar.innerHTML = RESULT_FILTER_FIELDS.map(f => {
+  let html = '';
+
+  // Add untracked filter toggle
+  html += `
+    <label class="flex items-center gap-2 text-xs font-bold py-1 px-3 bg-white rounded-xl border-2 border-slate-900 cursor-pointer">
+      <input type="checkbox" ${resultFilters.untracked ? 'checked' : ''} onchange="toggleUntrackedFilter()">
+      Only untracked
+    </label>
+  `;
+
+  // Add other filters
+  RESULT_FILTER_FIELDS.forEach(f => {
     const values = [...new Set(list.map(r => r.opp[f.field]).filter(Boolean))].sort();
-    if(values.length < 2) return '';
+    if(values.length < 2) return;
     anyFacet = true;
     const panelId = 'resultFilterPanel_' + f.key;
     const activeCount = resultFilters[f.key].size;
-    return `
+    html += `
       <div class="relative nav-dropdown">
         <button class="pop-btn bg-white font-bold text-xs px-3 py-2 rounded-xl flex items-center gap-1" onclick="toggleNavDropdownPanel('${panelId}')">
           <span>▾</span> ${f.label}${activeCount ? ` (${activeCount})` : ''}
@@ -1847,14 +1882,21 @@ function renderResultFilterBar(list){
         </div>
       </div>
     `;
-  }).join('');
-  const anyActive = Object.values(resultFilters).some(s => s.size);
+  });
+
+  bar.innerHTML = html;
+  const anyActive = Object.values(resultFilters).some(s => s instanceof Set ? s.size : s);
   bar.insertAdjacentHTML('beforeend', anyActive ? `<button class="text-xs font-bold text-indigo-600 hover:underline" onclick="clearResultFilters()">Clear filters</button>` : '');
-  wrap.classList.toggle('hidden', !anyFacet);
+  wrap.classList.toggle('hidden', !anyFacet && !resultFilters.untracked);
 }
 function toggleResultFilter(key, value){
   const set = resultFilters[key];
   if(set.has(value)) set.delete(value); else set.add(value);
+  resultVisibleCount = 10;
+  renderResults();
+}
+function toggleUntrackedFilter(){
+  resultFilters.untracked = !resultFilters.untracked;
   resultVisibleCount = 10;
   renderResults();
 }
@@ -1942,46 +1984,57 @@ async function fetchDeadlineCheck(oppId){
   }
 }
 // Overlays a fetchDeadlineCheck() result onto an extractTrackerInfo()-shaped info object,
-// in place — the shared/cached deadline check is authoritative for status/deadlines/opens/
+// in place — the shared/cached deadline check is authoritative for status/important_dates/
 // was_estimated when present, since (unlike extractTrackerInfo's own per-call guess) it's
 // verified server-side and shared across every user tracking the same opportunity.
 function applyDeadlineCheckToInfo(info, deadlineInfo){
   if(!deadlineInfo) return;
   if(['running','not_running','unknown'].includes(deadlineInfo.status)) info.status = deadlineInfo.status;
-  if(Array.isArray(deadlineInfo.deadlines) && deadlineInfo.deadlines.length) info.deadlines = deadlineInfo.deadlines;
-  if(deadlineInfo.opens_date) info.opens_iso = deadlineInfo.opens_date;
+  if(Array.isArray(deadlineInfo.important_dates) && deadlineInfo.important_dates.length) info.important_dates = deadlineInfo.important_dates;
   if(typeof deadlineInfo.was_estimated === 'boolean') info.was_estimated = deadlineInfo.was_estimated;
-  if(deadlineInfo.deadline_note) info.note = deadlineInfo.deadline_note;
+  if(deadlineInfo.important_date_note) info.note = deadlineInfo.important_date_note;
 }
 
 async function extractTrackerInfo(opp){
   const today = todayLabel();
+  const thisYear = new Date().getFullYear();
+  const nextYear = thisYear + 1;
   const root = baseDomain(opp.url);
   const system = `You extract structured tracking data for an extracurricular opportunity (program, internship, competition, or research position), for a high-school student's tracker. Today's date is ${today}.
 
-Search thoroughly with web_search:
-- Start with the given URL.
-- If that page's deadline/cycle information looks stale (from a past year, or missing entirely), also search the organization's base website (e.g. ${root}) for a more current version of this program's page — specific program URLs sometimes point to outdated or archived pages while the org's current site has the live one.
-- Look explicitly for language indicating the program is discontinued, paused, cancelled, or not accepting applications this cycle (e.g. "program has ended," "not running this year," "no longer offered"). If you find this, set status to "not_running" and explain briefly in note — do not guess a future deadline for a program you've determined isn't running.
+YOU MUST use web_search to gather current information before answering — do not rely on training data alone.
 
-Multiple deadline milestones — this matters a lot:
-- Many programs have MORE THAN ONE deadline — e.g. an early-bird/early registration deadline well before a later regular or final deadline (AMC 12's early-bird registration deadline is a good example: it lands weeks before the exam itself). Find and list EVERY distinct deadline milestone you can, each with a short specific label (e.g. "Early Bird Registration", "Regular Registration", "Final Deadline", "Application Deadline", "Late Registration") and its own date, in chronological order. Do not collapse them into just one "final" date — the earliest one is often the one a student needs to act on first.
-- If there's genuinely only one deadline, list just that one entry.
+GOAL: capture as many pertinent dates as you can find or reasonably estimate. Estimating from a prior cycle is expected and encouraged, not a fallback of last resort — a well-justified estimate is always better than an empty field.
 
-Registration/application OPENS date — pay particular, deliberate attention to this:
-- Actively search for the date applications/registration OPEN, not just when they close — this is often the single most useful date for a student trying to plan ahead, and it's easy to miss because it's mentioned less prominently than the deadline. Check the program page, past years' timelines, and any "key dates" or "timeline" section specifically for an opens/launch date.
-- If you can't find an explicit opens date but the program is recurring, ESTIMATE it from the prior cycle's opens date the same way you'd estimate a deadline (e.g. applications opened January 10 last cycle, program is annual → estimate a similar date this cycle) and set was_estimated true if any part of the dates you're returning is estimated.
-- Only leave opens_iso null if you genuinely found no opens date and have no reasonable prior-cycle basis to estimate one — don't skip searching for it just because you already found a deadline.
+SEARCH STEPS (do all of these, in order):
+1. Start with the given URL.
+2. Search "site:${root} ${nextYear}" and "site:${root} ${thisYear}" for a current/upcoming-cycle page — orgs often publish a separate year-specific page distinct from the evergreen landing page, which frequently omits the specific dates you actually need.
+3. ALWAYS ALSO search for the most recent PAST cycle (e.g. "site:${root} ${thisYear} deadline" and, using the year before ${thisYear} — compute it yourself from ${today} — "site:${root} <that year>"), even if step 2 succeeded. This is your estimation basis and is mandatory, not optional: you need it either to confirm the pattern behind a found date or to construct an estimate when nothing current is posted.
+4. Search "site:${root} FAQ", "how to apply", "key dates", "deadlines", "timeline" and check the best hits — specific program URLs sometimes point to outdated or archived pages while the org's current site has the live one.
+5. Look explicitly for language indicating the program is discontinued, paused, cancelled, or not accepting applications this cycle (e.g. "program has ended," "not running this year," "no longer offered"). If you find this, set status to "not_running" and explain briefly in note — do not estimate dates for a program you've determined isn't running.
 
-Date reasoning:
-- If every deadline you found has already passed relative to today, and the program appears to run on a regular annual/recurring cycle, ESTIMATE next cycle's dates from the prior cycle's timing (e.g. last deadline was March 15 2025, program is annual → estimate a 2026 date near March 15, or later if you can't confirm the exact next date). Set was_estimated to true and say what it's based on in note (e.g. "Estimated from the 2025 cycle; 2027 dates not yet posted").
-- Only mark status "running" if you found real evidence the program is currently active or has a future confirmed/estimated date. Use "unknown" if you found genuinely nothing usable after searching both the URL and the base site.
-- Never invent a specific date with no basis — every date must come from something you actually found, whether confirmed or reasonably estimated from a real prior cycle.
+ESTIMATION LOGIC (single source of truth — apply in this order):
+a. Found explicit current/upcoming-cycle dates → use them, was_estimated:false for those entries.
+b. No current-cycle dates found, but you found last cycle's real dates AND the program looks recurring (no evidence it's discontinued) → roll each date forward by ~1 year (or to the next plausible occurrence), was_estimated:true, status:"running". This is the expected path when a new cycle's page isn't live yet — use it; don't default to "unknown."
+c. Found only a vague pattern (e.g. "opens in fall," "rolling through spring") → construct a concrete estimated date from it (pick a reasonable specific day within the stated window), was_estimated:true, explain the basis briefly in note.
+d. Found genuinely nothing current AND nothing from any prior cycle after completing all search steps above → status:"unknown". This should be rare — only after step 3 has actually been tried and failed.
+
+Important dates — this matters a lot; capture EVERY pertinent date, not just a single "deadline":
+- This includes (when they exist or can be estimated): registration/application opens, early-bird deadline, regular/final deadline, notification/decision date, and event dates (e.g. a conference or symposium's actual start and end dates) — anything relevant in between. Many programs have MORE THAN ONE deadline — e.g. an early-bird/early registration deadline well before a later regular or final deadline (AMC 12's early-bird registration deadline is a good example: it lands weeks before the exam itself). Find and list EVERY distinct date you can, each with a short specific label (e.g. "Early Bird Registration", "Regular Registration", "Final Deadline", "Notification Date", "Conference Begins", "Conference Ends") and a "type" of "opens", "deadline", "event_start", "event_end", or "other", in chronological order. Do not collapse them into just one "final" date — the earliest one is often the one a student needs to act on first.
+- Actively search for the OPENS date specifically, not just the close — this is the field most often missed, and it's often the single most useful date for a student trying to plan ahead. Estimate it from the prior cycle if not explicitly posted (was_estimated:true).
+- Every date you reason about belongs in "important_dates", not just in "note". If you have enough basis to write a date into "note" (e.g. "registration typically opens Sept and closes Nov"), you have enough basis to ALSO add the matching structured entry to "important_dates" (was_estimated:true) — never describe a date in "note" prose without adding it. "note" is for a short caveat/basis explanation, not a place to put date information that should have been structured.
+- Only omit a date category if you found no information for it AND no prior-cycle basis to estimate it.
+- If there's genuinely only one date, list just that one entry.
+
+SELF-CHECK before responding:
+- Every date in "important_dates" must be on or after today (${today}). If any is in the past, roll it forward to its next real occurrence (was_estimated:true) or drop it — never submit a past date.
+- Every specific date/estimate mentioned in "note" must have a matching structured entry in "important_dates", and vice versa — the two must agree.
+- Prefer including a reasonably-estimated date over omitting it. Only leave a category out if step (d) above genuinely applies.
 
 Action items — think through what a student would actually need to DO to meet the nearest deadline, not just the deadline itself: e.g. requesting a recommendation letter, drafting an essay, gathering transcripts, preparing a portfolio or writing sample, getting parent/guardian sign-off, registering for a required test. Infer these from the requirements you find and from what's typical for this type of opportunity. Keep every item tactical and administrative — the logistics of applying, never advice about the student's own project or how to approach its substance, since you have no way of knowing the specifics of their work and must not assume or invent any. List 3-5 short, concrete action items (skip this if status is not_running).
 
-Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, matching exactly this schema: {"status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format, separated by ' · '","fit":"one sentence, under 25 words, on what this actually involves","note":"one sentence, under 25 words: status/estimate basis/caveat","noteType":"good, plain, or flag — use flag if not_running or a major caveat","opens_iso":"YYYY-MM-DD when applications open, or null if unknown","deadlines":[{"label":"short specific label, e.g. 'Early Bird Registration'","date_iso":"YYYY-MM-DD"}],"deadline_label":"short text like ROLLING or TBA — only used when the deadlines array is empty","was_estimated":true or false,"requirements":[{"date":"short date text","text":"under 12 words — what's needed, not a repeat of a deadlines entry"}],"apply_url":"the best URL for actually applying","apply_label":"short button label like 'Apply now'","calendar_events":[{"date":"YYYY-MM-DD","text":"under 8 words","type":"deadline, opens, notify, or conference"}],"action_items":["short concrete task, under 10 words", "..."]}. Stay well within a 1000-token response: at most 3 deadlines entries, 3 requirements items, 3 calendar_events, and 5 action_items. Never truncate mid-value or leave the JSON unclosed — shorten or drop optional arrays first, but keep at least the earliest deadline if one exists.`;
-  const userContent = `Opportunity: ${opp.name} (${opp.org})\nURL: ${opp.url}\nKnown info: ${opp.summary}\n\nFetch this URL (and the base site if needed), and extract current tracking details per the schema. Look carefully for multiple deadline milestones (early bird vs. regular, etc.) — don't just report the final one.`;
+Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, matching exactly this schema: {"status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format, separated by ' · '","fit":"one sentence, under 25 words, on what this actually involves","note":"one sentence, under 25 words: status/estimate basis/caveat","noteType":"good, plain, or flag — use flag if not_running or a major caveat","important_dates":[{"label":"short specific label, e.g. 'Early Bird Registration'","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other"}],"deadline_label":"short text like ROLLING or TBA — only used when the important_dates array is empty","was_estimated":true or false,"requirements":[{"date":"short date text","text":"under 12 words — what's needed, not a repeat of an important_dates entry"}],"apply_url":"the best URL for actually applying","apply_label":"short button label like 'Apply now'","calendar_events":[{"date":"YYYY-MM-DD","text":"under 8 words","type":"deadline, opens, notify, or conference"}],"action_items":["short concrete task, under 10 words", "..."]}. Stay well within a 1000-token response: at most 4 important_dates entries, 3 requirements items, 3 calendar_events, and 5 action_items. Never truncate mid-value or leave the JSON unclosed — shorten or drop optional arrays first, but keep at least the earliest date if one exists.`;
+  const userContent = `Opportunity: ${opp.name} (${opp.org})\nURL: ${opp.url}\nKnown info: ${opp.summary}\n\nFetch this URL (and the base site if needed), and extract current tracking details per the schema. Look carefully for every relevant date — registration open/close, event dates, notifications — not just the final deadline.`;
   const raw = await callGemini(system, userContent, true);
   return extractJSON(raw);
 }
@@ -2055,6 +2108,22 @@ async function loadTrackerData(){
       // Migration: older saved items predate the action-items feature — default to empty.
       ALL_BUCKETS.forEach(b => trackerData[b].forEach(item => {
         if(!Array.isArray(item.actionItems)) item.actionItems = [];
+      }));
+      // Migration: older saved items predate the unified importantDates field — they still
+      // carry the old separate opensISO + deadlines shape. Fold both into a single
+      // importantDates list (tagging the old opensISO as type 'opens', old deadlines entries
+      // as type 'deadline') so every downstream helper (getDisplayMilestones, earliestUpcoming,
+      // computeProgressStatus, etc.) only ever has to read one field.
+      ALL_BUCKETS.forEach(b => trackerData[b].forEach(item => {
+        if(Array.isArray(item.importantDates)) return;
+        const dates = [];
+        if(item.opensISO) dates.push({ dateISO: item.opensISO, label: 'Opens', type: 'opens' });
+        (item.deadlines || []).forEach(d => {
+          if(d && d.dateISO) dates.push({ dateISO: d.dateISO, label: d.label || 'Deadline', type: 'deadline' });
+        });
+        item.importantDates = dates;
+        delete item.opensISO;
+        delete item.deadlines;
       }));
     }
   }catch(e){ /* nothing saved yet, or storage unavailable — start fresh */ }
@@ -2182,17 +2251,37 @@ function shortDate(iso){
 // the final/regular one. Falls back to the latest known date if everything
 // has already passed.
 function earliestUpcoming(item){
-  const candidates = [];
-  if(item.opensISO) candidates.push({ date: item.opensISO, label: 'Opens', kind: 'opens' });
-  (item.deadlines || []).forEach(d => {
-    if(d.dateISO) candidates.push({ date: d.dateISO, label: d.label, kind: 'deadline' });
-  });
+  const candidates = (item.importantDates || [])
+    .filter(d => d.dateISO)
+    .map(d => ({ date: d.dateISO, label: d.label, kind: d.type || 'deadline' }));
   if(!candidates.length) return null;
   const future = candidates.filter(c => daysUntil(c.date) >= 0);
   future.sort((a, b) => a.date.localeCompare(b.date));
   if(future.length) return future[0];
   candidates.sort((a, b) => a.date.localeCompare(b.date));
   return candidates[candidates.length - 1];
+}
+// Single source of truth for "every date to display" on an item — used by both the
+// Tracker's list-view card (trackerCardHTML) and the calendar swimlanes
+// (deriveKeyDatesForItems), which previously each read item.opensISO/item.deadlines
+// independently and could disagree. Now both read the single item.importantDates list
+// (every pertinent date — opens, deadline, event start/end, etc. — each tagged with a
+// "type"). Dedupes exact (date, label) duplicates, sorts chronologically, and flags each
+// entry `isPast` (rather than silently dropping it) so a stale/un-refreshed date is
+// visually distinguishable instead of displaying identically to a real upcoming one.
+function getDisplayMilestones(item){
+  const seen = new Set();
+  const milestones = [];
+  (item.importantDates || []).forEach(d => {
+    if(!d.dateISO) return;
+    const key = d.dateISO + '|' + (d.label || '');
+    if(seen.has(key)) return;
+    seen.add(key);
+    milestones.push({ date: d.dateISO, label: d.label || 'Date', type: d.type || 'deadline' });
+  });
+  milestones.sort((a, b) => a.date.localeCompare(b.date));
+  milestones.forEach(m => { m.isPast = daysUntil(m.date) < 0; });
+  return milestones;
 }
 // System-controlled progress status — derived from the item's known milestones, not
 // user-editable. The "first step" is whichever comes earliest (the opens/registration
@@ -2208,9 +2297,7 @@ const PROGRESS_STATUS_LABEL = { not_started: 'Future Event', in_progress: 'Happe
 const ACTION_ITEM_STATUS_LABEL = { not_started: 'Not Started', in_progress: 'In Progress', completed: 'Completed' };
 function computeProgressStatus(item){
   if(item.status === 'not_running') return 'completed';
-  const dates = [];
-  if(item.opensISO) dates.push(item.opensISO);
-  (item.deadlines || []).forEach(d => { if(d.dateISO) dates.push(d.dateISO); });
+  const dates = (item.importantDates || []).map(d => d.dateISO).filter(Boolean);
   if(!dates.length) return 'not_started';
   dates.sort();
   const firstStep = dates[0];
@@ -2344,9 +2431,14 @@ function trackerCardHTML(item, sourceLabel){
   const estimatedNote = item.wasEstimated && item.status !== 'not_running'
     ? `<div class="bg-yellow-200 border-2 border-slate-900 rounded-xl px-4 py-2.5"><p class="text-xs font-bold text-amber-800">Predicted dates from past cycle.</p></div>`
     : '';
-  const deadlineRows = (item.deadlines && item.deadlines.length)
+  const milestones = getDisplayMilestones(item);
+  const allMilestonesPast = milestones.length > 0 && milestones.every(m => m.isPast);
+  const staleWarning = allMilestonesPast
+    ? `<div class="bg-rose-100 border-2 border-slate-900 rounded-xl px-4 py-2.5"><p class="text-xs font-bold text-rose-800">⚠ No confirmed upcoming date — every date shown below is from a past cycle. Check for updates.</p></div>`
+    : '';
+  const deadlineRows = milestones.length
     ? `<div class="space-y-2">
-         ${item.deadlines.map(d => `<div class="flex items-center gap-3 text-xs font-bold text-slate-800"><span class="bg-white border-2 border-slate-900 px-2.5 py-1 rounded-lg uppercase tracking-wide shrink-0">${shortDate(d.dateISO)}</span> ${d.label}</div>`).join('')}
+         ${milestones.map(m => `<div class="flex items-center gap-3 text-xs font-bold ${m.isPast ? 'text-slate-400' : 'text-slate-800'}"><span class="bg-white border-2 ${m.isPast ? 'border-slate-300' : 'border-slate-900'} px-2.5 py-1 rounded-lg uppercase tracking-wide shrink-0">${shortDate(m.date)}</span> ${m.label}${m.isPast ? ' <span class="italic normal-case font-medium">(passed)</span>' : ''}</div>`).join('')}
        </div>`
     : '';
   const isSaved = !!trackerSavedState[item.id];
@@ -2378,6 +2470,7 @@ function trackerCardHTML(item, sourceLabel){
       </div>
 
       ${estimatedNote}
+      ${staleWarning}
       ${deadlineRows}
 
       <details class="text-xs text-slate-500 cursor-pointer">
@@ -2413,14 +2506,15 @@ function sortedByTrackerDeadline(list){
 }
 
 // ---------- Calendar (derived live from each item's deadlines/opens — no separate cache to go stale) ----------
+// Reuses getDisplayMilestones() (same helper the list-view card uses) so the calendar can
+// never show a different set of dates than the Tracker cards for the same item.
 function deriveKeyDatesForItems(items){
   const dates = [];
   items.forEach(item => {
     if(item.status === 'not_running') return;
     const shortLabel = item.name.length > 22 ? item.name.slice(0, 20) + '…' : item.name;
-    if(item.opensISO){ dates.push({ date: item.opensISO, label: shortLabel, venueId: item.id, text: 'Opens', type: 'opens' }); }
-    (item.deadlines || []).forEach(d => {
-      if(d.dateISO) dates.push({ date: d.dateISO, label: shortLabel, venueId: item.id, text: d.label, type: 'deadline' });
+    getDisplayMilestones(item).forEach(m => {
+      dates.push({ date: m.date, label: shortLabel, venueId: item.id, text: m.label, type: m.type, isPast: m.isPast });
     });
   });
   return dates;
@@ -2434,11 +2528,11 @@ function monthCardHTML(ym, entries, isCurrent, colorMap, isNext){
         ${entries.map(e => {
           const c = colorMap.get(e.venueId) || hashColor(e.venueId);
           return `
-          <div class="month-entry" style="background:${c.bg};border-left-color:${c.border};cursor:pointer;" onclick="goToTrackerCard('${e.venueId}')" title="Jump to ${e.label}">
+          <div class="month-entry${e.isPast ? ' month-entry-past' : ''}" style="background:${c.bg};border-left-color:${c.border};cursor:pointer;" onclick="goToTrackerCard('${e.venueId}')" title="${e.isPast ? 'This date has passed — likely a stale/un-refreshed cycle. ' : ''}Jump to ${e.label}">
             <span class="day" style="color:${c.text};">${parseInt(e.date.slice(8,10),10)}</span>
             <span class="entry-text" style="color:${c.text};">
               <strong style="color:${c.text};">${e.label}</strong> — ${e.text}
-              <span class="entry-type">${e.type}</span>
+              <span class="entry-type">${e.type}${e.isPast ? ' · passed' : ''}</span>
             </span>
           </div>
         `;}).join('')}
@@ -2953,12 +3047,11 @@ async function buildTracker(){
           fit: info.fit || opp.summary,
           note: info.note || 'Details from the opportunities database — confirm on the official site.',
           noteType: info.status === 'not_running' ? 'flag' : (info.noteType || 'plain'),
-          deadlines: Array.isArray(info.deadlines)
-            ? info.deadlines.filter(d => d && d.date_iso).map(d => ({ label: d.label || 'Deadline', dateISO: d.date_iso })).sort((a, b) => a.dateISO.localeCompare(b.dateISO))
+          importantDates: Array.isArray(info.important_dates)
+            ? info.important_dates.filter(d => d && d.date_iso).map(d => ({ label: d.label || 'Date', dateISO: d.date_iso, type: d.type || 'deadline' })).sort((a, b) => a.dateISO.localeCompare(b.dateISO))
             : [],
           deadlineLabel: info.deadline_label || 'CHECK SITE',
           wasEstimated: !!info.was_estimated,
-          opensISO: info.opens_iso || null,
           requirements: Array.isArray(info.requirements) ? info.requirements.slice(0, 5) : null,
           applyUrl: info.apply_url || opp.url,
           applyLabel: info.apply_label || 'Apply / learn more',
@@ -2979,7 +3072,7 @@ async function buildTracker(){
           fit: opp.summary,
           note: 'Live details couldn\'t be fetched — showing database info only. Check the official site directly.',
           noteType: 'flag',
-          deadlines: [], deadlineLabel: 'CHECK SITE', wasEstimated: false, opensISO: null,
+          importantDates: [], deadlineLabel: 'CHECK SITE', wasEstimated: false,
           requirements: null, applyUrl: opp.url, applyLabel: 'Visit site', actionItems: []
         });
         newlyAddedTrackerIds.add(opp.id);
@@ -3041,21 +3134,20 @@ async function refreshTracker(){
       // every tracked item on every click.
       applyDeadlineCheckToInfo(info, await fetchDeadlineCheck(item.id));
       const oldStatus = item.status;
-      const oldDeadlinesKey = JSON.stringify(item.deadlines);
+      const oldImportantDatesKey = JSON.stringify(item.importantDates);
       item.status = ['running','not_running','unknown'].includes(info.status) ? info.status : item.status;
       item.meta = info.meta || item.meta;
       item.fit = info.fit || item.fit;
       item.note = info.note || item.note;
       item.noteType = item.status === 'not_running' ? 'flag' : (info.noteType || item.noteType);
-      if(Array.isArray(info.deadlines)){
-        item.deadlines = info.deadlines.filter(d => d && d.date_iso).map(d => ({ label: d.label || 'Deadline', dateISO: d.date_iso })).sort((a, b) => a.dateISO.localeCompare(b.dateISO));
+      if(Array.isArray(info.important_dates)){
+        item.importantDates = info.important_dates.filter(d => d && d.date_iso).map(d => ({ label: d.label || 'Date', dateISO: d.date_iso, type: d.type || 'deadline' })).sort((a, b) => a.dateISO.localeCompare(b.dateISO));
       }
       item.wasEstimated = !!info.was_estimated;
-      item.opensISO = info.opens_iso || item.opensISO;
       if(Array.isArray(info.requirements)) item.requirements = info.requirements.slice(0, 5);
       item.applyUrl = info.apply_url || item.applyUrl;
       item.applyLabel = info.apply_label || item.applyLabel;
-      if(oldStatus !== item.status || JSON.stringify(item.deadlines) !== oldDeadlinesKey){
+      if(oldStatus !== item.status || JSON.stringify(item.importantDates) !== oldImportantDatesKey){
         changes.push(`<strong>${item.name}</strong>: updated`);
       }
     }catch(err){
@@ -3097,17 +3189,21 @@ function slugifyTracker(text, bucket){
 async function trackerIntakeExtractAndClassify(url, notes){
   const today = todayLabel();
   const root = baseDomain(url);
+  const thisYear = new Date().getFullYear();
+  const nextYear = thisYear + 1;
   const system = `You classify and extract structured tracking data for a student extracurricular opportunity from a URL, for a high-school tracker. Today's date is ${today}.
 
 First determine 'section': 'conferences' for academic conferences/workshops that review and present papers, 'journals' for academic/student journals with manuscript submission, 'researchCompetitions' for science fairs, app challenges, and project/research-based contests where a project or paper is submitted and judged, 'pureCompetitions' for skills/knowledge tests with no project submitted (olympiads, quiz competitions, exams), 'internships' for hands-on mentored work positions with a lab, company, or organization, 'summerPrograms' for camps, enrichment programs, or coursework.
 
-Search thoroughly with web_search: start with the given URL; if stale or missing, also check the base site (${root}). Look for language indicating the program is discontinued/not running this cycle — set status to "not_running" if so. Find EVERY distinct deadline milestone (e.g. early-bird vs. regular), each with a short label, in chronological order. If every deadline found has passed and the program is recurring, estimate the next cycle's date and set was_estimated true. Never invent a date with no basis.
+Search thoroughly with web_search, in order: (1) the given URL; (2) "site:${root} ${nextYear}" / "site:${root} ${thisYear}" for a current/upcoming-cycle page (orgs often publish a year-specific page separate from the evergreen landing page); (3) ALWAYS ALSO search the most recent PAST cycle (e.g. "site:${root} ${thisYear} deadline" and the year before that, computed from ${today}) even if step 2 succeeded — this is your mandatory estimation basis; (4) "site:${root} FAQ"/"key dates"/"timeline" for the base site if still stale or missing. Look for language indicating the program is discontinued/not running this cycle — set status to "not_running" if so, and don't estimate dates for it.
 
-Pay particular, deliberate attention to the registration/application OPENS date, not just the deadline — actively search for it (check any "key dates" or "timeline" section), and if not found but the program is recurring, estimate it from the prior cycle's opens date the same way you'd estimate a deadline. Only leave opens_iso null if there's genuinely no basis to find or estimate one.
+Estimation is expected and encouraged, not a last resort — apply in order: (a) explicit current/upcoming-cycle dates found → use them, was_estimated:false; (b) no current-cycle dates but real prior-cycle dates found and the program looks recurring → roll each forward ~1 year, was_estimated:true, status:"running" (the expected path when a new cycle's page isn't live yet — don't default to "unknown"); (c) only a vague pattern found (e.g. "opens in fall") → construct a concrete estimated date from it, was_estimated:true, explain briefly in note; (d) genuinely nothing current or prior-cycle found after trying step 3 → status:"unknown" (should be rare).
+
+Find EVERY pertinent date — registration opens, early-bird vs. regular deadline, notification date, and event/conference start-end dates — each with a short label and a "type" of "opens", "deadline", "event_start", "event_end", or "other", in chronological order. Pay particular, deliberate attention to the registration/application OPENS date, not just the deadline — this is the field most often missed. Only omit a date category if there's genuinely no basis to find or estimate one (per step d above). Every date you have enough basis to mention in "note" (e.g. "registration typically opens Sept") must ALSO appear as a matching "important_dates" entry (was_estimated:true) — never describe date info in "note" without a corresponding structured entry, and vice versa. Prefer including a reasonably-estimated date over omitting it.
 
 Also think through 3-5 short, concrete action items a student would need to do to meet the nearest deadline (e.g. request a recommendation letter, draft an essay, gather transcripts) — infer these from requirements and what's typical for this type of opportunity. Keep every item tactical and administrative — the logistics of applying, never advice about the student's own project or its substance, since you don't know the specifics of their work and must not assume or invent any. Skip if status is not_running.
 
-Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","opens_iso":"YYYY-MM-DD or null","deadlines":[{"label":"short label","date_iso":"YYYY-MM-DD"}],"deadline_label":"short text like ROLLING, only if deadlines is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null","action_items":["short concrete task, under 10 words", "..."]}. Stay well within 1000 tokens: at most 3 deadlines, 3 requirements, and 5 action_items.`;
+Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","important_dates":[{"label":"short label","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other"}],"deadline_label":"short text like ROLLING, only if important_dates is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null","action_items":["short concrete task, under 10 words", "..."]}. Stay well within 1000 tokens: at most 4 important_dates, 3 requirements, and 5 action_items.`;
   const userContent = `URL: ${url}\n${notes ? `Extra context: ${notes}\n` : ''}\nFetch this URL, classify it, and extract tracking details per the schema.`;
   const raw = await callGemini(system, userContent, true);
   return extractJSON(raw);
@@ -3147,12 +3243,11 @@ async function trackerAnalyzeAndAdd(){
       fit: extracted.fit || '',
       note: extracted.note || 'Added manually via URL.',
       noteType: extracted.status === 'not_running' ? 'flag' : (extracted.noteType || 'plain'),
-      deadlines: Array.isArray(extracted.deadlines)
-        ? extracted.deadlines.filter(d => d && d.date_iso).map(d => ({ label: d.label || 'Deadline', dateISO: d.date_iso })).sort((a, b) => a.dateISO.localeCompare(b.dateISO))
+      importantDates: Array.isArray(extracted.important_dates)
+        ? extracted.important_dates.filter(d => d && d.date_iso).map(d => ({ label: d.label || 'Date', dateISO: d.date_iso, type: d.type || 'deadline' })).sort((a, b) => a.dateISO.localeCompare(b.dateISO))
         : [],
       deadlineLabel: extracted.deadline_label || 'CHECK SITE',
       wasEstimated: !!extracted.was_estimated,
-      opensISO: extracted.opens_iso || null,
       requirements: Array.isArray(extracted.requirements) ? extracted.requirements.slice(0, 5) : null,
       applyUrl: extracted.apply_url || url,
       applyLabel: extracted.apply_label || 'Apply / learn more',

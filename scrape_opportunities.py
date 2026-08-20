@@ -94,7 +94,7 @@ SEATTLE_SEEDS = [
     ("Program", "Seattle-area farmers markets and small local businesses (Pike Place Market, "
                  "neighborhood farmers markets, local makers/shops) that could let a motivated high schooler set up "
                  "a booth, run a project, or gain real hands-on experience — even if they don't explicitly market "
-                 "this to students. Explain concretely, in the description, how a specific kind of student project "
+                 "this to students. Explain concretely, in the summary, how a specific kind of student project "
                  "could actually use this."),
     ("Program", "Seattle Parks & Recreation youth boards, teen programs, or seasonal youth "
                  "employment/leadership opportunities"),
@@ -125,8 +125,9 @@ anything that looks defunct, or where you can't tell if it's still running.
 
 Respond with ONLY a raw JSON array, no markdown fences, no preamble, no text after the array. Each \
 element must match exactly this schema (use null for any field you don't have real evidence for):
-{{"name": "...", "org": "...", "url": "...", "summary": "1-2 sentences, under 40 words", \
-"description": "2-4 sentences with more detail", "subject": "one of: {subjects}", \
+{{"name": "...", "org": "...", "url": "...", "summary": "2-4 sentences covering what it is plus any \
+useful detail (this is the only descriptive text shown to students, so don't be overly terse)", \
+"subject": "one of: {subjects}", \
 "type": "one of: Program, Internship, Competition, Research, Volunteer, Journal, Conference", \
 "price": "Free, Paid, or null", "cost_detail": "short freeform cost note, or null", \
 "state": "2-letter US state code if location-specific, else null", \
@@ -135,7 +136,6 @@ element must match exactly this schema (use null for any field you don't have re
 "season": "one of Summer, Year-Long, Spring, Fall, Winter, or null", \
 "grade_min": integer or null, "grade_max": integer or null, \
 "eligibility": "short freeform eligibility note, or null", \
-"deadline_hint": "short freeform note on deadline/timing if you saw one — not authoritative, just a hint, or null", \
 "subject_tags": ["short tag", "..."]}}"""
 
 SEATTLE_ADDENDUM = """
@@ -144,7 +144,7 @@ This is a hyperlocal, creative-reasoning sweep: the org itself may not describe 
 opportunity" at all. Your job is to actively reason about whether a motivated high schooler could turn it \
 into one — e.g. a student building an app could use a local farmers market booth to get beta customers. \
 That's just one example, not a template — do not force every result into that same framing. In the \
-"description" field, concretely explain *why and how* a high schooler could actually use this one, specific \
+"summary" field, concretely explain *why and how* a high schooler could actually use this one, specific \
 to what you found, not generic filler. If you can't come up with a genuinely concrete, specific reason, leave \
 the opportunity out."""
 
@@ -199,12 +199,10 @@ def build_row(candidate, seed_category, mint_id, source):
         "intl": clean_value(candidate.get("intl"), VALID_INTL),
         "season": clean_value(candidate.get("season"), VALID_SEASON),
         "category": seed_category,
-        "description": candidate.get("description"),
         "eligibility": candidate.get("eligibility"),
         "grade_min": candidate.get("grade_min") if isinstance(candidate.get("grade_min"), int) else None,
         "grade_max": candidate.get("grade_max") if isinstance(candidate.get("grade_max"), int) else None,
         "cost": candidate.get("cost_detail"),
-        "deadline": candidate.get("deadline_hint"),
         "subject_tags": tags or None,
         "is_active": False,
         "source": source,

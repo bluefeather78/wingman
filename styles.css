@@ -165,6 +165,12 @@ body {
 .month-entry .entry-text { font-size: 11px; line-height: 1.4; }
 .month-entry .entry-text strong { display: block; }
 .month-entry .entry-type { font-size: 9px; text-transform: uppercase; opacity: 0.7; }
+/* Flags a milestone whose date has already passed relative to today — typically a stale/
+   un-refreshed AI-extracted date rather than a genuine past event, so it stays visible
+   (never silently hidden) but is clearly de-emphasized and distinguishable from real
+   upcoming dates. See getDisplayMilestones() in script.js. */
+.month-entry-past { opacity: 0.5; filter: grayscale(40%); }
+.month-entry-past .entry-type { font-style: italic; }
 .empty-state { color: #94A3B8; font-style: italic; font-size: 13px; }
 
 /* ---------- Calendar legend ---------- */

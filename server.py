@@ -122,14 +122,17 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 # tracker, or loads the Tracker page with an already-tracked item whose cached data has
 # gone stale. Uses Claude Haiku (claude-haiku-4-5-20251001) with web search enforced.
 # See check_deadlines.py's docstring for the underlying Supabase columns
-# (status/deadlines/opens_date/was_estimated/deadline_note/last_checked_at) — this endpoint
-# reads/writes the exact same columns, so the two mechanisms share one cache. The batch
-# script still exists for bulk backfill/cleanup (e.g. after a big scrape), but is no longer
-# the primary way this data gets kept current — see the plan doc's "On-demand deadline
-# checking" section for the full rationale.
+# (status/important_dates/was_estimated/important_date_note/last_checked_at) — this endpoint
+# reads/writes the exact same columns, so the two mechanisms share one cache. important_dates
+# holds EVERY pertinent date for the opportunity (registration opens/closes, event start/end,
+# notifications, etc.), each tagged with a "type" — not just a single narrow "deadline"; see
+# check_deadlines.py's build_system() for the full schema. The batch script still exists for
+# bulk backfill/cleanup (e.g. after a big scrape), but is no longer the primary way this data
+# gets kept current — see the plan doc's "On-demand deadline checking" section for the full
+# rationale.
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")  # Kept for other uses; not used for deadline checking
 DEADLINE_STALE_DAYS = 7
-DEADLINE_FIELDS = "id,name,org,url,summary,status,deadlines,opens_date,was_estimated,deadline_note,last_checked_at"
+DEADLINE_FIELDS = "id,name,org,url,summary,status,important_dates,was_estimated,important_date_note,last_checked_at"
 
 
 def get_opportunity_for_deadline_check(opp_id):
@@ -205,10 +208,9 @@ def deadline_cache_is_fresh(last_checked_at):
 def cached_deadline_payload(opp, source):
     return {
         "status": opp.get("status"),
-        "deadlines": opp.get("deadlines") or [],
-        "opens_date": opp.get("opens_date"),
+        "important_dates": opp.get("important_dates") or [],
         "was_estimated": opp.get("was_estimated"),
-        "deadline_note": opp.get("deadline_note"),
+        "important_date_note": opp.get("important_date_note"),
         "last_checked_at": opp.get("last_checked_at"),
         "source": source,
     }
@@ -222,10 +224,9 @@ def mock_deadline_check_payload(opp):
     deadline_iso = mock_deadline_iso((opp.get("name") or "") + (opp.get("url") or ""))
     return {
         "status": "running",
-        "deadlines": [{"label": "Application Deadline", "date_iso": deadline_iso}],
-        "opens_date": None,
+        "important_dates": [{"label": "Application Deadline", "date_iso": deadline_iso, "type": "deadline"}],
         "was_estimated": True,
-        "deadline_note": "Mock data — set GEMINI_API_KEY for a real, live-searched check.",
+        "important_date_note": "Mock data — set GEMINI_API_KEY for a real, live-searched check.",
         "last_checked_at": None,
         "source": "mock",
     }
@@ -575,8 +576,7 @@ def mock_tracker_extract(user_content, with_section):
         "fit": fit or f"Placeholder fit summary for {name} — set GEMINI_API_KEY for a real one.",
         "note": "Mock data for local testing — set GEMINI_API_KEY for real, live-searched details.",
         "noteType": "plain",
-        "opens_iso": None,
-        "deadlines": [{"label": "Application Deadline", "date_iso": deadline_iso}],
+        "important_dates": [{"label": "Application Deadline", "date_iso": deadline_iso, "type": "deadline"}],
         "deadline_label": "TBA",
         "was_estimated": True,
         "requirements": [],
@@ -795,7 +795,7 @@ class Handler(SimpleHTTPRequestHandler):
     def handle_deadline_check(self, opp_id):
         """GET /api/opportunities/<id>/deadline — on-demand, cross-user-cached deadline
         check. See the module-level comment above GEMINI_API_KEY for the full rationale.
-        Serves cached status/deadlines straight from Supabase if last_checked_at is under
+        Serves cached status/important_dates straight from Supabase if last_checked_at is under
         DEADLINE_STALE_DAYS old; otherwise runs a fresh Claude Haiku web_search check (reusing
         check_deadlines.py's check_one()), re-caches it, and returns the fresh result. Rejects
         silent search skips (searches == 0) and falls back to cached value if no searches occurred."""
@@ -826,10 +826,10 @@ class Handler(SimpleHTTPRequestHandler):
             info, _cost, searches = check_deadline_one(opp, ANTHROPIC_API_KEY)
 
             status = info.get("status") if info.get("status") in DEADLINE_VALID_STATUS else "unknown"
-            deadlines = info.get("deadlines") or []
-            if not isinstance(deadlines, list):
-                deadlines = []
-            deadlines = [d for d in deadlines if isinstance(d, dict) and d.get("date_iso")]
+            important_dates = info.get("important_dates") or []
+            if not isinstance(important_dates, list):
+                important_dates = []
+            important_dates = [d for d in important_dates if isinstance(d, dict) and d.get("date_iso")]
 
             # Distinguish between real searches and silent skips
             if searches == 0:
@@ -841,10 +841,9 @@ class Handler(SimpleHTTPRequestHandler):
 
             patch = {
                 "status": status,
-                "deadlines": deadlines,
-                "opens_date": info.get("opens_date"),
+                "important_dates": important_dates,
                 "was_estimated": bool(info.get("was_estimated")),
-                "deadline_note": info.get("deadline_note"),
+                "important_date_note": info.get("important_date_note"),
                 "last_checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }
             patch_opportunity_deadline(opp_id, patch)

@@ -127,7 +127,6 @@ Respond with ONLY a raw JSON array, no markdown fences, no preamble, no text aft
 element must match exactly this schema (use null for any field you don't have real evidence for):
 {{"name": "...", "org": "...", "url": "...", "summary": "2-4 sentences covering what it is plus any \
 useful detail (this is the only descriptive text shown to students, so don't be overly terse)", \
-"subject": "one of: {subjects}", \
 "type": "one of: Program, Internship, Competition, Research, Volunteer, Journal, Conference", \
 "price": "Free, Paid, or null", "cost_detail": "short freeform cost note, or null", \
 "state": "2-letter US state code if location-specific, else null", \
@@ -136,7 +135,8 @@ useful detail (this is the only descriptive text shown to students, so don't be 
 "season": "one of Summer, Year-Long, Spring, Fall, Winter, or null", \
 "grade_min": integer or null, "grade_max": integer or null, \
 "eligibility": "short freeform eligibility note, or null", \
-"subject_tags": ["short tag", "..."]}}"""
+"subject_tags": ["3-5 short tags: one broad category from {subjects}, plus 2-4 more specific tags \
+naming the actual field, skill, or activity"]}}"""
 
 SEATTLE_ADDENDUM = """
 
@@ -180,7 +180,6 @@ def build_row(candidate, seed_category, mint_id, source):
     url = (candidate.get("url") or "").strip()
     if not name or not url:
         return None
-    subject = candidate.get("subject") if candidate.get("subject") in VALID_SUBJECTS else "Mixed"
     opp_type = candidate.get("type") if candidate.get("type") in VALID_TYPES else seed_category
     tags = candidate.get("subject_tags") or []
     if not isinstance(tags, list):
@@ -191,7 +190,6 @@ def build_row(candidate, seed_category, mint_id, source):
         "org": (candidate.get("org") or "").strip() or None,
         "summary": candidate.get("summary"),
         "url": url,
-        "subject": subject,
         "type": opp_type,
         "price": clean_value(candidate.get("price"), VALID_PRICE),
         "state": (candidate.get("state") or None),

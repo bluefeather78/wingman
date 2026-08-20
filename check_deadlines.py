@@ -174,8 +174,12 @@ the year before {this_year} — compute it yourself from {today} — "site:{root
 step 2 succeeded. This is your estimation basis and is mandatory, not optional: you need it either to \
 confirm the pattern behind a found date or to construct an estimate when nothing current is posted.
 4. Search "site:{root} FAQ", "how to apply", "key dates", "deadlines", "timeline" and fetch the best hits.
-5. Look explicitly for "program has ended," "not running this year," "no longer offered," etc. If found, \
-set status "not_running" — do not estimate dates for a program you've confirmed isn't running.
+5. Look explicitly for closure language: "cycle closed," "not running this year," "applications no longer \
+accepted," etc. DISTINGUISH between: (a) current cycle is closed but program recurs (e.g., "2026 closed, 2027 \
+opening Fall") → status="running" (the program itself is ongoing), still extract dates for the next cycle; \
+(b) program is permanently discontinued (e.g., "no longer offered," "program ended") → status="not_running", \
+do not estimate future dates. Evidence of recurrence ("Next cycle in Fall", "2027 details TBA", "Check back \
+for 2027") → treat as "running" with forward-dated important_dates.
 
 ESTIMATION LOGIC (single source of truth — apply in this order):
 a. Found explicit current/upcoming-cycle dates → use them, was_estimated=false for those entries.
@@ -186,7 +190,11 @@ isn't live yet — use it; don't default to "unknown."
 c. Found only a vague pattern (e.g. "opens in fall," "rolling through spring") → construct a concrete \
 estimated date from it (pick a reasonable specific day within the stated window), was_estimated=true, \
 explain the basis briefly in important_date_note.
-d. Found genuinely nothing current AND nothing from any prior cycle after completing all search steps \
+d. Current cycle is explicitly closed (e.g., "2026 applications closed") BUT organization states or implies \
+the program will recur (e.g., "2027 opens Fall 2026") → status="running", extract/estimate dates for the \
+future cycle from explicit month/season language, was_estimated=true. This is the expected path when a new \
+cycle isn't yet open — capture the forward-looking dates.
+e. Found genuinely nothing current AND nothing from any prior cycle after completing all search steps \
 above → status="unknown". This should be rare — only after step 3 has actually been tried and failed.
 
 IMPORTANT DATES — capture every distinct pertinent date, not just one deadline:

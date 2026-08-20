@@ -29,10 +29,6 @@ FINDER_JSON = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "opportunity finder", "opportunities.json"
 )
 
-VALID_SUBJECTS = ['Mixed', 'STEM', 'Medicine', 'Humanities', 'Art', 'Business', 'Engineering',
-                   'Computer Science', 'Mathematics', 'Biology', 'Physics', 'Astronomy',
-                   'Chemistry', 'Leadership', 'Law', 'Logic', 'Education']
-
 WINGMAN_LOCATIONS = {'Remote', 'In-Person', 'In-Person and Remote'}
 
 # finder `category` -> wingman `type`. RESEARCH keeps its own "Research" type
@@ -49,7 +45,7 @@ CATEGORY_TO_TYPE = {
     'CONFERENCE': 'Conference',
 }
 
-CORE_FIELDS = ('id', 'name', 'org', 'summary', 'url', 'subject', 'type',
+CORE_FIELDS = ('id', 'name', 'org', 'summary', 'url', 'type',
                'price', 'state', 'location', 'intl', 'season')
 BATCH_SIZE = 500
 
@@ -112,7 +108,6 @@ def map_finder_row(opp, mint_id):
     tags = opp.get("subject_tags") or []
     if not isinstance(tags, list):
         tags = [tags] if tags else []
-    subject = next((t for t in tags if t in VALID_SUBJECTS), "Mixed")
 
     return {
         "id": mint_id,
@@ -120,7 +115,6 @@ def map_finder_row(opp, mint_id):
         "org": None,
         "summary": opp.get("description"),
         "url": url,
-        "subject": subject,
         "type": opp_type,
         "price": price,
         "state": None,

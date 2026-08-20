@@ -483,18 +483,21 @@ function goStage(n){
   if(n === 2) updateResultsBackLink();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
-// Swaps stage-2's back-link (and the accompanying "prefer to browse" link, only relevant
-// coming from the profile-based flow) based on resultsBackTarget.
+// Swaps stage-2's back-link based on resultsBackTarget. The "deepen your story" banner
+// only makes sense coming from the profile-based Fresh Finds flow (manual describe-your-
+// project results have no profile to deepen), and now carries its own "or browse
+// opportunities" link — so the standalone browse link only needs to show for the manual
+// flow, where there's no banner to carry it.
 function updateResultsBackLink(){
-  const browseLink = document.getElementById('resultsBrowseLink');
   const deepenBanner = document.getElementById('resultsDeepen StoryBanner');
-  // Show browse link and deepen banner only on profile-based flow (results from Fresh Finds)
-  if(browseLink) browseLink.classList.toggle('hidden', resultsBackTarget !== 0);
-  if(deepenBanner) deepenBanner.classList.toggle('hidden', resultsBackTarget !== 0);
+  const browseWrap = document.getElementById('resultsBrowseLinkWrap');
+  const onProfileFlow = resultsBackTarget === 0;
+  if(deepenBanner) deepenBanner.classList.toggle('hidden', !onProfileFlow);
+  if(browseWrap) browseWrap.classList.toggle('hidden', onProfileFlow);
 }
-// "Prefer to browse opportunities? Click here" from the results view (stage-2) — only
-// shown when those results came from the profile-based Fresh Finds match, since the
-// manual describe-your-project flow already went through the kind picker.
+// "Click here to browse opportunities" from the results view (stage-2) — always visible
+// once results are showing, as a way back to the kind picker regardless of which flow
+// (profile-based Fresh Finds or manual describe-your-project) produced these results.
 function browseFromResults(){
   goStage(0);
   const panel = document.getElementById('browsePanel');
@@ -570,7 +573,7 @@ function tokenize(text){
   return (text || '').toLowerCase().match(/[a-z0-9']+/g) || [];
 }
 function keywordScore(tokens, opp){
-  const haystack = (opp.name + ' ' + opp.org + ' ' + opp.summary + ' ' + opp.subject).toLowerCase();
+  const haystack = (opp.name + ' ' + opp.org + ' ' + opp.summary + ' ' + (opp.subject_tags || []).join(' ')).toLowerCase();
   let score = 0;
   tokens.forEach(t => {
     if(STOPWORDS.has(t) || t.length < 3) return;
@@ -579,7 +582,41 @@ function keywordScore(tokens, opp){
   return score;
 }
 
-function preFilter(description, subjectHints, typeFilter, strict){
+// ---------- Grade-level eligibility ----------
+// Maps a grade-level mention — from the Finder's explicit "Grade level" dropdown
+// (index.html) or free text in a student's profile/description — to a single US grade
+// number (6-12), the same scale as the DB's grade_min/grade_max columns. "Middle School"
+// resolves to 8 (its upper end) since grade_min/grade_max never goes below 6.
+const GRADE_WORD_TO_NUM = { freshman: 9, sophomore: 10, junior: 11, senior: 12 };
+function parseGradeFromText(text){
+  if(!text) return null;
+  const lower = text.toLowerCase();
+  // "9th grade", "grade 9", "9th-grade", etc.
+  let m = lower.match(/\b(6|7|8|9|10|11|12)(?:st|nd|rd|th)?\s*[- ]?\s*grade\b/) || lower.match(/\bgrade\s*[- ]?\s*(6|7|8|9|10|11|12)\b/);
+  if(m) return parseInt(m[1], 10);
+  // "freshman"/"sophomore"/"junior"/"senior", optionally "rising" (about to be that grade)
+  m = lower.match(/\b(?:rising\s+)?(freshman|sophomore|junior|senior)\b/);
+  if(m) return GRADE_WORD_TO_NUM[m[1]];
+  if(/\bmiddle school\b/.test(lower)) return 8;
+  return null;
+}
+// Explicit dropdown values share the same phrasing as free text, so route through the
+// same parser rather than maintaining a second mapping.
+function parseGradeLevel(label){
+  return parseGradeFromText(label);
+}
+// True if the opportunity's grade_min/grade_max range (if set) includes studentGrade.
+// Most rows have no grade bounds at all (only the opportunity-finder-sourced subset does)
+// — those are eligible for everyone. If the student's grade is unknown, nothing is filtered.
+function isGradeEligible(opp, studentGrade){
+  if(studentGrade == null) return true;
+  if(opp.grade_min == null && opp.grade_max == null) return true;
+  if(opp.grade_min != null && studentGrade < opp.grade_min) return false;
+  if(opp.grade_max != null && studentGrade > opp.grade_max) return false;
+  return true;
+}
+
+function preFilter(description, subjectHints, typeFilter, strict, studentGrade){
   const tokens = [...new Set(tokenize(description).filter(t => !STOPWORDS.has(t) && t.length >= 3))];
   const subjSet = new Set((subjectHints || []).map(s => s.toLowerCase()));
   const typeSet = typeFilter && typeFilter.length ? new Set(typeFilter) : null;
@@ -594,10 +631,16 @@ function preFilter(description, subjectHints, typeFilter, strict){
     // to keyword-matching the entire 1200+ row catalog.
     if(byType.length >= 15 || (strict && byType.length > 0)){ base = byType; }
   }
+  if(studentGrade != null){
+    // Hard filter, no size-gate fallback: nearly all rows have null grade bounds
+    // (eligible for everyone), so this only ever excludes the subset with an actual
+    // grade_min/grade_max range that doesn't cover the student — it can't collapse the pool.
+    base = base.filter(o => isGradeEligible(o, studentGrade));
+  }
 
   const scored = base.map(opp => {
     let score = keywordScore(tokens, opp);
-    if(subjSet.has((opp.subject || '').toLowerCase())) score += 3;
+    if((opp.subject_tags || []).some(t => subjSet.has((t || '').toLowerCase()))) score += 3;
     return { opp, score };
   });
   scored.sort((a, b) => b.score - a.score);
@@ -729,17 +772,40 @@ function extractJSON(text){
   }
 }
 
+// Calls Gemini/Claude and extracts JSON from the response, retrying the whole request
+// once if extractJSON fails to parse it. Occasionally the model emits a structurally
+// malformed value (e.g. an unescaped quote inside a "reason" string breaking a JSON
+// string mid-array) that extractJSON's truncation-repair can't fix since the damage
+// isn't at the end — this is a one-off formatting glitch, not something that reliably
+// repeats on a fresh request with the same prompt, so a single retry converts most of
+// these into a normal successful response instead of a hard user-facing error.
+async function callGeminiJSON(system, userContent, useWebSearch){
+  try{
+    return extractJSON(await callGemini(system, userContent, useWebSearch));
+  }catch(err){
+    console.warn('JSON parse failed, retrying once:', err.message);
+    return extractJSON(await callGemini(system, userContent, useWebSearch));
+  }
+}
+async function callClaudeJSON(system, userContent, useWebSearch){
+  try{
+    return extractJSON(await callClaude(system, userContent, useWebSearch));
+  }catch(err){
+    console.warn('JSON parse failed, retrying once:', err.message);
+    return extractJSON(await callClaude(system, userContent, useWebSearch));
+  }
+}
+
 const VALID_SUBJECTS = ['Mixed','STEM','Medicine','Humanities','Art','Business','Engineering','Computer Science','Mathematics','Biology','Physics','Astronomy','Chemistry','Leadership','Law','Logic','Education'];
 
 async function inferSubjects(description){
   const system = `You infer which subject categories from a fixed list best match a student's passion-project description. Valid categories (use these exact strings): ${VALID_SUBJECTS.join(', ')}. Respond with ONLY a raw JSON array of 2-5 of the most relevant category strings, no markdown, no preamble. Example: ["Computer Science","STEM","Mathematics"]`;
-  const raw = await callGemini(system, description, false);
-  const arr = extractJSON(raw);
+  const arr = await callGeminiJSON(system, description, false);
   return Array.isArray(arr) ? arr.filter(s => VALID_SUBJECTS.includes(s)) : [];
 }
 
 async function rankCandidates(description, candidates, prefs, requireAll){
-  const compact = candidates.map(c => ({ id: c.id, name: c.name, org: c.org, summary: c.summary, subject: c.subject, type: c.type, price: c.price, location: c.location, season: c.season }));
+  const compact = candidates.map(c => ({ id: c.id, name: c.name, org: c.org, summary: c.summary, subject_tags: c.subject_tags, type: c.type, price: c.price, location: c.location, season: c.season }));
   // requireAll (set for strict-type kinds like Conference/Journal Venue, where the
   // candidate list IS the entire real catalog for that type, not a large pre-filtered
   // pool) — tell Claude to rank every candidate instead of omitting weak fits. With
@@ -753,8 +819,7 @@ async function rankCandidates(description, candidates, prefs, requireAll){
   const system = `You are Wingman, helping a student find the best-fit extracurricular opportunities (programs, internships, competitions, research positions) for their specific passion project, from a candidate list. Read their project description and preferences carefully. ${selectionRule} For each, write a short specific reason (under 15 words) that names or clearly paraphrases an actual detail from THEIR description/preferences below (a subject, skill, project, goal, or interest they stated) — never write a generic reason that could apply to any student interested in this general field, and never invent details they didn't mention. Write the reason as Wingman speaking directly TO the student in second person ("you"/"your") — e.g. "Great fit for your robotics build" not "Good fit for the student's robotics project" or "Good fit for their robotics project." Assign a tier: 'strong' (excellent, highly specific fit) or 'look' (solid, worth a look). Respond with ONLY a raw JSON array, no markdown, no preamble, no text after the array, matching: [{"id":"...","reason":"...","tier":"strong|look"}]. Stay well within a 1000-token response — 10-12 items is a hard cap.`;
   const prefsText = prefs ? `\n\nStudent preferences: ${prefs}` : '';
   const userContent = `Student's passion project:\n${description}${prefsText}\n\nCandidate opportunities (JSON):\n${JSON.stringify(compact)}\n\nSelect and rank the best matches per the schema.`;
-  const raw = await callGemini(system, userContent, false);
-  const arr = extractJSON(raw);
+  const arr = await callGeminiJSON(system, userContent, false);
   return Array.isArray(arr) ? arr : [];
 }
 
@@ -774,8 +839,7 @@ Date handling: if a venue's listed submission deadline has already passed but it
 Only include opportunities that are a genuinely good fit — omit weak or generic matches entirely. For each, the "reason" must name or clearly paraphrase an actual detail from the student's research description/preferences below (a topic, method, skill, or goal they stated) — never a generic reason that could apply to any student in this broad field. Write the reason as Wingman speaking directly TO the student in second person ("you"/"your") — e.g. "Great fit for your climate modeling work" not "Good fit for the student's climate modeling project." For each of the best 6-8 matches, respond with ONLY a raw JSON array, no markdown, no preamble, no text after the array, matching: [{\"name\":\"official venue name, include year if known\",\"url\":\"the venue's official URL\",\"org\":\"organizing body, short\",\"summary\":\"under 18 words on scope/format\",\"reason\":\"under 15 words on why it fits THIS research specifically, addressed directly to the student\",\"tier\":\"strong|look\",\"next_deadline_iso\":\"YYYY-MM-DD or null\",\"was_estimated\":true or false}]. Stay well within a 1000-token response — 6-8 items is a hard cap, keep every field short.`;
   const prefsPart = prefsText ? `\nStudent preferences: ${prefsText}` : '';
   const userContent = `Research description:\n${description}${prefsPart}\n\nSearch the web and find the best matching real, current ${cfg.name.toLowerCase()} options.`;
-  const raw = await callGemini(system, userContent, true);
-  const arr = extractJSON(raw);
+  const arr = await callGeminiJSON(system, userContent, true);
   if(!Array.isArray(arr)) return [];
   return arr.map(item => {
     const opp = {
@@ -784,7 +848,7 @@ Only include opportunities that are a genuinely good fit — omit weak or generi
       org: item.org || '',
       summary: item.summary || '',
       url: item.url || '#',
-      subject: '',
+      subject_tags: [],
       type: cfg.name,
       price: '',
       state: '',
@@ -1173,8 +1237,7 @@ async function profileChatStarterQuestionsFromAI(regenerate){
   const breadthDirective = regenerate ? ` The student explicitly asked to regenerate these — swap in a fresh set. Prioritize BREADTH over depth: favor surfacing entirely new areas of their life the profile hasn't touched at all (academics, social life, jobs, family, random obsessions, sports, art, gaming, etc.) over drilling further into what's already well-covered. Where a question does build on something they've already mentioned, use it only as a springboard to go one layer deeper on that specific thing — but most of the three should open up completely uncovered territory rather than deepen existing ones.` : '';
   const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY (may be empty). Come up with exactly THREE distinct, short, fun, wacky-but-meaningful icebreaker questions to kick off a chat session that probes for details the profile is missing or only has shallowly — think music, sports/athletics, hobbies, what they do purely for fun, leadership, part-time jobs, quirks of personality, or deeper specifics on things already mentioned.${breadthDirective} Keep each one playful and casual, like a clever friend riffing with them, not a form — but each must serve a real purpose in understanding this student for extracurricular/college-application matching. This is chat round ${studentProfile.chatRounds + 1} of them returning to this page — the higher that number, the more specific and creative the questions should get. Respond with ONLY a JSON array of exactly 3 short question strings, e.g. ["...", "...", "..."] — no markdown, no preamble, no numbering.`;
   const userContent = `CURRENT PROFILE SUMMARY:\n${studentProfile.synthesized || '(empty)'}\n\nRespond with a JSON array of exactly 3 starter questions only.`;
-  const raw = await withTimeout(callClaude(system, userContent, false), 20000, 'Timed out waiting for starter questions');
-  const parsed = extractJSON(raw);
+  const parsed = await withTimeout(callClaudeJSON(system, userContent, false), 20000, 'Timed out waiting for starter questions');
   if(!Array.isArray(parsed) || !parsed.length) throw new Error('Unexpected starter question format');
   return parsed.slice(0, 3).map(String);
 }
@@ -1320,7 +1383,7 @@ function renderSuggestEntryCard(){
   const panel = document.getElementById('browsePanel');
   const browseOpen = !!(panel && !panel.classList.contains('hidden'));
   const btn = document.getElementById('browseToggleBtn');
-  if(btn) btn.textContent = browseOpen ? 'Hide opportunity types ↑' : 'Prefer to browse opportunities? Click here';
+  if(btn) btn.textContent = browseOpen ? 'Hide opportunity types' : 'Click here to browse opportunities';
 
   const hasProfile = !!studentProfile.synthesized;
   const sufficient = hasProfile && studentProfile.synthesized.trim().length >= PROFILE_SUFFICIENT_LENGTH;
@@ -1426,14 +1489,24 @@ async function runFreshFindsAutoSearch(){
   const description = studentProfile.synthesized;
   try{
     const subjects = await inferSubjects(description);
+    const studentGrade = parseGradeFromText(description);
+    // Each kind's ranking call is independent — isolate failures per-kind (a single
+    // flaky/malformed Gemini response for one kind used to reject the whole Promise.all
+    // and blank out every other kind's already-successful results too) so one bad call
+    // just contributes an empty list instead of failing the entire search.
     const perKind = await Promise.all(ACTIVE_KINDS.map(async kind => {
       const cfg = KIND_CONFIG[kind];
       if(!cfg) return [];
-      const pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType);
-      const ranked = await rankCandidates(description, pool, '', cfg.strictType);
-      const byId = {};
-      pool.forEach(o => { byId[o.id] = o; });
-      return ranked.filter(r => byId[r.id]).map(r => ({ opp: byId[r.id], reason: r.reason || '', tier: ['strong','look'].includes(r.tier) ? r.tier : 'look', kind }));
+      try{
+        const pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType, studentGrade);
+        const ranked = await rankCandidates(description, pool, '', cfg.strictType);
+        const byId = {};
+        pool.forEach(o => { byId[o.id] = o; });
+        return ranked.filter(r => byId[r.id]).map(r => ({ opp: byId[r.id], reason: r.reason || '', tier: ['strong','look'].includes(r.tier) ? r.tier : 'look', kind }));
+      }catch(err){
+        console.error(`Ranking failed for kind "${kind}":`, err);
+        return [];
+      }
     }));
     const merged = perKind.flat();
     if(!merged.length){
@@ -1457,7 +1530,7 @@ function toggleBrowsePanel(){
   if(!panel) return;
   const willOpen = panel.classList.contains('hidden');
   panel.classList.toggle('hidden', !willOpen);
-  if(btn) btn.textContent = willOpen ? 'Hide opportunity types ↑' : 'Prefer to browse opportunities? Click here';
+  if(btn) btn.textContent = willOpen ? 'Hide opportunity types' : 'Click here to browse opportunities';
   if(willOpen) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -1537,8 +1610,7 @@ async function confirmSuggestProfile(){
 async function assessProfileReadiness(profileText){
   const kindList = ACTIVE_KINDS.map(k => `"${k}" (${KIND_CONFIG[k].name}: ${KIND_CONFIG[k].desc})`).join(', ');
   const system = `You help decide whether a student's profile has enough detail to confidently recommend extracurricular opportunities, and which types are relevant. Valid opportunity type keys: ${kindList}. Read the profile below. If it gives clear enough signal about what the student wants to do and why, respond with ONLY raw JSON, no markdown, no preamble: {"ready":true,"kinds":["one or more of the valid type keys, the ones genuinely relevant"]}. If it's too vague, sparse, or ambiguous to match well, respond with ONLY raw JSON matching: {"ready":false,"questions":["a short, specific clarifying question", "..."]}. Ask at most 3 questions, and only ones that would actually change which opportunities fit — don't ask generic questions the profile already answers.`;
-  const raw = await callGemini(system, profileText, false);
-  return extractJSON(raw);
+  return callGeminiJSON(system, profileText, false);
 }
 function renderSuggestQuestions(questions){
   suggestPendingQuestions = questions;
@@ -1601,20 +1673,32 @@ async function runProfileSuggestSearch(){
     // slowest part of a multi-kind Suggest search: up to 2 sequential API calls
     // per kind, one-at-a-time).
     const subjects = await inferSubjects(description);
+    // No explicit grade dropdown on this flow (it's driven by the saved profile, not the
+    // Finder form) — infer it from whatever grade-level language the student's own profile
+    // text happens to contain, if any.
+    const studentGrade = parseGradeFromText(description);
 
     statusEl.textContent = kinds.length > 1 ? 'Searching every opportunity type…' : `Searching ${KIND_CONFIG[kinds[0]] ? KIND_CONFIG[kinds[0]].name.toLowerCase() + 's' : 'opportunities'}…`;
     // Each kind's ranking call is independent of the others — run them concurrently
     // instead of one at a time, so wall-clock time is bounded by the slowest single
-    // call instead of the sum of all of them.
+    // call instead of the sum of all of them. Failures are isolated per-kind (a single
+    // flaky/malformed Gemini response for one kind used to reject the whole Promise.all
+    // and blank out every other kind's already-successful results too) so one bad call
+    // just contributes an empty list instead of failing the entire search.
     const perKind = await Promise.all(kinds.map(async kind => {
       const cfg = KIND_CONFIG[kind];
       if(!cfg) return [];
-      let pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType);
-      if(pool.length < 20){ pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType); }
-      const ranked = await rankCandidates(description, pool, '', cfg.strictType);
-      const byId = {};
-      pool.forEach(o => { byId[o.id] = o; });
-      return ranked.filter(r => byId[r.id]).map(r => ({ opp: byId[r.id], reason: r.reason || '', tier: ['strong','look'].includes(r.tier) ? r.tier : 'look', kind }));
+      try{
+        let pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType, studentGrade);
+        if(pool.length < 20){ pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType, studentGrade); }
+        const ranked = await rankCandidates(description, pool, '', cfg.strictType);
+        const byId = {};
+        pool.forEach(o => { byId[o.id] = o; });
+        return ranked.filter(r => byId[r.id]).map(r => ({ opp: byId[r.id], reason: r.reason || '', tier: ['strong','look'].includes(r.tier) ? r.tier : 'look', kind }));
+      }catch(err){
+        console.error(`Ranking failed for kind "${kind}":`, err);
+        return [];
+      }
     }));
     const merged = perKind.flat();
     if(!merged.length){
@@ -1700,6 +1784,10 @@ async function runSearch(){
   // doesn't block the search itself.
   mergeIntoProfile(description);
 
+  // Prefer the explicit dropdown; fall back to whatever grade-level language the student's
+  // own description happens to contain (e.g. "I'm a junior…") if they left it blank.
+  const studentGrade = grade ? parseGradeLevel(grade) : parseGradeFromText(description);
+
   let prefsParts = [];
   if(grade) prefsParts.push(`grade level: ${grade}`);
   if(state) prefsParts.push(`home state: ${state}`);
@@ -1725,13 +1813,14 @@ async function runSearch(){
       progressNote.textContent = `Searching ${OPPORTUNITIES.length.toLocaleString()} opportunities…`;
       findLabel.textContent = 'Searching database…';
 
-      let pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType);
+      let pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType, studentGrade);
       if(priceWant === 'free'){ pool = pool.filter(o => o.price === 'Free'); }
       if(formatWant === 'remote'){ pool = pool.filter(o => o.location === 'Remote' || o.location === 'In-Person and Remote'); }
       if(formatWant === 'inperson'){ pool = pool.filter(o => o.location === 'In-Person' || o.location === 'In-Person and Remote'); }
       if(pool.length < 20){
-        // fallback: relax filters if too few remain
-        pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType);
+        // fallback: relax price/format filters if too few remain — grade eligibility stays
+        // a hard constraint (a program listed as grades 9-12 isn't relaxed for a 7th grader).
+        pool = preFilter(description, subjects, cfg.dbTypes, cfg.strictType, studentGrade);
       }
 
       progressNote.textContent = `Ranking the ${pool.length} closest matches…`;
@@ -2011,13 +2100,14 @@ SEARCH STEPS (do all of these, in order):
 2. Search "site:${root} ${nextYear}" and "site:${root} ${thisYear}" for a current/upcoming-cycle page — orgs often publish a separate year-specific page distinct from the evergreen landing page, which frequently omits the specific dates you actually need.
 3. ALWAYS ALSO search for the most recent PAST cycle (e.g. "site:${root} ${thisYear} deadline" and, using the year before ${thisYear} — compute it yourself from ${today} — "site:${root} <that year>"), even if step 2 succeeded. This is your estimation basis and is mandatory, not optional: you need it either to confirm the pattern behind a found date or to construct an estimate when nothing current is posted.
 4. Search "site:${root} FAQ", "how to apply", "key dates", "deadlines", "timeline" and check the best hits — specific program URLs sometimes point to outdated or archived pages while the org's current site has the live one.
-5. Look explicitly for language indicating the program is discontinued, paused, cancelled, or not accepting applications this cycle (e.g. "program has ended," "not running this year," "no longer offered"). If you find this, set status to "not_running" and explain briefly in note — do not estimate dates for a program you've determined isn't running.
+5. Look explicitly for closure language: "cycle closed," "not running this year," "applications no longer accepted," etc. DISTINGUISH between: (a) current cycle is closed but program recurs (e.g., "2026 closed, 2027 opening Fall") → status="running" (the program itself is ongoing), still extract dates for the next cycle; (b) program is permanently discontinued (e.g., "no longer offered," "program ended") → status="not_running", do not estimate future dates. Evidence of recurrence ("Next cycle in Fall", "2027 details TBA", "Check back for 2027") → treat as "running" with forward-dated important_dates.
 
 ESTIMATION LOGIC (single source of truth — apply in this order):
 a. Found explicit current/upcoming-cycle dates → use them, was_estimated:false for those entries.
 b. No current-cycle dates found, but you found last cycle's real dates AND the program looks recurring (no evidence it's discontinued) → roll each date forward by ~1 year (or to the next plausible occurrence), was_estimated:true, status:"running". This is the expected path when a new cycle's page isn't live yet — use it; don't default to "unknown."
 c. Found only a vague pattern (e.g. "opens in fall," "rolling through spring") → construct a concrete estimated date from it (pick a reasonable specific day within the stated window), was_estimated:true, explain the basis briefly in note.
-d. Found genuinely nothing current AND nothing from any prior cycle after completing all search steps above → status:"unknown". This should be rare — only after step 3 has actually been tried and failed.
+d. Current cycle is explicitly closed (e.g., "2026 applications closed") BUT organization states or implies the program will recur (e.g., "2027 opens Fall 2026") → status:"running", extract/estimate dates for the future cycle from explicit month/season language, was_estimated:true. This is the expected path when a new cycle isn't yet open — capture the forward-looking dates.
+e. Found genuinely nothing current AND nothing from any prior cycle after completing all search steps above → status:"unknown". This should be rare — only after step 3 has actually been tried and failed.
 
 Important dates — this matters a lot; capture EVERY pertinent date, not just a single "deadline":
 - This includes (when they exist or can be estimated): registration/application opens, early-bird deadline, regular/final deadline, notification/decision date, and event dates (e.g. a conference or symposium's actual start and end dates) — anything relevant in between. Many programs have MORE THAN ONE deadline — e.g. an early-bird/early registration deadline well before a later regular or final deadline (AMC 12's early-bird registration deadline is a good example: it lands weeks before the exam itself). Find and list EVERY distinct date you can, each with a short specific label (e.g. "Early Bird Registration", "Regular Registration", "Final Deadline", "Notification Date", "Conference Begins", "Conference Ends") and a "type" of "opens", "deadline", "event_start", "event_end", or "other", in chronological order. Do not collapse them into just one "final" date — the earliest one is often the one a student needs to act on first.
@@ -2032,11 +2122,11 @@ SELF-CHECK before responding:
 - Prefer including a reasonably-estimated date over omitting it. Only leave a category out if step (d) above genuinely applies.
 
 Action items — think through what a student would actually need to DO to meet the nearest deadline, not just the deadline itself: e.g. requesting a recommendation letter, drafting an essay, gathering transcripts, preparing a portfolio or writing sample, getting parent/guardian sign-off, registering for a required test. Infer these from the requirements you find and from what's typical for this type of opportunity. Keep every item tactical and administrative — the logistics of applying, never advice about the student's own project or how to approach its substance, since you have no way of knowing the specifics of their work and must not assume or invent any. List 3-5 short, concrete action items (skip this if status is not_running).
+For each action item, also give your best-guess direct URL for where the student would actually go to do it — the specific application/submission portal, payment or fee page, account sign-up/registration page, common-app or portal login, recommender/counselor form, or test-registration page, as applicable. Use the most specific URL you found during search (not just the homepage) whenever one exists. If nothing more specific than the general apply/info URL applies, reuse that URL. Only use null if you genuinely found no plausible page for that action — never invent or guess at a URL path that wasn't actually seen.
 
-Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, matching exactly this schema: {"status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format, separated by ' · '","fit":"one sentence, under 25 words, on what this actually involves","note":"one sentence, under 25 words: status/estimate basis/caveat","noteType":"good, plain, or flag — use flag if not_running or a major caveat","important_dates":[{"label":"short specific label, e.g. 'Early Bird Registration'","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other"}],"deadline_label":"short text like ROLLING or TBA — only used when the important_dates array is empty","was_estimated":true or false,"requirements":[{"date":"short date text","text":"under 12 words — what's needed, not a repeat of an important_dates entry"}],"apply_url":"the best URL for actually applying","apply_label":"short button label like 'Apply now'","calendar_events":[{"date":"YYYY-MM-DD","text":"under 8 words","type":"deadline, opens, notify, or conference"}],"action_items":["short concrete task, under 10 words", "..."]}. Stay well within a 1000-token response: at most 4 important_dates entries, 3 requirements items, 3 calendar_events, and 5 action_items. Never truncate mid-value or leave the JSON unclosed — shorten or drop optional arrays first, but keep at least the earliest date if one exists.`;
+Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, matching exactly this schema: {"status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format, separated by ' · '","fit":"one sentence, under 25 words, on what this actually involves","note":"one sentence, under 25 words: status/estimate basis/caveat","noteType":"good, plain, or flag — use flag if not_running or a major caveat","important_dates":[{"label":"short specific label, e.g. 'Early Bird Registration'","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other"}],"deadline_label":"short text like ROLLING or TBA — only used when the important_dates array is empty","was_estimated":true or false,"requirements":[{"date":"short date text","text":"under 12 words — what's needed, not a repeat of an important_dates entry"}],"apply_url":"the best URL for actually applying","apply_label":"short button label like 'Apply now'","calendar_events":[{"date":"YYYY-MM-DD","text":"under 8 words","type":"deadline, opens, notify, or conference"}],"action_items":[{"text":"short concrete task, under 10 words","url":"best-guess direct URL for this specific action (submission portal, payment page, sign-up page, etc.), or null"}]}. Stay well within a 1000-token response: at most 4 important_dates entries, 3 requirements items, 3 calendar_events, and 5 action_items. Never truncate mid-value or leave the JSON unclosed — shorten or drop optional arrays first, but keep at least the earliest date if one exists.`;
   const userContent = `Opportunity: ${opp.name} (${opp.org})\nURL: ${opp.url}\nKnown info: ${opp.summary}\n\nFetch this URL (and the base site if needed), and extract current tracking details per the schema. Look carefully for every relevant date — registration open/close, event dates, notifications — not just the final deadline.`;
-  const raw = await callGemini(system, userContent, true);
-  return extractJSON(raw);
+  return callGeminiJSON(system, userContent, true);
 }
 
 // ============================================================
@@ -2708,7 +2798,7 @@ function renderTodoModalContent(){
     const status = computeProgressStatus(item);
     const actionRows = (item.actionItems || []).map(ai => `
       <div class="flex items-center justify-between gap-3 py-1.5">
-        <span class="text-xs font-medium text-slate-700 ${ai.state === 'completed' ? 'line-through text-slate-400' : ''}">${ai.text}</span>
+        <span class="text-xs font-medium text-slate-700 ${ai.state === 'completed' ? 'line-through text-slate-400' : ''}">${ai.text}${ai.url ? ` <a href="${ai.url}" target="_blank" class="text-indigo-600 hover:underline" title="Go to this step" onclick="event.stopPropagation();">↗</a>` : ''}</span>
         <button class="status-pill status-task-${ai.state} cursor-pointer" onclick="cycleActionItemState('${item.id}','${ai.id}')" title="Click to change status">${ACTION_ITEM_STATUS_LABEL[ai.state]}</button>
       </div>
     `).join('');
@@ -2896,7 +2986,7 @@ const GENERIC_ACTION_ITEMS = [
 ];
 function ensureActionItems(item){
   if(!item.actionItems || !item.actionItems.length){
-    item.actionItems = GENERIC_ACTION_ITEMS.map((text, i) => ({ id: `${item.id}-gt${i}`, text, state: 'not_started' }));
+    item.actionItems = GENERIC_ACTION_ITEMS.map((text, i) => ({ id: `${item.id}-gt${i}`, text, url: null, state: 'not_started' }));
     return true; // backfilled — caller should persist
   }
   return false;
@@ -3056,7 +3146,12 @@ async function buildTracker(){
           applyUrl: info.apply_url || opp.url,
           applyLabel: info.apply_label || 'Apply / learn more',
           actionItems: Array.isArray(info.action_items)
-            ? info.action_items.slice(0, 5).map((text, i) => ({ id: `${opp.id}-t${i}`, text, state: 'not_started' }))
+            ? info.action_items.slice(0, 5).map((ai, i) => ({
+                id: `${opp.id}-t${i}`,
+                text: typeof ai === 'string' ? ai : ai.text,
+                url: (typeof ai === 'object' && ai.url) ? ai.url : null,
+                state: 'not_started'
+              }))
             : []
         });
         newlyAddedTrackerIds.add(opp.id);
@@ -3202,11 +3297,11 @@ Estimation is expected and encouraged, not a last resort — apply in order: (a)
 Find EVERY pertinent date — registration opens, early-bird vs. regular deadline, notification date, and event/conference start-end dates — each with a short label and a "type" of "opens", "deadline", "event_start", "event_end", or "other", in chronological order. Pay particular, deliberate attention to the registration/application OPENS date, not just the deadline — this is the field most often missed. Only omit a date category if there's genuinely no basis to find or estimate one (per step d above). Every date you have enough basis to mention in "note" (e.g. "registration typically opens Sept") must ALSO appear as a matching "important_dates" entry (was_estimated:true) — never describe date info in "note" without a corresponding structured entry, and vice versa. Prefer including a reasonably-estimated date over omitting it.
 
 Also think through 3-5 short, concrete action items a student would need to do to meet the nearest deadline (e.g. request a recommendation letter, draft an essay, gather transcripts) — infer these from requirements and what's typical for this type of opportunity. Keep every item tactical and administrative — the logistics of applying, never advice about the student's own project or its substance, since you don't know the specifics of their work and must not assume or invent any. Skip if status is not_running.
+For each action item, also give your best-guess direct URL for where the student would actually go to do it — the specific application/submission portal, payment or fee page, account sign-up/registration page, or test-registration page, as applicable. Use the most specific URL you found during search (not just the homepage) whenever one exists; reuse the general apply/info URL if nothing more specific applies; use null only if you genuinely found no plausible page — never invent a URL path that wasn't actually seen.
 
-Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","important_dates":[{"label":"short label","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other"}],"deadline_label":"short text like ROLLING, only if important_dates is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null","action_items":["short concrete task, under 10 words", "..."]}. Stay well within 1000 tokens: at most 4 important_dates, 3 requirements, and 5 action_items.`;
+Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","important_dates":[{"label":"short label","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other"}],"deadline_label":"short text like ROLLING, only if important_dates is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null","action_items":[{"text":"short concrete task, under 10 words","url":"best-guess direct URL for this specific action, or null"}]}. Stay well within 1000 tokens: at most 4 important_dates, 3 requirements, and 5 action_items.`;
   const userContent = `URL: ${url}\n${notes ? `Extra context: ${notes}\n` : ''}\nFetch this URL, classify it, and extract tracking details per the schema.`;
-  const raw = await callGemini(system, userContent, true);
-  return extractJSON(raw);
+  return callGeminiJSON(system, userContent, true);
 }
 async function trackerAnalyzeAndAdd(){
   const urlInput = document.getElementById('trackerIntakeUrl');
@@ -3252,7 +3347,12 @@ async function trackerAnalyzeAndAdd(){
       applyUrl: extracted.apply_url || url,
       applyLabel: extracted.apply_label || 'Apply / learn more',
       actionItems: Array.isArray(extracted.action_items)
-        ? extracted.action_items.slice(0, 5).map((text, i) => ({ id: `${id}-t${i}`, text, state: 'not_started' }))
+        ? extracted.action_items.slice(0, 5).map((ai, i) => ({
+            id: `${id}-t${i}`,
+            text: typeof ai === 'string' ? ai : ai.text,
+            url: (typeof ai === 'object' && ai.url) ? ai.url : null,
+            state: 'not_started'
+          }))
         : []
     };
     trackerData[bucket].push(item);

@@ -98,7 +98,7 @@ CLAUDE_MAX_TOKENS = 1000
 # the table's Row Level Security policy only allows reading is_active=true rows.
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
-OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject,type,price,state,location,intl,season,review_status,review_summary"
+OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject_tags,type,price,state,location,intl,season,review_status,review_summary,grade_min,grade_max"
 OPPORTUNITIES_CACHE_TTL = 300  # seconds
 _opportunities_cache = {"data": None, "fetched_at": 0.0}
 _opportunities_cache_lock = threading.Lock()
@@ -390,11 +390,11 @@ MOCK_REASONS = [
     "Worth a look given the breadth of your interests.",
 ]
 MOCK_ACTION_ITEMS = [
-    "Request a teacher recommendation letter",
-    "Draft your personal statement / essay",
-    "Gather transcripts and test scores",
-    "Fill out the application form",
-    "Prepare a writing sample or portfolio",
+    {"text": "Request a teacher recommendation letter", "url": None},
+    {"text": "Draft your personal statement / essay", "url": None},
+    {"text": "Gather transcripts and test scores", "url": None},
+    {"text": "Fill out the application form", "url": None},
+    {"text": "Prepare a writing sample or portfolio", "url": None},
 ]
 
 

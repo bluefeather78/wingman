@@ -14,7 +14,7 @@ import os
 from supabase_common import load_dotenv, supabase_get
 
 OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opportunities.json")
-FIELDS = "id,name,org,summary,url,subject,type,price,state,location,intl,season"
+FIELDS = "id,name,org,summary,url,subject_tags,type,price,state,location,intl,season"
 
 
 def main():

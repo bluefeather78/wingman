@@ -232,8 +232,8 @@
         </div>
 
         <div class="text-center mt-4">
-          <button class="text-sm font-bold hover:underline transition-colors" style="color: #6a63e8; background: none; border: none; cursor: pointer;" onmouseover="this.style.color='#5553d6'" onmouseout="this.style.color='#6a63e8'" onclick="toggleBrowsePanel()" id="browseToggleBtn">
-            Prefer to browse instead? →
+          <button class="text-xs font-semibold hover:underline transition-colors" style="color: #8a93a6; background: none; border: none; cursor: pointer;" onmouseover="this.style.color='#6a748f'" onmouseout="this.style.color='#8a93a6'" onclick="toggleBrowsePanel()" id="browseToggleBtn">
+            Click here to browse opportunities
           </button>
         </div>
 
@@ -380,11 +380,14 @@
             <div class="font-bold text-base" style="color: #fff;">Want more matches like these?</div>
             <div class="text-sm mt-0.5" style="color: #aab3c9;">Deepen your story by adding more details.</div>
           </div>
-          <div class="flex items-center gap-2 px-5 py-2.5 rounded-full flex-shrink-0 font-bold text-sm text-white whitespace-nowrap" style="background-color: #f4791d;">Deepen your story</div>
+          <div class="flex flex-col items-center gap-2 flex-shrink-0">
+            <div class="flex items-center gap-2 px-5 py-2.5 rounded-full font-bold text-sm text-white whitespace-nowrap" style="background-color: #f4791d;">Deepen your story</div>
+            <button class="text-xs font-semibold underline hover:no-underline transition-colors" style="color: #aab3c9; background: none; border: none; cursor: pointer;" onclick="event.stopPropagation(); event.preventDefault(); browseFromResults();">or browse opportunities</button>
+          </div>
         </a>
 
-        <div class="hidden text-right">
-          <button class="text-sm font-bold hover:underline" id="resultsBrowseLink" style="color: #8a93a6; background: none; border: none; cursor: pointer;" onclick="browseFromResults()">Prefer to browse opportunities? Click here</button>
+        <div class="text-right" id="resultsBrowseLinkWrap">
+          <button class="text-xs font-semibold hover:underline transition-colors" id="resultsBrowseLink" style="color: #8a93a6; background: none; border: none; cursor: pointer;" onmouseover="this.style.color='#6a748f'" onmouseout="this.style.color='#8a93a6'" onclick="browseFromResults()">Click here to browse opportunities</button>
         </div>
 
         <div class="hidden flex flex-wrap items-center gap-2 mb-4" id="resultFilterWrap">

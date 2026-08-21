@@ -14,9 +14,9 @@ Fields this agent CAN update:
   - name, org, summary, url, type, price, state, location, intl, season, category,
     eligibility, grade_min, grade_max, cost, subject_tags
 
-Run roughly 1x/month on all active opportunities. Uses gemini-3.5-flash-lite for cost
-efficiency (~$0.075/MTok input, $0.30/MTok output). With 1200+ rows, expect ~$10-15/month
-cost and 20-40 minutes wall time (includes Gemini rate limiting).
+Run roughly 1x/month on all active opportunities. Uses gemini-3.5-flash-lite (no web search —
+training data only) for cost efficiency and to avoid quota contention with deadline/review agents.
+With 1200+ rows, expect ~$1-2/month cost and 15-25 minutes wall time (fast, no web search overhead).
 
 SETUP:
     .env needs SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY.
@@ -90,8 +90,10 @@ def check_one(opp, api_key):
     system = build_system(opp)
     user_content = (f"Opportunity: {opp['name']} ({opp.get('org') or 'unknown org'})\n"
                     f"URL: {opp['url']}\nCurrent summary: {opp.get('summary') or 'none'}\n\n"
-                    f"Search for current information about this opportunity and extract per the schema.")
-    text, usage = call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=1200,
+                    f"Extract current opportunity metadata per the schema (no web search needed — use your training data).")
+    # use_web_search=False: metadata extraction doesn't need live verification, avoids quota contention
+    # with deadline/review agents. Training data is sufficient for name/org/eligibility/pricing extraction.
+    text, usage = call_gemini(system, user_content, api_key, use_web_search=False, max_tokens=1200,
                               model="gemini-3.5-flash-lite")
     info = extract_json(text)
     searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
@@ -180,7 +182,9 @@ def main():
     dry_run_results = []
 
     for i, opp in enumerate(items):
-        print(f"[{i + 1}/{len(items)}] {opp['name'][:60]}...", end=" ")
+        # Handle Unicode chars in opportunity names that may not render in console
+        opp_name = opp['name'][:60].encode('utf-8', errors='ignore').decode('utf-8')
+        print(f"[{i + 1}/{len(items)}] {opp_name}...", end=" ")
         try:
             info, cost, searches = check_one(opp, gemini_key)
             total_cost += cost
@@ -229,7 +233,10 @@ def main():
         except Exception as e:
             errors += 1
             print(f"[ERROR] {e}")
-        time.sleep(1.0)  # Rate limiting
+        # Rate limiting: match scrape_opportunities.py pattern.
+        # gemini_common.call_gemini() enforces 5 seconds between API calls;
+        # this additional sleep ensures we don't burst requests between items.
+        time.sleep(2.0)
 
     print(f"\n[SUMMARY] checked: {len(items)}, updated: {updated}, errors: {errors}, "
           f"silent (no-search) checks: {silent_search_count}/{len(items)}, cost: ${total_cost:.4f}")

@@ -1,0 +1,2 @@
+# This project uses only Python standard library (http.server, urllib, json, etc.)
+# No external dependencies required

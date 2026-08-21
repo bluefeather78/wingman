@@ -313,12 +313,14 @@ def main():
             changed = status != opp.get("status") or important_dates != (opp.get("important_dates") or [])
             if changed:
                 updated += 1
+            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
             supabase_patch(supabase_url, "opportunities", {"id": f"eq.{opp['id']}"}, {
                 "status": status,
                 "important_dates": important_dates,
                 "was_estimated": bool(info.get("was_estimated")),
                 "important_date_note": info.get("important_date_note"),
-                "last_checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "dates_last_checked_at": now_iso,
+                "updated_at": now_iso,
             }, service_key)
             silent = " [SILENT: no search invoked]" if searches == 0 else ""
             print(f"{status}, {searches} search(es){silent}, ${cost:.4f}" + (" [changed]" if changed else ""))

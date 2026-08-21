@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Highschool Wingman</title>
+  <title>Main Quest</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;700;800&family=Plus+Jakarta+Sans:wght@500;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -22,11 +22,11 @@
       <div class="text-center">
         <img src="favicon.svg" alt="" class="w-16 h-16 rounded-2xl mx-auto mb-2">
         <div class="flex items-center justify-center gap-2">
-          <h1 class="font-heading font-extrabold text-2xl">Wingman</h1>
+          <h1 class="font-heading font-extrabold text-2xl">Main Quest</h1>
           <span class="bg-amber-300 text-slate-900 font-extrabold text-[10px] uppercase px-2 py-0.5 rounded-full border-2 border-slate-900">Beta</span>
         </div>
-        <p class="font-heading font-extrabold text-lg mt-3 leading-snug">Main Quest: Build amazing stuff. Side Quest: Get into college.</p>
-        <p class="text-sm text-slate-500 mt-1">Find elite research venues, summer programs, internships, and competitions for your builds.</p>
+        <p class="font-heading font-extrabold text-lg mt-3 leading-snug">Follow your passion.<br>Side quest : Get into college.</p>
+        <p class="text-sm text-slate-500 mt-1">Discover research, programs, internships, and more for what you love.</p>
         <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">🚧 This app is in beta — features are actively evolving and results may occasionally be incomplete or inaccurate.</p>
         <p class="hidden" id="loginTagline"></p>
       </div>
@@ -42,7 +42,7 @@
           <input type="password" id="signInPassword" autocomplete="current-password" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="••••••••">
         </div>
         <p class="text-xs font-bold text-rose-600" id="signInError"></p>
-        <button type="submit" class="w-full pop-btn font-extrabold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;">Sign In</button>
+        <button type="submit" class="w-full pop-btn font-extrabold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;">Sign In</button>
         <p class="text-xs text-slate-500 text-center">Don't have an account? <a href="#" class="font-bold text-indigo-600 hover:underline" onclick="event.preventDefault(); showLoginMode('register');">Register</a></p>
       </form>
 
@@ -79,7 +79,7 @@
           <input type="password" id="regPasswordConfirm" autocomplete="new-password" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="••••••••">
         </div>
         <p class="text-xs font-bold text-rose-600" id="registerError"></p>
-        <button type="submit" class="w-full pop-btn font-extrabold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;">Create Account</button>
+        <button type="submit" class="w-full pop-btn font-extrabold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;">Create Account</button>
         <p class="text-xs text-slate-500 text-center">Already have an account? <a href="#" class="font-bold text-indigo-600 hover:underline" onclick="event.preventDefault(); showLoginMode('signin');">Sign In</a></p>
       </form>
     </div>
@@ -90,12 +90,12 @@
 
   <!-- Top Floating Pill Navigation -->
   <header class="sticky top-4 z-50 max-w-4xl mx-auto px-4">
-    <div class="bg-slate-900 rounded-full pl-3 pr-2 py-2 shadow-[0_10px_25px_-5px_rgba(15,23,42,0.45)] flex items-center justify-between gap-2">
-      <div class="flex items-center gap-2 shrink-0">
+    <div class="rounded-full pl-3 pr-2 py-2 flex items-center justify-between gap-2" style="background-color: #1d4e89; box-shadow: 0 10px 25px -5px rgba(29,78,137,0.45);">
+      <button onclick="showPage('home')" class="flex items-center gap-2 shrink-0 bg-none border-none cursor-pointer" style="color: inherit;">
         <img src="favicon.svg" alt="" class="w-8 h-8 rounded-lg">
-        <span class="font-heading font-extrabold text-lg text-white tracking-tight hidden sm:inline">Wingman</span>
-        <span class="bg-amber-300 text-slate-900 font-extrabold text-[9px] uppercase px-2 py-0.5 rounded-full">Beta</span>
-      </div>
+        <span class="font-heading font-extrabold text-lg text-white tracking-tight hidden sm:inline">Main Quest</span>
+        <span class="font-extrabold text-[9px] uppercase px-2 py-0.5 rounded-full" style="background-color: #f79256; color: #fff;">Beta</span>
+      </button>
 
       <!-- Nav Tabs -->
       <nav class="flex items-center gap-1 sm:gap-1.5 app-nav-inner">
@@ -118,7 +118,7 @@
       </nav>
 
       <!-- Account Badge -->
-      <button onclick="toggleProfile()" id="profileToggle" class="shrink-0 w-9 h-9 rounded-full flex items-center justify-center" style="background: #6a63e8; color: #fff; font-size: 16px;">
+      <button onclick="toggleProfile()" id="profileToggle" class="shrink-0 w-9 h-9 rounded-full flex items-center justify-center" style="background: #00b2ca; color: #fff; font-size: 16px;">
         👤
       </button>
     </div>
@@ -152,7 +152,7 @@
 
       <div class="bg-amber-50 border-2 border-amber-200 rounded-2xl p-3">
         <p class="text-xs font-bold text-amber-800">🚧 Beta product</p>
-        <p class="text-xs text-amber-700 mt-1">You're using an early, actively-evolving version of Highschool Wingman. Thanks for testing it out!</p>
+        <p class="text-xs text-amber-700 mt-1">You're using an early, actively-evolving version of Main Quest. Thanks for testing it out!</p>
       </div>
 
       <div class="border-2 border-slate-200 rounded-2xl p-3">
@@ -175,19 +175,19 @@
     <section id="page-home" class="space-y-6">
       
       <!-- Welcome Banner -->
-      <div class="bg-emerald-100 p-5 sm:p-6 flex items-center justify-between gap-4" style="border-radius: 22px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);">
+      <div class="p-5 sm:p-6 flex items-center justify-between gap-4" style="background-color: #f79256; border-radius: 22px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);">
         <div class="flex items-center gap-3 min-w-0">
           <svg viewBox="0 0 24 24" class="w-8 h-8 shrink-0" fill="none">
-            <rect x="2" y="14" width="4" height="8" rx="1" fill="#F97316"/>
-            <rect x="9" y="9" width="4" height="13" rx="1" fill="#F97316"/>
-            <rect x="16" y="4" width="4" height="18" rx="1" fill="#F97316"/>
-            <circle cx="18" cy="3" r="2.5" fill="#FDE047" stroke="#0F172A" stroke-width="1"/>
+            <rect x="2" y="14" width="4" height="8" rx="1" fill="#ffffff"/>
+            <rect x="9" y="9" width="4" height="13" rx="1" fill="#ffffff"/>
+            <rect x="16" y="4" width="4" height="18" rx="1" fill="#ffffff"/>
+            <circle cx="18" cy="3" r="2.5" fill="#FDE047" stroke="#1d4e89" stroke-width="1"/>
           </svg>
-          <h1 class="font-heading font-extrabold text-xl sm:text-2xl text-slate-900 truncate">Hey <span class="text-indigo-600" id="homeGreetingName">there</span> — ready?</h1>
+          <h1 class="font-heading font-extrabold text-xl sm:text-2xl truncate" style="color: #fff;">Hey <span style="color: #1d4e89;" id="homeGreetingName">there</span> — ready?</h1>
         </div>
-        <div class="bg-slate-900 rounded-2xl px-4 py-2 text-center shrink-0" id="homeDueSoonBadge">
+        <div class="rounded-2xl px-4 py-2 text-center shrink-0" id="homeDueSoonBadge" style="background-color: #1d4e89;">
           <p class="font-heading font-extrabold text-lg leading-none text-white" id="homeDueSoonCount">0</p>
-          <p class="text-[9px] font-bold uppercase tracking-wider text-yellow-300 mt-0.5">Due Soon</p>
+          <p class="text-[9px] font-bold uppercase tracking-wider mt-0.5" style="color: #f79256;">Due Soon</p>
         </div>
       </div>
 
@@ -199,7 +199,7 @@
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h2 class="font-heading font-bold text-xl">What You're Chasing</h2>
           <div class="flex flex-wrap gap-2">
-            <span class="bg-slate-900 text-white font-bold text-xs px-3 py-1.5 rounded-full cursor-pointer" id="statTotal" onclick="goToTrackerCalendar()" title="View in Tracker">0 tracked</span>
+            <span class="text-white font-bold text-xs px-3 py-1.5 rounded-full cursor-pointer" id="statTotal" style="background-color: #1d4e89;" onclick="goToTrackerCalendar()" title="View in Tracker">0 tracked</span>
           </div>
         </div>
         <div class="progress-track" id="homeProgressTrack"></div>
@@ -207,17 +207,33 @@
         <div id="homeTrackCTA"></div>
       </div>
 
-      <!-- Coming Up To-Do List -->
+      <!-- Combined To-Do List: "Your Next Moves" + Expandable "And Beyond" -->
       <div class="card-soft p-6 space-y-4" id="homeTodoCard" onclick="openTodoModal()">
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 class="font-heading font-bold text-xl">Your Next Moves</h2>
-            <p class="text-xs text-slate-400 font-medium">Tasks due this month & next — not everything you're tracking</p>
-          </div>
+          <h2 class="font-heading font-bold text-xl">Your Next Moves</h2>
           <div class="flex flex-wrap gap-2" id="todoStatCounts"></div>
         </div>
         <div class="progress-track" id="todoProgressTrack"></div>
         <div class="space-y-2" id="homeTodoList"></div>
+
+        <!-- "And Beyond" CTA inside the main card -->
+        <div class="text-center pt-2" id="todoBeyondCtaWrap">
+          <button class="text-sm font-semibold hover:underline transition-colors" style="color: #8a93a6; background: none; border: none; cursor: pointer;" onmouseover="this.style.color='#6a748f'" onmouseout="this.style.color='#8a93a6'" onclick="event.stopPropagation(); showTodoBeyond()">and beyond →</button>
+        </div>
+
+        <!-- Tasks Beyond Next Month (hidden by default) -->
+        <div class="hidden" id="homeTodoBeyondSection">
+          <hr class="border-t" style="border-color: #c9c9f0; margin: 16px 0;">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <h3 class="font-heading font-bold text-lg">And Beyond</h3>
+            <div class="flex flex-wrap gap-2 items-center">
+              <div class="flex flex-wrap gap-2" id="todoBeyondStatCounts"></div>
+              <button class="text-xs font-bold text-slate-500 hover:text-slate-900 bg-none border-none cursor-pointer" onclick="event.stopPropagation(); hideTodoBeyond()" title="Collapse">−</button>
+            </div>
+          </div>
+          <div class="progress-track" id="todoBeyondProgressTrack"></div>
+          <div class="space-y-2" id="homeTodoBeyondList"></div>
+        </div>
       </div>
     </section>
 
@@ -251,16 +267,16 @@
 
       <!-- STAGE SUGGEST: PROFILE-BASED DISCOVERY -->
       <div class="stage hidden space-y-6" id="stage-suggest">
-        <button class="text-sm font-bold hover:underline flex items-center gap-1 back-link" style="color: #6a63e8;" onclick="goStage(0)">
+        <button class="text-sm font-bold hover:underline flex items-center gap-1 back-link" style="color: #00b2ca;" onclick="goStage(0)">
           <span>←</span> Back to opportunity type
         </button>
 
         <div class="card-soft p-6 sm:p-8 form-card">
           <div id="suggestProgressSection" style="display:none;">
-            <p class="text-sm font-bold mb-4 form-status" id="suggestStatus" style="color: #6a63e8;"></p>
+            <p class="text-sm font-bold mb-4 form-status" id="suggestStatus" style="color: #00b2ca;"></p>
             <div id="suggestQuestionsWrap" class="space-y-4"></div>
             <div class="mt-6 form-actions">
-              <button class="pop-btn font-bold px-6 py-3 text-white" id="suggestContinueBtn" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px; display:none;" onclick="submitSuggestQuestions()">Continue →</button>
+              <button class="pop-btn font-bold px-6 py-3 text-white" id="suggestContinueBtn" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px; display:none;" onclick="submitSuggestQuestions()">Continue →</button>
             </div>
             <div class="mt-4 text-rose-900 p-4 font-bold text-sm form-error" id="suggestError" style="background-color: #ffe4e6; border-radius: 12px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);"></div>
           </div>
@@ -268,7 +284,7 @@
             <h2 class="font-heading font-bold text-xl mb-6">Here's what we know about you</h2>
             <div id="suggestProfileSummary" class="profile-fit-grid mb-6"></div>
             <div class="flex flex-wrap gap-3" id="suggestConfirmWrap">
-              <button class="pop-btn font-bold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="confirmSuggestProfile()">Profile looks good — find my matches →</button>
+              <button class="pop-btn font-bold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;" onclick="confirmSuggestProfile()">Profile looks good — find my matches →</button>
               <button class="pop-btn bg-white font-bold px-6 py-3 rounded-xl" style="border: 2px solid #1a2540;" onclick="goToProfileChat()">Add to my profile</button>
             </div>
           </div>
@@ -277,7 +293,7 @@
 
       <!-- STAGE QUIZ: NOT SURE? -->
       <div class="stage hidden space-y-6" id="stage-quiz">
-        <button class="text-sm font-bold hover:underline flex items-center gap-1 back-link" style="color: #6a63e8;" onclick="goStage(0)">
+        <button class="text-sm font-bold hover:underline flex items-center gap-1 back-link" style="color: #00b2ca;" onclick="goStage(0)">
           <span>←</span> Back to opportunity type
         </button>
 
@@ -287,17 +303,17 @@
           <div class="quiz-step" id="quizStep1">
             <p class="font-heading font-bold text-lg mb-4 quiz-question">Which of these sounds most like you right now?</p>
             <div class="space-y-3 quiz-options">
-              <button class="w-full text-left p-4 quiz-option" style="border-radius: 16px; background-color: #eef0fb; border: none;" onclick="quizAnswer('project')">
+              <button class="pop-btn w-full text-left p-4 quiz-option" style="background-color: #EDF7FC; color: #1d4e89;" onclick="quizAnswer('project')">
                 <strong class="block font-heading text-lg">I already have a research paper or project</strong>
-                <span class="text-sm text-slate-500">In progress or already completed</span>
+                <span class="text-sm" style="color: #4A6685;">In progress or already completed</span>
               </button>
-              <button class="border-2 border-slate-900 w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="quizAnswer('timeoff')">
+              <button class="pop-btn w-full text-left p-4 quiz-option" style="background-color: #fff; color: #1d4e89;" onclick="quizAnswer('timeoff')">
                 <strong class="block font-heading text-lg">I'm looking for something to do when school is out</strong>
-                <span class="text-sm text-slate-500">Camps, programs, or work experience</span>
+                <span class="text-sm" style="color: #4A6685;">Camps, programs, or work experience</span>
               </button>
-              <button class="border-2 border-slate-900 w-full text-left p-4 rounded-xl hover:bg-slate-50 quiz-option" onclick="quizAnswer('compete')">
+              <button class="pop-btn w-full text-left p-4 quiz-option" style="background-color: #fff; color: #1d4e89;" onclick="quizAnswer('compete')">
                 <strong class="block font-heading text-lg">I enjoy competing directly with my peers</strong>
-                <span class="text-sm text-slate-500">Tests, exams, head-to-head challenges</span>
+                <span class="text-sm" style="color: #4A6685;">Tests, exams, head-to-head challenges</span>
               </button>
             </div>
           </div>
@@ -307,7 +323,7 @@
 
       <!-- STAGE 1: DESCRIBE -->
       <div class="stage hidden space-y-6" id="stage-1">
-        <button class="text-sm font-bold hover:underline flex items-center gap-1 back-link" style="color: #6a63e8;" onclick="goStage(0)">
+        <button class="text-sm font-bold hover:underline flex items-center gap-1 back-link" style="color: #00b2ca;" onclick="goStage(0)">
           <span>←</span> Back to opportunity type
         </button>
 
@@ -316,7 +332,7 @@
 
           <div class="space-y-4">
             <div>
-              <p class="text-xs font-bold p-2 mb-2 progress-note" id="stage1RecallNote" style="color: #6a63e8; background-color: #f5f5ff; border-radius: 8px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);"></p>
+              <p class="text-xs font-bold p-2 mb-2 progress-note" id="stage1RecallNote" style="color: #00b2ca; background-color: #EDF7FC; border-radius: 8px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);"></p>
               <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2 field-label" id="stage1Label" for="pInterests">Details</label>
               <textarea id="pInterests" class="w-full p-4 min-h-[160px] font-medium" style="border-radius: 16px; border: none; background-color: #eef0fb; font-family: 'Poppins', sans-serif;" placeholder=""></textarea>
               <div class="text-right text-[10px] font-bold mt-1 char-count" id="charCount" style="color: #8a93a6;">0 characters — aim for at least 200</div>
@@ -367,7 +383,7 @@
             <span class="text-sm font-bold form-status" id="formStatus" style="color: #8a93a6;"></span>
           </div>
           
-          <p class="mt-4 text-xs font-bold progress-note" id="progressNote" style="color: #6a63e8;"></p>
+          <p class="mt-4 text-xs font-bold progress-note" id="progressNote" style="color: #00b2ca;"></p>
           <div class="mt-4 text-rose-900 p-4 font-bold text-sm form-error" id="formError" style="background-color: #ffe4e6; border-radius: 12px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);"></div>
         </div>
       </div>
@@ -405,7 +421,7 @@
         <div class="sticky bottom-4 z-40 selection-bar" id="selectionBar" style="display:none;">
           <div class="bg-slate-900 text-white p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
             <span class="font-bold text-sm" id="selectionCount">0 selected</span>
-            <button class="pop-btn font-bold px-6 py-3 text-white" id="buildTrackerBtn" onclick="buildTracker()" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;">
+            <button class="pop-btn font-bold px-6 py-3 text-white" id="buildTrackerBtn" onclick="buildTracker()" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;">
               <span class="spin hidden w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></span>
               <span id="buildTrackerLabel">Add to my tracker →</span>
             </button>
@@ -435,8 +451,10 @@
             <button class="pop-btn bg-white font-bold text-sm px-3 py-2.5 rounded-lg view-toggle-btn" id="oppViewListBtn" onclick="setOppView('list')" title="List view">📋</button>
           </div>
 
+          <button class="pop-btn bg-white font-bold text-sm px-3 py-2.5 rounded-lg flex items-center gap-1" id="exportCalendarBtn" onclick="exportAllDeadlinesToGoogle()" title="Export all deadlines to Google Calendar">📤 Export</button>
+
           <div class="relative nav-dropdown">
-            <button class="pop-btn font-bold px-6 py-3 text-white" id="trackerIntakeToggle" onclick="toggleNavDropdownPanel('trackerIntakeForm')" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;">Add Opportunity</button>
+            <button class="pop-btn font-bold px-6 py-3 text-white" id="trackerIntakeToggle" onclick="toggleNavDropdownPanel('trackerIntakeForm')" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;">Add Opportunity</button>
 
             <div class="absolute right-0 top-full mt-2 w-72 sm:w-96 bg-white p-4 rounded-2xl z-50 hidden nav-dropdown-panel border-2 border-slate-900" id="trackerIntakeForm">
               <h3 class="font-heading font-bold mb-3">Add Custom Opportunity</h3>
@@ -446,7 +464,7 @@
               <label class="block font-bold text-[10px] uppercase text-slate-500 mb-1" for="trackerIntakeNotes">Extra context (optional)</label>
               <textarea id="trackerIntakeNotes" rows="2" class="w-full border-2 border-slate-900 rounded-lg p-2 text-sm mb-3 font-medium" placeholder="Anything you already know..."></textarea>
 
-              <button class="w-full pop-btn font-bold py-2 text-white flex items-center justify-center gap-2" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" id="trackerIntakeSubmit" onclick="trackerAnalyzeAndAdd()">
+              <button class="w-full pop-btn font-bold py-2 text-white flex items-center justify-center gap-2" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;" id="trackerIntakeSubmit" onclick="trackerAnalyzeAndAdd()">
                 <span class="spin hidden w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
                 <span id="trackerIntakeSubmitLabel">Add</span>
               </button>
@@ -492,15 +510,32 @@
     <!-- ============== PAGE: PROFILE ============== -->
     <section id="page-profile" class="hidden space-y-6">
 
-      <!-- CTA Banner -->
+      <!-- CTA Banner - Sufficient Profile -->
       <div id="profileCtaBanner" class="hidden">
-        <button onclick="startProfileBasedSearch()" class="w-full flex items-center gap-5 rounded-2xl px-7 py-5 text-decoration-none no-underline bg-none border-0 cursor-pointer" style="background: linear-gradient(90deg, #101c36, #182750);">
+        <div class="w-full flex items-center gap-5 rounded-2xl px-7 py-5" style="background: linear-gradient(90deg, #101c36, #182750);">
           <div class="flex-1 min-w-0 text-left">
             <div class="font-bold text-base" style="color: #fff;">Your story is ready to work for you</div>
             <div class="text-sm mt-0.5" style="color: #aab3c9;">Head to Fresh Finds to see opportunities matched to what you just told us.</div>
           </div>
-          <div class="flex items-center gap-2 px-5 py-2.5 rounded-full flex-shrink-0 font-bold text-sm text-white whitespace-nowrap" style="background-color: #f4791d;">See my matches</div>
-        </button>
+          <div class="flex flex-col items-center gap-2 flex-shrink-0">
+            <button onclick="startProfileBasedSearch()" class="flex items-center gap-2 px-5 py-2.5 rounded-full font-bold text-sm text-white whitespace-nowrap" style="background-color: #f4791d; border: none; cursor: pointer;">Find my matches</button>
+            <button class="text-xs font-semibold underline hover:no-underline transition-colors" style="color: #aab3c9; background: none; border: none; cursor: pointer;" onclick="goToProfileChat()">or deepen your story</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- CTA Banner - Insufficient Profile -->
+      <div id="profileInsufficientBanner" class="hidden">
+        <div class="w-full flex items-center gap-5 rounded-2xl px-7 py-5" style="background: linear-gradient(90deg, #101c36, #182750);">
+          <div class="flex-1 min-w-0 text-left">
+            <div class="font-bold text-base" style="color: #fff;">I don't have enough yet to match opportunities</div>
+            <div class="text-sm mt-0.5" style="color: #aab3c9;">Help me help you by building your profile</div>
+          </div>
+          <div class="flex flex-col items-center gap-2 flex-shrink-0">
+            <button onclick="focusProfileChat()" class="flex items-center gap-2 px-5 py-2.5 rounded-full font-bold text-sm text-white whitespace-nowrap" style="background-color: #f4791d; border: none; cursor: pointer;">Deepen your story</button>
+            <button class="text-xs font-semibold underline hover:no-underline transition-colors" style="color: #aab3c9; background: none; border: none; cursor: pointer;" onclick="goToBrowseOpportunities()">or browse opportunities</button>
+          </div>
+        </div>
       </div>
 
       <!-- Main Profile Card -->
@@ -508,7 +543,7 @@
 
         <!-- Header with status badge -->
         <div class="flex flex-wrap justify-between items-start gap-4">
-          <h1 class="font-heading font-bold text-3xl" style="color: #1a2540;">Your Story So Far</h1>
+          <h1 class="font-heading font-bold text-3xl" style="color: #1d4e89;">Your Story So Far</h1>
           <span class="rounded-full px-4 py-1.5 text-sm font-bold whitespace-nowrap" id="profileUpdated" style="background-color: #e9f7c9; color: #4c6a1a;">Updated today</span>
         </div>
 
@@ -527,8 +562,8 @@
 
         <!-- Research Projects Section (if applicable) -->
         <div id="researchSection" class="hidden">
-          <div class="uppercase text-sm font-bold mb-3 flex items-center gap-2" style="color: #6a63e8; letter-spacing: 0.5px;">🔬 RESEARCH PROJECTS</div>
-          <div id="researchList" class="space-y-4 text-base leading-relaxed" style="color: #1a2540;"></div>
+          <div class="uppercase text-sm font-bold mb-3 flex items-center gap-2" style="color: #00b2ca; letter-spacing: 0.5px;">🔬 RESEARCH PROJECTS</div>
+          <div id="researchList" class="space-y-4 text-base leading-relaxed" style="color: #1d4e89;"></div>
         </div>
 
         <!-- Footer actions -->
@@ -537,9 +572,57 @@
           <button class="text-sm font-bold flex items-center gap-1.5" style="color: #d64545; background: none; border: none; cursor: pointer;" onclick="clearProfile()">
             🗑️ Clear profile
           </button>
-          <button class="px-6 py-3 rounded-full font-bold text-sm text-white flex items-center gap-2" style="background-color: #f4791d; border: none; cursor: pointer;" onclick="goToProfileChat()">
-            Deepen my story →
-          </button>
+        </div>
+      </div>
+
+      <!-- Resume/LinkedIn Import Card -->
+      <div class="card-soft p-6 space-y-4" id="importCard">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="font-heading font-bold text-xl">Quick Add: Resume or LinkedIn</h2>
+          <button type="button" class="text-xs font-bold text-slate-500 hover:text-slate-900" onclick="toggleImportCard()">−</button>
+        </div>
+        <p class="text-xs text-slate-400 font-normal italic">Upload your resume or share your LinkedIn profile to automatically extract relevant skills, experience, and education.</p>
+
+        <!-- Import Tabs -->
+        <div class="flex gap-2 border-b-2 border-slate-200 mb-4">
+          <button class="text-sm font-bold pb-2 border-b-2" id="resumeTab" style="border-color: #00b2ca; color: #00b2ca;" onclick="switchImportTab('resume')">📄 Upload Resume</button>
+          <button class="text-sm font-bold pb-2 border-b-2" id="linkedinTab" style="border-color: transparent; color: #8a93a6;" onclick="switchImportTab('linkedin')">🔗 LinkedIn Profile</button>
+        </div>
+
+        <!-- Resume Upload Tab -->
+        <div id="resumeTab-content" class="space-y-3">
+          <p class="text-xs text-slate-500">Upload a PDF or Word document (.pdf, .docx)</p>
+          <div class="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center cursor-pointer hover:border-slate-900 hover:bg-slate-50 transition-colors" id="resumeDropZone" onclick="document.getElementById('resumeFileInput').click()">
+            <p class="text-sm font-bold text-slate-900">📎 Click to upload or drag & drop</p>
+            <p class="text-xs text-slate-500 mt-1">PDF or Word document (max 5MB)</p>
+            <input type="file" id="resumeFileInput" accept=".pdf,.docx" style="display: none;" onchange="handleResumeUpload(this)">
+          </div>
+          <p class="text-xs text-slate-500 min-h-[1em]" id="resumeUploadStatus"></p>
+          <button class="w-full pop-btn bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm" id="resumeSubmitBtn" style="display: none;" onclick="submitResumeExtraction()">Extract from Resume</button>
+        </div>
+
+        <!-- LinkedIn Tab -->
+        <div id="linkedinTab-content" class="hidden space-y-3">
+          <div class="flex gap-2 mb-3">
+            <button class="text-sm font-bold px-3 py-1.5 rounded-lg" id="linkedinPasteBtn" style="background-color: #e9f7c9; color: #4c6a1a;" onclick="switchLinkedInMode('paste')">Paste Text</button>
+            <button class="text-sm font-bold px-3 py-1.5 rounded-lg hover:bg-slate-100" id="linkedinUrlBtn" style="background-color: transparent; color: #8a93a6;" onclick="switchLinkedInMode('url')">Enter URL</button>
+          </div>
+
+          <!-- LinkedIn Paste Mode -->
+          <div id="linkedinPaste-mode" class="space-y-3">
+            <p class="text-xs text-slate-500">Copy and paste your LinkedIn profile text here</p>
+            <textarea id="linkedinTextInput" class="w-full border-2 border-slate-900 rounded-xl p-3 text-sm font-medium" rows="6" placeholder="Paste your LinkedIn profile content here..."></textarea>
+            <button class="w-full pop-btn bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm" onclick="submitLinkedInExtraction('text')">Extract from LinkedIn Text</button>
+          </div>
+
+          <!-- LinkedIn URL Mode -->
+          <div id="linkedinUrl-mode" class="hidden space-y-3">
+            <p class="text-xs text-slate-500">Enter your LinkedIn profile URL (e.g., linkedin.com/in/yourname)</p>
+            <input type="text" id="linkedinUrlInput" class="w-full border-2 border-slate-900 rounded-xl p-3 text-sm font-medium" placeholder="https://linkedin.com/in/yourname">
+            <button class="w-full pop-btn bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm" onclick="submitLinkedInExtraction('url')">Extract from LinkedIn URL</button>
+          </div>
+
+          <p class="text-xs text-slate-500 min-h-[1em]" id="linkedinImportStatus"></p>
         </div>
       </div>
 
@@ -573,8 +656,8 @@
     <div class="modal-panel p-6 sm:p-8 space-y-4">
       <div class="flex items-center justify-between gap-3">
         <div>
-          <h2 class="font-heading font-bold text-xl">Your Next Moves</h2>
-          <p class="text-xs text-slate-400 font-medium">Tasks due this month & next — not everything you're tracking</p>
+          <h2 class="font-heading font-bold text-xl">All Your Tasks</h2>
+          <p class="text-xs text-slate-400 font-medium">Upcoming and beyond — manage everything in one place</p>
         </div>
         <button class="font-bold text-slate-500 hover:text-slate-900 text-lg" onclick="closeTodoModal()">✕</button>
       </div>

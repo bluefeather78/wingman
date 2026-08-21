@@ -186,11 +186,13 @@ def main():
                     "cost_usd": round(cost, 4),
                 })
             else:
+                now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
                 supabase_patch(supabase_url, "opportunities", {"id": f"eq.{opp['id']}"}, {
                     "review_status": status,
                     "review_summary": info.get("review_summary"),
                     "review_sources": sources,
-                    "last_reviewed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "last_reviewed_at": now_iso,
+                    "updated_at": now_iso,
                 }, service_key)
             silent = " [SILENT: no search invoked]" if searches == 0 else ""
             print(f"{status}, {searches} search(es){silent}, ${cost:.4f}" + (" [changed]" if changed else ""))

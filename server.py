@@ -866,6 +866,134 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_json_error(500, f"Failed to extract LinkedIn profile: {str(e)}")
 
+    def handle_user_submitted_opportunity(self):
+        """Accept user-submitted opportunity data, dedupe by URL, and insert into
+        opportunities table with is_active=false. Runs asynchronously."""
+        try:
+            body = self._read_json_body()
+        except Exception:
+            return self.send_json_error(400, "Malformed JSON.")
+
+        name = (body.get("name") or "").strip()
+        url = (body.get("url") or "").strip().lower()
+        opp_type = (body.get("type") or "").strip()
+        section = (body.get("section") or "").strip()
+        meta = (body.get("meta") or "").strip()
+        fit = (body.get("fit") or "").strip()
+        note = (body.get("note") or "").strip()
+        important_dates = body.get("important_dates") or []
+        requirements = body.get("requirements") or []
+        apply_url = (body.get("apply_url") or "").strip()
+        category = (body.get("category") or "").strip()
+
+        if not url or not name:
+            return self.send_json_error(400, "URL and name are required.")
+
+        # Run insertion in background thread
+        def background_insert():
+            try:
+                self._insert_user_opportunity(
+                    name, url, opp_type, section, meta, fit, note,
+                    important_dates, requirements, apply_url, category
+                )
+            except Exception as e:
+                print(f"[User Opportunity] Background insertion failed: {e}")
+
+        thread = threading.Thread(target=background_insert, daemon=True)
+        thread.start()
+
+        self._relay(200, json.dumps({
+            "status": "queued",
+            "message": "Opportunity queued for addition to database"
+        }).encode())
+
+    def _insert_user_opportunity(self, name, url, opp_type, section, meta, fit, note,
+                                 important_dates, requirements, apply_url, category):
+        """Insert user-submitted opportunity into opportunities table, deduplicated by URL."""
+        SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+        SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+        if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+            print("[User Opportunity] Supabase credentials not configured")
+            return
+
+        # Check if URL already exists
+        try:
+            params = {"url": f"eq.{url}", "select": "id"}
+            query = urllib.parse.urlencode(params)
+            req = urllib.request.Request(
+                f"{SUPABASE_URL}/rest/v1/opportunities?{query}",
+                headers={
+                    "apikey": SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                }
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                existing = json.loads(resp.read())
+            if existing:
+                print(f"[User Opportunity] URL already exists: {url}")
+                return
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                print(f"[User Opportunity] Error checking URL: {e}")
+                return
+        except Exception as e:
+            print(f"[User Opportunity] Error checking URL: {e}")
+            return
+
+        # Map section to type if needed
+        if not opp_type:
+            section_to_type = {
+                "summerPrograms": "Program",
+                "internships": "Internship",
+                "researchCompetitions": "Research",
+                "pureCompetitions": "Competition",
+                "conferences": "Conference",
+                "journals": "Journal",
+            }
+            opp_type = section_to_type.get(section, "Program")
+
+        # Generate unique ID
+        timestamp = int(time.time() * 1000)
+        generated_id = f"us{timestamp}"
+
+        # Build row
+        row = {
+            "id": generated_id,
+            "name": name,
+            "url": url,
+            "type": opp_type,
+            "summary": fit or meta or note,
+            "is_active": False,
+            "source": "user-submitted",
+            "apply_url": apply_url or url,
+            "apply_label": "Apply / learn more",
+            "meta": meta or None,
+            "important_dates": important_dates if important_dates else None,
+            "requirements": requirements if requirements else None,
+            "category": category or None,
+            "description": note or None,
+        }
+
+        # Insert into Supabase
+        try:
+            req = urllib.request.Request(
+                f"{SUPABASE_URL}/rest/v1/opportunities",
+                data=json.dumps([row]).encode("utf-8"),
+                method="POST",
+                headers={
+                    "apikey": SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal",
+                }
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                resp.read()
+            print(f"[User Opportunity] Inserted: {generated_id} - {name}")
+        except Exception as e:
+            print(f"[User Opportunity] Insert failed: {e}")
+
     def _extract_multipart_file(self, raw, boundary):
         """Extract filename and file bytes from multipart form data."""
         parts = raw.split(b"--" + boundary)

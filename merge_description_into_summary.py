@@ -76,7 +76,7 @@ def main():
     errors = 0
     for rid, old, new in to_update:
         try:
-            supabase_patch(supabase_url, "opportunities", {"id": f"eq.{rid}"}, {"summary": new}, service_key)
+            supabase_patch(supabase_url, "opportunities", {"id": f"eq.{rid}"}, {"summary": new, "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}, service_key)
             updated += 1
             if updated % 100 == 0:
                 print(f"  ...{updated}/{len(to_update)} updated")

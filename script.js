@@ -126,7 +126,7 @@ async function syncTrackerDeadlines(){
         if(deadlineData.important_dates) item.importantDates = deadlineData.important_dates;
         if(deadlineData.important_date_note) item.note = deadlineData.important_date_note;
         if(deadlineData.was_estimated !== undefined) item.wasEstimated = deadlineData.was_estimated;
-        if(deadlineData.last_checked_at) item.lastCheckedAt = deadlineData.last_checked_at;
+        if(deadlineData.dates_last_checked_at) item.datesLastCheckedAt = deadlineData.dates_last_checked_at;
         updatedCount++;
         break;
       }
@@ -431,14 +431,14 @@ function renderKindGrid(){
             <span class="font-heading font-bold" style="color:#8a93a6">${c.name}</span>
             <span style="background-color:#f4b400;color:#92400e;font-weight:700;font-size:10px;text-transform:uppercase;padding:2px 8px;border-radius:999px">Soon</span>
           </div>
-          <p class="text-xs mt-1" style="color:#8a93a6;font-size:13px">${c.desc}</p>
+          <p class="text-xs mt-1" style="color:#4A6685;font-size:13px">${c.desc}</p>
         </div>
       `;
     }
     return `
       <button style="background-color:#eef0fb;border-radius:16px;border:none;box-shadow:none;padding:16px;text-align:left;width:100%;transition:background-color 0.15s ease;cursor:pointer" onmouseover="this.style.backgroundColor='#dfe4f7'" onmouseout="this.style.backgroundColor='#eef0fb'" onclick="selectKind('${key}')">
         <span class="block font-heading font-bold" style="color:#1a2540">${c.name}</span>
-        <span class="block text-xs mt-1" style="color:#8a93a6;font-size:13px">${c.desc}</span>
+        <span class="block text-xs mt-1" style="color:#4A6685;font-size:13px">${c.desc}</span>
       </button>
     `;
   }).join('');
@@ -922,9 +922,14 @@ document.addEventListener('click', (e) => {
 // past this many days without an update, the Dashboard nudges them to refresh it.
 const PROFILE_STALE_DAYS = 14;
 // Threshold below which a profile is treated as "insufficient" for auto-matching on the
-// Fresh Finds landing (mirrors the "aim for at least 200 characters" guidance shown on the
+// Fresh Finds landing (mirrors the "aim for at least 20 words" guidance shown on the
 // manual describe-your-project textarea, so the bar is the same one students already see).
-const PROFILE_SUFFICIENT_LENGTH = 200;
+const PROFILE_SUFFICIENT_LENGTH = 20;
+// Count words in a profile string (split by whitespace)
+function countProfileWords(text){
+  if(!text) return 0;
+  return text.trim().split(/\s+/).filter(w => w.length > 0).length;
+}
 function daysSince(iso){
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
 }
@@ -981,6 +986,15 @@ function goToProfile(){
 function goToProfileChat(){
   showPage('profile');
   setTimeout(focusProfileChat, 150);
+}
+// Navigate to Fresh Finds and open the browse-by-opportunity-type panel.
+function goToBrowseOpportunities(){
+  showPage('wizard');
+  setTimeout(() => {
+    goStage(0);
+    const panel = document.getElementById('browsePanel');
+    if(panel && panel.classList.contains('hidden')) toggleBrowsePanel();
+  }, 150);
 }
 // The single entry point for "deepen my story" everywhere in the app (the Profile
 // page's own buttons, the stale-profile banner, the Home teaser, the Finder's
@@ -1071,13 +1085,64 @@ let profileChatBusy = false;
 let profileChatStarters = null; // array of 3 kickoff questions, shown once per fresh session
 let profileChatStartersLoading = false;
 
-// Generic fallback starters, used only if the AI call for fresh-session starters fails
-// (or times out) — so a flaky connection never leaves the chat stuck with nothing to show.
-const FALLBACK_STARTER_QUESTIONS = [
+// Predetermined starter questions — used when profile is empty/insufficient (no API cost).
+// Diverse questions covering music, sports, hobbies, personality, jobs, leadership, etc.
+// Rotates through different sets per user so variety is maintained across users.
+const PREDETERMINED_STARTER_QUESTIONS = [
   "If your extracurriculars had a theme song, what would it be — and why does that fit you?",
   "What's something you're weirdly good at that has nothing to do with school?",
-  "If you had one free Saturday with zero obligations, what would you actually do with it?"
+  "If you had one free Saturday with zero obligations, what would you actually do with it?",
+  "What's a skill you're trying to get better at that's purely for fun?",
+  "Tell me about the last time you got totally absorbed in something — what was it?",
+  "Do you have any quirky obsessions or guilty pleasures we should know about?",
+  "What was the last time you felt genuinely proud of yourself — what did you do?",
+  "If you could be part of any group or team (real or imaginary), what would it be?",
+  "What's something about your personality that surprises people when they get to know you?",
+  "Do you create or make anything (art, music, code, video, crafts, cooking)? What appeals to you?",
+  "What role do you usually play in group projects or friend groups — leader, organizer, listener, joker?",
+  "Have you ever had a job or volunteer gig? What did you learn about yourself?",
+  "What kind of stuff makes you lose track of time in the best way?",
+  "If you could teach someone else one skill you have, what would it be?",
+  "What's a topic or hobby you know way more about than most people your age?",
+  "Tell me about someone who inspires you and why they do.",
+  "What's something you've done that took guts or got you out of your comfort zone?",
+  "Do you play sports or do any athletic stuff? Or is movement/fitness not really your thing?",
+  "What's the most fun you've had in the last few months?",
+  "Are you more of a solo person or do you prefer hanging with others?",
+  "What would your friends say is your superpower?",
+  "Have you ever been really into a cause, movement, or community (online or IRL)?",
 ];
+
+let predeterminedStarterRotationIndex = 0; // Track which set of 3 we're on
+
+// Generic fallback starters, used only if the AI call fails AND profile exists
+// (or times out) — so a flaky connection never leaves the chat stuck with nothing to show.
+const FALLBACK_STARTER_QUESTIONS = [
+  "What's something you're weirdly good at that has nothing to do with school?",
+  "If you had one free Saturday with zero obligations, what would you actually do with it?",
+  "What was the last time you felt genuinely proud of yourself — what did you do?"
+];
+
+// Gets the next 3 questions from the predetermined pool, rotating through different sets.
+// This ensures variety across users and sessions when profile is empty/insufficient.
+function getNextPredeterminedStarterQuestions(){
+  const pool = PREDETERMINED_STARTER_QUESTIONS;
+  const startIdx = (predeterminedStarterRotationIndex * 3) % pool.length;
+  predeterminedStarterRotationIndex = (predeterminedStarterRotationIndex + 1) % Math.ceil(pool.length / 3);
+
+  const result = [];
+  for(let i = 0; i < 3; i++){
+    result.push(pool[(startIdx + i) % pool.length]);
+  }
+  return result;
+}
+
+// Check if profile is empty or has very minimal content (< 50 words = too thin for AI personalization).
+function isProfileInsufficientForAI(){
+  const synthesized = studentProfile.synthesized || '';
+  const wordCount = synthesized.trim().split(/\s+/).filter(w => w.length > 0).length;
+  return wordCount < 50;
+}
 
 // Races a promise against a plain timeout so a hung network call can never leave the
 // chat stuck in a loading state forever — it just falls back instead.
@@ -1229,11 +1294,20 @@ function renderProfileChatMessages(){
 }
 
 // Fetches 3 fresh, profile-aware icebreakers to kick off a brand-new chat session.
+// If profile is empty/insufficient, uses predetermined questions (no API cost).
+// If profile exists and is substantial, calls Claude for personalized questions.
 // `regenerate` — set when the student clicked "Regenerate" on an already-loaded set of
 // starters (see regenerateProfileChatStarters) — swaps in a directive that explicitly
 // prioritizes breadth (new, untouched areas of their life) over depth (drilling further
 // into interests the profile already covers well).
 async function profileChatStarterQuestionsFromAI(regenerate){
+  // Cost-optimization: use predetermined questions when profile is empty or too thin.
+  // This avoids unnecessary API calls while still providing high-quality icebreakers.
+  if(isProfileInsufficientForAI()){
+    return getNextPredeterminedStarterQuestions();
+  }
+
+  // Profile is substantial enough for personalized AI questions.
   const breadthDirective = regenerate ? ` The student explicitly asked to regenerate these — swap in a fresh set. Prioritize BREADTH over depth: favor surfacing entirely new areas of their life the profile hasn't touched at all (academics, social life, jobs, family, random obsessions, sports, art, gaming, etc.) over drilling further into what's already well-covered. Where a question does build on something they've already mentioned, use it only as a springboard to go one layer deeper on that specific thing — but most of the three should open up completely uncovered territory rather than deepen existing ones.` : '';
   const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY (may be empty). Come up with exactly THREE distinct, short, fun, wacky-but-meaningful icebreaker questions to kick off a chat session that probes for details the profile is missing or only has shallowly — think music, sports/athletics, hobbies, what they do purely for fun, leadership, part-time jobs, quirks of personality, or deeper specifics on things already mentioned.${breadthDirective} Keep each one playful and casual, like a clever friend riffing with them, not a form — but each must serve a real purpose in understanding this student for extracurricular/college-application matching. This is chat round ${studentProfile.chatRounds + 1} of them returning to this page — the higher that number, the more specific and creative the questions should get. Respond with ONLY a JSON array of exactly 3 short question strings, e.g. ["...", "...", "..."] — no markdown, no preamble, no numbering.`;
   const userContent = `CURRENT PROFILE SUMMARY:\n${studentProfile.synthesized || '(empty)'}\n\nRespond with a JSON array of exactly 3 starter questions only.`;
@@ -1358,6 +1432,218 @@ async function finishProfileChatSession(){
   }
 }
 
+// ============================================================
+// Resume / LinkedIn Profile Import — quickly build profile from existing documents
+// ============================================================
+
+// Tab switching for import card
+function switchImportTab(tabName){
+  const resumeTab = document.getElementById('resumeTab');
+  const linkedinTab = document.getElementById('linkedinTab');
+  const resumeContent = document.getElementById('resumeTab-content');
+  const linkedinContent = document.getElementById('linkedinTab-content');
+
+  if(tabName === 'resume'){
+    resumeTab.style.borderColor = '#00b2ca';
+    resumeTab.style.color = '#00b2ca';
+    linkedinTab.style.borderColor = 'transparent';
+    linkedinTab.style.color = '#8a93a6';
+    resumeContent.classList.remove('hidden');
+    linkedinContent.classList.add('hidden');
+  }else{
+    resumeTab.style.borderColor = 'transparent';
+    resumeTab.style.color = '#8a93a6';
+    linkedinTab.style.borderColor = '#00b2ca';
+    linkedinTab.style.color = '#00b2ca';
+    resumeContent.classList.add('hidden');
+    linkedinContent.classList.remove('hidden');
+  }
+}
+
+// LinkedIn mode switching (paste vs URL)
+function switchLinkedInMode(mode){
+  const pasteMode = document.getElementById('linkedinPaste-mode');
+  const urlMode = document.getElementById('linkedinUrl-mode');
+  const pasteBtn = document.getElementById('linkedinPasteBtn');
+  const urlBtn = document.getElementById('linkedinUrlBtn');
+
+  if(mode === 'paste'){
+    pasteMode.classList.remove('hidden');
+    urlMode.classList.add('hidden');
+    pasteBtn.style.backgroundColor = '#e9f7c9';
+    pasteBtn.style.color = '#4c6a1a';
+    urlBtn.style.backgroundColor = 'transparent';
+    urlBtn.style.color = '#8a93a6';
+  }else{
+    pasteMode.classList.add('hidden');
+    urlMode.classList.remove('hidden');
+    pasteBtn.style.backgroundColor = 'transparent';
+    pasteBtn.style.color = '#8a93a6';
+    urlBtn.style.backgroundColor = '#e9f7c9';
+    urlBtn.style.color = '#4c6a1a';
+  }
+}
+
+// Handle resume file upload
+function handleResumeUpload(input){
+  const file = input.files[0];
+  if(!file) return;
+
+  const statusEl = document.getElementById('resumeUploadStatus');
+  const submitBtn = document.getElementById('resumeSubmitBtn');
+
+  // Validate file type and size
+  const validTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+  const maxSize = 5 * 1024 * 1024; // 5MB
+
+  if(!validTypes.includes(file.type)){
+    statusEl.textContent = '❌ Please upload a PDF or Word document';
+    statusEl.style.color = '#d64545';
+    submitBtn.style.display = 'none';
+    return;
+  }
+
+  if(file.size > maxSize){
+    statusEl.textContent = '❌ File is too large (max 5MB)';
+    statusEl.style.color = '#d64545';
+    submitBtn.style.display = 'none';
+    return;
+  }
+
+  statusEl.textContent = `✓ ${file.name} ready to extract`;
+  statusEl.style.color = '#4c6a1a';
+  submitBtn.style.display = 'block';
+  // Store file for submission
+  window.resumeFileToUpload = file;
+}
+
+// Submit resume extraction
+async function submitResumeExtraction(){
+  if(!window.resumeFileToUpload) return;
+
+  const statusEl = document.getElementById('resumeUploadStatus');
+  const submitBtn = document.getElementById('resumeSubmitBtn');
+
+  statusEl.textContent = 'Extracting from your resume…';
+  statusEl.style.color = '#8a93a6';
+  submitBtn.disabled = true;
+
+  try{
+    const formData = new FormData();
+    formData.append('file', window.resumeFileToUpload);
+
+    const response = await fetch('/api/extract-from-resume', {
+      method: 'POST',
+      body: formData
+    });
+
+    if(!response.ok){
+      throw new Error(`Server returned ${response.status}`);
+    }
+
+    const data = await response.json();
+    const extractedText = data.extracted_text || '';
+
+    if(!extractedText.trim()){
+      statusEl.textContent = '⚠️ No relevant information found in resume';
+      statusEl.style.color = '#d64545';
+      submitBtn.disabled = false;
+      return;
+    }
+
+    // Merge into profile using the same synthesis flow
+    await mergeIntoProfile(extractedText);
+
+    statusEl.textContent = '✓ Profile updated with your resume information!';
+    statusEl.style.color = '#4c6a1a';
+    submitBtn.disabled = false;
+
+    // Reset file input
+    document.getElementById('resumeFileInput').value = '';
+    window.resumeFileToUpload = null;
+    submitBtn.style.display = 'none';
+
+  }catch(e){
+    console.error('Resume extraction failed:', e);
+    statusEl.textContent = '❌ Failed to extract resume. Try again in a moment.';
+    statusEl.style.color = '#d64545';
+    submitBtn.disabled = false;
+  }
+}
+
+// Submit LinkedIn extraction
+async function submitLinkedInExtraction(mode){
+  const statusEl = document.getElementById('linkedinImportStatus');
+  let linkedInInput = '';
+
+  if(mode === 'text'){
+    linkedInInput = document.getElementById('linkedinTextInput').value.trim();
+    if(!linkedInInput){
+      statusEl.textContent = '⚠️ Please paste your LinkedIn profile text';
+      statusEl.style.color = '#d64545';
+      return;
+    }
+  }else{
+    linkedInInput = document.getElementById('linkedinUrlInput').value.trim();
+    if(!linkedInInput){
+      statusEl.textContent = '⚠️ Please enter a LinkedIn URL';
+      statusEl.style.color = '#d64545';
+      return;
+    }
+  }
+
+  statusEl.textContent = 'Extracting from LinkedIn…';
+  statusEl.style.color = '#8a93a6';
+
+  try{
+    const requestBody = mode === 'text'
+      ? { linkedin_text: linkedInInput }
+      : { linkedin_url: linkedInInput };
+
+    const response = await fetch('/api/extract-from-linkedin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+
+    if(!response.ok){
+      const error = await response.json();
+      throw new Error(error.error || `Server returned ${response.status}`);
+    }
+
+    const data = await response.json();
+    const extractedText = data.extracted_text || '';
+
+    if(!extractedText.trim()){
+      statusEl.textContent = '⚠️ No relevant information found in LinkedIn profile';
+      statusEl.style.color = '#d64545';
+      return;
+    }
+
+    // Merge into profile
+    await mergeIntoProfile(extractedText);
+
+    statusEl.textContent = '✓ Profile updated with your LinkedIn information!';
+    statusEl.style.color = '#4c6a1a';
+
+    // Reset inputs
+    document.getElementById('linkedinTextInput').value = '';
+    document.getElementById('linkedinUrlInput').value = '';
+
+  }catch(e){
+    console.error('LinkedIn extraction failed:', e);
+    const msg = e.message === 'Failed to fetch' ? 'Network error — check your URL and try again' : e.message;
+    statusEl.textContent = `❌ ${msg}`;
+    statusEl.style.color = '#d64545';
+  }
+}
+
+// Toggle import card visibility
+function toggleImportCard(){
+  const card = document.getElementById('importCard');
+  if(card) card.classList.toggle('hidden');
+}
+
 
 // Used by empty-profile prompts elsewhere in the app to send the student to the one
 // place the profile now lives: the Profile tab.
@@ -1386,26 +1672,29 @@ function renderSuggestEntryCard(){
   if(btn) btn.textContent = browseOpen ? 'Hide opportunity types' : 'Click here to browse opportunities';
 
   const hasProfile = !!studentProfile.synthesized;
-  const sufficient = hasProfile && studentProfile.synthesized.trim().length >= PROFILE_SUFFICIENT_LENGTH;
-  if(sufficient){
-    // Matches already found this session (e.g. the student clicked "Back to Fresh
-    // Finds" from stage-2) — offer a one-click way back instead of silently re-running
-    // the search, and instead of leaving a stale "Finding your matches…" spinner behind.
-    // If no results yet, maybeAutoSuggestFreshFinds() is already in flight (or about to
-    // be) and will overwrite this with the same loading card.
-    el.innerHTML = currentResults.length ? readyToViewCardHTML() : freshFindsLoadingCardHTML();
+  const sufficient = hasProfile && countProfileWords(studentProfile.synthesized) >= PROFILE_SUFFICIENT_LENGTH;
+
+  if(!sufficient){
+    // Profile is insufficient (or empty) — show the appropriate card
+    el.innerHTML = hasProfile ? insufficientProfileCardHTML() : emptyProfileCardHTML();
     return;
   }
 
-  el.innerHTML = hasProfile ? insufficientProfileCardHTML() : emptyProfileCardHTML();
+  // Profile is sufficient — show results if available, otherwise loading
+  // Matches already found this session (e.g. the student clicked "Back to Fresh
+  // Finds" from stage-2) — offer a one-click way back instead of silently re-running
+  // the search, and instead of leaving a stale "Finding your matches…" spinner behind.
+  // If no results yet, maybeAutoSuggestFreshFinds() is already in flight (or about to
+  // be) and will overwrite this with the same loading card.
+  el.innerHTML = currentResults.length ? readyToViewCardHTML() : freshFindsLoadingCardHTML();
 }
 function readyToViewCardHTML(){
   return `
     <div class="max-w-xl w-full">
-      <h2 class="font-heading font-bold text-3xl" style="color: #1a2540;">Your matches are ready</h2>
-      <p class="text-base leading-relaxed italic mt-4 w-full" style="color: #8a93a6;">Based on everything in your profile.</p>
+      <h2 class="font-heading font-bold text-3xl" style="color: #1d4e89;">Your matches are ready</h2>
+      <p class="text-base leading-relaxed italic mt-4 w-full" style="color: #4A6685;">Based on everything in your profile.</p>
     </div>
-    <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="goStage(2)">View my matches →</button>
+    <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;" onclick="goStage(2)">View my matches →</button>
   `;
 }
 // Shared by both "nothing to show yet" states — same visual pattern, different
@@ -1413,19 +1702,19 @@ function readyToViewCardHTML(){
 function emptyProfileCardHTML(){
   return `
     <div class="max-w-xl w-full">
-      <h2 class="font-heading font-bold text-3xl" style="color: #1a2540;">Your profile is empty</h2>
-      <p class="text-base leading-relaxed italic mt-4 w-full" style="color: #8a93a6;">Every match here gets better once we know you. Takes 2 minutes — add a few things and your matches will show up right here.</p>
+      <h2 class="font-heading font-bold text-3xl" style="color: #1d4e89;">Your profile is empty</h2>
+      <p class="text-base leading-relaxed italic mt-4 w-full" style="color: #4A6685;">Every match here gets better once we know you. Takes 2 minutes — add a few things and your matches will show up right here.</p>
     </div>
-    <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="goToProfileChat()">Build my profile</button>
+    <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;" onclick="goToProfileChat()">Build my profile</button>
   `;
 }
 function insufficientProfileCardHTML(){
   return `
     <div class="max-w-xl w-full">
-      <h2 class="font-heading font-extrabold text-3xl mb-3" style="color: #1a2540;">🌱 Your profile needs a bit more detail</h2>
-      <p class="text-sm w-full" style="color: #8a93a6;">We've got a start, but not quite enough to match you well yet. Add a few more specifics — real projects, real interests — and your matches will show up right here.</p>
+      <h2 class="font-heading font-bold text-3xl" style="color: #1d4e89;">I don't have enough yet to match opportunities</h2>
+      <p class="text-base leading-relaxed italic mt-4 w-full" style="color: #4A6685;">Help me help you by building your profile</p>
     </div>
-    <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="goToProfileChat()">Add to my profile →</button>
+    <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;" onclick="focusProfileChat()">Deepen your story</button>
   `;
 }
 function freshFindsLoadingCardHTML(){
@@ -1433,8 +1722,8 @@ function freshFindsLoadingCardHTML(){
     <div class="max-w-xl flex items-center gap-3">
       <span class="spin inline-block w-6 h-6 border-2 rounded-full animate-spin shrink-0" style="border-color: #f4791d; border-top-color: transparent;"></span>
       <div>
-        <h2 class="font-heading font-extrabold text-2xl" style="color: #1a2540;">Finding your matches…</h2>
-        <p class="text-sm mt-1" style="color: #8a93a6;">Searching based on everything in your profile.</p>
+        <h2 class="font-heading font-extrabold text-2xl" style="color: #1d4e89;">Finding your matches…</h2>
+        <p class="text-sm mt-1" style="color: #4A6685;">Searching based on everything in your profile.</p>
       </div>
     </div>
   `;
@@ -1442,10 +1731,10 @@ function freshFindsLoadingCardHTML(){
 function freshFindsErrorCardHTML(message){
   return `
     <div class="max-w-xl">
-      <h2 class="font-heading font-extrabold text-3xl mb-3" style="color: #1a2540;">Couldn't load your matches</h2>
-      <p class="text-sm" style="color: #8a93a6;">${escapeHtmlTracker(message || 'Something went wrong — try again, or browse opportunities by type below.')}</p>
+      <h2 class="font-heading font-extrabold text-3xl mb-3" style="color: #1d4e89;">Couldn't load your matches</h2>
+      <p class="text-sm" style="color: #4A6685;">${escapeHtmlTracker(message || 'Something went wrong — try again, or browse opportunities by type below.')}</p>
     </div>
-    <button class="mt-6 pop-btn bg-white font-bold px-6 py-3 rounded-xl" style="border: 2px solid #1a2540;" onclick="renderSuggestEntryCard()">Try again</button>
+    <button class="mt-6 pop-btn bg-white font-bold px-6 py-3 rounded-xl" style="border: 2px solid #1d4e89; color: #1d4e89;" onclick="renderSuggestEntryCard()">Try again</button>
   `;
 }
 // Called when landing on Fresh Finds (stage 0) with a fresh session (see showPage()).
@@ -1455,7 +1744,7 @@ function freshFindsErrorCardHTML(message){
 // build the profile (or the "prefer to browse" link right below it) stays front and center.
 async function maybeAutoSuggestFreshFinds(){
   const hasProfile = !!studentProfile.synthesized;
-  const sufficient = hasProfile && studentProfile.synthesized.trim().length >= PROFILE_SUFFICIENT_LENGTH;
+  const sufficient = hasProfile && countProfileWords(studentProfile.synthesized) >= PROFILE_SUFFICIENT_LENGTH;
   if(!sufficient) return;
   // Already have matches from earlier this session (e.g. stepped back to stage-0 via
   // "Back to Fresh Finds") — don't silently re-run the search, let the "ready" card
@@ -1891,7 +2180,14 @@ function resultCardHTML(r){
       <div>
         <h3 class="font-heading text-2xl sm:text-3xl font-extrabold text-slate-900"><a href="${o.url}" target="_blank" class="hover:underline" onclick="event.stopPropagation()">${o.name}</a></h3>
       </div>
-      ${r.reason ? `<div class="flex gap-3 items-stretch">
+      ${r.aiReasoning ? `<div class="flex gap-3 items-stretch">
+        <div class="w-1 rounded-full bg-indigo-400 shrink-0"></div>
+        <div class="flex-1">
+          <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Profile match ${r.aiRank ? `• Rank #${r.aiRank}` : ''}</p>
+          <p class="font-heading text-lg sm:text-xl font-bold text-slate-900 leading-snug">${r.aiReasoning}</p>
+        </div>
+      </div>` : ''}
+      ${r.reason && !r.aiReasoning ? `<div class="flex gap-3 items-stretch">
         <div class="w-1 rounded-full bg-yellow-400 shrink-0"></div>
         <div>
           <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Why it fits</p>
@@ -1907,7 +2203,7 @@ function resultCardHTML(r){
   `;
 }
 // ---------- Result filters (type / cost / season / format) ----------
-let resultFilters = { type: new Set(), price: new Set(), location: new Set(), season: new Set(), untracked: false };
+let resultFilters = { type: new Set(), price: new Set(), location: new Set(), season: new Set(), profileTags: new Set(), untracked: false };
 let resultVisibleCount = 10;
 const RESULT_FILTER_FIELDS = [
   { key: 'type', field: 'type', label: 'Type' },
@@ -1915,29 +2211,297 @@ const RESULT_FILTER_FIELDS = [
   { key: 'season', field: 'season', label: 'Season' },
   { key: 'location', field: 'location', label: 'Format' }
 ];
+
+// Extract specific project tags from synthesized profile using Gemini
+// Cache includes both simple tags and enriched semantic metadata for matching
+let profileTagsCache = {
+  profile: '',
+  profileWordCount: 0,
+  tags: [],           // Simple string tags for filter UI
+  enrichedTags: [],   // Enriched tags with semantic metadata
+  tagEnrichmentMap: {} // Per-tag enrichment cache (tag string -> enriched data)
+};
+
+// Enrich a single tag with semantic metadata (category, intent, next steps, keywords)
+async function enrichProfileTag(tag) {
+  if(!tag || profileTagsCache.tagEnrichmentMap[tag]) {
+    return profileTagsCache.tagEnrichmentMap[tag] || null;
+  }
+
+  const system = `You are helping match a high school student's interests/goals to the best opportunities.
+
+Student's profile tag: "${tag}"
+
+Analyze what this tag represents and what would best help them grow. Return a JSON object with:
+1. category: One of: "competition_prep", "career_aspiration", "academic_goal", "research_project", "app_project", "business_idea", "skill_learning", "interest_exploration"
+2. intent: What are they trying to achieve? (1 sentence)
+3. nextSteps: Array of 2-3 logical milestones (e.g., ["Master advanced techniques", "Enter competitions", "Achieve recognition"])
+4. opportunityTypes: Array of opportunity types (e.g., "hackathon", "demo_day", "beta_testing_community", "research_conference", "internship", "summer_program", "bootcamp", "startup_pitch")
+5. semanticKeywords: Array of 8-12 keywords/phrases specific to this tag
+6. matchReason: Template string like "Great for {nextSteps[0]}"
+
+Return ONLY the JSON object, no other text.`;
+
+  const userContent = `Analyze this tag and provide semantic enrichment.`;
+
+  try {
+    const response = await callGemini(system, userContent, false);
+    const enriched = extractJSON(response);
+    if (enriched) {
+      enriched.tag = tag;
+      profileTagsCache.tagEnrichmentMap[tag] = enriched;
+      return enriched;
+    }
+  } catch(e) {
+    console.error('Error enriching profile tag:', tag, e);
+  }
+  return null;
+}
+
+async function extractProfileTags(){
+  if(!studentProfile.synthesized) return [];
+
+  // Calculate current profile word count
+  const currentWordCount = studentProfile.synthesized.trim().split(/\s+/).filter(w => w.length > 0).length;
+  const wordCountDiff = Math.abs(currentWordCount - profileTagsCache.profileWordCount);
+
+  // Return cached tags if profile hasn't materially changed (< 50 words difference)
+  if(profileTagsCache.profile === studentProfile.synthesized && wordCountDiff < 50 && profileTagsCache.enrichedTags.length > 0){
+    return profileTagsCache.enrichedTags;
+  }
+
+  // Extract simple tags from profile
+  const system = `You are extracting specific interests, goals, and pursuits from a student's profile to create concise filter tags. Extract and create tags for:
+1. Active passion projects and research projects (what they're currently building/researching)
+2. Deep interests they want to explore further (areas they're curious about and want to learn more in)
+3. Dormant interests (things they're interested in but haven't started pursuing yet)
+4. Academic goals (winning competitions, achieving certifications, mastering skills)
+5. Career aspirations (wanting to work at specific companies, roles, or industries)
+
+For each item, create a short, specific tag (max 60 characters) that captures what they want or are doing. Use action-oriented language where possible. Return ONLY a JSON array of strings, one tag per item, with no other text or formatting.
+Example format: ["Building AI chatbots", "Wants to win Math Olympiad", "Interested in deep learning", "Wants to intern at Google", "Learning quantum computing"]`;
+
+  const userContent = `Extract all interests, goals, and pursuits from this student profile:\n\n${studentProfile.synthesized}`;
+
+  try {
+    const response = await callGemini(system, userContent, false);
+    const tags = extractJSON(response) || [];
+
+    // Enrich each tag with semantic metadata in parallel
+    const enrichedPromises = tags.map(tag => enrichProfileTag(tag));
+    const enrichedTags = await Promise.all(enrichedPromises);
+
+    // Filter out failed enrichments, keep only successful ones
+    const validEnrichedTags = enrichedTags.filter(e => e !== null);
+
+    profileTagsCache = {
+      profile: studentProfile.synthesized,
+      profileWordCount: currentWordCount,
+      tags,
+      enrichedTags: validEnrichedTags,
+      tagEnrichmentMap: profileTagsCache.tagEnrichmentMap
+    };
+
+    return validEnrichedTags;
+  } catch(e) {
+    console.error('Error extracting profile tags:', e);
+    return [];
+  }
+}
+
+// Score an opportunity against an enriched profile tag
+// Returns { score (0-100), matchReasons (array of strings) }
+function scoreOpportunityAgainstEnrichedTag(opp, enrichedTag) {
+  if (!enrichedTag) return { score: 0, matchReasons: [] };
+
+  let score = 0;
+  const matchReasons = [];
+  const oppText = `${opp.name} ${opp.org} ${opp.summary}`.toLowerCase();
+  const summaryText = (opp.summary || '').toLowerCase();
+
+  // 1. Opportunity type exact match (+60 points) — most reliable signal
+  if (enrichedTag.opportunityTypes && enrichedTag.opportunityTypes.length > 0) {
+    const oppType = (opp.type || '').toLowerCase();
+    const typeMatch = enrichedTag.opportunityTypes.some(t =>
+      oppType.includes(t.toLowerCase()) || t.toLowerCase().includes(oppType)
+    );
+    if (typeMatch) {
+      score += 60;
+      const reason = (enrichedTag.nextSteps && enrichedTag.nextSteps[0]) || enrichedTag.intent || 'Perfect match';
+      matchReasons.push(`Perfect fit: ${reason}`);
+    }
+  }
+
+  // 2. Semantic keyword matches — require at least 2 keywords in summary for credibility
+  // Single keywords are too loose (e.g., "robotics" appears everywhere)
+  if (enrichedTag.semanticKeywords && enrichedTag.semanticKeywords.length > 0 && summaryText.length > 0) {
+    const matchedKeywords = enrichedTag.semanticKeywords.filter(kw =>
+      summaryText.includes(kw.toLowerCase())
+    );
+
+    // Only score if 2+ keywords match in the summary (not just name/org)
+    // This filters out loose matches like a generic "robotics conference" for "brainstorming robotics"
+    if (matchedKeywords.length >= 2) {
+      score += Math.min(30, matchedKeywords.length * 10);
+
+      if (matchReasons.length === 0) {
+        matchReasons.push(`Focuses on ${matchedKeywords.slice(0, 2).join(', ')}`);
+      }
+    }
+  }
+
+  return {
+    score: Math.min(100, score),
+    matchReasons: matchReasons.slice(0, 2) // Top 2 reasons only
+  };
+}
+
 function resetResultFilters(){
   Object.values(resultFilters).forEach(s => { if(s instanceof Set) s.clear(); });
   resultFilters.untracked = searchingFromMyVibes; // Enable untracked filter by default when from My Vibes
   searchingFromMyVibes = false; // Reset flag after using it
   resultVisibleCount = 10;
 }
-function filterResultList(list){
+
+// Score all opportunities against a profile tag in a single Gemini call
+// Returns { id, rank, reasoning } for matched opportunities (poor matches omitted by AI)
+async function batchScoreOpportunitiesWithAI(enrichedTag, opportunities){
+  if(!enrichedTag || !opportunities.length) return [];
+
+  // Format opportunities for Gemini
+  const oppsList = opportunities.map(opp =>
+    `ID: ${opp.id} | Name: ${opp.name} | Type: ${opp.type} | Summary: ${opp.summary || '(no description)'}`
+  ).join('\n');
+
+  const system = `You are helping a student find opportunities that match their interests and goals. Write directly to them in second person (using "you").`;
+
+  const userContent = `STUDENT'S PROFILE TAG: "${enrichedTag.tag}"
+INTENT: ${enrichedTag.intent || '(no intent specified)'}
+NEXT STEPS: ${(enrichedTag.nextSteps || []).join(', ') || '(no specific steps)'}
+
+OPPORTUNITIES TO RANK:
+${oppsList}
+
+Rank these opportunities by relevance to this student's profile. Return JSON array with only genuinely relevant opportunities:
+[
+  { "id": "opp_id", "rank": 1, "reasoning": "Brief 1-sentence message directly to the student using 'you' language" },
+  { "id": "opp_id", "rank": 2, "reasoning": "Brief 1-sentence message directly to the student using 'you' language" },
+  ...
+]
+
+For each reasoning, write directly to the student as if you're the app speaking to them. Example: "This aligns perfectly with your interest in AI competitions" or "You can showcase your skills here". Omit opportunities that don't align with the profile. Include only good/strong matches.
+Return ONLY valid JSON, no markdown, no preamble.`;
+
+  try {
+    const response = await callGemini(system, userContent, false);
+    const results = extractJSON(response) || [];
+    return results;
+  } catch(e) {
+    console.error('Batch scoring failed:', e);
+    return []; // Return empty on error — filterResultList will fall back to keyword matching
+  }
+}
+
+function opportunityMatchesProfileTag(opp, tag){
+  // Precise matching: look for key concepts from the project in the opportunity description
+  const oppText = `${opp.name} ${opp.org} ${opp.summary}`.toLowerCase();
+  const tagLower = tag.toLowerCase();
+
+  // Direct substring match (exact project name/phrase)
+  if(oppText.includes(tagLower)) return true;
+
+  // Extract key domain words (nouns, specific terms) - at least 3 chars, exclude very common words
+  const stopWords = new Set(['and', 'the', 'for', 'with', 'from', 'that', 'this', 'are', 'was', 'using', 'app', 'project', 'students', 'investigating', 'current']);
+  const words = tagLower.split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
+
+  if(words.length === 0) return false;
+
+  // Look for key concepts - at least 2 matching words from the project tag
+  const matches = words.filter(word => oppText.includes(word));
+
+  return matches.length >= Math.min(2, Math.max(1, Math.ceil(words.length / 2)));
+}
+
+async function filterResultList(list){
+  // First apply field-based filters (type, price, season, location)
   let filtered = list.filter(r => RESULT_FILTER_FIELDS.every(f => {
     const set = resultFilters[f.key];
     return !set.size || set.has(r.opp[f.field]);
   }));
-  // Apply untracked filter if enabled
+
+  // Apply AI-powered profile tag filter if enabled
+  if(resultFilters.profileTags.size > 0){
+    const selectedTagStrings = Array.from(resultFilters.profileTags);
+
+    // Get the single selected enriched tag (single-select enforced by toggleResultFilter)
+    const selectedEnrichedTag = profileTagsCache.enrichedTags.find(et =>
+      selectedTagStrings.includes(et.tag)
+    );
+
+    if(selectedEnrichedTag){
+      // Call Gemini to score all opportunities at once
+      const aiResults = await batchScoreOpportunitiesWithAI(selectedEnrichedTag, filtered.map(r => r.opp));
+
+      // Create a map of ID -> reasoning for quick lookup
+      const aiScores = {};
+      aiResults.forEach(result => {
+        aiScores[result.id] = { reasoning: result.reasoning, rank: result.rank };
+      });
+
+      // Filter to only opportunities returned by AI (AI is saying "omit poor matches")
+      // and attach reasoning
+      filtered = filtered
+        .filter(r => aiScores[r.opp.id]) // Only keep opps that AI rated
+        .map(r => {
+          r.aiReasoning = aiScores[r.opp.id].reasoning;
+          r.aiRank = aiScores[r.opp.id].rank;
+          return r;
+        })
+        .sort((a, b) => a.aiRank - b.aiRank); // Sort by AI rank order
+    }
+  }
+
+  // Apply untracked filter if enabled (after AI filtering)
   if(resultFilters.untracked){
     filtered = filtered.filter(r => !findTrackedItem(r.opp));
   }
   return filtered;
 }
-function renderResultFilterBar(list){
+async function renderResultFilterBar(list){
   const wrap = document.getElementById('resultFilterWrap');
   const bar = document.getElementById('resultFilterBar');
   if(!wrap || !bar) return;
   let anyFacet = false;
   let html = '';
+
+  // Add profile tags filter if profile exists (enriched tags with semantic metadata)
+  const enrichedTags = await extractProfileTags();
+  if(enrichedTags.length > 0){
+    anyFacet = true;
+    const panelId = 'resultFilterPanel_profileTags';
+    const activeCount = resultFilters.profileTags.size;
+    html += `
+      <div class="relative nav-dropdown">
+        <button class="pop-btn bg-white font-bold text-xs px-3 py-2 rounded-xl flex items-center gap-1" onclick="toggleNavDropdownPanel('${panelId}')">
+          <span>▾</span> Your Profile${activeCount ? ` (${activeCount})` : ''}
+        </button>
+        <div class="absolute left-0 top-full mt-2 w-56 bg-white p-3 rounded-2xl z-50 hidden nav-dropdown-panel border-2 border-slate-900" id="${panelId}">
+          <div class="space-y-1">
+            <label class="flex items-center gap-2 text-xs font-medium py-1 cursor-pointer">
+              <input type="radio" name="profileTagFilter" ${resultFilters.profileTags.size === 0 ? 'checked' : ''} onchange="resultFilters.profileTags.clear(); resultVisibleCount = 10; renderResults();">
+              None
+            </label>
+            ${enrichedTags.map(enriched => `
+              <label class="flex items-center gap-2 text-xs font-medium py-1 cursor-pointer">
+                <input type="radio" name="profileTagFilter" ${resultFilters.profileTags.has(enriched.tag) ? 'checked' : ''} onchange="toggleResultFilter('profileTags', '${enriched.tag}')">
+                ${enriched.tag}
+              </label>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  }
 
   // Add untracked filter toggle
   html += `
@@ -1980,7 +2544,20 @@ function renderResultFilterBar(list){
 }
 function toggleResultFilter(key, value){
   const set = resultFilters[key];
-  if(set.has(value)) set.delete(value); else set.add(value);
+
+  // Profile tags are single-select: clear others when selecting a new one
+  if(key === 'profileTags'){
+    if(set.has(value)){
+      set.delete(value);
+    } else {
+      set.clear();
+      set.add(value);
+    }
+  } else {
+    // Other filters allow multiple selections
+    if(set.has(value)) set.delete(value); else set.add(value);
+  }
+
   resultVisibleCount = 10;
   renderResults();
 }
@@ -1997,7 +2574,7 @@ function showMoreResults(){
   resultVisibleCount += 10;
   renderResults();
 }
-function renderResults(){
+async function renderResults(){
   // Already-tracked opportunities float to the very top, then saved matches (clicking
   // "Save Match" visibly moves a card up into this group), then everything else —
   // each group still ordered by tier internally.
@@ -2007,8 +2584,17 @@ function renderResults(){
     if(rankDiff !== 0) return rankDiff;
     return TIER_ORDER[a.tier] - TIER_ORDER[b.tier];
   });
-  renderResultFilterBar(sorted);
-  const filtered = filterResultList(sorted);
+
+  // Show loading state while enriching profile tags
+  const bar = document.getElementById('resultFilterBar');
+  const wrap = document.getElementById('resultFilterWrap');
+  if(bar && wrap) {
+    bar.innerHTML = '<div class="flex items-center gap-2"><span class="inline-block w-4 h-4 border-2 rounded-full border-indigo-300 border-t-indigo-600 animate-spin"></span><span class="text-sm text-slate-600">Analyzing your profile…</span></div>';
+    wrap.classList.remove('hidden');
+  }
+
+  await renderResultFilterBar(sorted);
+  const filtered = await filterResultList(sorted);
   const visible = filtered.slice(0, resultVisibleCount);
   document.getElementById('resultGrid').innerHTML = visible.length
     ? visible.map(resultCardHTML).join('')
@@ -2335,6 +2921,11 @@ function shortDate(iso){
   const d = new Date(iso + 'T00:00:00');
   return d.toLocaleDateString('en-US', {month:'short', day:'numeric'}).toUpperCase();
 }
+// Format date as "Mon DD" (e.g., "Nov 13") for tracker card date display
+function formatMonthDay(iso){
+  const d = new Date(iso + 'T00:00:00');
+  return d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+}
 // Gathers every known date on an item (each deadline milestone, plus the
 // opens date if known) and returns whichever comes soonest that hasn't
 // already passed — "the first deadline the system finds," not necessarily
@@ -2342,8 +2933,8 @@ function shortDate(iso){
 // has already passed.
 function earliestUpcoming(item){
   const candidates = (item.importantDates || [])
-    .filter(d => d.dateISO)
-    .map(d => ({ date: d.dateISO, label: d.label, kind: d.type || 'deadline' }));
+    .filter(d => d.dateISO || d.date_iso)
+    .map(d => ({ date: d.dateISO || d.date_iso, label: d.label, kind: d.type || 'deadline' }));
   if(!candidates.length) return null;
   const future = candidates.filter(c => daysUntil(c.date) >= 0);
   future.sort((a, b) => a.date.localeCompare(b.date));
@@ -2363,11 +2954,13 @@ function getDisplayMilestones(item){
   const seen = new Set();
   const milestones = [];
   (item.importantDates || []).forEach(d => {
-    if(!d.dateISO) return;
-    const key = d.dateISO + '|' + (d.label || '');
+    // Handle both dateISO (camelCase) and date_iso (snake_case) since dates may come from different sources
+    const dateISO = d.dateISO || d.date_iso;
+    if(!dateISO) return;
+    const key = dateISO + '|' + (d.label || '');
     if(seen.has(key)) return;
     seen.add(key);
-    milestones.push({ date: d.dateISO, label: d.label || 'Date', type: d.type || 'deadline' });
+    milestones.push({ date: dateISO, label: d.label || 'Date', type: d.type || 'deadline' });
   });
   milestones.sort((a, b) => a.date.localeCompare(b.date));
   milestones.forEach(m => { m.isPast = daysUntil(m.date) < 0; });
@@ -2387,13 +2980,21 @@ const PROGRESS_STATUS_LABEL = { not_started: 'Future Event', in_progress: 'Happe
 const ACTION_ITEM_STATUS_LABEL = { not_started: 'Not Started', in_progress: 'In Progress', completed: 'Completed' };
 function computeProgressStatus(item){
   if(item.status === 'not_running') return 'completed';
-  const dates = (item.importantDates || []).map(d => d.dateISO).filter(Boolean);
+  const dates = (item.importantDates || []).map(d => d.dateISO || d.date_iso).filter(Boolean);
   if(!dates.length) return 'not_started';
   dates.sort();
   const firstStep = dates[0];
   const lastStep = dates[dates.length - 1];
   if(daysUntil(firstStep) > 0) return 'not_started'; // first step (registration/opens) hasn't happened yet
-  if(daysUntil(lastStep) < 0) return 'completed'; // last known milestone for the cycle has passed
+  // If all dates are past, check if this is a running program with estimated dates:
+  // For recurring programs, estimated dates for a past cycle don't mean the program is over.
+  // Mark as 'not_started' (Future Event) so students know to check for next cycle dates.
+  if(daysUntil(lastStep) < 0) {
+    if(item.status === 'running' && item.wasEstimated) {
+      return 'not_started'; // Recurring program with estimated dates for past cycle — next cycle coming
+    }
+    return 'completed'; // Confirmed past dates or non-running program
+  }
   return 'in_progress';
 }
 // Opportunity event-timing state pill — always green/orange/red for Happening Now /
@@ -2450,7 +3051,7 @@ function progressBarHTML(counts, total, labels = PROGRESS_STATUS_LABEL, order = 
   }
   const track = order.map(k => `<div class="progress-seg seg-${kind}-${k}" style="width:${(counts[k] / total * 100)}%"></div>`).join('');
   const legend = order.map(k => `
-    <span class="progress-legend-item text-xs font-bold text-slate-600">
+    <span class="progress-legend-item text-xs font-bold" style="color: #1d4e89;">
       <span class="progress-legend-dot seg-${kind}-${k}"></span> ${labels[k]} (${counts[k]})
     </span>
   `).join('');
@@ -2524,13 +3125,35 @@ function trackerCardHTML(item, sourceLabel){
   const milestones = getDisplayMilestones(item);
   const allMilestonesPast = milestones.length > 0 && milestones.every(m => m.isPast);
   const staleWarning = allMilestonesPast
-    ? `<div class="bg-rose-100 border-2 border-slate-900 rounded-xl px-4 py-2.5"><p class="text-xs font-bold text-rose-800">⚠ No confirmed upcoming date — every date shown below is from a past cycle. Check for updates.</p></div>`
+    ? (item.status === 'running'
+        ? `<div class="bg-yellow-100 border-2 border-slate-900 rounded-xl px-4 py-2.5"><p class="text-xs font-bold text-amber-800">📅 These dates are from the last cycle. Check the program site for next cycle dates.</p></div>`
+        : `<div class="bg-rose-100 border-2 border-slate-900 rounded-xl px-4 py-2.5"><p class="text-xs font-bold text-rose-800">⚠ No upcoming dates — this program's last cycle has ended.</p></div>`)
     : '';
+
+  // Group milestones by year
+  const milestonesByYear = {};
+  milestones.forEach(m => {
+    const year = m.date.slice(0, 4);
+    if(!milestonesByYear[year]) milestonesByYear[year] = [];
+    milestonesByYear[year].push(m);
+  });
+
   const deadlineRows = milestones.length
-    ? `<div class="space-y-2">
-         ${milestones.map(m => `<div class="flex items-center gap-3 text-xs font-bold ${m.isPast ? 'text-slate-400' : 'text-slate-800'}"><span class="bg-white border-2 ${m.isPast ? 'border-slate-300' : 'border-slate-900'} px-2.5 py-1 rounded-lg uppercase tracking-wide shrink-0">${shortDate(m.date)}</span> ${m.label}${m.isPast ? ' <span class="italic normal-case font-medium">(passed)</span>' : ''}</div>`).join('')}
+    ? `<div>
+         ${Object.keys(milestonesByYear).sort().map(year => `
+           <div style="font-weight:700;font-size:11px;color:#0f1c33;background:#eee9dd;border-radius:6px;padding:4px 9px;display:inline-block;margin-bottom:8px;font-family:ui-monospace,Menlo,monospace;letter-spacing:0.03em">${year}</div>
+           <div style="display:flex;flex-direction:column;margin-bottom:14px">
+             ${milestonesByYear[year].map(m => `
+               <div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #eee;font-size:14px">
+                 <div style="font-weight:700;color:#0f1c33;width:66px;flex-shrink:0">${formatMonthDay(m.date)}</div>
+                 <div style="font-weight:600;color:#33404f">${m.label}</div>
+               </div>
+             `).join('')}
+           </div>
+         `).join('')}
        </div>`
     : '';
+
   const isSaved = !!trackerSavedState[item.id];
   const progress = computeProgressStatus(item);
   // Shown only for the batch of opportunities added in the current session (cleared
@@ -2703,15 +3326,15 @@ function computeStats(){
 function renderStats(){
   const s = computeStats();
   document.getElementById('statTotal').textContent = `${s.total} tracked`;
-  const bars = progressBarHTML({ not_started: s.not_started, in_progress: s.in_progress, completed: s.completed }, s.total);
+  const bars = progressBarHTML({ not_started: s.not_started, in_progress: s.in_progress, completed: s.completed }, s.total, PROGRESS_STATUS_LABEL, ['in_progress', 'not_started']);
   document.getElementById('homeProgressTrack').innerHTML = bars.track;
   document.getElementById('homeProgressLegend').innerHTML = bars.legend;
 
   const ctaEl = document.getElementById('homeTrackCTA');
   if(ctaEl){
     ctaEl.innerHTML = s.total === 0
-      ? `<button class="pop-btn font-bold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="showPage('wizard')">Find your first opportunity to track</button>`
-      : `<button class="pop-btn bg-white text-slate-900 font-bold text-xs px-4 py-2 rounded-xl" onclick="showPage('wizard')">Look for Fresh Finds</button>`;
+      ? `<button class="pop-btn font-bold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;" onclick="showPage('wizard')">Find your first opportunity to track</button>`
+      : `<button class="pop-btn bg-white font-bold text-xs px-4 py-2 rounded-xl" style="color: #1d4e89;" onclick="showPage('wizard')">Look for Fresh Finds</button>`;
   }
 }
 
@@ -2759,14 +3382,14 @@ function renderHomeTodo(){
     return `
       <div class="flex items-center justify-between gap-3 py-2 border-b border-slate-100 last:border-0">
         <div class="min-w-0">
-          <p class="font-bold text-sm text-slate-900 truncate">${item.name}</p>
-          <p class="text-xs text-slate-500">${shortDate(nextDate)} · ${nextLabel}${taskCount ? ` · ${taskCount} task${taskCount > 1 ? 's' : ''}` : ''}</p>
+          <p class="font-bold text-sm truncate" style="color: #1d4e89;">${item.name}</p>
+          <p class="text-xs" style="color: #4A6685;">${shortDate(nextDate)} · ${nextLabel}${taskCount ? ` · ${taskCount} task${taskCount > 1 ? 's' : ''}` : ''}</p>
         </div>
         ${statusPillHTML(status)}
       </div>
     `;
   }).join('');
-  listEl.insertAdjacentHTML('beforeend', `<div class="text-left pt-2"><button class="pop-btn bg-white text-slate-900 font-bold text-xs px-4 py-2 rounded-xl" onclick="event.stopPropagation(); openTodoModal();">See all tasks</button></div>`);
+  listEl.insertAdjacentHTML('beforeend', `<div class="text-left pt-2"><button class="pop-btn bg-white font-bold text-xs px-4 py-2 rounded-xl" style="color: #1d4e89;" onclick="event.stopPropagation(); openTodoModal();">See all tasks</button></div>`);
 }
 
 // ---------- Home to-do expand modal ----------
@@ -2781,6 +3404,11 @@ function cycleActionItemState(itemId, actionId){
         saveTrackerData();
         renderHomeTodo();
         renderTodoModalContent();
+        // Also update beyond section if it's visible
+        const beyondSection = document.getElementById('homeTodoBeyondSection');
+        if(beyondSection && !beyondSection.classList.contains('hidden')){
+          renderHomeTodoBeyond();
+        }
       }
       return;
     }
@@ -2790,11 +3418,16 @@ function renderTodoModalContent(){
   const wrap = document.getElementById('todoModalBody');
   if(!wrap) return;
   const upcoming = getUpcomingDeadlineItems();
-  if(!upcoming.length){
-    wrap.innerHTML = `<p class="empty-state">Nothing due this month or next — you're all caught up.</p>`;
+  const beyond = getBeyondDeadlineItems();
+  const allTasks = [...upcoming, ...beyond];
+
+  if(!allTasks.length){
+    wrap.innerHTML = `<p class="empty-state">Nothing due — you're all caught up.</p>`;
     return;
   }
-  wrap.innerHTML = upcoming.map(({ item, nextDate, nextLabel }) => {
+
+  // Helper function to render a single task card
+  const renderTaskCard = ({ item, nextDate, nextLabel }) => {
     const status = computeProgressStatus(item);
     const actionRows = (item.actionItems || []).map(ai => `
       <div class="flex items-center justify-between gap-3 py-1.5">
@@ -2803,7 +3436,7 @@ function renderTodoModalContent(){
       </div>
     `).join('');
     return `
-      <div class="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4">
+      <div class="bg-slate-50 border-2 border-slate-200 rounded-2xl p-4 mb-3">
         <div class="flex items-start justify-between gap-3 mb-1">
           <div class="min-w-0">
             <h4 class="font-bold text-sm text-slate-900 truncate"><a href="${item.url}" target="_blank" class="hover:underline">${item.name}</a></h4>
@@ -2815,7 +3448,14 @@ function renderTodoModalContent(){
         ${actionRows ? `<div class="border-t border-slate-200 pt-2 mt-2 space-y-0.5">${actionRows}</div>` : `<p class="text-xs text-slate-400 italic">No sub-tasks generated for this one.</p>`}
       </div>
     `;
-  }).join('');
+  };
+
+  let html = '';
+
+  // Render upcoming and beyond tasks together without section headers
+  html = allTasks.map(renderTaskCard).join('');
+
+  wrap.innerHTML = html;
 }
 function openTodoModal(){
   renderTodoModalContent();
@@ -2825,6 +3465,89 @@ function openTodoModal(){
 function closeTodoModal(){
   document.getElementById('todoModal').classList.add('hidden');
   unlockBodyScroll();
+}
+
+// ---------- Beyond next month tasks ----------
+function getBeyondDeadlineItems(){
+  const now = new Date();
+  const thisMonthKey = now.getFullYear() * 12 + now.getMonth();
+  const nextMonthKey = thisMonthKey + 1;
+  const results = [];
+  let backfilled = false;
+  ALL_BUCKETS.forEach(bucket => {
+    trackerData[bucket].forEach(item => {
+      if(item.status === 'not_running') return;
+      if(trackerSavedState[item.id]) return;
+      const next = earliestUpcoming(item);
+      if(!next) return;
+      const d = new Date(next.date + 'T00:00:00');
+      const key = d.getFullYear() * 12 + d.getMonth();
+      if(key > nextMonthKey){
+        if(ensureActionItems(item)) backfilled = true;
+        results.push({ item, bucket, nextDate: next.date, nextLabel: next.label, nextKind: next.kind });
+      }
+    });
+  });
+  if(backfilled) saveTrackerData();
+  results.sort((a, b) => {
+    const statusDiff = TRACKER_STATUS_ORDER[computeProgressStatus(a.item)] - TRACKER_STATUS_ORDER[computeProgressStatus(b.item)];
+    if(statusDiff !== 0) return statusDiff;
+    return a.nextDate.localeCompare(b.nextDate);
+  });
+  return results;
+}
+
+function renderHomeTodoBeyond(){
+  const listEl = document.getElementById('homeTodoBeyondList');
+  const trackEl = document.getElementById('todoBeyondProgressTrack');
+  if(!listEl || !trackEl) return;
+  const upcoming = getBeyondDeadlineItems();
+  const { counts, total } = allTodoUnitCounts(upcoming);
+  const bars = progressBarHTML(counts, total, ACTION_ITEM_STATUS_LABEL, ['not_started', 'in_progress', 'completed'], 'task');
+  trackEl.innerHTML = bars.track;
+  const statCountsEl = document.getElementById('todoBeyondStatCounts');
+  if(statCountsEl){
+    const statOrder = ['not_started', 'in_progress', 'completed'];
+    statCountsEl.innerHTML = statOrder.map(k => `<span class="status-pill status-task-${k}">${counts[k]} ${ACTION_ITEM_STATUS_LABEL[k]}</span>`).join('');
+  }
+
+  if(!upcoming.length){
+    listEl.innerHTML = `<p class="empty-state">Nothing due beyond next month.</p>`;
+    return;
+  }
+  listEl.innerHTML = upcoming.map(({ item, nextDate, nextLabel }) => {
+    const status = computeProgressStatus(item);
+    const taskCount = (item.actionItems || []).length;
+    return `
+      <div class="flex items-center justify-between gap-3 py-2 border-b border-slate-100 last:border-0">
+        <div class="min-w-0">
+          <p class="font-bold text-sm truncate" style="color: #1d4e89;">${item.name}</p>
+          <p class="text-xs" style="color: #4A6685;">${shortDate(nextDate)} · ${nextLabel}${taskCount ? ` · ${taskCount} task${taskCount > 1 ? 's' : ''}` : ''}</p>
+        </div>
+        ${statusPillHTML(status)}
+      </div>
+    `;
+  }).join('');
+  listEl.insertAdjacentHTML('beforeend', `<div class="text-left pt-2"><button class="pop-btn bg-white font-bold text-xs px-4 py-2 rounded-xl" style="color: #1d4e89;" onclick="event.stopPropagation(); openTodoModal();">See all tasks</button></div>`);
+}
+
+function showTodoBeyond(){
+  const beyondSection = document.getElementById('homeTodoBeyondSection');
+  const ctaWrap = document.getElementById('todoBeyondCtaWrap');
+  if(beyondSection && ctaWrap){
+    beyondSection.classList.remove('hidden');
+    ctaWrap.classList.add('hidden');
+    renderHomeTodoBeyond();
+  }
+}
+
+function hideTodoBeyond(){
+  const beyondSection = document.getElementById('homeTodoBeyondSection');
+  const ctaWrap = document.getElementById('todoBeyondCtaWrap');
+  if(beyondSection && ctaWrap){
+    beyondSection.classList.add('hidden');
+    ctaWrap.classList.remove('hidden');
+  }
 }
 
 // ---------- Dashboard profile teaser: urgent nudge toward the Profile tab ----------
@@ -2841,12 +3564,12 @@ function renderHomeProfileTeaser(){
 
   if(!hasProfile){
     wrap.innerHTML = `
-      <div class="urgent-pulse bg-gradient-to-br from-orange-400 to-rose-500 text-white p-6 flex flex-wrap items-center justify-between gap-4" style="border-radius: 22px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);">
+      <div class="urgent-pulse text-white p-6 flex flex-wrap items-center justify-between gap-4" style="background: linear-gradient(135deg, #00b2ca, #1d4e89); border-radius: 22px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);">
         <div>
           <p class="font-heading font-extrabold text-lg">Your profile is empty</p>
           <p class="text-sm font-medium opacity-90 mt-1 max-w-md">Every match in the Finder gets better once we know you. Takes 2 minutes — go build it now.</p>
         </div>
-        <button class="pop-btn font-bold px-6 py-3 text-white shrink-0" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="goToProfile()">Build my profile</button>
+        <button class="pop-btn font-bold px-6 py-3 shrink-0" style="background-color: #fff; color: #1d4e89; border: none; cursor: pointer; border-radius: 999px;" onclick="goToProfile()">Build my profile</button>
       </div>
     `;
     return;
@@ -2854,12 +3577,12 @@ function renderHomeProfileTeaser(){
 
   if(isStale){
     wrap.innerHTML = `
-      <div class="urgent-pulse bg-amber-100 p-6 flex flex-wrap items-center justify-between gap-4" style="border-radius: 22px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);">
+      <div class="urgent-pulse p-6 flex flex-wrap items-center justify-between gap-4" style="background-color: #FCE9D0; border-radius: 22px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);">
         <div>
-          <p class="font-heading font-extrabold text-lg text-amber-900">⏰ Your profile is ${days} days old</p>
-          <p class="text-sm font-medium text-amber-800 mt-1 max-w-md">Stale profiles mean stale matches — a quick refresh keeps your suggestions sharp.</p>
+          <p class="font-heading font-extrabold text-lg" style="color: #8A4A0E;">⏰ Your profile is ${days} days old</p>
+          <p class="text-sm font-medium mt-1 max-w-md" style="color: #8A4A0E;">Stale profiles mean stale matches — a quick refresh keeps your suggestions sharp.</p>
         </div>
-        <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="goToProfile()">Update my profile →</button>
+        <button class="pop-btn font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" style="background-color: #f79256; color: #fff;" onclick="goToProfile()">Update my profile →</button>
       </div>
     `;
     return;
@@ -2869,9 +3592,9 @@ function renderHomeProfileTeaser(){
     <div class="bg-white p-6 space-y-4" style="border-radius: 22px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <h2 class="font-heading font-bold text-xl">Your Story So Far</h2>
-        <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="goToProfile()">View &amp; deepen it →</button>
+        <button class="pop-btn font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" style="background-color: #f79256; color: #fff;" onclick="goToProfile()">View &amp; deepen it →</button>
       </div>
-      <p class="text-sm text-slate-500 font-medium line-clamp-3">${escapeHtmlTracker(studentProfile.synthesized)}</p>
+      <p class="text-sm font-medium line-clamp-3" style="color: #4A6685;">${escapeHtmlTracker(studentProfile.synthesized)}</p>
     </div>
   `;
 }
@@ -2886,16 +3609,18 @@ function renderProfileFit(){
   const researchWrap = document.getElementById('researchSection');
   const researchList = document.getElementById('researchList');
   const ctaBanner = document.getElementById('profileCtaBanner');
+  const insufficientBanner = document.getElementById('profileInsufficientBanner');
 
   if(!contentWrap) return;
 
   if(!studentProfile.synthesized){
     contentWrap.innerHTML = `
       <p class="empty-state">Nothing here yet — chat with the bot below to build your profile.</p>
-      <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f4791d; border: none; cursor: pointer; border-radius: 999px;" onclick="focusProfileChat()">Start chatting</button>
+      <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;" onclick="focusProfileChat()">Start chatting</button>
     `;
     if(researchWrap) researchWrap.classList.add('hidden');
     if(ctaBanner) ctaBanner.classList.add('hidden');
+    if(insufficientBanner) insufficientBanner.classList.add('hidden');
     return;
   }
 
@@ -2924,8 +3649,22 @@ function renderProfileFit(){
     researchWrap.classList.add('hidden');
   }
 
-  // Show CTA banner
-  if(ctaBanner) ctaBanner.classList.remove('hidden');
+  // Show appropriate banner based on profile sufficiency
+  const isSufficient = countProfileWords(studentProfile.synthesized) >= PROFILE_SUFFICIENT_LENGTH;
+  if(ctaBanner){
+    if(isSufficient){
+      ctaBanner.classList.remove('hidden');
+    } else {
+      ctaBanner.classList.add('hidden');
+    }
+  }
+  if(insufficientBanner){
+    if(!isSufficient){
+      insufficientBanner.classList.remove('hidden');
+    } else {
+      insufficientBanner.classList.add('hidden');
+    }
+  }
 }
 
 // Splits a synthesized profile into readable paragraphs, pulling out any
@@ -3071,6 +3810,136 @@ function renderTrackerPage(){
 
   renderCalendarSwimlanes();
   renderHomePage();
+}
+
+// ---------- Export tracker deadlines to Google Calendar ----------
+function exportAllDeadlinesToGoogle(){
+  console.log('[Export] Button clicked!');
+  console.log('[Export] trackerData:', trackerData);
+  console.log('[Export] ALL_BUCKETS:', ALL_BUCKETS);
+
+  // Collect all tracked items across all buckets
+  const allItems = [];
+  ALL_BUCKETS.forEach(bucket => {
+    trackerData[bucket].forEach(item => {
+      // Only export actively tracked items (not saved-for-later)
+      if(!trackerSavedState[item.id]){
+        allItems.push(item);
+      }
+    });
+  });
+
+  console.log('[Export] Found tracked items:', allItems.length);
+
+  if(!allItems.length){
+    alert('No tracked opportunities to export.');
+    return;
+  }
+
+  // Collect all deadlines (importantDates) from all items
+  const events = [];
+  allItems.forEach(item => {
+    console.log('[Export] Item:', item.name, 'importantDates:', item.importantDates);
+    (item.importantDates || []).forEach(date => {
+      // Handle both dateISO and date_iso (underscore version)
+      const dateValue = date.dateISO || date.date_iso;
+      console.log('[Export] Date object:', date, 'extracted value:', dateValue);
+      if(dateValue){
+        events.push({
+          name: item.name,
+          org: item.org,
+          dateISO: dateValue,
+          dateLabel: date.label || 'Deadline',
+          url: item.url
+        });
+      }
+    });
+  });
+
+  console.log('[Export] Total events collected:', events.length);
+
+  if(!events.length){
+    alert('No deadlines found to export.');
+    return;
+  }
+
+  // Generate iCalendar (.ics) file content
+  const icsContent = generateICS(events);
+
+  // Trigger download
+  const blob = new Blob([icsContent], { type: 'text/calendar' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `wingman-deadlines-${new Date().toISOString().slice(0,10)}.ics`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+// Generate iCalendar format (.ics) content from events
+function generateICS(events){
+  // iCalendar format: https://en.wikipedia.org/wiki/ICalendar
+  const now = new Date().toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  const icsLines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Highschool Wingman//Calendar Export//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'X-WR-CALNAME:Wingman Deadlines',
+    'X-WR-TIMEZONE:UTC'
+  ];
+
+  events.forEach((event, idx) => {
+    const dateISO = event.dateISO; // YYYY-MM-DD format
+    const startDate = dateISO.replace(/-/g, ''); // YYYYMMDD
+
+    // Calculate end date (all-day events in iCalendar end on the day after)
+    const [year, month, day] = dateISO.split('-');
+    const endDateObj = new Date(year, parseInt(month) - 1, parseInt(day) + 1);
+    const endDateStr = endDateObj.getFullYear().toString() +
+      String(endDateObj.getMonth() + 1).padStart(2, '0') +
+      String(endDateObj.getDate()).padStart(2, '0');
+
+    // Create a unique ID for the event (RFC 5545 requires unique UIDs)
+    const uid = `wingman-${dateISO}-${event.name.replace(/[^a-z0-9]/gi, '')}-${idx}@wingman`;
+
+    const summary = event.org ? `${event.name} (${event.org})` : event.name;
+    const description = event.url ? `URL: ${event.url}` : '';
+
+    // Build event lines
+    const eventLines = [
+      'BEGIN:VEVENT',
+      `UID:${uid}`,
+      `DTSTAMP:${now}`,
+      `DTSTART;VALUE=DATE:${startDate}`,
+      `DTEND;VALUE=DATE:${endDateStr}`,
+      `SUMMARY:${escapeICS(summary)} - ${escapeICS(event.dateLabel)}`
+    ];
+
+    if(description){
+      eventLines.push(`DESCRIPTION:${escapeICS(description)}`);
+    }
+
+    eventLines.push('END:VEVENT');
+    icsLines.push(...eventLines);
+  });
+
+  icsLines.push('END:VCALENDAR');
+  return icsLines.join('\r\n');
+}
+
+// Helper: escape special characters in iCalendar format (RFC 5545)
+function escapeICS(text){
+  if(!text) return '';
+  return text
+    .replace(/\\/g, '\\\\')      // Backslash must be escaped first
+    .replace(/;/g, '\\;')        // Semicolon
+    .replace(/,/g, '\\,')        // Comma
+    .replace(/\n/g, '\\n')       // Newline
+    .replace(/\r/g, '\\n');      // Carriage return
 }
 
 // ---------- Build/reconcile from the wizard's selected results ----------
@@ -3363,6 +4232,10 @@ async function trackerAnalyzeAndAdd(){
     urlInput.value = '';
     notesInput.value = '';
     goToTrackerCard(id);
+
+    // Submit to opportunities database in background (non-blocking)
+    submitUserOpportunityToDatabase(extracted, url, bucket);
+
   }catch(err){
     console.error('Tracker intake failed:', err);
     errorBox.textContent = `Couldn't extract details — this only works with live API access. Error: ${err.message}`;
@@ -3372,6 +4245,45 @@ async function trackerAnalyzeAndAdd(){
     btn.classList.remove('loading');
     label.textContent = 'Add';
   }
+}
+
+// ---------- Submit user opportunity to database in background ----------
+function submitUserOpportunityToDatabase(extracted, url, bucket){
+  // Fire and forget — submit extracted data to /api/user-submitted-opportunities
+  // without blocking the UI. Runs in background.
+  (async () => {
+    try {
+      const payload = {
+        name: extracted.name || url,
+        url: url,
+        type: extracted.category || 'Program',
+        section: bucket,
+        meta: extracted.meta || '',
+        fit: extracted.fit || '',
+        note: extracted.note || '',
+        important_dates: extracted.important_dates || [],
+        requirements: extracted.requirements || [],
+        apply_url: extracted.apply_url || url,
+        category: extracted.category || null
+      };
+      const res = await fetch('/api/user-submitted-opportunities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if(!res.ok) {
+        const err = await res.json().catch(() => ({ message: 'Unknown error' }));
+        console.warn('Failed to submit opportunity to database:', err);
+      } else {
+        const result = await res.json();
+        console.log('Opportunity queued for database:', result);
+      }
+    } catch(err) {
+      console.warn('Error submitting opportunity to database:', err);
+      // Silent fail — the opportunity is already in the user's tracker, database submission
+      // is just a background nicety. Don't annoy the user if it fails.
+    }
+  })();
 }
 
 // ---------- To Do (persistent, scoped to the Tracker page) ----------

@@ -8,10 +8,12 @@ without a real key or network access. Mock responses are pattern-matched against
 system prompt used in script.js's callGemini()/callClaude() call sites.
 """
 import datetime
+import http.cookies
 import json
 import os
 import re
 import random
+import secrets
 import sys
 import threading
 import time
@@ -186,6 +188,24 @@ def subscription_state(record):
     }
 
 
+def _login_payload(record):
+    """The response shape handle_login/handle_google_session/handle_google_finish all
+    return — the client caches this as-is into currentUser (see loginUser() in script.js),
+    so every path that hands back a signed-in session must agree on its shape."""
+    return {
+        "ok": True,
+        # handle_login's callers already have the userid (it's the form field the user
+        # typed), but the Google flow generates it server-side and the client never
+        # otherwise learns it — see handleGoogleRedirect()/finishGoogleSignup() in script.js.
+        "userid": record["userid"],
+        "firstName": record["first_name"],
+        "lastName": record["last_name"],
+        "email": record["email"],
+        "location": record.get("location") or "",
+        "subscription": subscription_state(record),
+    }
+
+
 def ensure_trial_started(userid, record):
     """Give a dateless trial row a real end date, and return the updated record.
 
@@ -227,6 +247,51 @@ TERMS_VERSION = "2026-08-21"
 # passwordHash arrives already SHA-256-hashed client-side; the server never
 # sees or stores a plaintext password.
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+
+# ---------- Google Sign-In (OAuth 2.0 authorization-code flow) ----------
+# Client ID/Secret from a Google Cloud OAuth client (Web application type), configured with
+# redirect URIs for both localhost and the production domain. Server-side redirect flow, not
+# Google Identity Services JS — the callback exchanges a code for tokens itself, so no
+# client-side Google library is needed. See google_auth_schema.sql for the users table columns
+# this depends on (google_id, and password_hash made nullable for Google-only accounts).
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+
+# One-time-use handoff tokens bridging the OAuth redirect back to the SPA, which has no
+# cookie/session concept of its own (see handle_login: login is just a POST that returns
+# user JSON, cached client-side). Minted in handle_google_callback, consumed exactly once
+# by handle_google_session. In-process only, like _opportunities_cache — fine for a
+# single-process dev/prod server, and these are short-lived by design.
+_google_session_tokens = {}
+GOOGLE_TOKEN_TTL_SECONDS = 5 * 60
+
+
+def _prune_google_tokens():
+    now = time.time()
+    expired = [t for t, entry in _google_session_tokens.items() if entry["expires_at"] < now]
+    for t in expired:
+        del _google_session_tokens[t]
+
+
+def _mint_google_token(payload):
+    _prune_google_tokens()
+    token = secrets.token_urlsafe(32)
+    _google_session_tokens[token] = {
+        **payload,
+        "expires_at": time.time() + GOOGLE_TOKEN_TTL_SECONDS,
+    }
+    return token
+
+
+def _take_google_token(token):
+    """Look up and delete a token in one step — single-use, so a replayed or leaked
+    URL (browser history, a referrer header) can't be reused to resolve a session twice."""
+    _prune_google_tokens()
+    return _google_session_tokens.pop(token, None)
+
 
 # ---------- On-demand, shared/cached deadline check (Claude Haiku-backed) ----------
 # Replaces check_deadlines.py's batch/cron model as the primary way status/deadlines data
@@ -797,6 +862,38 @@ def _users_request(method, query="", data=None):
 EMAIL_RE = re.compile(r"^[^\s@,()\x22\x27]+@[^\s@,()\x22\x27]+\.[^\s@,()\x22\x27]{2,}$")
 
 
+def _check_signup_consent(is_adult, parental_consent, accepted_terms):
+    """The three account-creation consent conditions from Terms of Use §2, shared by
+    handle_register and handle_google_finish so a Google signup can't skip the gate a
+    password signup enforces. Returns an error message, or None if consent holds."""
+    if not accepted_terms:
+        return ("You must accept the Terms of Use and Privacy Policy to create an "
+                "account.")
+    if not is_adult and not parental_consent:
+        return ("If you are under 18, a parent or guardian must give permission "
+                "before you can create an account.")
+    return None
+
+
+def _unique_userid_from_email(email):
+    """Derive a free userid for a Google signup, since Google never supplies one — a
+    password registration has the user pick it, but this flow has no form for it.
+
+    Slugified local-part of the email, deduped against existing rows by an incrementing
+    numeric suffix. Userid has no format validation elsewhere in this codebase (the
+    register form takes free text, only checked for uniqueness), so this only needs to
+    be free, not "valid" by some stricter rule.
+    """
+    local = normalize_email(email).split("@", 1)[0]
+    base = re.sub(r"[^a-z0-9._-]", "", local) or "user"
+    candidate = base
+    suffix = 2
+    while get_user(candidate):
+        candidate = f"{base}{suffix}"
+        suffix += 1
+    return candidate
+
+
 def normalize_email(email):
     """The canonical stored/compared form of an address: trimmed and lowercased.
 
@@ -829,6 +926,15 @@ def get_user_by_email(email):
     return rows[0] if rows else None
 
 
+def get_user_by_google_id(google_id):
+    """The account linked to this Google account's `sub`, or None."""
+    if not google_id:
+        return None
+    query = "?" + urllib.parse.urlencode({"google_id": f"eq.{google_id}", "select": "*"})
+    rows = _users_request("GET", query)
+    return rows[0] if rows else None
+
+
 class DuplicateEmail(Exception):
     """The email is already on another account.
 
@@ -847,35 +953,44 @@ class MissingUserColumns(Exception):
 
 
 def create_user(userid, first_name, last_name, email, password_hash, location="",
-                is_adult=False, parental_consent=False):
+                is_adult=False, parental_consent=False, google_id=None):
     """Insert a new account, starting its free trial and recording signup consent.
 
     is_adult / parental_consent come from the registration checkboxes; the caller
-    (handle_register) is what enforces them, this just records what was agreed to.
-    Every column past `data` requires subscription_schema.sql to have been run.
+    (handle_register / handle_google_finish) is what enforces them, this just records
+    what was agreed to. Every column past `data` requires subscription_schema.sql to
+    have been run; google_id additionally requires google_auth_schema.sql (password_hash
+    is None for a Google-only account — that schema also drops the NOT NULL on it).
     """
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    row = {
+        "userid": userid,
+        "first_name": first_name,
+        "last_name": last_name,
+        "email": normalize_email(email),
+        "password_hash": password_hash,
+        "location": location,
+        "data": {},
+        "subscription_status": "trial",
+        "trial_ends_at": trial_ends_at_iso(),
+        "subscription_end_at": None,
+        "stripe_customer_id": None,
+        "stripe_subscription_id": None,
+        "promo_codes_used": [],
+        "is_adult": is_adult,
+        "parental_consent": parental_consent,
+        "terms_accepted_at": now,
+        "privacy_accepted_at": now,
+        "terms_version": TERMS_VERSION,
+    }
+    # Only set on a Google signup — omitted (not merely None) for a plain password
+    # registration, so that path keeps working even before google_auth_schema.sql has
+    # been run: PostgREST 400s the whole insert on an unrecognized column, and google_id
+    # would be exactly that until the migration lands.
+    if google_id is not None:
+        row["google_id"] = google_id
     try:
-        _users_request("POST", "", data=[{
-            "userid": userid,
-            "first_name": first_name,
-            "last_name": last_name,
-            "email": normalize_email(email),
-            "password_hash": password_hash,
-            "location": location,
-            "data": {},
-            "subscription_status": "trial",
-            "trial_ends_at": trial_ends_at_iso(),
-            "subscription_end_at": None,
-            "stripe_customer_id": None,
-            "stripe_subscription_id": None,
-            "promo_codes_used": [],
-            "is_adult": is_adult,
-            "parental_consent": parental_consent,
-            "terms_accepted_at": now,
-            "privacy_accepted_at": now,
-            "terms_version": TERMS_VERSION,
-        }])
+        _users_request("POST", "", data=[row])
     except urllib.error.HTTPError as e:
         # The body reads only once, so classify from a single copy of it.
         detail = _error_body(e)
@@ -3144,6 +3259,12 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_error(404)
         elif self.path.startswith("/api/opportunities"):
             self.handle_opportunities()
+        elif path == "/api/auth/google/start":
+            self.handle_google_start()
+        elif path == "/api/auth/google/callback":
+            self.handle_google_callback(query)
+        elif path == "/api/auth/google/session":
+            self.handle_google_session(query)
         else:
             super().do_GET()
 
@@ -3217,6 +3338,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.handle_register()
         elif self.path == "/api/login":
             self.handle_login()
+        elif self.path == "/api/auth/google/finish":
+            self.handle_google_finish()
         elif self.path == "/api/data/save":
             self.handle_data_save()
         elif self.path == "/api/data/load":
@@ -3289,13 +3412,9 @@ class Handler(SimpleHTTPRequestHandler):
         is_adult = bool(body.get("isAdult"))
         parental_consent = bool(body.get("parentalConsent"))
         accepted_terms = bool(body.get("acceptedTerms"))
-        if not accepted_terms:
-            return self.send_json_error(400, "You must accept the Terms of Use and "
-                                             "Privacy Policy to create an account.")
-        if not is_adult and not parental_consent:
-            return self.send_json_error(400, "If you are under 18, a parent or guardian "
-                                             "must give permission before you can create "
-                                             "an account.")
+        consent_error = _check_signup_consent(is_adult, parental_consent, accepted_terms)
+        if consent_error:
+            return self.send_json_error(400, consent_error)
 
         if not EMAIL_RE.match(email):
             return self.send_json_error(400, "Please enter a valid email address.")
@@ -3357,17 +3476,193 @@ class Handler(SimpleHTTPRequestHandler):
         if record.get("password_hash") != password_hash:
             return self.send_json_error(401, "Incorrect password.")
         record = ensure_trial_started(key, record)
-        # Ship the subscription block with the login response so the client can decide
-        # whether to show the app or the paywall without a second round-trip on every
-        # sign-in (checkSubscriptionStatus still exists for refreshing it in place).
-        self._relay(200, json.dumps({
-            "ok": True,
-            "firstName": record["first_name"],
-            "lastName": record["last_name"],
-            "email": record["email"],
-            "location": record.get("location") or "",
-            "subscription": subscription_state(record),
-        }).encode())
+        self._relay(200, json.dumps(_login_payload(record)).encode())
+
+    # ---------- Google Sign-In ----------
+    # See google_auth_schema.sql and the constants/helpers near GOOGLE_CLIENT_ID above.
+    # Four-step redirect flow: start -> Google -> callback -> (session | finish).
+
+    def handle_google_start(self):
+        if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+            return self.send_json_error(503, "Google Sign-In is not configured: set "
+                                             "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET "
+                                             "in .env.")
+        state = secrets.token_urlsafe(24)
+        params = {
+            "client_id": GOOGLE_CLIENT_ID,
+            "redirect_uri": self._google_redirect_uri(),
+            "response_type": "code",
+            "scope": "openid email profile",
+            "state": state,
+            "prompt": "select_account",
+        }
+        self.send_response(302)
+        self.send_header("Location", f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(params)}")
+        # Short-lived, HttpOnly — this is CSRF protection for the OAuth handshake only,
+        # not an app session cookie (the app has none; see _login_payload/handle_login).
+        cookie = http.cookies.SimpleCookie()
+        cookie["google_oauth_state"] = state
+        cookie["google_oauth_state"]["path"] = "/"
+        cookie["google_oauth_state"]["httponly"] = True
+        cookie["google_oauth_state"]["max-age"] = GOOGLE_TOKEN_TTL_SECONDS
+        for line in cookie.output(header="").split("\r\n"):
+            if line.strip():
+                self.send_header("Set-Cookie", line.strip())
+        self.end_headers()
+
+    def _google_redirect_uri(self):
+        # Must exactly match one of the Authorized redirect URIs on the OAuth client —
+        # Google rejects the exchange otherwise. Derived from the request's own Host
+        # header so localhost and the production domain both work off the same code.
+        host = self.headers.get("Host", f"localhost:{PORT}")
+        scheme = "http" if host.startswith("localhost") or host.startswith("127.0.0.1") else "https"
+        return f"{scheme}://{host}/api/auth/google/callback"
+
+    def _google_redirect_home(self, query_suffix=""):
+        self.send_response(302)
+        self.send_header("Location", f"/{query_suffix}")
+        self.end_headers()
+
+    def handle_google_callback(self, query):
+        cookies = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        cookie_state = cookies["google_oauth_state"].value if "google_oauth_state" in cookies else None
+        req_state = (query.get("state") or [""])[0]
+        code = (query.get("code") or [""])[0]
+        if not code or not req_state or not cookie_state or req_state != cookie_state:
+            return self.send_json_error(400, "Google sign-in failed: invalid or expired "
+                                             "request. Please try again.")
+        if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+            return self.send_json_error(503, "Google Sign-In is not configured.")
+
+        try:
+            token_req = urllib.request.Request(
+                GOOGLE_TOKEN_URL,
+                data=urllib.parse.urlencode({
+                    "code": code,
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": self._google_redirect_uri(),
+                    "grant_type": "authorization_code",
+                }).encode(),
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with urllib.request.urlopen(token_req, timeout=10) as resp:
+                tokens = json.loads(resp.read())
+            userinfo_req = urllib.request.Request(
+                GOOGLE_USERINFO_URL,
+                headers={"Authorization": f"Bearer {tokens['access_token']}"},
+            )
+            with urllib.request.urlopen(userinfo_req, timeout=10) as resp:
+                profile = json.loads(resp.read())
+        except Exception as e:
+            print(f"[WARN] Google OAuth exchange failed: {e}")
+            return self.send_json_error(502, "Could not verify your Google account. "
+                                             "Please try again.")
+
+        google_id = profile.get("sub")
+        email = profile.get("email") or ""
+        first_name = profile.get("given_name") or ""
+        last_name = profile.get("family_name") or ""
+        if not google_id or not email:
+            return self.send_json_error(502, "Google did not return a usable profile.")
+
+        try:
+            record = get_user_by_google_id(google_id)
+            if not record:
+                by_email = get_user_by_email(email)
+                if by_email:
+                    # Google has already verified this address, so it's safe to link it
+                    # to the existing password account rather than creating a duplicate.
+                    record = get_user(by_email["userid"])
+                    query_patch = "?" + urllib.parse.urlencode({"userid": f"eq.{record['userid']}"})
+                    _users_request("PATCH", query_patch, data={"google_id": google_id})
+                    record["google_id"] = google_id
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+
+        if record:
+            token = _mint_google_token({"kind": "login", "userid": record["userid"]})
+        else:
+            token = _mint_google_token({
+                "kind": "pending",
+                "google_id": google_id,
+                "email": email,
+                "first_name": first_name,
+                "last_name": last_name,
+            })
+        self._google_redirect_home(f"?google_token={urllib.parse.quote(token)}")
+
+    def handle_google_session(self, query):
+        token = (query.get("token") or [""])[0]
+        entry = _take_google_token(token)
+        if not entry:
+            return self.send_json_error(400, "This sign-in link has expired. Please try "
+                                             "signing in with Google again.")
+        if entry["kind"] == "pending":
+            return self._relay(200, json.dumps({
+                "ok": True,
+                "pending": True,
+                "firstName": entry["first_name"],
+                "lastName": entry["last_name"],
+                "email": entry["email"],
+            }).encode())
+        try:
+            record = get_user(entry["userid"])
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+        if not record:
+            return self.send_json_error(404, "No account found.")
+        record = ensure_trial_started(record["userid"], record)
+        self._relay(200, json.dumps(_login_payload(record)).encode())
+
+    def handle_google_finish(self):
+        body = self._read_json_body()
+        token = body.get("token") or ""
+        entry = _take_google_token(token)
+        if not entry or entry.get("kind") != "pending":
+            return self.send_json_error(400, "This sign-in link has expired. Please try "
+                                             "signing in with Google again.")
+
+        location = (body.get("location") or "").strip()
+        is_adult = bool(body.get("isAdult"))
+        parental_consent = bool(body.get("parentalConsent"))
+        accepted_terms = bool(body.get("acceptedTerms"))
+        consent_error = _check_signup_consent(is_adult, parental_consent, accepted_terms)
+        if consent_error:
+            return self.send_json_error(400, consent_error)
+        if not location:
+            return self.send_json_error(400, "Missing required fields.")
+
+        try:
+            if get_user_by_google_id(entry["google_id"]) or get_user_by_email(entry["email"]):
+                # Lost a race with another completion of the same pending signup (e.g. a
+                # duplicate tab), or the email was claimed by a fresh password signup in
+                # between. Either way there's now a real account for it — not an error.
+                return self.send_json_error(409, "An account for this Google profile "
+                                                 "already exists. Please sign in again.")
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+
+        userid = _unique_userid_from_email(entry["email"])
+        try:
+            create_user(userid, entry["first_name"], entry["last_name"], entry["email"],
+                        None, location, is_adult=is_adult,
+                        parental_consent=parental_consent, google_id=entry["google_id"])
+        except MissingUserColumns:
+            return self.send_json_error(503, "Accounts are temporarily unavailable: the "
+                                             "database is missing required columns. Run "
+                                             "subscription_schema.sql and "
+                                             "google_auth_schema.sql in the Supabase SQL "
+                                             "editor, then try again.")
+        except DuplicateEmail:
+            return self.send_json_error(409, "An account already exists with that email "
+                                             "address. Please sign in instead.")
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+
+        record = get_user(userid)
+        self._relay(200, json.dumps(_login_payload(record)).encode())
 
     def handle_update_location(self):
         body = self._read_json_body()

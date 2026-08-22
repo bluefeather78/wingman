@@ -17,6 +17,7 @@ fetch('/api/opportunities')
 // ============================================================
 
 let currentUser = null; // { userid, firstName, lastName, email, location } — the signed-in session, cached locally
+let googlePendingToken = null; // set while #googleFinishForm is showing — see handleGoogleRedirect()
 
 // Query-string userid for the endpoints that cost money but take no JSON body we can put
 // it in (the deadline check is a GET, the resume import is multipart). It is only used
@@ -180,15 +181,29 @@ async function hashPassword(password){
   return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Toggles between the Sign In and Register forms on the login screen.
+// Toggles between the Sign In, Register, and Google-finish forms on the login screen.
 function showLoginMode(mode){
   const signInForm = document.getElementById('signInForm');
   const registerForm = document.getElementById('registerForm');
+  const googleFinishForm = document.getElementById('googleFinishForm');
+  const googleRow = document.getElementById('googleSignInRow');
   const tagline = document.getElementById('loginTagline');
   const signInError = document.getElementById('signInError');
   const registerError = document.getElementById('registerError');
   if(signInError) signInError.textContent = '';
   if(registerError) registerError.textContent = '';
+  if(mode === 'google'){
+    // Mid-signup consent step for a brand-new Google account — the other two forms and
+    // the Google button itself are irrelevant until this one is finished or abandoned.
+    if(signInForm) signInForm.classList.add('hidden');
+    if(registerForm) registerForm.classList.add('hidden');
+    if(googleRow) googleRow.classList.add('hidden');
+    if(googleFinishForm) googleFinishForm.classList.remove('hidden');
+    if(tagline) tagline.textContent = 'Just a few more details to finish creating your account.';
+    return;
+  }
+  if(googleFinishForm) googleFinishForm.classList.add('hidden');
+  if(googleRow) googleRow.classList.remove('hidden');
   if(mode === 'register'){
     if(signInForm) signInForm.classList.add('hidden');
     if(registerForm) registerForm.classList.remove('hidden');
@@ -332,6 +347,128 @@ async function loginUser(event){
   await showApp();
 }
 
+// Kicks off the redirect-based OAuth flow — see handle_google_start in server.py.
+// Used by the "Continue with Google" button on both the sign-in and register forms.
+function googleSignIn(){
+  location.href = '/api/auth/google/start';
+}
+
+// The parental-permission checkbox for the Google finish form — mirrors
+// updateRegisterConsent() for #registerForm.
+function updateGoogleFinishConsent(){
+  const isAdult = document.getElementById('googleIsAdult');
+  const parentalRow = document.getElementById('googleParentalRow');
+  const parental = document.getElementById('googleParentalConsent');
+  if(!isAdult || !parentalRow) return;
+  if(isAdult.checked){
+    parentalRow.classList.add('hidden');
+    if(parental) parental.checked = false;
+  }else{
+    parentalRow.classList.remove('hidden');
+  }
+}
+
+// Called once on page load. handle_google_callback in server.py redirects back to
+// `/?google_token=...` after the user approves on Google's side; this resolves that
+// one-time token into either a completed sign-in or a "finish creating your account"
+// step. Returns true if it took over the login gate (so the caller skips the normal
+// loadUser()-based landing/app decision), false otherwise.
+async function handleGoogleRedirect(){
+  const params = new URLSearchParams(location.search);
+  const token = params.get('google_token');
+  if(!token) return false;
+  // Strip it from the URL immediately — it's single-use server-side, and leaving it
+  // visible would just invite a confusing "expired link" on refresh.
+  params.delete('google_token');
+  const qs = params.toString();
+  history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : ''));
+
+  let data;
+  try{
+    const res = await fetch(`/api/auth/google/session?token=${encodeURIComponent(token)}`);
+    data = await res.json().catch(() => ({}));
+    if(!res.ok){
+      showLoginGate('signin');
+      const errorEl = document.getElementById('signInError');
+      if(errorEl) errorEl.textContent = data.error || 'Could not complete Google sign-in.';
+      return true;
+    }
+  }catch(e){
+    showLoginGate('signin');
+    return true;
+  }
+
+  if(data.pending){
+    googlePendingToken = token;
+    showLoginGate('google');
+    const nameEl = document.getElementById('googleFinishName');
+    if(nameEl) nameEl.textContent = data.firstName || data.email;
+    return true;
+  }
+
+  currentUser = { userid: data.userid, firstName: data.firstName, lastName: data.lastName, email: data.email, location: data.location || '' };
+  if(data.subscription) currentUser.subscription = data.subscription;
+  await saveUser();
+  await showApp();
+  return true;
+}
+
+// Submits the consent step for a brand-new Google account — see handle_google_finish
+// in server.py. Mirrors registerUser()'s tail once the account is created.
+async function finishGoogleSignup(event){
+  event.preventDefault();
+  const errorEl = document.getElementById('googleFinishError');
+  const location_ = document.getElementById('googleFinishLocation').value.trim();
+  const isAdult = !!document.getElementById('googleIsAdult')?.checked;
+  const parentalConsent = !!document.getElementById('googleParentalConsent')?.checked;
+  const acceptedTerms = !!document.getElementById('googleAcceptedTerms')?.checked;
+
+  if(!googlePendingToken){
+    if(errorEl) errorEl.textContent = 'This sign-in link has expired. Please try signing in with Google again.';
+    return;
+  }
+  if(!location_){
+    if(errorEl) errorEl.textContent = 'Please fill in every field.';
+    return;
+  }
+  if(!isAdult && !parentalConsent){
+    if(errorEl) errorEl.textContent = 'If you are under 18, confirm that a parent or guardian has given you permission.';
+    return;
+  }
+  if(!acceptedTerms){
+    if(errorEl) errorEl.textContent = 'Please read and accept the Terms of Use and Privacy Policy.';
+    return;
+  }
+
+  let data;
+  try{
+    const res = await fetch('/api/auth/google/finish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: googlePendingToken, location: location_, isAdult, parentalConsent, acceptedTerms })
+    });
+    data = await res.json().catch(() => ({}));
+    if(!res.ok){
+      if(errorEl) errorEl.textContent = data.error || 'Could not create account.';
+      return;
+    }
+  }catch(e){
+    if(errorEl) errorEl.textContent = 'Could not reach the server. Please try again.';
+    return;
+  }
+
+  googlePendingToken = null;
+  currentUser = { userid: data.userid, firstName: data.firstName, lastName: data.lastName, email: data.email, location: data.location || '' };
+  if(data.subscription) currentUser.subscription = data.subscription;
+  await saveUser();
+  if(typeof firebase !== 'undefined' && firebase.analytics) {
+    firebase.analytics().logEvent('user_registered', {
+      'location': location_
+    });
+  }
+  await showApp();
+}
+
 // The signed-out marketing page shown before the sign-in/register form. See
 // showLoginGate() for the form itself.
 function showLandingPage(){
@@ -354,7 +491,7 @@ function showLoginGate(mode){
   if(loginPage) loginPage.classList.remove('hidden');
   if(appShell) appShell.classList.add('hidden');
   if(locked) locked.classList.add('hidden');
-  showLoginMode(mode === 'register' ? 'register' : 'signin');
+  showLoginMode(mode === 'register' || mode === 'google' ? mode : 'signin');
 }
 
 // Signed in, but out of trial and unpaid. Replaces the app entirely rather than
@@ -4821,6 +4958,12 @@ function escapeHtmlTracker(str){
 // #appShell stays hidden (and #page-login shown) until a returning session is found or
 // the student signs in / registers. Profile/tracker data is loaded fresh per-account
 // only once signed in — see showApp() -> loadAccountData().
-loadUser().then(() => {
-  if(currentUser){ showApp(); } else { showLandingPage(); }
+// A fresh Google redirect takes precedence over whatever loadUser() finds cached —
+// see handleGoogleRedirect(), which handles both the sign-in and finish-signup cases
+// and returns true whenever it did.
+handleGoogleRedirect().then((handled) => {
+  if(handled) return;
+  loadUser().then(() => {
+    if(currentUser){ showApp(); } else { showLandingPage(); }
+  });
 });

@@ -332,14 +332,29 @@ async function loginUser(event){
   await showApp();
 }
 
-function showLoginGate(){
+// The signed-out marketing page shown before the sign-in/register form. See
+// showLoginGate() for the form itself.
+function showLandingPage(){
+  const landingPage = document.getElementById('page-landing');
   const loginPage = document.getElementById('page-login');
   const appShell = document.getElementById('appShell');
   const locked = document.getElementById('page-locked');
+  if(landingPage) landingPage.classList.remove('hidden');
+  if(loginPage) loginPage.classList.add('hidden');
+  if(appShell) appShell.classList.add('hidden');
+  if(locked) locked.classList.add('hidden');
+}
+
+function showLoginGate(mode){
+  const landingPage = document.getElementById('page-landing');
+  const loginPage = document.getElementById('page-login');
+  const appShell = document.getElementById('appShell');
+  const locked = document.getElementById('page-locked');
+  if(landingPage) landingPage.classList.add('hidden');
   if(loginPage) loginPage.classList.remove('hidden');
   if(appShell) appShell.classList.add('hidden');
   if(locked) locked.classList.add('hidden');
-  showLoginMode('signin');
+  showLoginMode(mode === 'register' ? 'register' : 'signin');
 }
 
 // Signed in, but out of trial and unpaid. Replaces the app entirely rather than
@@ -347,9 +362,11 @@ function showLoginGate(){
 // same thing on the endpoints that cost money (Handler._subscription_blocks), so
 // this screen is the explanation, not the lock.
 function showPaywall(){
+  const landingPage = document.getElementById('page-landing');
   const loginPage = document.getElementById('page-login');
   const appShell = document.getElementById('appShell');
   const locked = document.getElementById('page-locked');
+  if(landingPage) landingPage.classList.add('hidden');
   if(loginPage) loginPage.classList.add('hidden');
   if(appShell) appShell.classList.add('hidden');
   if(locked) locked.classList.remove('hidden');
@@ -395,9 +412,11 @@ async function showApp(){
   // the way to the paywall.
   if(!hasSubscriptionAccess()){ showPaywall(); return; }
 
+  const landingPage = document.getElementById('page-landing');
   const loginPage = document.getElementById('page-login');
   const appShell = document.getElementById('appShell');
   const locked = document.getElementById('page-locked');
+  if(landingPage) landingPage.classList.add('hidden');
   if(loginPage) loginPage.classList.add('hidden');
   if(locked) locked.classList.add('hidden');
   if(appShell) appShell.classList.remove('hidden');
@@ -432,7 +451,7 @@ async function logoutUser(){
   trackerData = { summerPrograms: [], internships: [], researchCompetitions: [], pureCompetitions: [], conferences: [], journals: [] };
   trackerSavedState = {};
   toggleProfile(); // close the drawer on the way out
-  showLoginGate();
+  showLandingPage();
 }
 async function saveAccountLocation(){
   const inputEl = document.getElementById('accountLocationInput');
@@ -2733,14 +2752,20 @@ Example format: ["Building AI chatbots", "Wants to win Math Olympiad", "Interest
 
   const userContent = `Extract all interests, goals, and pursuits from this student profile:\n\n${text}`;
 
-  const tags = extractJSON(await callGemini(system, userContent, false));
+  // callGeminiJSON, not callGemini + extractJSON: it retries once on a parse failure. Gemini
+  // intermittently emits a stray character into an otherwise fine array (an observed run
+  // opened with `[=` instead of `["`), and without the retry that one glitch silently cost
+  // the student their whole filter facet — which is exactly what it was written for.
+  const tags = await callGeminiJSON(system, userContent, false);
   if(!Array.isArray(tags)) return [];
   return tags.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim()).slice(0, PROFILE_TAG_LIMIT);
 }
 
-// One call for every tag. Tags the model doesn't return an object for are dropped: without
-// semantic metadata a tag can't drive batchScoreOpportunitiesWithAI(), so showing it in the
-// filter bar would offer a facet that filters everything out.
+// One call for every tag. Only asks for the three fields anything actually consumes —
+// batchScoreOpportunitiesWithAI() reads `tag`, `intent` and `nextSteps` and nothing else.
+// The category/semanticKeywords/opportunityTypes/matchReason this used to request were read
+// only by dead code, and on a long profile they made the response several times larger than
+// it needed to be, for no behaviour, with a real risk of hitting the token limit mid-array.
 async function enrichProfileTags(tags){
   if(!tags.length) return [];
 
@@ -2749,20 +2774,25 @@ async function enrichProfileTags(tags){
 Return ONLY a JSON array with one object per tag, in the same order as given, no other text:
 [{
   "tag": "the tag string exactly as given",
-  "category": one of "competition_prep", "career_aspiration", "academic_goal", "research_project", "app_project", "business_idea", "skill_learning", "interest_exploration",
-  "intent": "what they are trying to achieve (1 sentence)",
-  "nextSteps": ["2-3 logical milestones, e.g. Master advanced techniques", "Enter competitions"],
-  "opportunityTypes": ["e.g. hackathon", "demo_day", "research_conference", "internship", "summer_program"],
-  "semanticKeywords": ["8-12 keywords/phrases specific to this tag"],
-  "matchReason": "template string like Great for {nextSteps[0]}"
+  "intent": "what they are trying to achieve (1 short sentence)",
+  "nextSteps": ["2-3 short, logical milestones, e.g. Master advanced techniques", "Enter competitions"]
 }]
 
 Keep every field short — the whole array must fit comfortably in one response.`;
 
   const userContent = `PROFILE TAGS:\n${tags.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\nReturn the JSON array of ${tags.length} enrichment objects.`;
 
-  const arr = extractJSON(await callGemini(system, userContent, false));
-  if(!Array.isArray(arr)) return [];
+  let arr = [];
+  try{
+    const parsed = await callGeminiJSON(system, userContent, false);
+    // Tolerate the model wrapping the array in an object ({"tags": [...]}) — the shape it
+    // was asked for is an array, but a wrapper is a formatting slip, not a failed answer.
+    arr = Array.isArray(parsed) ? parsed
+        : (parsed && typeof parsed === 'object') ? (Object.values(parsed).find(Array.isArray) || []) : [];
+  }catch(e){
+    console.warn('Profile tag enrichment failed, falling back to bare tags:', e.message);
+  }
+
   // Match on the echoed tag string where there is one, falling back to position — a
   // truncated or reordered response still yields usable enrichments for the tags it did
   // return, instead of throwing all of them away.
@@ -2772,7 +2802,11 @@ Keep every field short — the whole array must fit comfortably in one response.
     const tag = (typeof e.tag === 'string' && tags.includes(e.tag)) ? e.tag : tags[i];
     if(tag && !byTag[tag]) byTag[tag] = Object.assign({}, e, { tag });
   });
-  return tags.map(t => byTag[t]).filter(Boolean);
+  // Every extracted tag survives, enriched or not. Enrichment only sharpens the scoring
+  // prompt — batchScoreOpportunitiesWithAI() already substitutes for a missing intent or
+  // nextSteps — so dropping un-enriched tags traded a slightly weaker facet for no facet
+  // at all, which is how one malformed response emptied the whole dropdown.
+  return tags.map(t => byTag[t] || { tag: t });
 }
 
 // Extraction → enrichment, as one unit. Never throws: the tag facet is an enhancement on
@@ -2780,59 +2814,18 @@ Keep every field short — the whole array must fit comfortably in one response.
 // than failing anything the student is actually looking at.
 async function buildProfileFilterTags(text){
   try{
-    return await enrichProfileTags(await extractProfileTagStrings(text));
+    const tags = await extractProfileTagStrings(text);
+    if(!tags.length) console.warn('Profile tag extraction returned no tags — the filter facet will be hidden.');
+    return await enrichProfileTags(tags);
   }catch(e){
     console.error('Error building profile filter tags:', e);
     return [];
   }
 }
 
-// Score an opportunity against an enriched profile tag
-// Returns { score (0-100), matchReasons (array of strings) }
-function scoreOpportunityAgainstEnrichedTag(opp, enrichedTag) {
-  if (!enrichedTag) return { score: 0, matchReasons: [] };
-
-  let score = 0;
-  const matchReasons = [];
-  const oppText = `${opp.name} ${opp.org} ${opp.summary}`.toLowerCase();
-  const summaryText = (opp.summary || '').toLowerCase();
-
-  // 1. Opportunity type exact match (+60 points) — most reliable signal
-  if (enrichedTag.opportunityTypes && enrichedTag.opportunityTypes.length > 0) {
-    const oppType = (opp.type || '').toLowerCase();
-    const typeMatch = enrichedTag.opportunityTypes.some(t =>
-      oppType.includes(t.toLowerCase()) || t.toLowerCase().includes(oppType)
-    );
-    if (typeMatch) {
-      score += 60;
-      const reason = (enrichedTag.nextSteps && enrichedTag.nextSteps[0]) || enrichedTag.intent || 'Perfect match';
-      matchReasons.push(`Perfect fit: ${reason}`);
-    }
-  }
-
-  // 2. Semantic keyword matches — require at least 2 keywords in summary for credibility
-  // Single keywords are too loose (e.g., "robotics" appears everywhere)
-  if (enrichedTag.semanticKeywords && enrichedTag.semanticKeywords.length > 0 && summaryText.length > 0) {
-    const matchedKeywords = enrichedTag.semanticKeywords.filter(kw =>
-      summaryText.includes(kw.toLowerCase())
-    );
-
-    // Only score if 2+ keywords match in the summary (not just name/org)
-    // This filters out loose matches like a generic "robotics conference" for "brainstorming robotics"
-    if (matchedKeywords.length >= 2) {
-      score += Math.min(30, matchedKeywords.length * 10);
-
-      if (matchReasons.length === 0) {
-        matchReasons.push(`Focuses on ${matchedKeywords.slice(0, 2).join(', ')}`);
-      }
-    }
-  }
-
-  return {
-    score: Math.min(100, score),
-    matchReasons: matchReasons.slice(0, 2) // Top 2 reasons only
-  };
-}
+// (A local keyword/type scorer against an enriched tag used to live here. It had no callers
+// — the tag filter goes through batchScoreOpportunitiesWithAI() — and it was the only reader
+// of the enrichment fields the prompt above no longer asks for, so it went with them.)
 
 function resetResultFilters(){
   Object.values(resultFilters).forEach(s => { if(s instanceof Set) s.clear(); });
@@ -4829,5 +4822,5 @@ function escapeHtmlTracker(str){
 // the student signs in / registers. Profile/tracker data is loaded fresh per-account
 // only once signed in — see showApp() -> loadAccountData().
 loadUser().then(() => {
-  if(currentUser){ showApp(); } else { showLoginGate(); }
+  if(currentUser){ showApp(); } else { showLandingPage(); }
 });

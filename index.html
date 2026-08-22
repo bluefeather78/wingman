@@ -25,9 +25,11 @@
           <span class="font-heading font-extrabold text-base text-white">Wingman</span>
           <span class="text-white font-extrabold text-[9px] uppercase px-[9px] py-[3px] rounded-full" style="background-color: #f79256;">Beta</span>
         </div>
-        <nav class="flex items-center gap-4 sm:gap-6">
-          <a href="#" class="text-white font-bold text-xs sm:text-sm opacity-90 hover:opacity-100" onclick="event.preventDefault(); showLoginGate('signin');">Sign In</a>
-          <a href="#" class="pop-btn text-white font-extrabold text-[13px] px-4 sm:px-5 py-2.5 rounded-full" style="background-color: #f79256; border: none;" onclick="event.preventDefault(); showLoginGate('register');">Get started free</a>
+        <nav class="flex items-center pr-2">
+          <a href="#" class="text-white font-bold text-xs sm:text-sm opacity-90 hover:opacity-100 flex items-center gap-1.5" onclick="event.preventDefault(); showLoginGate('signin');">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/></svg>
+            Sign In
+          </a>
         </nav>
       </div>
     </header>
@@ -748,126 +750,126 @@
 
     </section>
 
-    <!-- ============== PAGE: PROFILE ============== -->
-    <section id="page-profile" class="hidden space-y-6">
+    <!-- ============== PAGE: PROFILE ("My Vibe") ============== -->
+    <section id="page-profile" class="hidden">
 
       <!-- CTA Banner - Sufficient Profile -->
-      <div id="profileCtaBanner" class="hidden">
-        <div class="w-full flex items-center gap-5 rounded-2xl px-7 py-5" style="background: linear-gradient(90deg, #101c36, #182750);">
+      <div id="profileCtaBanner" class="hidden mb-5">
+        <div class="w-full flex flex-wrap items-center gap-5 rounded-2xl px-7 py-6" style="background: linear-gradient(90deg, #101c36, #182750);">
           <div class="flex-1 min-w-0 text-left">
-            <div class="font-bold text-base" style="color: #fff;">Your story is ready to work for you</div>
-            <div class="text-sm mt-0.5" style="color: #aab3c9;">Head to Fresh Finds to see opportunities matched to what you just told us.</div>
+            <div class="font-heading font-bold text-lg" style="color: #fff;">Your story is ready to work for you.</div>
+            <div class="text-sm mt-1" style="color: #aab3c9;">Head to Fresh Finds to see opportunities matched to what you just told us.</div>
           </div>
-          <div class="flex flex-col items-center gap-2 flex-shrink-0">
-            <button onclick="startProfileBasedSearch()" class="flex items-center gap-2 px-5 py-2.5 rounded-full font-bold text-sm text-white whitespace-nowrap" style="background-color: #f4791d; border: none; cursor: pointer;">Find my matches</button>
-            <button class="text-xs font-semibold underline hover:no-underline transition-colors" style="color: #aab3c9; background: none; border: none; cursor: pointer;" onclick="goToProfileChat()">or deepen your story</button>
-          </div>
+          <button onclick="startProfileBasedSearch()" class="pop-btn text-white whitespace-nowrap" style="background-color: #f4791d; border-color: #1a2540; font-size: 14px; padding: 12px 26px; border-radius: 999px;">Find your matches</button>
         </div>
       </div>
 
       <!-- CTA Banner - Insufficient Profile -->
-      <div id="profileInsufficientBanner" class="hidden">
-        <div class="w-full flex items-center gap-5 rounded-2xl px-7 py-5" style="background: linear-gradient(90deg, #101c36, #182750);">
+      <div id="profileInsufficientBanner" class="hidden mb-5">
+        <div class="w-full flex flex-wrap items-center gap-5 rounded-2xl px-7 py-6" style="background: linear-gradient(90deg, #101c36, #182750);">
           <div class="flex-1 min-w-0 text-left">
-            <div class="font-bold text-base" style="color: #fff;">I don't have enough yet to match opportunities</div>
-            <div class="text-sm mt-0.5" style="color: #aab3c9;">Help me help you by building your profile</div>
+            <div class="font-heading font-bold text-lg" style="color: #fff;">I don't have enough yet to match opportunities</div>
+            <div class="text-sm mt-1" style="color: #aab3c9;">Help me help you by building your profile.</div>
           </div>
           <div class="flex flex-col items-center gap-2 flex-shrink-0">
-            <button onclick="focusProfileChat()" class="flex items-center gap-2 px-5 py-2.5 rounded-full font-bold text-sm text-white whitespace-nowrap" style="background-color: #f4791d; border: none; cursor: pointer;">Deepen your story</button>
+            <button onclick="openStoryDrawer()" class="pop-btn text-white whitespace-nowrap" style="background-color: #f4791d; border-color: #1a2540; font-size: 14px; padding: 12px 26px; border-radius: 999px;">Deepen your story</button>
             <button class="text-xs font-semibold underline hover:no-underline transition-colors" style="color: #aab3c9; background: none; border: none; cursor: pointer;" onclick="goToBrowseOpportunities()">or browse opportunities</button>
           </div>
         </div>
       </div>
 
+      <div id="profileStaleBanner"></div>
+
       <!-- Main Profile Card -->
-      <div class="card-soft p-12 space-y-6">
+      <div class="card-soft" style="padding: 28px;">
 
-        <!-- Header with status badge -->
-        <div class="flex flex-wrap justify-between items-start gap-4">
-          <h1 class="font-heading font-bold text-3xl" style="color: #1d4e89;">Your Story So Far</h1>
-          <span class="rounded-full px-4 py-1.5 text-sm font-bold whitespace-nowrap" id="profileUpdated" style="background-color: #e9f7c9; color: #4c6a1a;">Updated today</span>
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-5">
+          <div class="flex flex-wrap items-center gap-3">
+            <h2 class="font-heading font-bold text-xl" style="color: #1a2540;">Your Story So Far</h2>
+            <span class="rounded-full px-3 py-1.5 text-xs font-bold whitespace-nowrap" id="profileUpdated"></span>
+          </div>
+          <div class="flex gap-2.5 flex-wrap">
+            <button class="pop-btn flex items-center gap-1.5" style="background:#fff; color:#1a2540; border-color:#1a2540; font-size:13px; padding:10px 18px; border-radius:999px;" onclick="openImportModal()">
+              📄 Quick add from resume / LinkedIn
+            </button>
+            <button class="pop-btn" style="background:#f79256; color:#fff; border-color:#1a2540; font-size:13px; padding:10px 20px; border-radius:999px;" onclick="openStoryDrawer()">
+              Deepen your story
+            </button>
+          </div>
         </div>
 
-        <!-- Helper paragraph -->
-        <p class="text-base leading-relaxed italic" style="color: #8a93a6;">
-          Powers every match in the Finder: the more detailed and current it is, the better your suggestions. The more specific you are (real projects, real interests, real quirks, not just "I like science"), the easier it is to find opportunities that are actually a fit, not just generic ones anyone could get. Click "deepen my story" below any time to chat with the bot and go deeper.
-        </p>
+        <!-- Basics, read out of the profile text itself (see renderProfileBasics) -->
+        <div id="profileBasicsGrid" class="vibe-grid"></div>
 
-        <!-- Profile content sections -->
-        <div id="profileContent" class="space-y-4">
-          <!-- Populated by script.js renderProfile() -->
-        </div>
+        <!-- Interests, passion projects, research projects -->
+        <div id="profileContent"></div>
 
-        <!-- Divider -->
-        <hr id="profileContentDivider" class="border-0 border-t" style="border-color: #c9c9f0; margin: 28px 0 20px;">
+        <p class="text-xs font-bold mt-4 min-h-[1em]" id="profileSaveStatus" style="color:#8a93a6;"></p>
 
-        <!-- Research Projects Section (if applicable) -->
-        <div id="researchSection" class="hidden">
-          <div class="uppercase text-sm font-bold mb-3 flex items-center gap-2" style="color: #00b2ca; letter-spacing: 0.5px;">🔬 RESEARCH PROJECTS</div>
-          <div id="researchList" class="space-y-4 text-base leading-relaxed" style="color: #1d4e89;"></div>
-        </div>
-
-        <!-- Footer actions -->
-        <hr id="profileFooterDivider" class="border-0 border-t" style="border-color: #eef0f5; margin: 28px 0 20px;">
-        <div id="profileFooterButtons" class="flex justify-between items-center gap-4 flex-wrap">
-          <button class="text-sm font-bold flex items-center gap-1.5" style="color: #d64545; background: none; border: none; cursor: pointer;" onclick="clearProfile()">
+        <div class="flex flex-wrap justify-between items-center gap-4 mt-2">
+          <button style="background:none; border:none; padding:0; font-size:12px; font-weight:700; color:#8a93a6; cursor:pointer; text-decoration:underline;" onclick="openStoryDrawer()">
+            or deepen your story
+          </button>
+          <button class="text-sm font-bold flex items-center gap-1.5 hidden" id="profileClearBtn" style="color: #d64545; background: none; border: none; cursor: pointer;" onclick="clearProfile(this)">
             🗑️ Clear profile
           </button>
         </div>
       </div>
 
-      <!-- Resume/LinkedIn Import Card -->
-      <div class="card-soft p-6 space-y-4" id="importCard">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <h2 class="font-heading font-bold text-xl">Quick Add: Resume or LinkedIn</h2>
-          <button type="button" class="text-xs font-bold text-slate-500 hover:text-slate-900" onclick="toggleImportCard()">−</button>
-        </div>
-        <p class="text-xs text-slate-400 font-normal italic">Upload your resume or share your LinkedIn profile to automatically extract relevant skills, experience, and education.</p>
-
-        <!-- Import Tabs -->
-        <div class="flex gap-2 border-b-2 border-slate-200 mb-4">
-          <button class="text-sm font-bold pb-2 border-b-2" id="resumeTab" style="border-color: #00b2ca; color: #00b2ca;" onclick="switchImportTab('resume')">📄 Upload Resume</button>
-          <button class="text-sm font-bold pb-2 border-b-2" id="linkedinTab" style="border-color: transparent; color: #8a93a6;" onclick="switchImportTab('linkedin')">🔗 LinkedIn Profile</button>
-        </div>
-
-        <!-- Resume Upload Tab -->
-        <div id="resumeTab-content" class="space-y-3">
-          <p class="text-xs text-slate-500">Upload a PDF or Word document (.pdf, .docx)</p>
-          <div class="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center cursor-pointer hover:border-slate-900 hover:bg-slate-50 transition-colors" id="resumeDropZone" onclick="document.getElementById('resumeFileInput').click()">
-            <p class="text-sm font-bold text-slate-900">📎 Click to upload or drag & drop</p>
-            <p class="text-xs text-slate-500 mt-1">PDF or Word document (max 5MB)</p>
-            <input type="file" id="resumeFileInput" accept=".pdf,.docx" style="display: none;" onchange="handleResumeUpload(this)">
+      <!-- ---------- "Deepen your story" chat drawer ---------- -->
+      <div class="drawer-overlay hidden" id="storyDrawerOverlay" onclick="closeStoryDrawer()"></div>
+      <aside class="story-drawer" id="storyDrawer" aria-hidden="true">
+        <div class="story-drawer-head">
+          <div>
+            <h3 class="font-heading font-bold text-lg" style="color:#1a2540; margin:0;">Deepen your story</h3>
+            <p class="text-xs mt-1" style="color:#8a93a6;">Chat with the bot to add more detail. Close this and I'll fold it into your profile.</p>
           </div>
-          <p class="text-xs text-slate-500 min-h-[1em]" id="resumeUploadStatus"></p>
-          <button class="w-full pop-btn bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm" id="resumeSubmitBtn" style="display: none;" onclick="submitResumeExtraction()">Extract from Resume</button>
-        </div>
-
-        <!-- LinkedIn Tab -->
-        <div id="linkedinTab-content" class="hidden space-y-3">
-          <p class="text-xs text-slate-500">Copy and paste your LinkedIn profile text here (LinkedIn blocks direct URL access, so text paste is the only method)</p>
-          <textarea id="linkedinTextInput" class="w-full border-2 border-slate-900 rounded-xl p-3 text-sm font-medium" rows="6" placeholder="Paste your LinkedIn profile content here..."></textarea>
-          <button class="w-full pop-btn bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm" onclick="submitLinkedInExtraction('text')">Extract from LinkedIn Text</button>
-          <p class="text-xs text-slate-500 min-h-[1em]" id="linkedinImportStatus"></p>
-        </div>
-      </div>
-
-      <!-- Chat Card (for profile editing) -->
-      <div class="card-soft p-6 space-y-4 hidden" id="profileChatCard">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <h2 class="font-heading font-bold text-xl">Spill the Tea</h2>
-          <button type="button" id="profileChatSpeakerBtn" class="pop-btn bg-white text-slate-900 font-bold w-10 h-10 rounded-xl text-base shrink-0 hidden" onclick="toggleVoiceOutput()" title="Turn on spoken questions">🔇</button>
-        </div>
-        <p class="text-xs text-slate-400 font-normal italic">A few fun questions to round out your profile: music, sports, weird hobbies, side projects, whatever makes you <em>you</em>. Answer as many as you like, then hit "I'm done for now" and I'll fold it all into your profile summary above.</p>
-        <div class="bg-slate-50 border-2 border-slate-900 rounded-2xl p-4 space-y-3 max-h-[420px] overflow-y-auto" id="profileChatMessages"></div>
-        <p class="text-xs font-bold text-indigo-600 min-h-[1em]" id="profileChatStatus"></p>
-        <div class="flex flex-col sm:flex-row gap-2">
-          <div class="flex-1 flex gap-2">
-            <input type="text" id="profileChatInput" class="flex-1 border-2 border-slate-900 rounded-xl p-3 text-sm font-medium" placeholder="Type your answer..." onkeydown="if(event.key==='Enter'){event.preventDefault(); sendProfileChatMessage();}">
-            <button type="button" id="profileChatMicBtn" class="pop-btn bg-white text-slate-900 font-bold w-12 rounded-xl text-base shrink-0 hidden" onclick="toggleVoiceInput()" title="Speak your answer">🎤</button>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button type="button" id="profileChatSpeakerBtn" class="pop-btn bg-white text-slate-900 font-bold w-9 h-9 rounded-xl text-base shrink-0 hidden" onclick="toggleVoiceOutput()" title="Turn on spoken questions">🔇</button>
+            <button onclick="closeStoryDrawer()" style="background:none; border:none; font-size:20px; font-weight:800; color:#8a93a6; cursor:pointer; line-height:1;" title="Close and save">✕</button>
           </div>
+        </div>
+
+        <div class="story-drawer-body" id="profileChatMessages"></div>
+
+        <div class="story-drawer-foot">
           <div class="flex gap-2">
-            <button class="pop-btn bg-orange-500 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" id="profileChatSendBtn" onclick="sendProfileChatMessage()">Send</button>
-            <button class="pop-btn bg-white font-bold px-4 py-2.5 rounded-xl text-sm shrink-0" onclick="finishProfileChatSession()">I'm done for now</button>
+            <input type="text" id="profileChatInput" class="flex-1 border-2 border-slate-900 rounded-xl p-3 text-sm font-medium min-w-0" placeholder="Type your answer..." onkeydown="if(event.key==='Enter'){event.preventDefault(); sendProfileChatMessage();}">
+            <button type="button" id="profileChatMicBtn" class="pop-btn bg-white text-slate-900 font-bold w-12 rounded-xl text-base shrink-0 hidden" onclick="toggleVoiceInput()" title="Speak your answer">🎤</button>
+            <button class="pop-btn text-white font-bold px-5 rounded-xl text-sm shrink-0" style="background-color:#f79256; border-color:#1a2540;" id="profileChatSendBtn" onclick="sendProfileChatMessage()">Send</button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ---------- Resume / LinkedIn quick-add modal ---------- -->
+      <div class="import-overlay hidden" id="importModal" onclick="if(event.target===this) closeImportModal();">
+        <div class="card-soft" style="width:100%; max-width:440px; padding:26px;" id="importCard">
+          <div class="flex items-center justify-between mb-1.5">
+            <h2 class="font-heading font-bold text-lg" style="color:#1a2540;">Quick add</h2>
+            <button type="button" onclick="closeImportModal()" style="background:none; border:none; font-size:18px; font-weight:800; color:#8a93a6; cursor:pointer;">✕</button>
+          </div>
+          <p class="text-xs mb-4 leading-relaxed" style="color:#8a93a6;">Upload your resume or share your LinkedIn profile to automatically extract relevant skills, experience, and education.</p>
+
+          <div class="flex gap-4 border-b-2 border-slate-200 mb-4">
+            <button class="text-sm font-bold pb-2 border-b-2 -mb-0.5" id="resumeTab" style="border-color: #00b2ca; color: #00b2ca; background:none; cursor:pointer;" onclick="switchImportTab('resume')">📄 Upload Resume</button>
+            <button class="text-sm font-bold pb-2 border-b-2 -mb-0.5" id="linkedinTab" style="border-color: transparent; color: #8a93a6; background:none; cursor:pointer;" onclick="switchImportTab('linkedin')">🔗 LinkedIn Profile</button>
+          </div>
+
+          <div id="resumeTab-content" class="space-y-3">
+            <div class="border-2 border-dashed border-slate-300 rounded-2xl p-6 text-center cursor-pointer hover:border-slate-900 hover:bg-slate-50 transition-colors" id="resumeDropZone" onclick="document.getElementById('resumeFileInput').click()">
+              <p class="text-sm font-bold" style="color:#5b6785;">Drop your resume here, or click to browse</p>
+              <p class="text-xs mt-1" style="color:#94a3b8;">PDF or Word document (max 5MB)</p>
+              <input type="file" id="resumeFileInput" accept=".pdf,.docx" style="display: none;" onchange="handleResumeUpload(this)">
+            </div>
+            <p class="text-xs min-h-[1em]" style="color:#8a93a6;" id="resumeUploadStatus"></p>
+            <button class="w-full pop-btn bg-slate-900 text-white font-bold py-3 rounded-xl text-sm" id="resumeSubmitBtn" style="display: none;" onclick="submitResumeExtraction()">Extract from Resume</button>
+          </div>
+
+          <div id="linkedinTab-content" class="hidden space-y-3">
+            <p class="text-xs" style="color:#8a93a6;">Copy and paste your LinkedIn profile text here (LinkedIn blocks direct URL access, so text paste is the only method)</p>
+            <textarea id="linkedinTextInput" class="w-full border-2 border-slate-900 rounded-2xl p-3 text-sm font-medium" rows="5" placeholder="Paste your LinkedIn profile content here..."></textarea>
+            <button class="w-full pop-btn bg-slate-900 text-white font-bold py-3 rounded-xl text-sm" onclick="submitLinkedInExtraction('text')">Extract from LinkedIn Text</button>
+            <p class="text-xs min-h-[1em]" style="color:#8a93a6;" id="linkedinImportStatus"></p>
           </div>
         </div>
       </div>

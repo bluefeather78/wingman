@@ -625,6 +625,7 @@ FEATURE_LABELS = {
     "tag_intent":        "Tag intent analysis",
     "tag_suggestions":   "Tag suggestions",
     "resume_import":     "Resume / LinkedIn import",
+    "profile_basics":    "Profile basics",
     "deadline_check":    "Deadline check",
     "other":             "Other",
 }
@@ -687,6 +688,7 @@ _FEATURE_SIGNATURES = [
     ("classify and extract structured tracking data",             "tracker_extract"),
     ("extract structured tracking data",                          "tracker_extract"),
     ("extract ONLY information that would be relevant",           "resume_import"),
+    ("pull out a small set of specific profile facts",            "profile_basics"),
     # The ranking prompt only contains "Rank the best 10-12 matches" on one of its two
     # selectionRule branches, so it also gets matched on its stable opening line.
     ("helping a student find the best-fit extracurricular",       "ranking"),
@@ -1210,6 +1212,18 @@ def mock_profile_chat_findings(user_content):
     return "Additional details shared in chat: " + "; ".join(lines)
 
 
+def mock_profile_basics(user_content):
+    """Regex what the real extraction infers, and leave the rest null — a mock that
+    invented a grade or a gender would make the "No info" tiles untestable offline."""
+    grade = re.search(r'(9th|10th|11th|12th|freshman|sophomore|junior|senior)', user_content, re.I)
+    state = re.search(r'(?:in|from) (Washington|California|New York|Texas|Oregon)', user_content, re.I)
+    return json.dumps({
+        "grade": grade.group(1).lower() if grade else None,
+        "state": state.group(1) if state else None,
+        "gender": None,
+    })
+
+
 def mock_venues_via_web():
     next_deadline = (datetime.date.today() + datetime.timedelta(days=75)).isoformat()
     return json.dumps([
@@ -1313,6 +1327,8 @@ def generate_mock_text(system, user_content):
         return mock_profile_chat_question(user_content)
     if "distill a casual chat conversation into new facts" in system:
         return mock_profile_chat_findings(user_content)
+    if "pull out a small set of specific profile facts" in system:
+        return mock_profile_basics(user_content)
     if "classify and extract structured tracking data" in system:
         return mock_tracker_extract(user_content, with_section=True)
     if "extract structured tracking data" in system:

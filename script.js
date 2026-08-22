@@ -1387,6 +1387,28 @@ async function inferSubjects(description){
   return Array.isArray(arr) ? arr.filter(s => VALID_SUBJECTS.includes(s)) : [];
 }
 
+// The five "basics" tiles on My Vibe are read out of the profile text rather than
+// collected as their own form — the student only ever types prose, so anything they
+// never mentioned stays blank rather than showing a made-up default.
+const PROFILE_BASICS_FIELDS = [
+  { key: 'grade', label: 'Grade level' },
+  { key: 'state', label: 'Home state' },
+  { key: 'gender', label: 'Gender' }
+];
+
+async function extractProfileBasics(text){
+  if(!text || !text.trim()) return {};
+  const system = `You read a high school student's self-description and pull out a small set of specific profile facts, ONLY if the student actually stated or clearly implied them. Respond with ONLY a raw JSON object (no markdown, no preamble) with exactly these keys: "grade" (their school year, e.g. "11th grade"), "state" (US state or region they live in, spelled out), "gender". Set a key to null if the student did not say it — never guess, never infer from stereotypes, and never fill a value in just to avoid a null.`;
+  const obj = await callGeminiJSON(system, text, false);
+  if(!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+  const out = {};
+  PROFILE_BASICS_FIELDS.forEach(({ key }) => {
+    const v = obj[key];
+    out[key] = (typeof v === 'string' && v.trim() && !/^(null|n\/?a|unknown|unspecified)$/i.test(v.trim())) ? v.trim() : null;
+  });
+  return out;
+}
+
 async function rankCandidates(description, candidates, prefs, requireAll){
   const compact = candidates.map(c => ({ id: c.id, name: c.name, org: c.org, summary: c.summary, subject_tags: c.subject_tags, type: c.type, price: c.price, location: c.location, season: c.season }));
   // requireAll (set for strict-type kinds like Conference/Journal Venue, where the
@@ -1553,6 +1575,15 @@ const PROFILE_DERIVED_SLOTS = {
     async compute(text){
       return { enrichedTags: await buildProfileFilterTags(text) };
     }
+  },
+  // The My Vibe basics tiles. `fields` is an object, not an array, so its freshness
+  // check can't use the array-shaped `key` path the other two slots take.
+  basics: {
+    key: 'fields',
+    isFilled: rec => !!(rec && rec.fields && typeof rec.fields === 'object'),
+    async compute(text){
+      return { fields: await extractProfileBasics(text) };
+    }
   }
 };
 // slot -> { text, promise } for a computation already running, so a background refresh
@@ -1560,7 +1591,9 @@ const PROFILE_DERIVED_SLOTS = {
 const profileDerivedInFlight = {};
 
 function profileDerivedIsFresh(slot, rec, text){
-  if(!rec || !rec.computedAt || !Array.isArray(rec[PROFILE_DERIVED_SLOTS[slot].key])) return false;
+  const cfg = PROFILE_DERIVED_SLOTS[slot];
+  const filled = cfg.isFilled || (r => Array.isArray(r[cfg.key]));
+  if(!rec || !rec.computedAt || !filled(rec)) return false;
   if(rec.profile === text) return true;
   return Math.abs(countProfileWords(text) - (rec.wordCount || 0)) < PROFILE_FILTER_REFRESH_WORDS;
 }
@@ -1644,25 +1677,14 @@ function renderProfile(){
   }
   if(bannerEl){
     bannerEl.innerHTML = isStale ? `
-      <div class="bg-amber-50 border-2 border-amber-400 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2">
+      <div class="bg-amber-50 border-2 border-amber-400 rounded-2xl p-3 mb-5 flex flex-wrap items-center justify-between gap-2">
         <p class="text-xs font-bold text-amber-900">It's been ${days} days since you updated your profile — refresh it for the best matches.</p>
         <button class="pop-btn bg-white text-slate-900 font-bold px-3 py-1.5 rounded-xl text-xs shrink-0" onclick="focusProfileChat()">↓ Update via chat</button>
       </div>
     ` : '';
   }
-  // Hide footer buttons and dividers when profile is empty
-  const footerButtons = document.getElementById('profileFooterButtons');
-  const footerDivider = document.getElementById('profileFooterDivider');
-  const contentDivider = document.getElementById('profileContentDivider');
-  if(footerButtons){
-    footerButtons.classList.toggle('hidden', !hasProfile);
-  }
-  if(footerDivider){
-    footerDivider.classList.toggle('hidden', !hasProfile);
-  }
-  if(contentDivider){
-    contentDivider.classList.toggle('hidden', !hasProfile);
-  }
+  const clearBtn = document.getElementById('profileClearBtn');
+  if(clearBtn) clearBtn.classList.toggle('hidden', !hasProfile);
 }
 // Sends the student to the dedicated Profile tab, where the profile builder lives.
 function goToProfile(){
@@ -1687,21 +1709,58 @@ function goToBrowseOpportunities(){
 }
 // The single entry point for "deepen my story" everywhere in the app (the Profile
 // page's own buttons, the stale-profile banner, the Home teaser, the Finder's
-// pre-search nudge). "Spill the Tea" starts hidden and its starter questions are never
+// pre-search nudge). The drawer starts closed and its starter questions are never
 // fetched until the student explicitly asks to go deeper — this is the only place that
-// un-hides the card and calls initProfileChat() (which is what actually triggers the
+// opens it and calls initProfileChat() (which is what actually triggers the
 // profileChatStarterQuestionsFromAI API call), so simply visiting the Profile tab never
 // spends an API call on its own.
-function focusProfileChat(){
-  const card = document.getElementById('profileChatCard');
-  if(card){
-    card.classList.remove('hidden');
-    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
+function openStoryDrawer(){
+  const drawer = document.getElementById('storyDrawer');
+  const overlay = document.getElementById('storyDrawerOverlay');
+  if(!drawer) return;
+  overlay.classList.remove('hidden');
+  drawer.classList.add('open');
+  drawer.setAttribute('aria-hidden', 'false');
   initProfileChat();
   const input = document.getElementById('profileChatInput');
   if(input) setTimeout(() => input.focus(), 300);
 }
+
+// Closing IS the save: clicking the backdrop, the ✕, or hitting Escape all fold whatever
+// the student shared in this session into the profile (see finishProfileChatSession),
+// which then flashes the newly-added sentences. The drawer shuts immediately rather than
+// waiting on that call — the merge takes a couple of API round-trips, and holding a
+// dismissed drawer open for them reads as broken.
+function closeStoryDrawer(){
+  const drawer = document.getElementById('storyDrawer');
+  const overlay = document.getElementById('storyDrawerOverlay');
+  if(!drawer || !drawer.classList.contains('open')) return;
+  overlay.classList.add('hidden');
+  drawer.classList.remove('open');
+  drawer.setAttribute('aria-hidden', 'true');
+  if(profileChatHistory.some(m => m.role === 'user')) finishProfileChatSession();
+}
+
+// Kept as the app-wide alias so existing "deepen your story" call sites keep working.
+function focusProfileChat(){
+  openStoryDrawer();
+}
+
+function openImportModal(){
+  const modal = document.getElementById('importModal');
+  if(modal) modal.classList.remove('hidden');
+}
+function closeImportModal(){
+  const modal = document.getElementById('importModal');
+  if(modal) modal.classList.add('hidden');
+}
+
+document.addEventListener('keydown', (e) => {
+  if(e.key !== 'Escape') return;
+  const modal = document.getElementById('importModal');
+  if(modal && !modal.classList.contains('hidden')){ closeImportModal(); return; }
+  closeStoryDrawer();
+});
 
 let clearProfileArmed = false;
 async function clearProfile(btn){
@@ -1729,10 +1788,10 @@ async function clearProfile(btn){
   renderProfileFit();
   renderSuggestEntryCard();
   renderHomeProfileTeaser();
-  // Only refresh the chat (and re-spend an API call on fresh starters) if "Spill the
-  // Tea" is already open — clearing the profile shouldn't be what opens it.
-  const chatCard = document.getElementById('profileChatCard');
-  if(chatCard && !chatCard.classList.contains('hidden')) initProfileChat();
+  // Only refresh the chat (and re-spend an API call on fresh starters) if the drawer is
+  // already open — clearing the profile shouldn't be what opens it.
+  const drawer = document.getElementById('storyDrawer');
+  if(drawer && drawer.classList.contains('open')) initProfileChat();
 }
 
 // Merges a block of new text into the single synthesized profile via the API — adding,
@@ -1747,6 +1806,7 @@ async function synthesizeProfile(existing, newText){
 }
 async function mergeIntoProfile(text){
   if(!text || !text.trim()) return;
+  const before = studentProfile.synthesized;
   try{
     studentProfile.synthesized = await synthesizeProfile(studentProfile.synthesized, text.trim());
   }catch(e){
@@ -1754,6 +1814,12 @@ async function mergeIntoProfile(text){
     studentProfile.synthesized = studentProfile.synthesized ? studentProfile.synthesized + ' ' + text.trim() : text.trim();
   }
   studentProfile.updatedAt = new Date().toISOString();
+  profileBasicsUnavailable = false;
+  // Swap the optimistic tile for the real thing in one render, rather than clearing it a
+  // tick earlier (the card would flicker back to its old state) or a tick later (the
+  // student's words would briefly appear twice, once raw and once merged).
+  profilePendingText = null;
+  flagNewProfileText(before, studentProfile.synthesized);
   await saveProfile();
   // The profile text just changed, so its derived search filter values may be stale.
   // Recompute them here rather than on the next Fresh Finds load — that's the whole
@@ -2101,29 +2167,39 @@ async function summarizeProfileChat(){
   return raw.trim();
 }
 
+// Called when the drawer closes, which is now the only way a chat session ends. The
+// transcript is cleared either way — on failure the student's answers are gone, so say so
+// out loud on the page rather than only in the drawer they just dismissed. Starters are
+// deliberately NOT preloaded here: that costs an API call for a panel nobody is looking at.
 async function finishProfileChatSession(){
-  const statusEl = document.getElementById('profileChatStatus');
-  const hasAnswers = profileChatHistory.some(m => m.role === 'user');
-  if(!hasAnswers){
-    if(statusEl) statusEl.textContent = 'Answer at least one question first, then hit this again.';
-    return;
-  }
-  if(statusEl) statusEl.textContent = 'Folding what you shared into your profile…';
+  const statusEl = document.getElementById('profileSaveStatus');
+  const setStatus = (text, color) => {
+    if(!statusEl) return;
+    statusEl.textContent = text;
+    statusEl.style.color = color;
+  };
+  const answers = profileChatHistory.filter(m => m.role === 'user').map(m => m.text);
+  if(!answers.length) return;
+  // Paint the student's own answers onto the card before awaiting anything, so closing the
+  // drawer updates the profile in the same frame it closes in.
+  profilePendingText = answers.join(' ');
+  renderProfileFit();
+  setStatus('', '#8a93a6');
   try{
     const findings = await summarizeProfileChat();
     await mergeIntoProfile(findings);
     studentProfile.chatRounds += 1;
-    await saveProfile();
-    profileChatHistory = [];
-    profileChatStarters = null;
-    profileChatStartersLoading = false;
-    renderProfileChatMessages();
-    loadProfileChatStarters();
-    if(statusEl) statusEl.textContent = 'Profile updated! Come back any time for more questions.';
   }catch(e){
     console.error('Profile chat summarize/merge failed:', e);
-    if(statusEl) statusEl.textContent = "Couldn't update your profile just now — try again in a moment.";
+    setStatus("Couldn't fold that chat into your profile — try again in a moment.", '#d64545');
+    profilePendingText = null;
+    renderProfileFit();
   }
+  profileChatHistory = [];
+  profileChatStarters = null;
+  profileChatStartersLoading = false;
+  await saveProfile();
+  renderProfileChatMessages();
 }
 
 // ============================================================
@@ -2294,13 +2370,6 @@ async function submitLinkedInExtraction(mode){
   }
 }
 
-// Toggle import card visibility
-function toggleImportCard(){
-  const card = document.getElementById('importCard');
-  if(card) card.classList.toggle('hidden');
-}
-
-
 // Used by empty-profile prompts elsewhere in the app to send the student to the one
 // place the profile now lives: the Profile tab.
 // ============================================================
@@ -2370,7 +2439,7 @@ function insufficientProfileCardHTML(){
       <h2 class="font-heading font-bold text-3xl" style="color: #1d4e89;">I don't have enough yet to match opportunities</h2>
       <p class="text-base leading-relaxed italic mt-4 w-full" style="color: #4A6685;">Help me help you by building your profile</p>
     </div>
-    <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;" onclick="focusProfileChat()">Deepen your story</button>
+    <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;" onclick="openStoryDrawer()">Deepen your story</button>
   `;
 }
 function freshFindsLoadingCardHTML(){
@@ -3519,9 +3588,9 @@ function showPage(name){
       goStage(currentStage);
     }
   }
-  // Deliberately no initProfileChat() call here — "Spill the Tea" (and the API call for
-  // its starter questions) only opens via focusProfileChat(), triggered by an explicit
-  // "deepen my story" action, not just by visiting this tab. See focusProfileChat().
+  // Deliberately no initProfileChat() call here — the drawer (and the API call for its
+  // starter questions) only opens via openStoryDrawer(), triggered by an explicit
+  // "deepen my story" action, not just by visiting this tab.
   if(name === 'profile'){ renderProfile(); renderProfileFit(); }
   if(name === 'subscription'){ checkSubscriptionStatus(); renderSubscriptionPage(); }
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -4290,69 +4359,193 @@ function renderHomeProfileTeaser(){
 // ---------- Profile tab: single synthesized profile (read-only summary) ----------
 // Static by design — the summary itself is never directly editable. The only action
 // available here is clearing it completely; every add/update/correction happens through
-// the chat below (see the Profile Builder Chat block), which is the sole source of truth
-// for what gets merged into this summary.
+// the "Deepen your story" drawer, which is the sole source of truth for what gets merged
+// into this summary.
+
+// Sentences that appeared in the profile only after the last merge. Rendered wrapped in
+// <mark> so the student can see what the chat actually added, then dropped after 5s.
+let profileHighlightSet = null;
+let profileHighlightTimer = null;
+// Set alongside the highlight set and consumed by the next render, so the card scrolls to
+// the new text exactly once — the 5s expiry re-render and every unrelated renderProfileFit
+// call must not yank the page around again.
+let profileScrollToHighlight = false;
+
+// What the student said in the session currently being folded in. Closing the drawer kicks
+// off two AI round-trips (distil the transcript, then re-synthesize the whole profile) that
+// take several seconds together, and a card that sits unchanged for that long reads as
+// "closing it threw my answers away". So their own words go up on the card immediately and
+// are replaced by the synthesized version when it lands — see mergeIntoProfile, which
+// clears this at the exact moment the merged text is rendered.
+let profilePendingText = null;
+
+function splitProfileSentences(text){
+  return (text || '').split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+}
+
+// How much word overlap makes a sentence a reworded version of one already in the profile
+// rather than a new one. Synthesis rewrites the whole profile every merge, so it routinely
+// returns settled content with a word or two changed ("into marine biology" ->
+// "interested in marine biology"); exact-match diffing lights all of that up and the
+// highlight stops meaning "here is what you just added". Measured separation on real
+// merges is wide — a reworded sentence scores ~0.8, genuinely new content ~0.1 — so this
+// sits between them rather than near either.
+const PROFILE_REWORD_RATIO = 0.6;
+
+function sentenceWords(text){
+  return new Set(text.toLowerCase().match(/[a-z0-9']+/g) || []);
+}
+
+// Jaccard overlap, so a long sentence can't score high against a short one merely by
+// containing it — an appended clause should still read as new.
+function sentenceSimilarity(a, b){
+  const A = sentenceWords(a), B = sentenceWords(b);
+  if(!A.size || !B.size) return 0;
+  let shared = 0;
+  A.forEach(w => { if(B.has(w)) shared++; });
+  return shared / (A.size + B.size - shared);
+}
+
+// Diffs by sentence rather than by whole paragraph: a merge commonly appends a clause to
+// an existing paragraph, and highlighting the entire paragraph would drown the one new bit.
+function flagNewProfileText(before, after){
+  const old = splitProfileSentences(before);
+  const oldExact = new Set(old);
+  const added = splitProfileSentences(after).filter(s =>
+    !oldExact.has(s) && !old.some(o => sentenceSimilarity(s, o) >= PROFILE_REWORD_RATIO)
+  );
+  if(profileHighlightTimer) clearTimeout(profileHighlightTimer);
+  if(!added.length){
+    profileHighlightSet = null;
+    return;
+  }
+  profileHighlightSet = new Set(added);
+  profileScrollToHighlight = true;
+  profileHighlightTimer = setTimeout(() => {
+    profileHighlightSet = null;
+    profileHighlightTimer = null;
+    renderProfileFit();
+  }, 5000);
+}
+
+function profileTextHTML(text){
+  if(!profileHighlightSet || !profileHighlightSet.size) return escapeHtmlTracker(text);
+  return splitProfileSentences(text).map(s =>
+    profileHighlightSet.has(s) ? `<mark class="profile-new">${escapeHtmlTracker(s)}</mark>` : escapeHtmlTracker(s)
+  ).join(' ');
+}
+
+function vibeField(label, innerHTML){
+  return `<div class="vibe-field"><p class="vibe-label">${label}</p>${innerHTML}</div>`;
+}
+
+// The basics tiles are derived from the profile text (see the `basics` slot in
+// PROFILE_DERIVED_SLOTS), so they cost one cached AI call per meaningful profile change
+// rather than one per render. Anything the student never mentioned reads "No info".
+// Latches when the extraction call fails, so the tiles settle on "No info" instead of
+// spinning forever — and so a failing key isn't retried on every single re-render. Cleared
+// whenever the profile text changes, which is a fresh chance for the call to succeed.
+let profileBasicsUnavailable = false;
+
+function renderProfileBasics(){
+  const wrap = document.getElementById('profileBasicsGrid');
+  if(!wrap) return;
+  const text = studentProfile.synthesized || '';
+  if(!text){
+    wrap.innerHTML = '';
+    return;
+  }
+  const fresh = profileDerivedIsFresh('basics', studentProfile.basics, text);
+  const fields = (studentProfile.basics && studentProfile.basics.fields) || {};
+  wrap.innerHTML = PROFILE_BASICS_FIELDS.map(({ key, label }) => {
+    const value = fields[key];
+    const cls = value ? 'vibe-value' : 'vibe-value empty';
+    const shown = value ? profileTextHTML(value) : ((fresh || profileBasicsUnavailable) ? 'No info' : '…');
+    return vibeField(label, `<p class="${cls}">${shown}</p>`);
+  }).join('');
+  if(!fresh && !profileBasicsUnavailable){
+    getProfileDerived('basics')
+      .then(renderProfileBasics)
+      .catch(err => {
+        console.warn('Profile basics extraction failed:', err.message);
+        profileBasicsUnavailable = true;
+        renderProfileBasics();
+      });
+  }
+}
+
 function renderProfileFit(){
   const contentWrap = document.getElementById('profileContent');
-  const researchWrap = document.getElementById('researchSection');
-  const researchList = document.getElementById('researchList');
   const ctaBanner = document.getElementById('profileCtaBanner');
   const insufficientBanner = document.getElementById('profileInsufficientBanner');
 
   if(!contentWrap) return;
 
+  renderProfileBasics();
+
   if(!studentProfile.synthesized){
     contentWrap.innerHTML = `
-      <p class="empty-state">Nothing here yet — chat with the bot below to build your profile.</p>
-      <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;" onclick="focusProfileChat()">Start chatting</button>
+      <p class="empty-state">Nothing here yet — chat with the bot to build your profile.</p>
+      <button class="mt-6 pop-btn font-bold px-6 py-3 text-white" style="background-color: #f79256; border-color: #1a2540; cursor: pointer; border-radius: 999px;" onclick="openStoryDrawer()">Start chatting</button>
     `;
-    if(researchWrap) researchWrap.classList.add('hidden');
     if(ctaBanner) ctaBanner.classList.add('hidden');
     if(insufficientBanner) insufficientBanner.classList.add('hidden');
     return;
   }
 
-  // Split profile into sections
-  const allParagraphs = (studentProfile.synthesized || '').split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  const allParagraphs = studentProfile.synthesized.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  const passionProjects = [];
   const researchProjects = [];
   const generalParagraphs = [];
   allParagraphs.forEach(p => {
-    if(/^research projects?:/i.test(p)) researchProjects.push(p.replace(/^research projects?:\s*/i, ''));
+    if(/^passion projects?:/i.test(p)) passionProjects.push(p.replace(/^passion projects?:\s*/i, ''));
+    else if(/^research projects?:/i.test(p)) researchProjects.push(p.replace(/^research projects?:\s*/i, ''));
     else generalParagraphs.push(p);
   });
 
-  // Populate main content paragraphs
-  contentWrap.innerHTML = generalParagraphs.map(p => `<p>${escapeHtmlTracker(p)}</p>`).join('');
+  const numbered = items => `<ol class="vibe-list">${items.map(p => `<li>${profileTextHTML(p)}</li>`).join('')}</ol>`;
 
-  // Populate research section
-  if(researchProjects.length && researchWrap && researchList){
-    researchWrap.classList.remove('hidden');
-    researchList.innerHTML = researchProjects.map((p, i) => `
-      <div>
-        <span class="research-number">${i + 1}.</span>
-        <p>${escapeHtmlTracker(p)}</p>
-      </div>
-    `).join('');
-  } else if(researchWrap){
-    researchWrap.classList.add('hidden');
+  let html = '';
+  if(generalParagraphs.length){
+    html += vibeField('Interests &amp; experience', generalParagraphs.map(p =>
+      `<p class="vibe-value vibe-body">${profileTextHTML(p)}</p>`
+    ).join(''));
   }
+  if(passionProjects.length) html += vibeField('Passion projects', numbered(passionProjects));
+  if(researchProjects.length) html += vibeField('Research projects', numbered(researchProjects));
+  if(profilePendingText){
+    html += `<div class="vibe-field vibe-pending">
+      <p class="vibe-label">Just shared — folding this in<span class="vibe-dots"></span></p>
+      <p class="vibe-value vibe-body">${escapeHtmlTracker(profilePendingText)}</p>
+    </div>`;
+  }
+  contentWrap.innerHTML = html;
 
-  // Show appropriate banner based on profile sufficiency
   const isSufficient = countProfileWords(studentProfile.synthesized) >= PROFILE_SUFFICIENT_LENGTH;
-  if(ctaBanner){
-    if(isSufficient){
-      ctaBanner.classList.remove('hidden');
-    } else {
-      ctaBanner.classList.add('hidden');
-    }
+  if(ctaBanner) ctaBanner.classList.toggle('hidden', !isSufficient);
+  if(insufficientBanner) insufficientBanner.classList.toggle('hidden', isSufficient);
+
+  if(profileScrollToHighlight){
+    profileScrollToHighlight = false;
+    scrollToFirstProfileHighlight();
   }
-  if(insufficientBanner){
-    if(!isSufficient){
-      insufficientBanner.classList.remove('hidden');
-    } else {
-      insufficientBanner.classList.add('hidden');
-    }
-  }
+}
+
+// Brings the freshly-merged text into view once synthesis lands. The wait between closing
+// the drawer and the merged profile appearing is several seconds, which is long enough for
+// the student to have scrolled elsewhere on the page — landing them on the new sentence is
+// the point of highlighting it at all. Deliberately silent when My Vibe isn't the visible
+// page: showPage() scrolls to top on arrival, and a background merge yanking a page the
+// student is reading is worse than no scroll.
+function scrollToFirstProfileHighlight(){
+  const page = document.getElementById('page-profile');
+  if(!page || page.classList.contains('hidden')) return;
+  // Synchronous, not deferred to requestAnimationFrame: the mark is already in the DOM
+  // (innerHTML was assigned just above) so there is nothing to wait for, and rAF does not
+  // run at all in a backgrounded tab — the callback would sit queued until the student
+  // came back to the tab and then jump the page under them, seconds after the fact.
+  const mark = document.querySelector('#profileContent mark.profile-new');
+  if(mark) mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // Splits a synthesized profile into readable paragraphs, pulling out any

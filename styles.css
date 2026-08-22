@@ -127,8 +127,19 @@ body {
 /* ---------- Result card selection state ---------- */
 .result-card { transition: box-shadow 0.15s; }
 
-/* ---------- View toggle active state ---------- */
-.view-toggle-btn.active { background: #E0E7FF !important; }
+/* ---------- Quest Log: Calendar/List view tabs ---------- */
+.view-tabs { display: inline-flex; background: #eef0fb; border-radius: 999px; padding: 3px; gap: 2px; }
+.view-tab { border: none; background: none; cursor: pointer; font-weight: 800; font-size: 13px; padding: 8px 14px; border-radius: 999px; color: #5b6785; display: flex; align-items: center; gap: 6px; }
+.view-tab.active { background: #1d4e89; color: #fff; }
+
+/* ---------- Quest Log: circular icon buttons (save/delete/refresh) ---------- */
+.icon-btn { width: 30px; height: 30px; border-radius: 999px; background: #fff; border: 2px solid #1d4e89; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+
+/* ---------- Quest Log: deadline list, grouped by year ---------- */
+.date-year-tag { font-weight: 800; font-size: 10px; color: #0f1c33; background: #eee9dd; border-radius: 6px; padding: 3px 8px; display: inline-block; margin: 10px 0 6px; font-family: ui-monospace, Menlo, monospace; letter-spacing: 0.03em; }
+.date-year-tag:first-child { margin-top: 0; }
+.date-row { display: flex; align-items: center; gap: 14px; padding: 9px 0; border-bottom: 1px solid #eee; font-size: 14px; }
+.date-row:last-child { border-bottom: none; }
 
 /* ---------- Calendar strip ---------- */
 .month-card {

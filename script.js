@@ -3778,6 +3778,50 @@ function deleteTrackerItem(id, btn){
   // Re-render finder results if they're currently visible to update "In Quest Log" tags
   if(currentStage === 2) renderResults();
 }
+// Renders an opportunity's deadlines grouped by year, in a single column when short
+// or split into two balanced columns (by row count, not strictly by year) once the
+// list gets long — matching the Quest Log redesign. When a year's dates span both
+// columns, column two gets a "(cont.)" tag instead of repeating a bare year label.
+function deadlineRowsHTML(milestones){
+  if(!milestones.length) return '';
+  const milestonesByYear = {};
+  milestones.forEach(m => {
+    const year = m.date.slice(0, 4);
+    if(!milestonesByYear[year]) milestonesByYear[year] = [];
+    milestonesByYear[year].push(m);
+  });
+  const entries = [];
+  Object.keys(milestonesByYear).sort().forEach(year => {
+    entries.push({ type: 'tag', year });
+    milestonesByYear[year].forEach(m => entries.push({ type: 'date', m }));
+  });
+
+  const renderEntry = (e) => e.type === 'tag'
+    ? `<div class="date-year-tag">${e.year}${e.cont ? ' (cont.)' : ''}</div>`
+    : `<div class="date-row"><span style="font-weight:700;color:#0f1c33;width:52px;flex-shrink:0;">${formatMonthDay(e.m.date)}</span><span style="color:#33404f;">${e.m.label}</span></div>`;
+  const renderColumn = (col) => col.map(renderEntry).join('');
+
+  const TWO_COLUMN_THRESHOLD = 5;
+  if(entries.length <= TWO_COLUMN_THRESHOLD){
+    return `<div>${renderColumn(entries)}</div>`;
+  }
+
+  const colSize = Math.ceil(entries.length / 2);
+  const col1 = entries.slice(0, colSize);
+  const col2 = entries.slice(colSize);
+  if(col2.length && col2[0].type !== 'tag'){
+    let lastYear = null;
+    for(let i = colSize - 1; i >= 0; i--){
+      if(entries[i].type === 'tag'){ lastYear = entries[i].year; break; }
+    }
+    if(lastYear) col2.unshift({ type: 'tag', year: lastYear, cont: true });
+  }
+
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px;">
+    <div>${renderColumn(col1)}</div>
+    <div>${renderColumn(col2)}</div>
+  </div>`;
+}
 function trackerCardHTML(item, sourceLabel){
   const notRunningBadge = item.status === 'not_running'
     ? `<span class="bg-rose-100 text-rose-900 border-2 border-slate-900 font-bold text-[10px] uppercase tracking-wider px-3 py-1 rounded-full">Not running</span>`
@@ -3794,36 +3838,14 @@ function trackerCardHTML(item, sourceLabel){
         : `<div class="bg-rose-100 border-2 border-slate-900 rounded-xl px-4 py-2.5"><p class="text-xs font-bold text-rose-800">⚠ No upcoming dates — this program's last cycle has ended.</p></div>`)
     : '';
 
-  // Group milestones by year
-  const milestonesByYear = {};
-  milestones.forEach(m => {
-    const year = m.date.slice(0, 4);
-    if(!milestonesByYear[year]) milestonesByYear[year] = [];
-    milestonesByYear[year].push(m);
-  });
-
-  const deadlineRows = milestones.length
-    ? `<div>
-         ${Object.keys(milestonesByYear).sort().map(year => `
-           <div style="font-weight:700;font-size:11px;color:#0f1c33;background:#eee9dd;border-radius:6px;padding:4px 9px;display:inline-block;margin-bottom:8px;font-family:ui-monospace,Menlo,monospace;letter-spacing:0.03em">${year}</div>
-           <div style="display:flex;flex-direction:column;margin-bottom:14px">
-             ${milestonesByYear[year].map(m => `
-               <div style="display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #eee;font-size:14px">
-                 <div style="font-weight:700;color:#0f1c33;width:66px;flex-shrink:0">${formatMonthDay(m.date)}</div>
-                 <div style="font-weight:600;color:#33404f">${m.label}</div>
-               </div>
-             `).join('')}
-           </div>
-         `).join('')}
-       </div>`
-    : '';
+  const deadlineRows = deadlineRowsHTML(milestones);
 
   const isSaved = !!trackerSavedState[item.id];
   const progress = computeProgressStatus(item);
   // Shown only for the batch of opportunities added in the current session (cleared
   // as soon as the user navigates away from the Tracker screen — see showPage).
   const newBanner = newlyAddedTrackerIds.has(item.id)
-    ? `<span class="absolute -left-2 -top-2 bg-lime-300 text-slate-900 font-extrabold text-[10px] uppercase px-3 py-1 rounded-lg border-2 border-slate-900 shadow-sm z-10">New</span>`
+    ? `<span class="absolute font-extrabold text-[10px] uppercase z-10" style="left:-8px;top:-8px;background:#d7f542;color:#1a2540;padding:3px 10px;border-radius:8px;border:2px solid #1d4e89;box-shadow:2px 2px 0 #1d4e89;">New</span>`
     : '';
 
   return `
@@ -3835,9 +3857,11 @@ function trackerCardHTML(item, sourceLabel){
           ${notRunningBadge}
           ${reviewBadgeHTML(item.reviewStatus, item.reviewSummary, `tracker-${item.id}`)}
         </div>
-        <div class="flex items-center gap-2 shrink-0">
-          <button onclick="event.stopPropagation(); toggleTrackerSaved('${item.id}')" class="w-9 h-9 rounded-full bg-white border-2 border-slate-900 flex items-center justify-center hover:scale-105 transition-transform" title="${isSaved ? 'Restore' : 'Save'}">${isSaved ? '★' : '☆'}</button>
-          <button onclick="event.stopPropagation(); deleteTrackerItem('${item.id}', this)" class="w-9 h-9 rounded-full bg-white border-2 border-slate-900 flex items-center justify-center text-slate-500 hover:text-rose-600 transition-colors" title="Delete">✕</button>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button onclick="event.stopPropagation(); toggleTrackerSaved('${item.id}')" class="icon-btn" style="color:${isSaved ? '#f79256' : '#1d4e89'};" title="${isSaved ? 'Restore' : 'Save'}">${isSaved
+            ? `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`
+            : `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`}</button>
+          <button onclick="event.stopPropagation(); deleteTrackerItem('${item.id}', this)" class="icon-btn" style="color:#94a3b8;" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
       </div>
 

@@ -293,6 +293,32 @@ def _take_google_token(token):
     return _google_session_tokens.pop(token, None)
 
 
+# ---------- Google Calendar sync ----------
+# A separate, additional OAuth grant from Google Sign-In above: sign-in only ever asks for
+# "openid email profile", so an existing signed-in session (password or Google) has no
+# token that can touch Calendar. Connecting Calendar is its own start/callback pair that
+# requests the calendar.events scope against the already-known userid, and persists the
+# resulting tokens (see google_calendar_schema.sql) rather than discarding them like the
+# short-lived _google_session_tokens above — a sync can then run again later without
+# re-prompting, as long as the refresh token stays valid.
+GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.app.created"
+WINGMAN_CALENDAR_NAME = "Highschool Wingman"
+GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
+
+# state -> {"userid": ..., "expires_at": ...}. Mirrors _google_session_tokens: in-process,
+# short-lived, fine for a single-process server. Keyed separately from the sign-in state
+# cookie so a stale calendar-connect attempt can't be replayed against the sign-in flow
+# or vice versa.
+_google_calendar_states = {}
+
+
+def _prune_google_calendar_states():
+    now = time.time()
+    expired = [s for s, entry in _google_calendar_states.items() if entry["expires_at"] < now]
+    for s in expired:
+        del _google_calendar_states[s]
+
+
 # ---------- On-demand, shared/cached deadline check (Claude Haiku-backed) ----------
 # Replaces check_deadlines.py's batch/cron model as the primary way status/deadlines data
 # gets populated: rather than proactively scanning the whole catalog on a schedule (which,
@@ -3265,6 +3291,10 @@ class Handler(SimpleHTTPRequestHandler):
             self.handle_google_callback(query)
         elif path == "/api/auth/google/session":
             self.handle_google_session(query)
+        elif path == "/api/auth/google/calendar/start":
+            self.handle_google_calendar_start(query)
+        elif path == "/api/auth/google/calendar/callback":
+            self.handle_google_calendar_callback(query)
         else:
             super().do_GET()
 
@@ -3340,6 +3370,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.handle_login()
         elif self.path == "/api/auth/google/finish":
             self.handle_google_finish()
+        elif self.path == "/api/calendar/sync":
+            self.handle_calendar_sync()
         elif self.path == "/api/data/save":
             self.handle_data_save()
         elif self.path == "/api/data/load":
@@ -3663,6 +3695,291 @@ class Handler(SimpleHTTPRequestHandler):
 
         record = get_user(userid)
         self._relay(200, json.dumps(_login_payload(record)).encode())
+
+    # ---------- Google Calendar connect + sync ----------
+    # See the GOOGLE_CALENDAR_SCOPE comment above and google_calendar_schema.sql.
+
+    def handle_google_calendar_start(self, query):
+        if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+            return self.send_json_error(503, "Google Sign-In is not configured: set "
+                                             "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET "
+                                             "in .env.")
+        userid = (query.get("userid") or [""])[0].strip().lower()
+        if not userid:
+            return self.send_json_error(400, "Missing userid.")
+        try:
+            if not get_user(userid):
+                return self.send_json_error(404, "No account found.")
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+
+        _prune_google_calendar_states()
+        state = secrets.token_urlsafe(24)
+        _google_calendar_states[state] = {"userid": userid, "expires_at": time.time() + GOOGLE_TOKEN_TTL_SECONDS}
+
+        params = {
+            "client_id": GOOGLE_CLIENT_ID,
+            "redirect_uri": self._google_calendar_redirect_uri(),
+            "response_type": "code",
+            "scope": GOOGLE_CALENDAR_SCOPE,
+            "state": state,
+            # offline + consent guarantee a refresh_token comes back even if this user
+            # already granted this scope before — Google otherwise only issues one on a
+            # user's *first* consent, and it's stored (not discarded) so a later sync
+            # doesn't need to send the user through this screen again.
+            "access_type": "offline",
+            "prompt": "consent",
+        }
+        self.send_response(302)
+        self.send_header("Location", f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(params)}")
+        cookie = http.cookies.SimpleCookie()
+        cookie["google_calendar_oauth_state"] = state
+        cookie["google_calendar_oauth_state"]["path"] = "/"
+        cookie["google_calendar_oauth_state"]["httponly"] = True
+        cookie["google_calendar_oauth_state"]["max-age"] = GOOGLE_TOKEN_TTL_SECONDS
+        for line in cookie.output(header="").split("\r\n"):
+            if line.strip():
+                self.send_header("Set-Cookie", line.strip())
+        self.end_headers()
+
+    def _google_calendar_redirect_uri(self):
+        host = self.headers.get("Host", f"localhost:{PORT}")
+        scheme = "http" if host.startswith("localhost") or host.startswith("127.0.0.1") else "https"
+        return f"{scheme}://{host}/api/auth/google/calendar/callback"
+
+    def handle_google_calendar_callback(self, query):
+        cookies = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        cookie_state = cookies["google_calendar_oauth_state"].value if "google_calendar_oauth_state" in cookies else None
+        req_state = (query.get("state") or [""])[0]
+        code = (query.get("code") or [""])[0]
+        _prune_google_calendar_states()
+        entry = _google_calendar_states.pop(req_state, None) if req_state else None
+        if not code or not req_state or not cookie_state or req_state != cookie_state or not entry:
+            return self.send_json_error(400, "Google Calendar connection failed: invalid "
+                                             "or expired request. Please try again.")
+        if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+            return self.send_json_error(503, "Google Sign-In is not configured.")
+
+        try:
+            token_req = urllib.request.Request(
+                GOOGLE_TOKEN_URL,
+                data=urllib.parse.urlencode({
+                    "code": code,
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": self._google_calendar_redirect_uri(),
+                    "grant_type": "authorization_code",
+                }).encode(),
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with urllib.request.urlopen(token_req, timeout=10) as resp:
+                tokens = json.loads(resp.read())
+        except Exception as e:
+            print(f"[WARN] Google Calendar OAuth exchange failed: {e}")
+            return self.send_json_error(502, "Could not connect Google Calendar. Please "
+                                             "try again.")
+
+        access_token = tokens.get("access_token")
+        refresh_token = tokens.get("refresh_token")  # absent if this scope was granted before
+        expires_in = tokens.get("expires_in") or 3600
+        if not access_token:
+            return self.send_json_error(502, "Google did not return a usable token.")
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        expires_at = (now + datetime.timedelta(seconds=expires_in)).isoformat()
+        patch = {
+            "google_calendar_access_token": access_token,
+            "google_calendar_token_expires_at": expires_at,
+            "google_calendar_connected_at": now.isoformat(),
+        }
+        if refresh_token:
+            patch["google_calendar_refresh_token"] = refresh_token
+        try:
+            query_patch = "?" + urllib.parse.urlencode({"userid": f"eq.{entry['userid']}"})
+            _users_request("PATCH", query_patch, data=patch)
+        except urllib.error.HTTPError as e:
+            if _is_missing_column_error(e):
+                return self.send_json_error(503, "Google Calendar sync is temporarily "
+                                                 "unavailable: run google_calendar_schema.sql "
+                                                 "in the Supabase SQL editor, then try again.")
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+        except Exception as e:
+            return self.send_json_error(502, f"Could not reach Supabase: {e}")
+
+        self._google_redirect_home("?calendar_connected=1")
+
+    def _get_google_calendar_access_token(self, userid):
+        """Returns a valid access token for this user's Calendar grant, refreshing it
+        first if expired. Returns None if the user has never connected Calendar, and
+        raises on a Supabase/Google failure so the caller can distinguish the two."""
+        record = get_user(userid)
+        if not record or not record.get("google_calendar_refresh_token"):
+            return None
+        expires_at = record.get("google_calendar_token_expires_at")
+        access_token = record.get("google_calendar_access_token")
+        still_valid = False
+        if expires_at and access_token:
+            try:
+                exp = datetime.datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                still_valid = exp > datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=60)
+            except ValueError:
+                still_valid = False
+        if still_valid:
+            return access_token
+
+        token_req = urllib.request.Request(
+            GOOGLE_TOKEN_URL,
+            data=urllib.parse.urlencode({
+                "refresh_token": record["google_calendar_refresh_token"],
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "grant_type": "refresh_token",
+            }).encode(),
+            method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with urllib.request.urlopen(token_req, timeout=10) as resp:
+            tokens = json.loads(resp.read())
+        access_token = tokens.get("access_token")
+        expires_in = tokens.get("expires_in") or 3600
+        if not access_token:
+            return None
+        expires_at = (datetime.datetime.now(datetime.timezone.utc)
+                      + datetime.timedelta(seconds=expires_in)).isoformat()
+        query_patch = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
+        _users_request("PATCH", query_patch, data={
+            "google_calendar_access_token": access_token,
+            "google_calendar_token_expires_at": expires_at,
+        })
+        return access_token
+
+    def _ensure_wingman_calendar(self, access_token, userid, record):
+        """Returns the id of this user's dedicated "Highschool Wingman" calendar,
+        creating it on first use. calendar.app.created only grants access to events on
+        calendars the app itself created, so events can never land on the user's primary
+        calendar or any other existing one — this is what makes that true."""
+        calendar_id = record.get("google_calendar_id")
+        if calendar_id:
+            check_req = urllib.request.Request(
+                f"{GOOGLE_CALENDAR_API_BASE}/calendars/{urllib.parse.quote(calendar_id)}",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            try:
+                with urllib.request.urlopen(check_req, timeout=10):
+                    return calendar_id
+            except urllib.error.HTTPError as e:
+                if e.code not in (404, 403):
+                    raise
+                # Calendar was deleted on Google's side (or predates this grant) — fall
+                # through and create a fresh one.
+
+        create_req = urllib.request.Request(
+            f"{GOOGLE_CALENDAR_API_BASE}/calendars",
+            data=json.dumps({"summary": WINGMAN_CALENDAR_NAME}).encode(),
+            method="POST",
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(create_req, timeout=10) as resp:
+            created = json.loads(resp.read())
+        calendar_id = created["id"]
+        query_patch = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
+        _users_request("PATCH", query_patch, data={"google_calendar_id": calendar_id})
+        return calendar_id
+
+    def handle_calendar_sync(self):
+        body = self._read_json_body()
+        userid = (body.get("userid") or "").strip().lower()
+        events = body.get("events") or []
+        if not userid:
+            return self.send_json_error(400, "Missing userid.")
+        if not isinstance(events, list) or not events:
+            return self.send_json_error(400, "No events to sync.")
+
+        try:
+            access_token = self._get_google_calendar_access_token(userid)
+        except Exception as e:
+            return self.send_json_error(502, f"Could not refresh Google Calendar access: {e}")
+        if not access_token:
+            return self.send_json_error(409, "Google Calendar is not connected for this "
+                                             "account. Connect it first.")
+
+        try:
+            calendar_id = self._ensure_wingman_calendar(access_token, userid, get_user(userid))
+        except urllib.error.HTTPError as e:
+            if _is_missing_column_error(e):
+                return self.send_json_error(503, "Google Calendar sync is temporarily "
+                                                 "unavailable: run google_calendar_schema.sql "
+                                                 "in the Supabase SQL editor, then try again.")
+            return self.send_json_error(502, f"Could not prepare your {WINGMAN_CALENDAR_NAME} calendar: {e}")
+        except Exception as e:
+            return self.send_json_error(502, f"Could not prepare your {WINGMAN_CALENDAR_NAME} calendar: {e}")
+
+        results = []
+        for event in events:
+            item_id = event.get("id")
+            title = (event.get("title") or "").strip()
+            date_iso = (event.get("dateISO") or "").strip()
+            description = event.get("description") or ""
+            google_event_id = event.get("googleEventId")
+            if not item_id or not title or not date_iso:
+                results.append({"id": item_id, "status": "error", "error": "Missing id, title, or dateISO."})
+                continue
+
+            year, month, day = date_iso.split("-")
+            end_obj = (datetime.date(int(year), int(month), int(day)) + datetime.timedelta(days=1))
+            body_payload = {
+                "summary": title,
+                "description": description,
+                "start": {"date": date_iso},
+                "end": {"date": end_obj.isoformat()},
+            }
+            try:
+                calendar_path = f"calendars/{urllib.parse.quote(calendar_id)}"
+                if google_event_id:
+                    url = f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events/{google_event_id}"
+                    method = "PATCH"
+                else:
+                    url = f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events"
+                    method = "POST"
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(body_payload).encode(),
+                    method=method,
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/json",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    created = json.loads(resp.read())
+                results.append({"id": item_id, "status": "ok", "googleEventId": created.get("id")})
+            except urllib.error.HTTPError as e:
+                # A previously-synced event the user deleted on Google's side 404s on
+                # PATCH — fall back to creating a fresh one rather than failing the sync.
+                if google_event_id and e.code == 404:
+                    try:
+                        req = urllib.request.Request(
+                            f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events",
+                            data=json.dumps(body_payload).encode(),
+                            method="POST",
+                            headers={
+                                "Authorization": f"Bearer {access_token}",
+                                "Content-Type": "application/json",
+                            },
+                        )
+                        with urllib.request.urlopen(req, timeout=10) as resp:
+                            created = json.loads(resp.read())
+                        results.append({"id": item_id, "status": "ok", "googleEventId": created.get("id")})
+                        continue
+                    except Exception as e2:
+                        results.append({"id": item_id, "status": "error", "error": str(e2)})
+                        continue
+                results.append({"id": item_id, "status": "error", "error": f"Google API error {e.code}"})
+            except Exception as e:
+                results.append({"id": item_id, "status": "error", "error": str(e)})
+
+        self._relay(200, json.dumps({"ok": True, "results": results}).encode())
 
     def handle_update_location(self):
         body = self._read_json_body()

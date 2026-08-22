@@ -670,7 +670,9 @@
             <button class="pop-btn bg-white font-bold text-sm px-3 py-2.5 rounded-lg view-toggle-btn" id="oppViewListBtn" onclick="setOppView('list')" title="List view">📋</button>
           </div>
 
-          <button class="pop-btn bg-white font-bold text-sm px-3 py-2.5 rounded-lg flex items-center gap-1" id="exportCalendarBtn" onclick="exportAllDeadlinesToGoogle()" title="Export all deadlines to Google Calendar">📤 Export</button>
+          <button class="pop-btn bg-white font-bold text-sm px-3 py-2.5 rounded-lg flex items-center gap-1" id="exportCalendarBtn" onclick="exportAllDeadlinesToGoogle()" title="Download all deadlines as an .ics file">📤 Export .ics</button>
+
+          <button class="pop-btn bg-white font-bold text-sm px-3 py-2.5 rounded-lg flex items-center gap-1" id="syncCalendarBtn" onclick="syncToGoogleCalendar()" title="Sync all tracked deadlines directly to your Google Calendar">🔄 Sync to Google Calendar</button>
 
           <div class="relative nav-dropdown">
             <button class="pop-btn font-bold px-6 py-3 text-white" id="trackerIntakeToggle" onclick="toggleNavDropdownPanel('trackerIntakeForm')" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;">Add Opportunity</button>

@@ -368,6 +368,21 @@ function updateGoogleFinishConsent(){
   }
 }
 
+// Called once on page load. handle_google_calendar_callback in server.py redirects back
+// to `/?calendar_connected=1` after the user grants Calendar access — this just strips
+// the marker param and reports whether it was there, so the init chain below can show a
+// confirmation once the normal session-restore has run. Unlike handleGoogleRedirect()
+// this carries no token: the tokens that matter (access/refresh) were already persisted
+// server-side against the userid in the OAuth state, not handed to the client.
+function checkCalendarConnectedRedirect(){
+  const params = new URLSearchParams(location.search);
+  if(!params.has('calendar_connected')) return false;
+  params.delete('calendar_connected');
+  const qs = params.toString();
+  history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : ''));
+  return true;
+}
+
 // Called once on page load. handle_google_callback in server.py redirects back to
 // `/?google_token=...` after the user approves on Google's side; this resolves that
 // one-time token into either a completed sign-in or a "finish creating your account"
@@ -4461,54 +4476,47 @@ function renderTrackerPage(){
   renderHomePage();
 }
 
-// ---------- Export tracker deadlines to Google Calendar ----------
-function exportAllDeadlinesToGoogle(){
-  console.log('[Export] Button clicked!');
-  console.log('[Export] trackerData:', trackerData);
-  console.log('[Export] ALL_BUCKETS:', ALL_BUCKETS);
-
-  // Collect all tracked items across all buckets
+// ---------- Export/sync tracker deadlines to Google Calendar ----------
+// Shared by the .ics download (exportAllDeadlinesToGoogle) and the live API sync
+// (syncToGoogleCalendar) below, so the two never disagree about which deadlines count.
+// Only actively-tracked items (not saved-for-later) with a real dateISO are included.
+function collectTrackedDeadlineEvents(){
   const allItems = [];
   ALL_BUCKETS.forEach(bucket => {
     trackerData[bucket].forEach(item => {
-      // Only export actively tracked items (not saved-for-later)
       if(!trackerSavedState[item.id]){
         allItems.push(item);
       }
     });
   });
 
-  console.log('[Export] Found tracked items:', allItems.length);
-
-  if(!allItems.length){
-    alert('No tracked opportunities to export.');
-    return;
-  }
-
-  // Collect all deadlines (importantDates) from all items
   const events = [];
   allItems.forEach(item => {
-    console.log('[Export] Item:', item.name, 'importantDates:', item.importantDates);
-    (item.importantDates || []).forEach(date => {
+    (item.importantDates || []).forEach((date, idx) => {
       // Handle both dateISO and date_iso (underscore version)
       const dateValue = date.dateISO || date.date_iso;
-      console.log('[Export] Date object:', date, 'extracted value:', dateValue);
       if(dateValue){
         events.push({
+          itemId: item.id,
+          dateIdx: idx,
           name: item.name,
           org: item.org,
           dateISO: dateValue,
           dateLabel: date.label || 'Deadline',
-          url: item.url
+          url: item.url,
+          googleEventId: date.googleEventId || null
         });
       }
     });
   });
+  return events;
+}
 
-  console.log('[Export] Total events collected:', events.length);
+function exportAllDeadlinesToGoogle(){
+  const events = collectTrackedDeadlineEvents();
 
   if(!events.length){
-    alert('No deadlines found to export.');
+    alert('No tracked deadlines to export.');
     return;
   }
 
@@ -4525,6 +4533,91 @@ function exportAllDeadlinesToGoogle(){
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+// Kicks off the calendar-connect OAuth flow — see handle_google_calendar_start in
+// server.py. Separate grant from Google Sign-In (that only ever asks for openid/email/
+// profile), so this is needed even for an account that already signed in with Google.
+function connectGoogleCalendar(){
+  if(!currentUser || !currentUser.userid){
+    alert('Please sign in first.');
+    return;
+  }
+  location.href = `/api/auth/google/calendar/start?userid=${encodeURIComponent(currentUser.userid)}`;
+}
+
+// Pushes every tracked deadline to the signed-in user's primary Google Calendar via
+// /api/calendar/sync (handle_calendar_sync in server.py). Re-running this updates
+// previously-synced events in place rather than duplicating them: each successfully
+// synced date gets a googleEventId written back onto trackerData and persisted, and
+// that id is sent along on the next sync so the server PATCHes instead of inserting.
+async function syncToGoogleCalendar(){
+  if(!currentUser || !currentUser.userid){
+    alert('Please sign in first.');
+    return;
+  }
+  const events = collectTrackedDeadlineEvents();
+  if(!events.length){
+    alert('No tracked deadlines to sync.');
+    return;
+  }
+
+  const btn = document.getElementById('syncCalendarBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Syncing...'; }
+
+  try{
+    const res = await fetch('/api/calendar/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userid: currentUser.userid,
+        events: events.map(e => ({
+          id: `${e.itemId}::${e.dateIdx}`,
+          title: e.org ? `${e.name} (${e.org})` : e.name,
+          description: e.url ? `${e.dateLabel}\nURL: ${e.url}` : e.dateLabel,
+          dateISO: e.dateISO,
+          googleEventId: e.googleEventId
+        }))
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if(res.status === 409){
+      if(confirm('Google Calendar isn\'t connected yet. Connect it now?')){
+        connectGoogleCalendar();
+      }
+      return;
+    }
+    if(!res.ok){
+      alert(data.error || 'Could not sync to Google Calendar.');
+      return;
+    }
+
+    // Write each synced event's googleEventId back onto trackerData so a future sync
+    // updates it in place instead of creating a duplicate, then persist.
+    let okCount = 0, errCount = 0;
+    const byKey = {};
+    (data.results || []).forEach(r => { byKey[r.id] = r; });
+    ALL_BUCKETS.forEach(bucket => {
+      trackerData[bucket].forEach(item => {
+        (item.importantDates || []).forEach((date, idx) => {
+          const r = byKey[`${item.id}::${idx}`];
+          if(!r) return;
+          if(r.status === 'ok'){ date.googleEventId = r.googleEventId; okCount++; }
+          else { errCount++; }
+        });
+      });
+    });
+    await saveTrackerData();
+
+    alert(errCount
+      ? `Synced ${okCount} deadline${okCount === 1 ? '' : 's'} to Google Calendar (${errCount} failed).`
+      : `Synced ${okCount} deadline${okCount === 1 ? '' : 's'} to Google Calendar.`);
+  }catch(e){
+    alert('Could not reach the server to sync to Google Calendar.');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '🔄 Sync to Google Calendar'; }
+  }
 }
 
 // Generate iCalendar format (.ics) content from events
@@ -4961,9 +5054,17 @@ function escapeHtmlTracker(str){
 // A fresh Google redirect takes precedence over whatever loadUser() finds cached —
 // see handleGoogleRedirect(), which handles both the sign-in and finish-signup cases
 // and returns true whenever it did.
+const calendarJustConnected = checkCalendarConnectedRedirect();
 handleGoogleRedirect().then((handled) => {
   if(handled) return;
   loadUser().then(() => {
-    if(currentUser){ showApp(); } else { showLandingPage(); }
+    if(currentUser){
+      showApp().then(() => {
+        if(calendarJustConnected) alert('Google Calendar connected! Use "Sync to Google Calendar" in your Quest Log to push your tracked deadlines.');
+      });
+    } else {
+      showLandingPage();
+      if(calendarJustConnected) alert('Google Calendar was connected, but you were signed out in the process — please sign in again, then sync from your Quest Log.');
+    }
   });
 });

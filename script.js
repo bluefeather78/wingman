@@ -428,7 +428,7 @@ async function logoutUser(){
   // Clear in-memory app data so it can't leak into a different account that signs
   // in next in this same tab — the next login re-fetches everything fresh via
   // loadAccountData().
-  studentProfile = { synthesized: '', updatedAt: null, chatRounds: 0 };
+  studentProfile = { synthesized: '', updatedAt: null, chatRounds: 0, filterValues: null, filterTags: null };
   trackerData = { summerPrograms: [], internships: [], researchCompetitions: [], pureCompetitions: [], conferences: [], journals: [] };
   trackerSavedState = {};
   toggleProfile(); // close the drawer on the way out
@@ -1283,7 +1283,7 @@ Only include opportunities that are a genuinely good fit — omit weak or generi
 // ============================================================
 const ACTIVE_KINDS = Object.keys(KIND_CONFIG).filter(k => !KIND_CONFIG[k].comingSoon);
 
-let studentProfile = { synthesized: '', updatedAt: null, chatRounds: 0 };
+let studentProfile = { synthesized: '', updatedAt: null, chatRounds: 0, filterValues: null, filterTags: null };
 
 async function loadProfile(){
   try{
@@ -1305,6 +1305,11 @@ async function loadProfile(){
       }
       studentProfile.updatedAt = parsed.updatedAt || null;
       studentProfile.chatRounds = typeof parsed.chatRounds === 'number' ? parsed.chatRounds : 0;
+      // Values derived from the profile text (see getProfileDerived) — a profile saved
+      // before these were introduced simply has none, and the next reader computes them.
+      Object.keys(PROFILE_DERIVED_SLOTS).forEach(slot => {
+        studentProfile[slot] = (parsed[slot] && typeof parsed[slot] === 'object') ? parsed[slot] : null;
+      });
     }
   }catch(e){ /* nothing saved yet, or storage unavailable — start fresh */ }
 }
@@ -1341,6 +1346,107 @@ const PROFILE_SUFFICIENT_LENGTH = 20;
 function countProfileWords(text){
   if(!text) return 0;
   return text.trim().split(/\s+/).filter(w => w.length > 0).length;
+}
+
+// ---------- Values derived from the profile text (subjects, grade, filter tags) ----------
+// Three things are derived from the profile text and nothing else: the subject categories
+// preFilter() wants (an AI call — inferSubjects), the student's grade (a local regex
+// parse), and the enriched "Your Profile" tags on the results filter bar (two AI calls —
+// buildProfileFilterTags). Because they depend only on the text, they are computed once
+// when the profile is updated and stored on studentProfile alongside it. Fresh Finds used
+// to recompute all of it on every single load — a subject-inference call before the
+// search, then 1 + N tag calls in front of the results — to get the same answers back from
+// an unchanged profile. Anything below this many words of change is treated as a touch-up
+// (rewording, a clarifying sentence) that wouldn't move any of them, so what's stored stands.
+const PROFILE_FILTER_REFRESH_WORDS = 10;
+
+// They are stored as two independent slots, `filterValues` and `filterTags`, rather than
+// one record, because their consumers can't wait on each other: a search needs subjects
+// before it can pre-filter, and tag building is two calls that would otherwise sit in
+// front of it for nothing (the tags only feed a filter dropdown further down the page).
+// Each slot carries its own copy of the text it was computed from, so one can be stale,
+// missing, or mid-refresh without saying anything about the other.
+const PROFILE_DERIVED_SLOTS = {
+  // Note the freshness check is `computedAt`, not array length: an empty result is a
+  // legitimate answer (inferSubjects drops anything outside VALID_SUBJECTS; a thin profile
+  // may yield no tags), and treating it as "not computed yet" would re-pay for that same
+  // empty answer on every single load.
+  filterValues: {
+    key: 'subjects',
+    async compute(text){
+      return { subjects: await inferSubjects(text), grade: parseGradeFromText(text) };
+    }
+  },
+  filterTags: {
+    key: 'enrichedTags',
+    async compute(text){
+      return { enrichedTags: await buildProfileFilterTags(text) };
+    }
+  }
+};
+// slot -> { text, promise } for a computation already running, so a background refresh
+// started by mergeIntoProfile and a search landing mid-flight share one call.
+const profileDerivedInFlight = {};
+
+function profileDerivedIsFresh(slot, rec, text){
+  if(!rec || !rec.computedAt || !Array.isArray(rec[PROFILE_DERIVED_SLOTS[slot].key])) return false;
+  if(rec.profile === text) return true;
+  return Math.abs(countProfileWords(text) - (rec.wordCount || 0)) < PROFILE_FILTER_REFRESH_WORDS;
+}
+
+// Returns the stored values when the profile hasn't meaningfully changed since they were
+// computed, otherwise computes and persists them now — so a profile that predates this
+// cache, or one edited while storage was unavailable, still works; it just pays once.
+async function getProfileDerived(slot){
+  const text = studentProfile.synthesized || '';
+  if(profileDerivedIsFresh(slot, studentProfile[slot], text)) return studentProfile[slot];
+  const flight = profileDerivedInFlight[slot];
+  if(flight && flight.text === text) return flight.promise;
+  const promise = (async () => {
+    try{
+      const rec = Object.assign(await PROFILE_DERIVED_SLOTS[slot].compute(text), {
+        profile: text,
+        wordCount: countProfileWords(text),
+        computedAt: new Date().toISOString()
+      });
+      // The profile can be edited while this is in flight; don't overwrite values for text
+      // that's already been superseded — the next call recomputes against the new text.
+      if((studentProfile.synthesized || '') === text){
+        studentProfile[slot] = rec;
+        await saveProfile();
+      }
+      return rec;
+    }finally{
+      if(profileDerivedInFlight[slot] && profileDerivedInFlight[slot].text === text) delete profileDerivedInFlight[slot];
+    }
+  })();
+  profileDerivedInFlight[slot] = { text, promise };
+  return promise;
+}
+
+// The one way search flows should read subjects + grade.
+function getProfileFilterValues(){ return getProfileDerived('filterValues'); }
+// ...and the one way the results filter bar should read its tags.
+function getProfileFilterTags(){ return getProfileDerived('filterTags'); }
+
+// Synchronous read of the stored tags, for callers that must not block (renderResults
+// paints the filter bar from this before deciding whether anything is missing). Returns
+// null — distinct from [] — when nothing has been computed for the current text yet.
+function cachedProfileFilterTags(){
+  const rec = studentProfile.filterTags;
+  if(!profileDerivedIsFresh('filterTags', rec, studentProfile.synthesized || '')) return null;
+  return rec.enrichedTags;
+}
+
+// Fire-and-forget refresh after a profile edit (see mergeIntoProfile), so neither a search
+// nor a results render has to pay for these. Both slots go at once — they don't block each
+// other here. A failure is not user-facing: the next reader recomputes, or does without
+// (no subject hints for the pre-filter, no tag facet on the bar).
+function refreshProfileFilterValues(){
+  if(!studentProfile.synthesized) return;
+  Object.keys(PROFILE_DERIVED_SLOTS).forEach(slot => {
+    getProfileDerived(slot).catch(err => console.warn(`Profile ${slot} refresh failed:`, err.message));
+  });
 }
 function daysSince(iso){
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
@@ -1441,7 +1547,7 @@ async function clearProfile(btn){
     return;
   }
   clearProfileArmed = false;
-  studentProfile = { synthesized: '', updatedAt: null, chatRounds: 0 };
+  studentProfile = { synthesized: '', updatedAt: null, chatRounds: 0, filterValues: null, filterTags: null };
   await saveProfile();
   // The in-progress chat session was talking about the profile that just got wiped —
   // start fresh so the next question isn't referencing details that no longer exist.
@@ -1478,6 +1584,11 @@ async function mergeIntoProfile(text){
   }
   studentProfile.updatedAt = new Date().toISOString();
   await saveProfile();
+  // The profile text just changed, so its derived search filter values may be stale.
+  // Recompute them here rather than on the next Fresh Finds load — that's the whole
+  // point of caching them (see getProfileFilterValues). Deliberately not awaited: the
+  // student is looking at their updated profile, not waiting on a search.
+  refreshProfileFilterValues();
   renderProfile();
   renderProfileFit();
   renderSuggestEntryCard();
@@ -2151,8 +2262,10 @@ async function runFreshFindsAutoSearch(){
   if(el) el.innerHTML = freshFindsLoadingCardHTML();
   const description = studentProfile.synthesized;
   try{
-    const subjects = await inferSubjects(description);
-    const studentGrade = parseGradeFromText(description);
+    // Subjects + grade come from the profile's stored filter values, recomputed only
+    // when the profile itself meaningfully changes (see getProfileFilterValues) — this
+    // used to be an unconditional Gemini call on every Fresh Finds load.
+    const { subjects, grade: studentGrade } = await getProfileFilterValues();
     // Each kind's ranking call is independent — isolate failures per-kind (a single
     // flaky/malformed Gemini response for one kind used to reject the whole Promise.all
     // and blank out every other kind's already-successful results too) so one bad call
@@ -2330,16 +2443,14 @@ async function runProfileSuggestSearch(){
   }
   try{
     statusEl.textContent = 'Understanding your profile…';
-    // Subject inference only depends on the profile text, not which kind is being
-    // searched — compute it once and reuse across every kind below instead of
-    // re-asking Claude the same question once per kind (this used to be the
-    // slowest part of a multi-kind Suggest search: up to 2 sequential API calls
-    // per kind, one-at-a-time).
-    const subjects = await inferSubjects(description);
+    // Subject inference depends only on the profile text, not on which kind is being
+    // searched, so one value serves every kind below (this used to be re-asked once per
+    // kind — the slowest part of a multi-kind Suggest search).
     // No explicit grade dropdown on this flow (it's driven by the saved profile, not the
-    // Finder form) — infer it from whatever grade-level language the student's own profile
-    // text happens to contain, if any.
-    const studentGrade = parseGradeFromText(description);
+    // Finder form) — the grade comes from whatever grade-level language the student's own
+    // profile text happens to contain, if any. Both values are cached on the profile and
+    // only recomputed when it meaningfully changes (see getProfileFilterValues).
+    const { subjects, grade: studentGrade } = await getProfileFilterValues();
 
     statusEl.textContent = kinds.length > 1 ? 'Searching every opportunity type…' : `Searching ${KIND_CONFIG[kinds[0]] ? KIND_CONFIG[kinds[0]].name.toLowerCase() + 's' : 'opportunities'}…`;
     // Each kind's ranking call is independent of the others — run them concurrently
@@ -2587,6 +2698,9 @@ function resultCardHTML(r){
 // ---------- Result filters (type / cost / season / format) ----------
 let resultFilters = { type: new Set(), price: new Set(), location: new Set(), season: new Set(), profileTags: new Set(), untracked: false };
 let resultVisibleCount = 10;
+// Bumped by every renderResults() call, so an async filter-bar top-up can tell whether its
+// render is still the one on screen before repainting.
+let resultsRenderToken = 0;
 const RESULT_FILTER_FIELDS = [
   { key: 'type', field: 'type', label: 'Type' },
   { key: 'price', field: 'price', label: 'Cost' },
@@ -2594,65 +2708,19 @@ const RESULT_FILTER_FIELDS = [
   { key: 'location', field: 'location', label: 'Format' }
 ];
 
-// Extract specific project tags from synthesized profile using Gemini
-// Cache includes both simple tags and enriched semantic metadata for matching
-let profileTagsCache = {
-  profile: '',
-  profileWordCount: 0,
-  tags: [],           // Simple string tags for filter UI
-  enrichedTags: [],   // Enriched tags with semantic metadata
-  tagEnrichmentMap: {} // Per-tag enrichment cache (tag string -> enriched data)
-};
+// ---------- Profile filter tags (the "Your Profile" facet on the results bar) ----------
+// These are derived from the profile text exactly like subjects/grade are, so they're
+// stored on the profile and computed when it changes — never on a results render. Read
+// them via getProfileFilterTags(), or cachedProfileFilterTags() where blocking isn't an
+// option (see PROFILE_DERIVED_SLOTS).
+//
+// Extraction and enrichment are two calls, not one per tag: enriching each tag in its own
+// request made a results page cost 1 + N calls (a 10-tag profile = 11 round trips, the
+// slowest of which gated the whole filter bar). The model does the same per-tag work either
+// way, so they go in one request and come back keyed by tag.
+const PROFILE_TAG_LIMIT = 10;
 
-// Enrich a single tag with semantic metadata (category, intent, next steps, keywords)
-async function enrichProfileTag(tag) {
-  if(!tag || profileTagsCache.tagEnrichmentMap[tag]) {
-    return profileTagsCache.tagEnrichmentMap[tag] || null;
-  }
-
-  const system = `You are helping match a high school student's interests/goals to the best opportunities.
-
-Student's profile tag: "${tag}"
-
-Analyze what this tag represents and what would best help them grow. Return a JSON object with:
-1. category: One of: "competition_prep", "career_aspiration", "academic_goal", "research_project", "app_project", "business_idea", "skill_learning", "interest_exploration"
-2. intent: What are they trying to achieve? (1 sentence)
-3. nextSteps: Array of 2-3 logical milestones (e.g., ["Master advanced techniques", "Enter competitions", "Achieve recognition"])
-4. opportunityTypes: Array of opportunity types (e.g., "hackathon", "demo_day", "beta_testing_community", "research_conference", "internship", "summer_program", "bootcamp", "startup_pitch")
-5. semanticKeywords: Array of 8-12 keywords/phrases specific to this tag
-6. matchReason: Template string like "Great for {nextSteps[0]}"
-
-Return ONLY the JSON object, no other text.`;
-
-  const userContent = `Analyze this tag and provide semantic enrichment.`;
-
-  try {
-    const response = await callGemini(system, userContent, false);
-    const enriched = extractJSON(response);
-    if (enriched) {
-      enriched.tag = tag;
-      profileTagsCache.tagEnrichmentMap[tag] = enriched;
-      return enriched;
-    }
-  } catch(e) {
-    console.error('Error enriching profile tag:', tag, e);
-  }
-  return null;
-}
-
-async function extractProfileTags(){
-  if(!studentProfile.synthesized) return [];
-
-  // Calculate current profile word count
-  const currentWordCount = studentProfile.synthesized.trim().split(/\s+/).filter(w => w.length > 0).length;
-  const wordCountDiff = Math.abs(currentWordCount - profileTagsCache.profileWordCount);
-
-  // Return cached tags if profile hasn't materially changed (< 50 words difference)
-  if(profileTagsCache.profile === studentProfile.synthesized && wordCountDiff < 50 && profileTagsCache.enrichedTags.length > 0){
-    return profileTagsCache.enrichedTags;
-  }
-
-  // Extract simple tags from profile
+async function extractProfileTagStrings(text){
   const system = `You are extracting specific interests, goals, and pursuits from a student's profile to create concise filter tags. Extract and create tags for:
 1. Active passion projects and research projects (what they're currently building/researching)
 2. Deep interests they want to explore further (areas they're curious about and want to learn more in)
@@ -2660,33 +2728,61 @@ async function extractProfileTags(){
 4. Academic goals (winning competitions, achieving certifications, mastering skills)
 5. Career aspirations (wanting to work at specific companies, roles, or industries)
 
-For each item, create a short, specific tag (max 60 characters) that captures what they want or are doing. Use action-oriented language where possible. Return ONLY a JSON array of strings, one tag per item, with no other text or formatting.
+For each item, create a short, specific tag (max 60 characters) that captures what they want or are doing. Use action-oriented language where possible. Return at most ${PROFILE_TAG_LIMIT} tags, most important first. Return ONLY a JSON array of strings, one tag per item, with no other text or formatting.
 Example format: ["Building AI chatbots", "Wants to win Math Olympiad", "Interested in deep learning", "Wants to intern at Google", "Learning quantum computing"]`;
 
-  const userContent = `Extract all interests, goals, and pursuits from this student profile:\n\n${studentProfile.synthesized}`;
+  const userContent = `Extract all interests, goals, and pursuits from this student profile:\n\n${text}`;
 
-  try {
-    const response = await callGemini(system, userContent, false);
-    const tags = extractJSON(response) || [];
+  const tags = extractJSON(await callGemini(system, userContent, false));
+  if(!Array.isArray(tags)) return [];
+  return tags.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim()).slice(0, PROFILE_TAG_LIMIT);
+}
 
-    // Enrich each tag with semantic metadata in parallel
-    const enrichedPromises = tags.map(tag => enrichProfileTag(tag));
-    const enrichedTags = await Promise.all(enrichedPromises);
+// One call for every tag. Tags the model doesn't return an object for are dropped: without
+// semantic metadata a tag can't drive batchScoreOpportunitiesWithAI(), so showing it in the
+// filter bar would offer a facet that filters everything out.
+async function enrichProfileTags(tags){
+  if(!tags.length) return [];
 
-    // Filter out failed enrichments, keep only successful ones
-    const validEnrichedTags = enrichedTags.filter(e => e !== null);
+  const system = `You are helping match a high school student's interests/goals to the best opportunities. You will be given a list of the student's profile tags. Analyze EACH tag for what it represents and what would best help them grow.
 
-    profileTagsCache = {
-      profile: studentProfile.synthesized,
-      profileWordCount: currentWordCount,
-      tags,
-      enrichedTags: validEnrichedTags,
-      tagEnrichmentMap: profileTagsCache.tagEnrichmentMap
-    };
+Return ONLY a JSON array with one object per tag, in the same order as given, no other text:
+[{
+  "tag": "the tag string exactly as given",
+  "category": one of "competition_prep", "career_aspiration", "academic_goal", "research_project", "app_project", "business_idea", "skill_learning", "interest_exploration",
+  "intent": "what they are trying to achieve (1 sentence)",
+  "nextSteps": ["2-3 logical milestones, e.g. Master advanced techniques", "Enter competitions"],
+  "opportunityTypes": ["e.g. hackathon", "demo_day", "research_conference", "internship", "summer_program"],
+  "semanticKeywords": ["8-12 keywords/phrases specific to this tag"],
+  "matchReason": "template string like Great for {nextSteps[0]}"
+}]
 
-    return validEnrichedTags;
-  } catch(e) {
-    console.error('Error extracting profile tags:', e);
+Keep every field short — the whole array must fit comfortably in one response.`;
+
+  const userContent = `PROFILE TAGS:\n${tags.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\nReturn the JSON array of ${tags.length} enrichment objects.`;
+
+  const arr = extractJSON(await callGemini(system, userContent, false));
+  if(!Array.isArray(arr)) return [];
+  // Match on the echoed tag string where there is one, falling back to position — a
+  // truncated or reordered response still yields usable enrichments for the tags it did
+  // return, instead of throwing all of them away.
+  const byTag = {};
+  arr.forEach((e, i) => {
+    if(!e || typeof e !== 'object') return;
+    const tag = (typeof e.tag === 'string' && tags.includes(e.tag)) ? e.tag : tags[i];
+    if(tag && !byTag[tag]) byTag[tag] = Object.assign({}, e, { tag });
+  });
+  return tags.map(t => byTag[t]).filter(Boolean);
+}
+
+// Extraction → enrichment, as one unit. Never throws: the tag facet is an enhancement on
+// top of a results list that is already on screen, so a failure here hides the facet rather
+// than failing anything the student is actually looking at.
+async function buildProfileFilterTags(text){
+  try{
+    return await enrichProfileTags(await extractProfileTagStrings(text));
+  }catch(e){
+    console.error('Error building profile filter tags:', e);
     return [];
   }
 }
@@ -2815,8 +2911,11 @@ async function filterResultList(list){
   if(resultFilters.profileTags.size > 0){
     const selectedTagStrings = Array.from(resultFilters.profileTags);
 
-    // Get the single selected enriched tag (single-select enforced by toggleResultFilter)
-    const selectedEnrichedTag = profileTagsCache.enrichedTags.find(et =>
+    // Get the single selected enriched tag (single-select enforced by toggleResultFilter).
+    // A tag can only be selected from a bar rendered off these same stored values, so they
+    // are present here by construction — but the profile can be edited from another tab
+    // mid-session, so a miss just means no tag filter rather than an error.
+    const selectedEnrichedTag = (cachedProfileFilterTags() || []).find(et =>
       selectedTagStrings.includes(et.tag)
     );
 
@@ -2849,15 +2948,28 @@ async function filterResultList(list){
   }
   return filtered;
 }
-async function renderResultFilterBar(list){
+// Synchronous — `enrichedTags` comes from the caller (the stored profile record), and
+// `tagsPending` is true only while they're still being computed for a profile that has
+// none yet. This used to await the tag extraction itself, which is what put an
+// "Analyzing your profile…" spinner in front of results that were already in hand.
+function renderResultFilterBar(list, enrichedTags, tagsPending){
   const wrap = document.getElementById('resultFilterWrap');
   const bar = document.getElementById('resultFilterBar');
   if(!wrap || !bar) return;
   let anyFacet = false;
   let html = '';
 
-  // Add profile tags filter if profile exists (enriched tags with semantic metadata)
-  const enrichedTags = await extractProfileTags();
+  // The profile-tag facet, once the enriched tags for the current profile exist. While
+  // they don't, show the placeholder in its place — the rest of the bar stays usable.
+  if(tagsPending){
+    anyFacet = true;
+    html += `
+      <div class="flex items-center gap-2 py-2 px-3">
+        <span class="inline-block w-4 h-4 border-2 rounded-full border-indigo-300 border-t-indigo-600 animate-spin"></span>
+        <span class="text-sm text-slate-600">Reading your profile…</span>
+      </div>
+    `;
+  }
   if(enrichedTags.length > 0){
     anyFacet = true;
     const panelId = 'resultFilterPanel_profileTags';
@@ -2967,15 +3079,17 @@ async function renderResults(){
     return TIER_ORDER[a.tier] - TIER_ORDER[b.tier];
   });
 
-  // Show loading state while enriching profile tags
-  const bar = document.getElementById('resultFilterBar');
-  const wrap = document.getElementById('resultFilterWrap');
-  if(bar && wrap) {
-    bar.innerHTML = '<div class="flex items-center gap-2"><span class="inline-block w-4 h-4 border-2 rounded-full border-indigo-300 border-t-indigo-600 animate-spin"></span><span class="text-sm text-slate-600">Analyzing your profile…</span></div>';
-    wrap.classList.remove('hidden');
-  }
+  // Paint the filter bar from the profile's stored tags. On the common path they're
+  // already there and this costs nothing; when they aren't (a profile edited seconds ago,
+  // or one that predates this cache) the bar shows a placeholder in that one slot and
+  // fills itself in below, rather than holding the results back on an API call.
+  const renderToken = ++resultsRenderToken;
+  const cachedTags = cachedProfileFilterTags();
+  const hasProfile = !!studentProfile.synthesized;
+  renderResultFilterBar(sorted, cachedTags || [], !cachedTags && hasProfile);
 
-  await renderResultFilterBar(sorted);
+  // Only actually awaits when a profile tag is selected (that's a deliberate,
+  // student-triggered scoring call); otherwise this resolves without a round trip.
   const filtered = await filterResultList(sorted);
   const visible = filtered.slice(0, resultVisibleCount);
   document.getElementById('resultGrid').innerHTML = visible.length
@@ -2989,6 +3103,22 @@ async function renderResults(){
     if(btn) btn.textContent = `Show more (${remaining} left)`;
   }
   updateSelectionBar();
+
+  // Tags weren't ready — compute them (this also persists them onto the profile, so it
+  // happens at most once) and swap the placeholder for the real facet when they land. The
+  // token check drops a slow response whose render has since been superseded, which would
+  // otherwise repaint the bar with a list the visible results no longer come from.
+  if(!cachedTags && hasProfile){
+    getProfileFilterTags()
+      .then(rec => {
+        if(renderToken !== resultsRenderToken) return;
+        renderResultFilterBar(sorted, rec.enrichedTags, false);
+      })
+      .catch(err => {
+        console.warn('Profile filter tags unavailable:', err.message);
+        if(renderToken === resultsRenderToken) renderResultFilterBar(sorted, [], false);
+      });
+  }
 }
 function toggleSelect(id){
   if(selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);

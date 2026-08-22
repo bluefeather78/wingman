@@ -4,10 +4,11 @@ catalog, searches (via web_search) for independent evidence of whether it's actu
 worthwhile — Reddit/College Confidential/Niche-style discussion, complaints, red flags of
 pay-to-play/predatory programs — versus relying only on the org's own marketing copy.
 
-Run far less often than check_deadlines.py (1-2x/year is the intent, not monthly): by
-default this script only re-checks rows where last_reviewed_at is null or more than 6
-months old, so accidentally running it more often doesn't re-spend on rows that were
-just checked. Pass --force to ignore that staleness filter.
+Run far less often than check_deadlines.py — an organization's reputation changes on the
+scale of months, not days. By default this script only re-checks rows where
+last_reviewed_at is null or more than STALE_AFTER_DAYS (30) days old, so running it more
+often than that doesn't re-spend on rows that were just checked. Pass --force to ignore the
+staleness filter entirely and re-check every active row.
 
 Same hard rule as extractTrackerInfo's "never invent a date": this script must never
 invent a review verdict from thin evidence. Most hyperlocal/niche opportunities won't
@@ -42,11 +43,18 @@ import time
 import urllib.error
 import urllib.parse
 
+from agent_common import add_agent_args, apply_timing, emit_preview, snapshot_stamp
 from gemini_common import call_gemini, extract_json, estimate_cost
 from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
 
 VALID_STATUS = {"positive", "mixed", "negative", "insufficient_data"}
-STALE_AFTER_DAYS = 182  # ~6 months
+# How old a review has to be before a default run re-checks it. Lowered from 182 (~6
+# months) to 30 on 2026-08-22 so an ad-hoc run picks up genuinely aging rows instead of
+# doing nothing at all for half a year — the previous value meant the only way to make
+# this agent do anything between passes was --force, i.e. the whole catalog.
+# It still exists to keep a plain run idempotent: rows checked yesterday are not re-paid
+# for. Raising it makes runs cheaper and staler; lowering it, the reverse.
+STALE_AFTER_DAYS = 30
 
 
 def build_system(opp):
@@ -101,7 +109,9 @@ def main():
     parser.add_argument("--force", action="store_true", help="Ignore the staleness filter and recheck every active row.")
     parser.add_argument("--dry-run", action="store_true", help="No writes (opportunities or agent_runs) — just prints "
                                                                  "and dumps results to a local JSON review file.")
+    add_agent_args(parser, default_timeout=120)
     args = parser.parse_args()
+    apply_timing(args, gemini=True)
 
     load_dotenv()
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -114,14 +124,20 @@ def main():
     params = {
         "select": "id,name,org,url,summary,review_status,last_reviewed_at",
         "is_active": "eq.true",
-        "review_status": "is.null",  # TEMP: only rows without review status
-        "order": "id",  # TEMP: stable ordering
+        # Stable ordering, so an interrupted batch resumes over the same sequence rather
+        # than whatever order PostgREST happens to return.
+        "order": "id",
     }
+    # There used to be a `"review_status": "is.null"` filter here, added to protect the
+    # August 2026 backlog from being re-paid for on every resume. It was removed once that
+    # backlog finished (2026-08-22): with every active row now carrying a verdict, it
+    # matched nothing, which made STALE_AFTER_DAYS below dead code and meant this agent
+    # could never re-check anything again. Staleness is the only recheck rule now.
     if not args.force:
         cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=STALE_AFTER_DAYS)).isoformat()
         params["or"] = f"(last_reviewed_at.is.null,last_reviewed_at.lt.{cutoff})"
 
-    print("[OK] Fetching all active + unchecked (review_status IS NULL) catalog rows from Supabase...")
+    print("[OK] Fetching active catalog rows never reviewed or due for a re-check...")
     candidates = supabase_get(supabase_url, "opportunities", params, service_key)
     print(f"[OK] {len(candidates)} row(s) due for a review check"
           f"{' (staleness filter ignored)' if args.force else f' (unchecked or >{STALE_AFTER_DAYS} days stale)'}.")
@@ -132,18 +148,27 @@ def main():
         mode = "sample"
         items = random.sample(candidates, min(args.sample, len(candidates)))
 
+    # Preview: scope resolved, report and stop before the first (paid) Gemini call.
+    if args.preview:
+        emit_preview(len(items), "rows", [o.get("name", "?") for o in items],
+                     mode=mode + ("-force" if args.force else ""))
+        return
+
     if not items:
         print("[OK] Nothing due for a review check right now.")
         return
 
-    run_id = None
-    if not args.dry_run:
-        run_row = supabase_insert_one(supabase_url, "agent_runs", {
-            "agent": "review_checker",
-            "mode": mode + ("-force" if args.force else ""),
-            "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        }, service_key)
-        run_id = run_row["id"] if run_row else None
+    # A dry run logs its agent_runs row too. It skips DATABASE writes, not API calls —
+    # it costs exactly as much as a live run — so omitting the row (as this used to do)
+    # made real money invisible in every cost total. The "-dryrun" mode suffix is how
+    # readers tell the two apart; it avoids needing a new column on agent_runs.
+    run_mode = mode + ("-force" if args.force else "") + ("-dryrun" if args.dry_run else "")
+    run_row = supabase_insert_one(supabase_url, "agent_runs", {
+        "agent": "review_checker",
+        "mode": run_mode,
+        "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }, service_key)
+    run_id = run_row["id"] if run_row else None
 
     total_cost = 0.0
     updated = 0
@@ -215,14 +240,16 @@ def main():
               f"~${projected:.2f} for a full pass.")
 
     if args.dry_run:
-        run_date = datetime.date.today().strftime("%Y%m%d")
+        # Seconds, not just the date — see snapshot_stamp(). Same-day runs used to
+        # overwrite each other's already-paid-for output.
+        stamp = snapshot_stamp()
         review_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    f"review_check_dry_run_{run_date}.json")
+                                    f"review_check_dry_run_{stamp}.json")
         with open(review_path, "w", encoding="utf-8") as f:
             json.dump(dry_run_results, f, indent=2, ensure_ascii=False)
         print(f"[OK] Wrote dry-run review snapshot: {review_path}")
-        print("[DRY RUN] No writes performed (opportunities or agent_runs).")
-        return
+        print("[DRY RUN] No opportunities were written. The run itself is still logged to "
+              "agent_runs (mode='%s') because it cost real money." % run_mode)
 
     if run_id is not None:
         supabase_patch(supabase_url, "agent_runs", {"id": f"eq.{run_id}"}, {

@@ -15,6 +15,26 @@ __pycache__/
 
 # Logs
 server.log
+server_err.log
+refresh_run.log
+refresh_final.log
+
+# Captured stdout of admin-console agent runs (one file per run)
+agent_logs/
+
+# Local dev-server PID, written by restart_server.ps1
+.server.pid
+server_restart.log
+
+# Lockfile preventing two web-search agents from sharing the Google Search quota
+.gemini_web_search.lock
+
+# Per-machine agent timing overrides, edited from the admin console's timing table
+agent_settings.json
+
+# Dry-run snapshots written by the agent scripts
+*_dry_run_*.json
+scrape_review_*.json
 
 #gitignore
 .gitignore

@@ -1,0 +1,2223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wingman Agent Ops</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ---------------------------------------------------------------------------
+   Design tokens. Warm-neutral base carried over from the previous console —
+   the palette was the good part; the layout is what needed rebuilding.
+   Each agent gets its own hue, used consistently in the chart, the cards and
+   the activity log so one colour always means one agent.
+--------------------------------------------------------------------------- */
+:root {
+  --bg: #FAFAF8;
+  --surface: #FFFFFF;
+  --surface-2: #F5F5F1;
+  --surface-3: #EDEDE7;
+  --text: #1A1A1A;
+  --text-2: #6B6764;
+  --text-3: #A39F9B;
+  --border: #E5E5E0;
+  --border-strong: #D6D6CE;
+
+  --accent: #2563EB;
+  --accent-hover: #1D4ED8;
+  --accent-soft: #EAF0FE;
+
+  --ok: #059669;
+  --ok-soft: #E7F5EF;
+  --warn: #D97706;
+  --warn-soft: #FDF3E4;
+  --danger: #DC2626;
+  --danger-soft: #FDECEC;
+  --muted-soft: #EFEFEA;
+
+  --agent-metadata: #7C3AED;
+  --agent-reviews:  #0891B2;
+  --agent-scraper:  #D97706;
+  --agent-deadline: #DB2777;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+  --shadow: 0 1px 2px rgba(16,15,14,.05), 0 1px 3px rgba(16,15,14,.04);
+  --font-head: 'Outfit', system-ui, sans-serif;
+  --font-body: 'DM Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0F0E0D; --surface: #1A1916; --surface-2: #211F1C; --surface-3: #2A2824;
+    --text: #F2F0EC; --text-2: #A8A39C; --text-3: #75706A;
+    --border: #302D29; --border-strong: #3C3935;
+    --accent: #60A5FA; --accent-hover: #93C5FD; --accent-soft: #1B2438;
+    --ok: #34D399; --ok-soft: #10281F; --warn: #FBBF24; --warn-soft: #2A2010;
+    --danger: #F87171; --danger-soft: #2E1515; --muted-soft: #26241F;
+    --agent-metadata: #A78BFA; --agent-reviews: #22D3EE;
+    --agent-scraper: #FBBF24; --agent-deadline: #F472B6;
+    --shadow: 0 1px 2px rgba(0,0,0,.4);
+  }
+}
+[data-theme="dark"] {
+  --bg: #0F0E0D; --surface: #1A1916; --surface-2: #211F1C; --surface-3: #2A2824;
+  --text: #F2F0EC; --text-2: #A8A39C; --text-3: #75706A;
+  --border: #302D29; --border-strong: #3C3935;
+  --accent: #60A5FA; --accent-hover: #93C5FD; --accent-soft: #1B2438;
+  --ok: #34D399; --ok-soft: #10281F; --warn: #FBBF24; --warn-soft: #2A2010;
+  --danger: #F87171; --danger-soft: #2E1515; --muted-soft: #26241F;
+  --agent-metadata: #A78BFA; --agent-reviews: #22D3EE;
+  --agent-scraper: #FBBF24; --agent-deadline: #F472B6;
+  --shadow: 0 1px 2px rgba(0,0,0,.4);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: var(--font-body); font-size: 14px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+h1,h2,h3,h4 { font-family: var(--font-head); margin: 0; font-weight: 600; letter-spacing: -.01em; }
+a { color: var(--accent); }
+button { font-family: inherit; font-size: inherit; cursor: pointer; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.wrap { max-width: 1400px; margin: 0 auto; padding: var(--sp-5) var(--sp-5) 64px; }
+
+/* ---- header ---- */
+.topbar {
+  display: flex; align-items: center; gap: var(--sp-4);
+  flex-wrap: wrap; padding-bottom: var(--sp-4); margin-bottom: var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+.topbar h1 { font-size: 20px; }
+.topbar .sub { color: var(--text-2); font-size: 13px; }
+.topbar .spacer { flex: 1; }
+select, input[type="text"], input[type="number"], textarea {
+  font-family: inherit; font-size: 13px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); padding: 7px 10px;
+}
+textarea { font-family: var(--font-body); resize: vertical; width: 100%; }
+select:focus, input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.btn {
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+  border-radius: var(--radius-sm); padding: 7px 13px; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.btn:hover { background: var(--surface-2); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn-danger:hover { filter: brightness(1.08); }
+.btn-sm { padding: 4px 9px; font-size: 12px; }
+.btn-ghost { border-color: transparent; background: transparent; color: var(--text-2); }
+.btn-ghost:hover { background: var(--surface-2); color: var(--text); }
+
+/* ---- cards ---- */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: var(--sp-5);
+}
+.card-head {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--border);
+}
+.card-head h2 { font-size: 15px; }
+.card-head .spacer { flex: 1; }
+.card-head .hint { color: var(--text-3); font-size: 12px; }
+.card-body { padding: var(--sp-5); }
+.card-body.tight { padding: 0; }
+
+/* ---- KPI strip ---- */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px,1fr)); gap: var(--sp-3); margin-bottom: var(--sp-5); }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-4); box-shadow: var(--shadow); }
+.kpi .label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); font-family: var(--font-head); font-weight: 600; }
+.kpi .value { font-family: var(--font-mono); font-size: 26px; font-weight: 700; margin-top: 6px; letter-spacing: -.02em; }
+.kpi .delta { font-size: 12px; margin-top: 2px; color: var(--text-3); }
+.delta.up { color: var(--ok); } .delta.down { color: var(--danger); } .delta.flat { color: var(--text-3); }
+
+/* ---- agent cards ---- */
+.agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px,1fr)); gap: var(--sp-4); margin-bottom: var(--sp-5); }
+.agent-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; }
+.agent-card .accentbar { height: 3px; background: var(--c); }
+.agent-card .inner { padding: var(--sp-4); flex: 1; display: flex; flex-direction: column; gap: var(--sp-3); }
+.agent-card h3 { font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.agent-card .desc { color: var(--text-2); font-size: 12.5px; min-height: 34px; }
+.agent-card .api { font-size: 11px; color: var(--text-3); font-family: var(--font-mono); }
+.metrics { display: grid; grid-template-columns: repeat(3,1fr); gap: var(--sp-2); }
+.metric { background: var(--surface-2); border-radius: var(--radius-sm); padding: 8px 10px; }
+.metric .m-label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); font-weight: 600; }
+.metric .m-value { font-family: var(--font-mono); font-size: 16px; font-weight: 600; margin-top: 2px; }
+.agent-card .foot { display: flex; align-items: center; gap: var(--sp-2); }
+.agent-card .foot .spacer { flex: 1; }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; }
+.dot.running { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.dot.error { background: var(--danger); }
+.dot.interrupted { background: var(--warn); }
+.dot.idle { background: var(--text-3); }
+@keyframes pulse { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.35; transform:scale(.8);} }
+
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 99px; background: var(--muted-soft); color: var(--text-2);
+  font-family: var(--font-head); white-space: nowrap; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.danger { background: var(--danger-soft); color: var(--danger); }
+.pill.info { background: var(--accent-soft); color: var(--accent); }
+
+/* ---- charts ---- */
+.chart-wrap { overflow-x: auto; }
+svg.chart { display: block; width: 100%; min-width: 520px; height: 200px; }
+svg.spark { display: block; width: 100%; height: 34px; }
+.legend { display: flex; flex-wrap: wrap; gap: var(--sp-4); margin-top: var(--sp-3); font-size: 12px; color: var(--text-2); }
+.legend .item { display: flex; align-items: center; gap: 6px; }
+/* Base rule so a swatch also renders outside a .legend flex row — the provider
+   column of the by-model table puts one inline in a table cell. */
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+          flex: none; vertical-align: middle; }
+.axis-label { font-size: 10px; fill: var(--text-3); font-family: var(--font-mono); }
+.grid-line { stroke: var(--border); stroke-width: 1; }
+
+/* ---- tables ---- */
+.tbl-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-family: var(--font-head); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--text-3); font-weight: 600; padding: 10px var(--sp-4);
+  border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--surface-2); }
+th.num, td.num { text-align: right; }
+td { padding: 10px var(--sp-4); border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+tbody tr.clickable { cursor: pointer; }
+tbody tr.clickable:hover { background: var(--surface-2); }
+.detail-row td { background: var(--surface-2); }
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: var(--sp-3); }
+.detail-grid .d { font-size: 12px; }
+.detail-grid .d .k { color: var(--text-3); text-transform: uppercase; font-size: 10px; letter-spacing: .05em; font-weight: 600; }
+.detail-grid .d .v { font-family: var(--font-mono); margin-top: 2px; word-break: break-word; }
+.empty { padding: var(--sp-6); text-align: center; color: var(--text-3); }
+
+/* ---- editable timing cells ---- */
+.timing-cell { display: inline-flex; align-items: center; gap: 5px; justify-content: flex-end; }
+.timing-input {
+  width: 68px; text-align: right; padding: 4px 6px; font-size: 13px;
+  border: 1px solid transparent; background: var(--surface-2);
+  border-radius: var(--radius-sm); color: var(--text);
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+}
+.timing-input:hover { border-color: var(--border-strong); }
+.timing-input:focus { border-color: var(--accent); background: var(--surface); }
+/* A value that differs from the shipped default should be obvious at a glance. */
+.timing-input.changed { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.timing-cell .unit { color: var(--text-3); font-size: 12px; font-family: var(--font-mono); }
+.reset-btn {
+  border: none; background: transparent; color: var(--text-3);
+  font-size: 10.5px; text-decoration: underline; padding: 0 2px;
+}
+.reset-btn:hover { color: var(--accent); }
+
+/* ---- seeds ---- */
+/* Top-level view nav. Deliberately a different shape from .tab (the inline pill used
+   inside a card head, e.g. the scraper's National/Seattle switch) — one of these swaps the
+   whole page, the other filters one table, and they should not look interchangeable. */
+.viewtabs { display: flex; gap: var(--sp-5); border-bottom: 1px solid var(--border);
+  margin-bottom: var(--sp-6); }
+.vtab { position: relative; padding: 0 2px 12px; background: transparent; border: 0;
+  font-family: var(--font-head); font-size: 14px; font-weight: 600; color: var(--text-3);
+  letter-spacing: .01em; }
+.vtab:hover { color: var(--text-2); }
+.vtab.active { color: var(--text); }
+.vtab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px;
+  height: 2px; background: var(--accent); border-radius: 2px 2px 0 0; }
+.vtab .count { font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  color: var(--text-3); margin-left: 6px; }
+.view-lead { color: var(--text-2); font-size: 13px; line-height: 1.6; max-width: 76ch;
+  margin: -8px 0 20px; }
+
+.tabs { display: flex; gap: var(--sp-1); }
+.tab { padding: 5px 12px; border-radius: var(--radius-sm); border: 1px solid transparent;
+  background: transparent; color: var(--text-2); font-weight: 500; font-size: 13px; }
+.tab.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+tr.sel-row > td { background: var(--accent-soft); }
+.dup-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px;
+  max-height: 260px; overflow-y: auto; }
+.dup-opt { display: flex; gap: 9px; align-items: flex-start; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
+.dup-opt:hover { border-color: var(--accent); }
+.dup-opt.on { background: var(--accent-soft); border-color: var(--accent); }
+.dup-opt .nm { font-weight: 600; font-size: 13px; }
+.dup-opt .sub { font-size: 11.5px; color: var(--text-3); word-break: break-all; }
+
+.seed-angle { min-width: 320px; }
+.seed-angle .txt { cursor: text; border-radius: var(--radius-sm); padding: 2px 4px; margin: -2px -4px; }
+.seed-angle .txt:hover { background: var(--surface-3); }
+tr.disabled-seed { opacity: .48; }
+.switch { position: relative; width: 34px; height: 19px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .track { position: absolute; inset: 0; background: var(--border-strong); border-radius: 99px; transition: .15s; }
+.switch .track::before { content:""; position: absolute; width: 15px; height: 15px; left: 2px; top: 2px;
+  background: var(--surface); border-radius: 50%; transition: .15s; }
+.switch input:checked + .track { background: var(--ok); }
+.switch input:checked + .track::before { transform: translateX(15px); }
+
+/* ---- modal ---- */
+.overlay { position: fixed; inset: 0; background: rgba(15,14,13,.55); display: none;
+  align-items: flex-start; justify-content: center; padding: var(--sp-5); z-index: 50; overflow-y: auto; }
+.overlay.open { display: flex; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  width: 100%; max-width: 660px; box-shadow: 0 12px 40px rgba(0,0,0,.22); margin: auto; }
+.modal-head { padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: var(--sp-3); }
+.modal-head h2 { font-size: 16px; }
+.modal-body { padding: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-4); }
+.modal-foot { padding: var(--sp-4) var(--sp-5); border-top: 1px solid var(--border); display: flex; gap: var(--sp-2); align-items: center; }
+.modal-foot .spacer { flex: 1; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field > label { font-family: var(--font-head); font-weight: 600; font-size: 12px; }
+.field .help { font-size: 11.5px; color: var(--text-3); line-height: 1.45; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+.check { display: flex; align-items: flex-start; gap: 8px; }
+.check input { margin-top: 3px; }
+.check label { font-size: 13px; }
+.fieldset { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
+.fieldset > .legend-title { font-family: var(--font-head); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); }
+.estimate { border-radius: var(--radius-sm); padding: var(--sp-3) var(--sp-4); font-size: 13px; background: var(--surface-2); border: 1px solid var(--border); }
+.estimate.free { background: var(--accent-soft); border-color: var(--accent); }
+.estimate.spend { background: var(--warn-soft); border-color: var(--warn); }
+.estimate .big { font-family: var(--font-mono); font-size: 17px; font-weight: 700; }
+.console { background: #0D0C0B; color: #D7D3CC; font-family: var(--font-mono); font-size: 11.5px;
+  line-height: 1.55; padding: var(--sp-3); border-radius: var(--radius-sm); height: 230px;
+  overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+.console .l-err { color: #F87171; } .console .l-ok { color: #34D399; }
+.console .l-warn { color: #FBBF24; } .console .l-cmd { color: #93C5FD; }
+.notice { font-size: 12.5px; padding: var(--sp-3) var(--sp-4); border-radius: var(--radius-sm);
+  background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); }
+.notice.err { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+.notice.info { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.hidden { display: none !important; }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 99px;
+  font-size: 13px; z-index: 100; box-shadow: 0 6px 20px rgba(0,0,0,.28); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div>
+      <h1>Agent Ops</h1>
+      <div class="sub" id="viewSubtitle">Background agents that maintain the Wingman opportunity catalog</div>
+    </div>
+    <div class="spacer"></div>
+    <label class="sub" for="timeRange">Range</label>
+    <select id="timeRange">
+      <option value="7">Last 7 days</option>
+      <option value="30" selected>Last 30 days</option>
+      <option value="90">Last 90 days</option>
+    </select>
+    <button class="btn" id="refreshBtn">Refresh</button>
+  </div>
+
+  <div class="viewtabs" id="viewTabs">
+    <button class="vtab active" data-view="agents">Agents</button>
+    <button class="vtab" data-view="review">Review queue<span class="count" id="reviewTabCount"></span></button>
+    <button class="vtab" data-view="users">Cost per user<span class="count" id="userTabCount"></span></button>
+  </div>
+
+  <div id="globalNotice" class="notice err hidden" style="margin-bottom:24px"></div>
+
+  <div class="view" id="view-agents">
+
+  <!-- KPI strip -->
+  <div class="kpis" id="kpis"></div>
+
+  <!-- Cost & activity -->
+  <div class="card">
+    <div class="card-head">
+      <h2>Spend &amp; activity</h2>
+      <div class="spacer"></div>
+      <div class="hint" id="chartHint"></div>
+    </div>
+    <div class="card-body">
+      <div class="chart-wrap"><svg class="chart" id="costChart" preserveAspectRatio="none"></svg></div>
+      <div class="legend" id="chartLegend"></div>
+    </div>
+  </div>
+
+  <!-- Estimated vs billed -->
+  <div class="card">
+    <div class="card-head">
+      <h2>Estimated vs billed</h2>
+      <div class="spacer"></div>
+      <div class="hint">Everything else on this page is an estimate — this is what the providers actually charged</div>
+    </div>
+    <div class="card-body" id="billedBody"><div class="empty">Loading…</div></div>
+  </div>
+
+  <!-- Agent cards -->
+  <div class="agents" id="agentCards"></div>
+
+  <!-- Activity log -->
+  <div class="card">
+    <div class="card-head">
+      <h2>Run history</h2>
+      <div class="spacer"></div>
+      <select id="logAgentFilter"><option value="">All agents</option></select>
+      <select id="logStatusFilter">
+        <option value="">All statuses</option>
+        <option value="success">Success</option>
+        <option value="failed">Failed</option>
+        <option value="interrupted">Interrupted</option>
+        <option value="running">Running</option>
+      </select>
+    </div>
+    <div class="card-body tight">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>Agent</th><th>Status</th><th>Mode</th><th class="num">Processed</th>
+            <th class="num">Updated</th><th class="num">Created</th><th class="num">Errors</th>
+            <th class="num">Cost</th><th class="num">Duration</th><th>When</th>
+          </tr></thead>
+          <tbody id="historyBody"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dry-run snapshots -->
+  <div class="card">
+    <div class="card-head">
+      <h2>Dry-run snapshots</h2>
+      <div class="spacer"></div>
+      <div class="hint">Already paid for &mdash; commit one instead of re-running the agent</div>
+    </div>
+    <div class="card-body tight">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>Run at</th><th>Agent</th><th>File</th>
+            <th class="num">Entries</th><th class="num">Would change</th><th>Action</th>
+          </tr></thead>
+          <tbody id="snapshotBody"><tr><td colspan="6" class="empty">Loading&hellip;</td></tr></tbody>
+        </table>
+      </div>
+      <div style="padding:16px 24px; font-size:12.5px; color:var(--text-2); border-top:1px solid var(--border)">
+        A <strong>dry run calls the paid API at full cost</strong> and only skips the database
+        writes, dumping what it would have written to a local JSON file. Committing that file
+        applies those writes. It makes <em>no</em> API calls and costs nothing &mdash; the money was
+        already spent by the run that produced it.
+        <br><br>
+        Scraper snapshots insert new rows <strong>inactive</strong>, exactly like a live scrape, and
+        are deduplicated by URL against the whole table &mdash; committing the same file twice inserts
+        nothing the second time. Nothing here ever activates a row; that is the Review queue tab.
+        <br><br>
+        Snapshot filenames carry a <em>date</em> only, so a second run on the same day overwrites the
+        first one’s file. A snapshot is the last run of that date, not all of them.
+      </div>
+    </div>
+  </div>
+
+  <!-- Scraper angles -->
+  <div class="card">
+    <div class="card-head">
+      <h2>Scraper angles</h2>
+      <div class="tabs" id="seedTabs">
+        <button class="tab active" data-mode="national">National</button>
+        <button class="tab" data-mode="seattle">Seattle</button>
+      </div>
+      <div class="spacer"></div>
+      <div class="hint">Sorted by yield — click a column to re-sort</div>
+      <button class="btn btn-sm" id="addSeedBtn">+ Add angle</button>
+    </div>
+    <div class="card-body tight">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>On</th><th>Category</th><th class="seed-angle">Search angle</th>
+            <th class="num sortable" data-sort="total_runs">Runs</th>
+            <th class="num sortable" data-sort="total_found">Found</th>
+            <th class="num sortable" data-sort="total_added">Added</th>
+            <th class="num sortable" data-sort="dupe_rate">Dupe&nbsp;%</th>
+            <th class="num sortable" data-sort="total_cost">Cost</th>
+            <th class="num sortable" data-sort="added_per_dollar">Added&nbsp;/&nbsp;$</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="seedBody"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Timing reference -->
+  <div class="card">
+    <div class="card-head">
+      <h2>Timing &amp; rate limits</h2>
+      <div class="spacer"></div>
+      <div class="hint">Editable — these are the defaults each run modal starts from</div>
+    </div>
+    <div class="card-body tight">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Agent</th><th>API</th><th class="num">Min delay</th><th class="num">Timeout</th><th>Shared search lock</th><th>Writes</th></tr></thead>
+          <tbody id="timingBody"></tbody>
+        </table>
+      </div>
+      <div style="padding:16px 24px; font-size:12.5px; color:var(--text-2); border-top:1px solid var(--border)">
+        Edit any value above to change it permanently — it saves immediately and becomes what every new
+        run of that agent starts from. Changed values are highlighted, with a <em>reset</em> link back to the built-in default.
+        <br><br>
+        <strong>Min delay</strong> is the minimum gap between API calls. 5&nbsp;s is the value that resolved this
+        pipeline's repeated HTTP&nbsp;429 rate limiting — lower it only for short sample runs.
+        It also dominates wall time: a 1,300-row pass at 5&nbsp;s takes roughly 110&nbsp;minutes regardless of how fast the API responds.
+        <strong>Timeout</strong> is the per-request read timeout; note a client-side timeout does
+        <em>not</em> stop or refund work already running server-side, so setting it too low means paying for answers you never see.
+        The two agents marked as sharing the search lock cannot run at the same time.
+      </div>
+    </div>
+  </div>
+
+  </div><!-- /view-agents -->
+
+  <div class="view hidden" id="view-review">
+    <div class="view-lead">
+      Everything sitting at <span class="mono">is_active = false</span> &mdash; rows the scraper
+      found and opportunities students submitted themselves. Nothing in this repo activates a row
+      automatically; both paths write inactive and stay that way until someone here says otherwise.
+      Activating one puts it in front of students, so read the row before you tick it.
+      <strong>Rejecting</strong> never deletes: the row stays in the table so its URL keeps blocking
+      re-submission, it just drops out of this queue instead of coming back round every time.
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Review queue</h2>
+        <div class="tabs" id="pendingStatusTabs">
+          <button class="tab active" data-status="queue">Queue<span class="count" id="queueCount"></span></button>
+          <button class="tab" data-status="rejected">Rejected<span class="count" id="rejectedCount"></span></button>
+        </div>
+        <div class="spacer"></div>
+        <select id="pendingSource"><option value="">All sources</option></select>
+        <button class="btn btn-sm" id="pendingSelectAll">Select all</button>
+        <button class="btn btn-sm" id="pendingClear">Clear</button>
+        <button class="btn btn-danger" id="rejectBtn" disabled>Reject selected</button>
+        <button class="btn btn-sm hidden" id="restoreBtn" disabled>Restore to queue</button>
+        <button class="btn" id="activateBtn" disabled>Activate selected</button>
+      </div>
+      <div class="card-body tight">
+        <div class="hint hidden" id="moderationSetup" style="padding:10px 14px">
+          Reject is unavailable: the moderation columns do not exist yet. Run
+          <span class="mono">user_submissions_schema.sql</span> in the Supabase SQL editor
+          (it is idempotent), then restart with <span class="mono">restart_server.ps1</span>.
+          Activation is unaffected.
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr>
+              <th style="width:34px"></th><th>Name</th><th>Org</th><th>Type</th>
+              <th>Source</th><th>Found</th><th></th>
+            </tr></thead>
+            <tbody id="pendingBody"><tr><td colspan="7" class="empty">Loading&hellip;</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="view hidden" id="view-users">
+    <div class="view-lead">
+      What each account's own use of the product costs in AI, against the $9.99/month plan.
+      This is the <strong>same money</strong> as the app half of estimated spend on the Agents
+      tab, split by who triggered it &mdash; never additional spend.
+    </div>
+
+  <!-- Cost per user -->
+  <div class="card">
+    <div class="card-head">
+      <h2>Cost per user</h2>
+      <div class="spacer"></div>
+      <div class="hint">Sorted by cost &mdash; click a row for the per-provider, per-model and per-feature breakdown</div>
+      <select id="userCostSort">
+        <option value="cost_usd">Sort by cost</option>
+        <option value="calls">Sort by calls</option>
+        <option value="cost_per_call">Sort by cost / call</option>
+        <option value="last_at">Sort by last active</option>
+      </select>
+    </div>
+    <div class="card-body" id="userCostSummary"><div class="empty">Loading&hellip;</div></div>
+    <div class="card-body tight" id="userCostTableWrap">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>User</th><th>Plan</th>
+            <th class="num" title="Billed, attributable calls only — see the Active users tile.">Billed&nbsp;calls</th>
+            <th class="num">Searches</th>
+            <th class="num">Cost</th><th class="num">Cost&nbsp;/&nbsp;call</th>
+            <th class="num">% of $9.99</th><th>Last active</th>
+          </tr></thead>
+          <tbody id="userCostBody"><tr><td colspan="8" class="empty">Loading&hellip;</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  </div><!-- /view-users -->
+</div>
+
+<!-- ---------- Run modal ---------- -->
+<div class="overlay" id="runModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span class="dot" id="modalDot"></span>
+      <h2 id="modalTitle">Run agent</h2>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" id="modalClose">Close</button>
+    </div>
+    <div class="modal-body">
+      <div id="modalDesc" class="field help"></div>
+      <div id="modalBlocked" class="notice hidden"></div>
+      <div id="modalScope"></div>
+
+      <div class="fieldset">
+        <div class="legend-title">Timing &amp; rate limits</div>
+        <div class="field-row">
+          <div class="field">
+            <label for="cfgMinDelay">Delay between API calls (seconds)</label>
+            <input type="number" id="cfgMinDelay" min="0" step="0.5">
+            <div class="help" id="minDelayHelp">5&nbsp;s is the floor that fixed past HTTP 429s.</div>
+          </div>
+          <div class="field">
+            <label for="cfgTimeout">Per-request timeout (seconds)</label>
+            <input type="number" id="cfgTimeout" min="10" step="10">
+            <div class="help">A client timeout doesn't refund server-side work.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="estimate" id="estimate">
+        Run <strong>Preview</strong> to see how many items this would touch and what it would cost.
+        Preview makes no API calls and writes nothing.
+      </div>
+
+      <div id="argvLine" class="field help mono hidden"></div>
+      <div class="console hidden" id="runConsole"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="previewBtn">Preview (free)</button>
+      <div class="spacer"></div>
+      <button class="btn" id="dryRunBtn" title="Calls the API at full cost but writes nothing to the database">Dry run</button>
+      <button class="btn btn-primary" id="liveRunBtn">Run live</button>
+    </div>
+  </div>
+</div>
+
+<!-- ---------- Seed editor modal ---------- -->
+<!-- Edit modal for a queued row. Field ids map 1:1 onto EDITABLE_OPPORTUNITY_FIELDS in
+     server.py — adding one here means adding it to that whitelist too, or the save 400s
+     naming the key. -->
+<!-- Picking the surviving row for a duplicate. Marking one row a duplicate of another is
+     the one moderation action that needs a target, so it gets its own step instead of
+     riding on the Reject button. -->
+<div class="overlay" id="dupModal">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-head">
+      <h2>Mark as duplicate</h2>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" id="dupClose">Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:14px">
+        <strong id="dupSubject"></strong> will be marked <span class="mono">duplicate</span> of
+        whichever row you pick, and drops out of the queue. Nothing is deleted &mdash; it stays
+        in the table pointing at the survivor, and Restore undoes it.
+      </div>
+      <div id="dupSuggested"></div>
+      <div class="field">
+        <label for="dupSearch">Find the surviving row</label>
+        <input id="dupSearch" type="text" placeholder="Name, organization, URL, or id" autocomplete="off">
+        <div class="help">Searches the whole catalog, live rows and queued ones alike &mdash; the
+          survivor of two queued scrapes is itself still queued.</div>
+      </div>
+      <div id="dupResults" class="dup-list"></div>
+      <div id="dupError" class="notice err hidden"></div>
+    </div>
+    <div class="modal-foot">
+      <div class="spacer"></div>
+      <button class="btn btn-danger" id="dupSave" disabled>Pick a surviving row</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="oppModal">
+  <div class="modal" style="max-width:760px">
+    <div class="modal-head">
+      <h2>Edit queued opportunity</h2>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" id="oppClose">Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:14px">
+        Fixing a row before anyone activates it. <span class="mono" id="oppId"></span> &mdash;
+        saving does <strong>not</strong> activate it or change its review status.
+        Deadlines, run status and the legitimacy review are owned by the agents and are not
+        editable here; the next agent run would overwrite them anyway.
+      </div>
+      <div class="field">
+        <label for="oppName">Name</label>
+        <input id="oppName" type="text">
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="oppOrg">Organization</label><input id="oppOrg" type="text"></div>
+        <div class="field"><label for="oppType">Type</label><select id="oppType"></select>
+          <div class="help">Drives which finder kind surfaces the row. A wrong value hides it.</div></div>
+      </div>
+      <div class="field">
+        <label for="oppUrl">URL</label>
+        <input id="oppUrl" type="text">
+        <div class="help">Stored exactly as typed &mdash; case-sensitive paths must not be folded.</div>
+      </div>
+      <div class="field">
+        <label for="oppSummary">Summary</label>
+        <textarea id="oppSummary" rows="4"></textarea>
+      </div>
+      <div class="field">
+        <label for="oppEligibility">Eligibility</label>
+        <textarea id="oppEligibility" rows="2"></textarea>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="oppGradeMin">Grade min</label><input id="oppGradeMin" type="number" min="1" max="13"></div>
+        <div class="field"><label for="oppGradeMax">Grade max</label><input id="oppGradeMax" type="number" min="1" max="13"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="oppPrice">Price</label><input id="oppPrice" type="text" placeholder="Free / Paid"></div>
+        <div class="field"><label for="oppCost">Cost detail</label><input id="oppCost" type="text"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="oppLocation">Location</label><input id="oppLocation" type="text" placeholder="In-Person / Remote"></div>
+        <div class="field"><label for="oppState">State</label><input id="oppState" type="text" maxlength="2" placeholder="WA">
+          <div class="help">2-letter US code, or blank for national/online.</div></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="oppIntl">International</label><input id="oppIntl" type="text"></div>
+        <div class="field"><label for="oppSeason">Season</label><input id="oppSeason" type="text" placeholder="Summer"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="oppCategory">Category</label><input id="oppCategory" type="text">
+          <div class="help">Legacy free-text field, unvalidated. <span class="mono">type</span> above is the one that matters.</div></div>
+        <div class="field"><label for="oppSubjectTags">Subject tags</label><input id="oppSubjectTags" type="text" placeholder="Biology, Research">
+          <div class="help">Comma-separated.</div></div>
+      </div>
+      <div id="oppError" class="notice err hidden"></div>
+    </div>
+    <div class="modal-foot">
+      <a id="oppOpenLink" href="#" target="_blank" rel="noopener" class="btn btn-ghost">Open source ↗</a>
+      <div class="spacer"></div>
+      <button class="btn btn-primary" id="oppSave">Save changes</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="seedModal">
+  <div class="modal" style="max-width:620px">
+    <div class="modal-head">
+      <h2 id="seedModalTitle">Add search angle</h2>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" id="seedClose">Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="field-row">
+        <div class="field">
+          <label for="seedMode">Mode</label>
+          <select id="seedMode"><option value="national">National</option><option value="seattle">Seattle</option></select>
+        </div>
+        <div class="field">
+          <label for="seedCategory">Category</label>
+          <select id="seedCategory"></select>
+          <div class="help">Sets the fallback type on rows this angle finds.</div>
+        </div>
+      </div>
+      <div class="field">
+        <label for="seedAngle">Search angle</label>
+        <textarea id="seedAngle" rows="5" placeholder="e.g. national marine biology and oceanography research programs open to high schoolers"></textarea>
+        <div class="help">Written into the scraper's prompt as the specific thing this call should search for. Be concrete — vague angles return duplicates you already have.</div>
+      </div>
+      <div id="seedError" class="notice err hidden"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="seedDelete">Delete</button>
+      <div class="spacer"></div>
+      <button class="btn btn-primary" id="seedSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===========================================================================
+   State. `config` is fetched once (the static agent registry from server.py's
+   AGENT_CONFIGS_SCHEMA); everything else refreshes on a poll.
+=========================================================================== */
+const S = {
+  config: {}, status: {}, history: [], summary: null,
+  seeds: [], seedMode: 'national', seedSort: 'added_per_dollar',
+  userCosts: null, userCostSort: 'cost_usd', expandedUsers: new Set(), view: 'agents',
+  snapshots: [], pending: [], pendingSource: '', selectedPending: new Set(),
+  pendingStatus: 'queue', moderationReady: true, editingOpp: null,
+  duplicateTargets: {}, dupSubject: null, dupPick: null, dupTimer: null,
+  range: 30, modalAgent: null, logCursor: 0, logTimer: null, pollTimer: null,
+  editingSeed: null, expanded: new Set(),
+};
+
+const CATEGORIES = ['Program','Internship','Competition','Research','Volunteer','Journal','Conference'];
+const AGENT_COLOR = a => `var(--agent-${a}, var(--text-3))`;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function money(v)  {
+  if (v === null || v === undefined) return '—';
+  const n = Number(v);
+  // Precision keyed off MAGNITUDE, not the raw value: a negative margin is < 1 but
+  // reads as money, not as a sub-cent figure that needs four decimals.
+  const s = '$' + Math.abs(n).toFixed(Math.abs(n) < 1 ? 4 : 2);
+  return n < 0 ? '-' + s : s;
+}
+function num(v)    { return (v === null || v === undefined) ? '—' : Number(v).toLocaleString(); }
+function pct(v)    { return (v === null || v === undefined) ? '—' : (Number(v) * 100).toFixed(0) + '%'; }
+
+function duration(secs) {
+  if (secs === null || secs === undefined) return '—';
+  if (secs < 60) return secs.toFixed(0) + 's';
+  if (secs < 3600) return (secs / 60).toFixed(secs < 600 ? 1 : 0) + 'm';
+  return (secs / 3600).toFixed(1) + 'h';
+}
+function ago(iso) {
+  if (!iso) return 'never';
+  const d = (Date.now() - new Date(iso)) / 1000;
+  if (d < 60) return 'just now';
+  if (d < 3600) return Math.round(d / 60) + 'm ago';
+  if (d < 86400) return Math.round(d / 3600) + 'h ago';
+  return Math.round(d / 86400) + 'd ago';
+}
+// Time-of-day from a snapshot's stamp. Only shown for files whose NAME carries one:
+// a date-only snapshot resolves to midnight, and printing "00:00" would read as a real
+// run time rather than as "we don't know which run today this was".
+// getUTC* deliberately: the server tags the stamp as UTC to keep snapshots comparable,
+// but the agent wrote local time, so reading it back as UTC prints the same digits the
+// filename holds. Converting to browser-local would shift them away from the filename.
+function clock(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
+}
+function toast(msg) {
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3200);
+}
+function notice(msg) {
+  const el = $('globalNotice');
+  if (!msg) { el.classList.add('hidden'); return; }
+  el.textContent = msg; el.classList.remove('hidden');
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (_) { data = null; }
+  if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
+  return data;
+}
+
+/* ===========================================================================
+   Load + render
+=========================================================================== */
+async function loadConfig() {
+  const d = await api('/api/agents/config');
+  S.config = d.agents || {};
+  S.bounds = d.setting_bounds || null;
+  S.recommendedMinDelay = d.recommended_min_delay ?? 5;
+  const filter = $('logAgentFilter');
+  Object.entries(S.config).forEach(([k, c]) => {
+    const o = document.createElement('option');
+    o.value = k; o.textContent = c.name; filter.appendChild(o);
+  });
+  renderTiming();
+}
+
+async function refreshDashboard() {
+  try {
+    const [status, summary, history, billed, userCosts, snapshots, pending] = await Promise.all([
+      api('/api/agents/status'),
+      api(`/api/agents/summary?days=${S.range}`),
+      api(`/api/agents/history?days=${S.range}&limit=100`),
+      api(`/api/agents/billed?days=${S.range}`).catch(() => null),
+      api(`/api/agents/user-costs?days=${S.range}`).catch(() => null),
+      api('/api/agents/snapshots').catch(() => null),
+      // status=all fetches both slices at once — the queue and the already-rejected rows
+      // are split client-side, so switching tabs costs no round-trip.
+      api('/api/agents/pending?limit=2000&status=all').catch(() => null),
+    ]);
+    S.status = status; S.summary = summary; S.history = history; S.billed = billed;
+    S.userCosts = userCosts;
+    S.snapshots = (snapshots && snapshots.snapshots) || [];
+    S.pending = (pending && pending.opportunities) || [];
+    S.pendingSources = (pending && pending.sources) || [];
+    S.moderationReady = !pending || pending.moderation_ready !== false;
+    S.duplicateTargets = (pending && pending.duplicate_targets) || {};
+    notice('');
+    renderKPIs(); renderBilled(); renderUserCosts(); renderChart(); renderCards(); renderHistory();
+    renderSnapshots(); renderPending();
+    schedulePoll();
+  } catch (e) {
+    notice('Could not reach the agent API: ' + e.message);
+  }
+}
+
+/* Poll fast only while something is actually running. The previous console
+   polled every 3s forever, which is a lot of Supabase traffic for data that
+   changes at most once per run. */
+function schedulePoll() {
+  clearTimeout(S.pollTimer);
+  const running = Object.values(S.status).some(s => s.status === 'running');
+  S.pollTimer = setTimeout(refreshDashboard, running ? 3000 : 20000);
+}
+
+function renderKPIs() {
+  const c = S.summary.current, p = S.summary.previous;
+  const delta = (now, before, invert) => {
+    if (!before) return `<div class="delta flat">no prior period</div>`;
+    const change = ((now - before) / before) * 100;
+    const good = invert ? change < 0 : change > 0;
+    const cls = Math.abs(change) < 1 ? 'flat' : (good ? 'up' : 'down');
+    return `<div class="delta ${cls}">${change >= 0 ? '+' : ''}${change.toFixed(0)}% vs prior ${S.range}d</div>`;
+  };
+  // "Estimated spend", not "Spend" — this is computed from token counts, and it excludes
+  // anything a provider billed that we never saw (see the caveats strip below).
+  const tiles = [
+    ['Estimated spend', money(c.cost_usd),
+      `<div class="delta flat">${money(c.agent_cost_usd)} agents · ${money(c.app_cost_usd)} app</div>`],
+    ['Runs', num(c.runs),
+      c.dry_runs ? `<div class="delta flat">${c.dry_runs} dry run${c.dry_runs === 1 ? '' : 's'} (billed, changed nothing)</div>`
+                 : delta(c.runs, p.runs)],
+    ['Rows updated', num(c.rows_updated), delta(c.rows_updated, p.rows_updated)],
+    ['Rows created', num(c.rows_added), delta(c.rows_added, p.rows_added)],
+    ['Failed runs', `${c.failed_runs}<span style="font-size:15px;color:var(--text-3)">/${c.runs}</span>`,
+      `<div class="delta ${c.error_rate > 0.2 ? 'down' : 'flat'}">${pct(c.error_rate)} of runs</div>`],
+  ];
+  $('kpis').innerHTML = tiles.map(([l, v, d]) =>
+    `<div class="kpi"><div class="label">${l}</div><div class="value">${v}</div>${d}</div>`).join('');
+}
+
+function renderBilled() {
+  const b = S.billed, c = S.summary.current;
+  if (!b) { $('billedBody').innerHTML = '<div class="empty">Loading…</div>'; return; }
+
+  const provider = (label, d) => d.available
+    ? `<div class="kpi" style="box-shadow:none">
+         <div class="label">${label} — billed</div>
+         <div class="value">${money(d.cost_usd)}</div>
+         <div class="delta flat">actual, from the provider</div>
+       </div>`
+    : `<div class="kpi" style="box-shadow:none">
+         <div class="label">${label} — billed</div>
+         <div class="value" style="font-size:16px;color:var(--text-3)">Not available</div>
+         <div class="delta flat" style="line-height:1.5;margin-top:6px">${esc(d.reason)}
+           <br><a href="${d.dashboard_url}" target="_blank" rel="noopener">Open dashboard ↗</a></div>
+       </div>`;
+
+  const unknown = c.unknown_cost_runs
+    ? `<li><strong>${c.unknown_cost_runs} run${c.unknown_cost_runs === 1 ? '' : 's'}</strong> ended without reporting totals — their spend counts as $0 here.</li>` : '';
+
+  $('billedBody').innerHTML = `
+    <div class="kpis" style="margin-bottom:16px">
+      <div class="kpi" style="box-shadow:none">
+        <div class="label">Our estimate</div>
+        <div class="value">${money(b.estimated_total_usd)}</div>
+        <div class="delta flat">from token counts, both providers</div>
+      </div>
+      ${provider('Anthropic', b.anthropic)}
+      ${provider('Gemini', b.gemini)}
+    </div>
+    <div class="notice info" style="line-height:1.6">
+      <strong>Treat the estimate as a floor, not a total.</strong>
+      <ul style="margin:8px 0 0 18px;padding:0">
+        ${unknown}
+        <li>Cost is computed locally from token counts against fixed prices — it is not read from provider billing.</li>
+        <li>A client-side timeout still bills server-side; that spend is never captured here.</li>
+        <li>Dry runs are included in spend (they call the API at full cost) but excluded from rows changed.</li>
+      </ul>
+    </div>`;
+}
+
+/* ===========================================================================
+   Dry-run snapshots
+
+   A --dry-run pays full API price and writes nothing, which used to mean the
+   only way to act on its answer was to run the whole agent again and pay twice.
+   Committing the snapshot it already dumped applies those writes for free.
+=========================================================================== */
+function renderSnapshots() {
+  const rows = S.snapshots || [];
+  const body = $('snapshotBody');
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="6" class="empty">No snapshots on disk.</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(s => {
+    if (s.error) {
+      return `<tr><td>—</td><td>${esc(s.label || s.agent)}</td><td class="mono">${esc(s.file)}</td>
+              <td colspan="3" style="color:var(--danger)">${esc(s.error)}</td></tr>`;
+    }
+    const cfg = S.config[s.agent];
+    const stale = s.stale
+      ? ` <span class="pill warn" title="This snapshot is ${s.age_days} days old — the rows it describes may have changed since.">${s.age_days}d old</span>` : '';
+    const verb = s.kind === 'insert' ? 'insert' : 'update';
+    return `<tr>
+      <td style="white-space:nowrap">${esc(s.run_date || '—')}
+        ${s.has_time ? `<div class="hint mono">${esc(clock(s.ran_at))}</div>` : ''}${stale}</td>
+      <td><span style="display:inline-flex;align-items:center;gap:7px">
+        <span style="width:7px;height:7px;border-radius:2px;background:${AGENT_COLOR(s.agent)}"></span>
+        ${esc(cfg ? cfg.name : s.label)}</span></td>
+      <td class="mono" style="font-size:12px">${esc(s.file)}</td>
+      <td class="num mono">${num(s.entries)}</td>
+      <td class="num mono">${s.pending ? num(s.pending) : '—'}</td>
+      <td><button class="btn btn-sm" ${s.pending ? '' : 'disabled'}
+            onclick="previewSnapshot('${esc(s.file)}')">Commit&hellip;</button>
+          <span class="hint" style="margin-left:6px">would ${verb}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+/* Two-step on purpose: the preview resolves the real numbers (post-dedupe) from
+   the server and writes nothing, so the confirm shows what will actually happen
+   rather than the raw file count. */
+async function previewSnapshot(file) {
+  try {
+    const p = await api('/api/agents/snapshots/commit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file, preview: true }),
+    });
+    if (!p.applied) {
+      toast('Nothing left to apply in that snapshot.');
+      return;
+    }
+    const what = p.kind === 'insert'
+      ? `insert ${p.applied} new opportunit${p.applied === 1 ? 'y' : 'ies'} (inactive, pending review).`
+         + (p.skipped_duplicate ? `\n${p.skipped_duplicate} already in the catalog and will be skipped.` : '')
+      : `update ${p.applied} existing row${p.applied === 1 ? '' : 's'}.`;
+    if (!confirm(`Commit ${file}?\n\nThis will ${what}\n\nNo API calls are made — this costs nothing.`)) return;
+    const r = await api('/api/agents/snapshots/commit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file }),
+    });
+    toast(r.kind === 'insert'
+      ? `Inserted ${r.applied} row(s), skipped ${r.skipped_duplicate} duplicate(s).`
+      : `Updated ${r.applied} row(s).`);
+    if (r.errors) notice(`${r.errors} write(s) failed: ${(r.error_details || []).join(' | ')}`);
+    refreshDashboard();
+  } catch (e) {
+    notice('Commit failed: ' + e.message);
+  }
+}
+
+/* ===========================================================================
+   Review queue — the only place is_active is ever flipped to true.
+=========================================================================== */
+/* A NULL moderation_status is the scraper's (and every pre-migration row's) state and
+   means "never adjudicated" — it belongs in the queue, not in Rejected. Only an explicit
+   rejected/duplicate verdict leaves the queue. */
+const ADJUDICATED = ['rejected', 'duplicate'];
+const isAdjudicated = o => ADJUDICATED.includes(o.moderation_status);
+
+function pendingInStatus(status) {
+  return (S.pending || []).filter(o => status === 'rejected' ? isAdjudicated(o) : !isAdjudicated(o));
+}
+
+function renderPending() {
+  const inStatus = pendingInStatus(S.pendingStatus);
+  const rows = S.pendingSource ? inStatus.filter(o => o.source === S.pendingSource) : inStatus;
+  const queueTotal = pendingInStatus('queue').length;
+  const rejectedTotal = pendingInStatus('rejected').length;
+  // The nav badge counts work still to do, not every inactive row.
+  $('reviewTabCount').textContent = queueTotal ? num(queueTotal) : '';
+  $('queueCount').textContent = queueTotal ? num(queueTotal) : '';
+  $('rejectedCount').textContent = rejectedTotal ? num(rejectedTotal) : '';
+  $('moderationSetup').classList.toggle('hidden', S.moderationReady);
+  [...document.querySelectorAll('#pendingStatusTabs .tab')].forEach(t =>
+    t.classList.toggle('active', t.dataset.status === S.pendingStatus));
+
+  const sel = $('pendingSource');
+  if (sel.options.length <= 1 && (S.pendingSources || []).length) {
+    (S.pendingSources || []).forEach(x => {
+      const o = document.createElement('option');
+      o.value = x.source; o.textContent = `${x.source} (${x.count})`;
+      sel.appendChild(o);
+    });
+  }
+
+  const body = $('pendingBody');
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="7" class="empty">${S.pendingStatus === 'rejected'
+      ? 'Nothing has been rejected.' : 'Nothing waiting for review.'}</td></tr>`;
+    updateReviewButtons();
+    return;
+  }
+  body.innerHTML = rows.map(o => {
+    const on = S.selectedPending.has(o.id);
+    // Provenance and the submission-time hints matter most on a student submission:
+    // they are what a reviewer would otherwise have to open the database to see.
+    const flags = Array.isArray(o.quality_flags) ? o.quality_flags : [];
+    const dupes = Array.isArray(o.dup_candidates) ? o.dup_candidates : [];
+    const tags = [
+      o.submitted_by ? `<span class="pill info">from ${esc(o.submitted_by)}</span>` : '',
+      dupes.length ? `<span class="pill warn">${dupes.length} possible duplicate${dupes.length === 1 ? '' : 's'}</span>` : '',
+      ...flags.map(f => `<span class="pill warn">${esc(String(f).slice(0, 90))}</span>`),
+      isAdjudicated(o) ? `<span class="pill danger">${esc(o.moderation_status)}${o.reviewed_at ? ' ' + ago(o.reviewed_at) : ''}</span>` : '',
+      // A bare duplicate_of id means nothing to a reader; name the survivor.
+      o.duplicate_of ? `<span class="pill info">of ${esc((S.duplicateTargets[o.duplicate_of] || {}).name || o.duplicate_of)}</span>` : '',
+    ].filter(Boolean).join(' ');
+    return `<tr class="${on ? 'sel-row' : ''}">
+      <td><input type="checkbox" ${on ? 'checked' : ''} onchange="togglePending('${esc(o.id)}', this.checked)"></td>
+      <td><div>${esc(o.name || '(no name)')}</div>
+          ${o.summary ? `<div class="hint" style="margin-top:3px">${esc(String(o.summary).slice(0, 120))}</div>` : ''}
+          ${tags ? `<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px">${tags}</div>` : ''}</td>
+      <td>${esc(o.org || '—')}</td>
+      <td>${esc(o.type || '—')}</td>
+      <td class="mono" style="font-size:11.5px">${esc(o.source || '—')}</td>
+      <td style="white-space:nowrap;color:var(--text-2)">${ago(o.created_at)}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-sm" onclick="editOpportunity('${esc(o.id)}')">Edit</button>
+        ${isAdjudicated(o) ? '' : ` <button class="btn btn-sm" ${S.moderationReady ? '' : 'disabled'}
+          onclick="markDuplicate('${esc(o.id)}')">Duplicate</button>`}
+        ${o.url ? ` <a href="${esc(o.url)}" target="_blank" rel="noopener">Open ↗</a>` : ''}</td>
+    </tr>`;
+  }).join('');
+  updateReviewButtons();
+}
+
+function togglePending(id, on) {
+  if (on) S.selectedPending.add(id); else S.selectedPending.delete(id);
+  renderPending();
+}
+
+function updateReviewButtons() {
+  const n = S.selectedPending.size;
+  const rejected = S.pendingStatus === 'rejected';
+  const act = $('activateBtn'), rej = $('rejectBtn'), res = $('restoreBtn');
+  act.disabled = !n;
+  act.textContent = n ? `Activate ${n} selected` : 'Activate selected';
+  // Reject only makes sense on the queue; restore only on rows already rejected.
+  rej.classList.toggle('hidden', rejected);
+  res.classList.toggle('hidden', !rejected);
+  rej.disabled = !n || !S.moderationReady;
+  rej.title = S.moderationReady ? '' : 'Run user_submissions_schema.sql first.';
+  rej.textContent = n ? `Reject ${n} selected` : 'Reject selected';
+  res.disabled = !n;
+  res.textContent = n ? `Restore ${n} to queue` : 'Restore to queue';
+}
+
+async function moderateSelected(status) {
+  const ids = [...S.selectedPending];
+  if (!ids.length) return;
+  const many = ids.length === 1 ? 'this opportunity' : `these ${ids.length} opportunities`;
+  const msg = status === 'rejected'
+    ? `Reject ${many}?\n\nNothing is deleted — the row stays in the database so its URL keeps `
+      + `blocking re-submission, and it drops out of the queue. You can restore it from the `
+      + `Rejected tab.`
+    : `Put ${many} back in the review queue?`;
+  if (!confirm(msg)) return;
+  try {
+    const r = await api('/api/agents/pending/moderate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, status }),
+    });
+    toast(`${status === 'rejected' ? 'Rejected' : 'Restored'} ${r.moderated} `
+        + `opportunit${r.moderated === 1 ? 'y' : 'ies'}.`);
+    if (r.errors) notice(`${r.errors} failed: ${(r.error_details || []).join(' | ')}`);
+    S.selectedPending.clear();
+    refreshDashboard();
+  } catch (e) {
+    notice((status === 'rejected' ? 'Reject' : 'Restore') + ' failed: ' + e.message);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Editing a queued row.
+
+   The field map is the single source of truth for both directions: it fills the
+   modal and it builds the payload, so a field cannot be shown but not saved.
+   Keys must match server.py's EDITABLE_OPPORTUNITY_FIELDS — anything else is
+   refused there by name rather than silently dropped.
+--------------------------------------------------------------------------- */
+const OPP_FIELDS = {
+  name: 'oppName', org: 'oppOrg', type: 'oppType', url: 'oppUrl',
+  summary: 'oppSummary', eligibility: 'oppEligibility',
+  grade_min: 'oppGradeMin', grade_max: 'oppGradeMax',
+  price: 'oppPrice', cost: 'oppCost', location: 'oppLocation', state: 'oppState',
+  intl: 'oppIntl', season: 'oppSeason', category: 'oppCategory',
+  subject_tags: 'oppSubjectTags',
+};
+
+/* ---------------------------------------------------------------------------
+   Marking a row a duplicate of another.
+
+   Its own step rather than a status on the Reject button, because it is the one
+   verdict that needs a target — and a duplicate with no survivor is just a
+   rejection wearing a misleading label. The server refuses one without a target.
+--------------------------------------------------------------------------- */
+function markDuplicate(id) {
+  const o = (S.pending || []).find(x => x.id === id);
+  if (!o) return;
+  S.dupSubject = o; S.dupPick = null;
+  $('dupSubject').textContent = o.name || o.id;
+  $('dupSearch').value = '';
+  $('dupError').classList.add('hidden');
+
+  // dup_candidates is what url_dedupe already worked out at submission time, with its
+  // reason and confidence. Showing it first is the whole reason that column is stored.
+  const cands = Array.isArray(o.dup_candidates) ? o.dup_candidates : [];
+  $('dupSuggested').innerHTML = cands.length
+    ? `<div class="field"><label>Suggested by the dedupe check</label>
+       <div class="dup-list">${cands.map(c => dupOption(c, c.reason, c.confidence)).join('')}</div></div>`
+    : '';
+  $('dupResults').innerHTML = '';
+  updateDupBtn();
+  $('dupModal').classList.add('open');
+}
+
+function dupOption(row, reason, confidence) {
+  const bits = [row.org, row.is_active === false ? 'still queued' : null,
+                reason ? `${confidence || ''} — ${reason}`.trim() : null]
+    .filter(Boolean).map(esc).join(' · ');
+  return `<label class="dup-opt" data-id="${esc(row.id)}" onclick="pickDuplicate('${esc(row.id)}', this)">
+    <input type="radio" name="dupPick" ${S.dupPick === row.id ? 'checked' : ''}>
+    <span><span class="nm">${esc(row.name || row.id)}</span>
+      ${bits ? `<div class="sub">${bits}</div>` : ''}
+      <div class="sub mono">${esc(row.id)}${row.url ? ' · ' + esc(row.url) : ''}</div></span>
+  </label>`;
+}
+
+function pickDuplicate(id, el) {
+  S.dupPick = id;
+  [...document.querySelectorAll('#dupModal .dup-opt')].forEach(n =>
+    n.classList.toggle('on', n === el));
+  updateDupBtn();
+}
+
+function updateDupBtn() {
+  const btn = $('dupSave');
+  btn.disabled = !S.dupPick;
+  btn.textContent = S.dupPick ? 'Mark duplicate' : 'Pick a surviving row';
+}
+
+async function searchSurvivors(q) {
+  const box = $('dupResults');
+  if (q.trim().length < 2) { box.innerHTML = ''; return; }
+  try {
+    const r = await api(`/api/agents/opportunities/search?q=${encodeURIComponent(q)}&limit=25`);
+    const rows = (r.opportunities || []).filter(x => x.id !== (S.dupSubject || {}).id);
+    box.innerHTML = rows.length
+      ? rows.map(x => dupOption(x, null, null)).join('')
+      : `<div class="hint">${esc(r.note || 'Nothing matched.')}</div>`;
+  } catch (e) {
+    box.innerHTML = `<div class="hint">Search failed: ${esc(e.message)}</div>`;
+  }
+}
+
+async function saveDuplicate() {
+  const o = S.dupSubject;
+  if (!o || !S.dupPick) return;
+  try {
+    const r = await api('/api/agents/pending/moderate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [o.id], status: 'duplicate', duplicate_of: S.dupPick }),
+    });
+    if (!r.ok) throw new Error(r.error || 'Failed');
+    $('dupModal').classList.remove('open');
+    S.dupSubject = null; S.dupPick = null;
+    toast('Marked as a duplicate.');
+    refreshDashboard();
+  } catch (e) {
+    $('dupError').textContent = e.message;
+    $('dupError').classList.remove('hidden');
+  }
+}
+
+function editOpportunity(id) {
+  const o = (S.pending || []).find(x => x.id === id);
+  if (!o) return;
+  S.editingOpp = o;
+  $('oppType').innerHTML = ['', ...CATEGORIES].map(c =>
+    `<option value="${c}">${c || '(none)'}</option>`).join('');
+  Object.entries(OPP_FIELDS).forEach(([key, elId]) => {
+    const v = o[key];
+    $(elId).value = Array.isArray(v) ? v.join(', ') : (v === null || v === undefined ? '' : v);
+  });
+  $('oppId').textContent = o.id;
+  const link = $('oppOpenLink');
+  link.href = o.url || '#';
+  link.classList.toggle('hidden', !o.url);
+  $('oppError').classList.add('hidden');
+  $('oppModal').classList.add('open');
+}
+
+async function saveOpportunity() {
+  const o = S.editingOpp; if (!o) return;
+  const fields = {};
+  Object.entries(OPP_FIELDS).forEach(([key, elId]) => {
+    const raw = $(elId).value.trim();
+    const before = Array.isArray(o[key]) ? o[key].join(', ')
+                 : (o[key] === null || o[key] === undefined ? '' : String(o[key]));
+    // Send only what actually changed: a no-op PATCH would still bump updated_at and
+    // make a row look freshly touched in every other view.
+    if (raw !== before) fields[key] = raw;
+  });
+  if (!Object.keys(fields).length) { $('oppModal').classList.remove('open'); return; }
+  try {
+    const r = await api('/api/agents/pending/update', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: o.id, fields }),
+    });
+    // Patch the row in place rather than refetching the dashboard — the queue can be a
+    // couple of thousand rows and the selection would survive either way.
+    if (r.opportunity) Object.assign(o, r.opportunity);
+    $('oppModal').classList.remove('open');
+    S.editingOpp = null;
+    toast(`Updated ${r.updated.length} field${r.updated.length === 1 ? '' : 's'}.`);
+    renderPending();
+  } catch (e) {
+    $('oppError').textContent = e.message;
+    $('oppError').classList.remove('hidden');
+  }
+}
+
+async function activateSelected() {
+  const ids = [...S.selectedPending];
+  if (!ids.length) return;
+  if (!confirm(`Activate ${ids.length} opportunit${ids.length === 1 ? 'y' : 'ies'}?\n\n`
+             + (ids.length === 1 ? 'It becomes' : 'They become')
+             + ` visible to students in the app immediately.`)) return;
+  try {
+    const r = await api('/api/agents/pending/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, active: true }),
+    });
+    toast(`Activated ${r.activated} opportunit${r.activated === 1 ? 'y' : 'ies'}.`);
+    if (r.errors) notice(`${r.errors} failed: ${(r.error_details || []).join(' | ')}`);
+    S.selectedPending.clear();
+    refreshDashboard();
+  } catch (e) {
+    notice('Activation failed: ' + e.message);
+  }
+}
+
+/* ===========================================================================
+   Cost per user
+
+   The money shown here is the SAME money as the app half of "Estimated spend"
+   above, sliced by who triggered it — never added to it. The one number that is
+   genuinely new is the unattributed residual: calls that arrived with no userid
+   (signed-out visitors, anything pre-login). That is shown rather than hidden,
+   because an attribution rate is the only way to know how much of the split you
+   can actually trust.
+=========================================================================== */
+// "calls" counts only what was actually billed AND attributable — see the tooltip text.
+// Worth being explicit about, because the obvious reading (total app traffic) is wrong.
+const CALLS_TOOLTIP = "Billed, attributable calls only. Excludes mock-mode calls, calls from signed-out visitors, cached deadline checks, and calls that errored before returning — note an errored or timed-out call can still bill server-side, so treat this as a floor.";
+
+const FEATURE_COLORS = ['#E8833A','#4C8DF6','#3FB27F','#B565D8','#E4B429','#E05C6E',
+                        '#38A8B8','#8A8FA3','#C4795A','#6D74C9','#5FA855','#A8A0B8'];
+const featureColor = i => FEATURE_COLORS[i % FEATURE_COLORS.length];
+
+// Providers get FIXED colours, not positional ones like features: this palette has to
+// mean the same thing every render, or a provider that overtakes the other one swaps
+// colours mid-session and the bar silently reads backwards.
+const PROVIDER_COLORS = { anthropic: '#D97757', google: '#4C8DF6', unknown: '#8A8FA3' };
+const providerColor = k => PROVIDER_COLORS[k] || PROVIDER_COLORS.unknown;
+
+function planPill(status) {
+  const map = {
+    active:   ['ok',     'Pro'],
+    trial:    ['info',   'Trial'],
+    expired:  ['warn',   'Expired'],
+    canceled: ['warn',   'Canceled'],
+    cancelled:['warn',   'Canceled'],
+  };
+  const [cls, label] = map[status] || ['', status || 'unknown'];
+  return `<span class="pill ${cls}">${esc(label)}</span>`;
+}
+
+const VIEW_SUBTITLE = {
+  agents: 'Background agents that maintain the Wingman opportunity catalog',
+  users:  'What each user\u2019s own activity costs, against the plan they pay for',
+  review: 'Scraped opportunities waiting on a human before students can see them',
+};
+
+function showView(view) {
+  S.view = view;
+  document.querySelectorAll('#viewTabs .vtab').forEach(
+    t => t.classList.toggle('active', t.dataset.view === view));
+  document.querySelectorAll('.view').forEach(
+    v => v.classList.toggle('hidden', v.id !== 'view-' + view));
+  $('viewSubtitle').textContent = VIEW_SUBTITLE[view] || '';
+  window.scrollTo({ top: 0 });
+}
+
+function renderUserCosts() {
+  const d = S.userCosts;
+  const summaryEl = $('userCostSummary'), bodyEl = $('userCostBody');
+  if (!d) {
+    summaryEl.innerHTML = '<div class="empty">Could not load per-user costs.</div>';
+    bodyEl.innerHTML = '<tr><td colspan="8" class="empty">Unavailable.</td></tr>';
+    return;
+  }
+  if (!d.table_ready) {
+    // One un-run migration should read as a setup step, not as a broken page.
+    summaryEl.innerHTML = `<div class="notice" style="line-height:1.6">
+      <strong>Per-user attribution is not switched on yet.</strong>
+      Run <span class="mono">${esc(d.setup_sql_file || 'user_costs_schema.sql')}</span> once in the
+      Supabase SQL editor, then restart the server. Until then every interactive call is still
+      costed in the totals above — it just isn't attributed to anyone.
+    </div>`;
+    bodyEl.innerHTML = '<tr><td colspan="8" class="empty">Waiting on the user_costs table.</td></tr>';
+    $('userCostTableWrap').classList.add('hidden');
+    return;
+  }
+  $('userCostTableWrap').classList.remove('hidden');
+
+  const t = d.totals, price = d.price_per_month_usd;
+  // Blank rather than "$0.0000" before any spend is attributed — a zero badge reads as
+  // a broken tab, not as an empty one.
+  $('userTabCount').textContent = t.attributed_cost_usd ? money(t.attributed_cost_usd) : '';
+  const overPlan = t.users_over_plan;
+  const tiles = [
+    ['Attributed to users', money(t.attributed_cost_usd),
+      `<div class="delta flat">${pct(t.attribution_rate)} of ${money(t.interactive_total_usd)} app spend</div>`],
+    ['Unattributed', money(t.unattributed_cost_usd),
+      `<div class="delta flat">calls with no signed-in user</div>`],
+    ['Active users', num(t.active_users),
+      `<div class="delta flat" title="${CALLS_TOOLTIP}">${num(t.calls)} billed calls · ${num(t.web_searches)} searches</div>`],
+    ['Avg cost / user', money(t.avg_cost_per_user),
+      `<div class="delta flat">worst ${money(t.max_cost_per_user)} · plan ${money(price)}</div>`],
+    ['Over plan price', `${overPlan}<span style="font-size:15px;color:var(--text-3)">/${t.active_users}</span>`,
+      `<div class="delta ${overPlan ? 'down' : 'flat'}">cost more than ${money(price)} of AI</div>`],
+  ];
+
+  const feats = d.features || [];
+  const featTotal = feats.reduce((a, f) => a + f.cost_usd, 0);
+  const bar = featTotal > 0 ? `
+    <div style="margin-top:4px">
+      <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;border:1px solid var(--border)">
+        ${feats.map((f, i) => `<div title="${esc(f.label)}: ${money(f.cost_usd)} over ${num(f.calls)} calls"
+             style="width:${(f.cost_usd / featTotal * 100).toFixed(2)}%;background:${featureColor(i)}"></div>`).join('')}
+      </div>
+      <div class="legend" style="margin-top:10px">
+        ${feats.map((f, i) => `<span class="item">
+           <span class="swatch" style="background:${featureColor(i)}"></span>
+           ${esc(f.label)} <span class="mono" style="color:var(--text-3)">${money(f.cost_usd)}</span>
+         </span>`).join('')}
+      </div>
+    </div>` : '<div class="empty">No attributed spend in this window yet.</div>';
+
+  summaryEl.innerHTML = `
+    <div class="kpis" style="margin-bottom:16px">
+      ${tiles.map(([l, v, sub]) => `<div class="kpi" style="box-shadow:none">
+        <div class="label">${l}</div><div class="value">${v}</div>${sub}</div>`).join('')}
+    </div>
+    ${providerBlock(d)}
+    <div class="hint" style="margin-bottom:8px">Where the attributed money went, by feature</div>
+    ${bar}
+    <div class="notice info" style="margin-top:16px;line-height:1.6">
+      This is the <strong>same money</strong> as the app half of estimated spend on the Agents tab,
+      split by who triggered it — never additional spend. ${money(t.unattributed_cost_usd)} could not be attributed
+      because those calls carried no signed-in user. Cached deadline checks are not charged to anyone:
+      they make no API call, so only the user who paid to populate the cache is billed for it.
+    </div>`;
+
+  renderUserCostRows();
+}
+
+function renderUserCostRows() {
+  const d = S.userCosts;
+  const bodyEl = $('userCostBody');
+  if (!d || !d.table_ready) return;
+  const key = S.userCostSort;
+  const rows = [...(d.users || [])].sort((a, b) => {
+    if (key === 'last_at') return String(b.last_at || '').localeCompare(String(a.last_at || ''));
+    return (b[key] || 0) - (a[key] || 0);
+  });
+  if (!rows.length) {
+    bodyEl.innerHTML = '<tr><td colspan="8" class="empty">No attributed usage in this window.</td></tr>';
+    return;
+  }
+  const price = d.price_per_month_usd;
+  bodyEl.innerHTML = rows.map(u => {
+    const open = S.expandedUsers.has(u.userid);
+    const over = u.cost_usd > price;
+    const label = u.name ? `${esc(u.name)} <span style="color:var(--text-3)">· ${esc(u.userid)}</span>`
+                         : esc(u.userid);
+    const orphan = u.known_account ? ''
+      : ' <span class="pill warn" title="Spend is attributed to this userid but no matching row exists in the users table.">no account</span>';
+    const main = `<tr class="clickable" onclick="toggleUserCost('${esc(u.userid).replace(/'/g, "\\'")}')">
+      <td>${label}${orphan}</td>
+      <td>${planPill(u.subscription_status)}</td>
+      <td class="num mono">${num(u.calls)}</td>
+      <td class="num mono">${u.web_searches ? num(u.web_searches) : '—'}</td>
+      <td class="num mono" ${over ? 'style="color:var(--danger);font-weight:600"' : ''}>${money(u.cost_usd)}</td>
+      <td class="num mono">${money(u.cost_per_call)}</td>
+      <td class="num mono" ${over ? 'style="color:var(--danger)"' : ''}>${pct(u.pct_of_plan)}</td>
+      <td style="white-space:nowrap;color:var(--text-2)">${ago(u.last_at)}</td>
+    </tr>`;
+    if (!open) return main;
+
+    const feats = Object.entries(u.features || {})
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => [FEATURE_LABEL(k), money(v)]);
+    const surfaces = Object.entries(u.surfaces || {})
+      .map(([k, v]) => [SURFACE_LABEL(k), money(v)]);
+    const provs = Object.entries(u.providers || {})
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => [PROVIDER_LABEL(k), money(v)]);
+    // Model id verbatim — this is the string that has to match an invoice line, so it is
+    // deliberately not prettified into a marketing name.
+    const usedModels = (u.models || []).map(m =>
+      [`${PROVIDER_LABEL(m.provider)} · ${m.model || '(untracked model)'}`,
+       `${money(m.cost_usd)} · ${num(m.calls)} calls`]);
+    const details = [
+      ['Email', u.email || '—'],
+      ['Plan', u.subscription_status],
+      ['Trial ends', u.trial_ends_at ? new Date(u.trial_ends_at).toLocaleDateString() : '—'],
+      ['Margin vs plan', money(u.margin_usd)],
+      ['Input tokens', num(u.input_tokens)],
+      ['Output tokens', num(u.output_tokens)],
+      ['First seen', u.first_at ? new Date(u.first_at).toLocaleString() : '—'],
+      ...provs, ...usedModels, ...surfaces, ...feats,
+    ];
+    const warn = u.cost_usd > price
+      ? `<div class="notice" style="margin-top:12px">This account has used ${money(u.cost_usd)} of AI
+         against a ${money(price)} plan — inference alone is ${pct(u.pct_of_plan)} of the price,
+         before Stripe fees or anything else.</div>` : '';
+    return main + `<tr class="detail-row"><td colspan="8">
+      <div class="detail-grid">${details.map(([k, v]) =>
+        `<div class="d"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
+      ${warn}</td></tr>`;
+  }).join('');
+}
+
+/* Which vendor is billing, and for which model. `surface` (gemini / claude /
+   deadline_check) answers a different question — where in the app the call came from —
+   and the two only coincide while every surface stays on one provider. This block reads
+   off the model id that was actually sent, so it stays right when they diverge. */
+function providerBlock(d) {
+  const provs = d.providers || [], models = d.models || [];
+  if (!provs.length) return '';
+  const total = provs.reduce((a, p) => a + p.cost_usd, 0);
+  if (total <= 0) return '';
+
+  const stale = d.model_ready === false ? `
+    <div class="notice" style="margin:0 0 12px;line-height:1.6">
+      The <span class="mono">user_costs</span> table has no <span class="mono">model</span>
+      column yet, so spend is split by provider only. Re-run
+      <span class="mono">${esc(d.setup_sql_file || 'user_costs_schema.sql')}</span> in the
+      Supabase SQL editor to break it out by model — the totals are already correct either way.
+    </div>` : '';
+
+  const split = `
+    <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;border:1px solid var(--border)">
+      ${provs.map(p => `<div title="${esc(p.label)}: ${money(p.cost_usd)} over ${num(p.calls)} calls"
+           style="width:${(p.cost_usd / total * 100).toFixed(2)}%;background:${providerColor(p.key)}"></div>`).join('')}
+    </div>
+    <div class="legend" style="margin-top:10px">
+      ${provs.map(p => `<span class="item">
+         <span class="swatch" style="background:${providerColor(p.key)}"></span>
+         ${esc(p.label)} <span class="mono" style="color:var(--text-3)">${money(p.cost_usd)}</span>
+         <span style="color:var(--text-3)">· ${pct(p.cost_usd / total)}</span>
+       </span>`).join('')}
+    </div>`;
+
+  const rows = models.map(m => `<tr>
+      <td><span class="swatch" style="background:${providerColor(m.provider)};margin-right:8px"></span>${esc(m.provider_label)}</td>
+      <td class="mono">${esc(m.model)}</td>
+      <td class="num mono">${num(m.users)}</td>
+      <td class="num mono" title="${CALLS_TOOLTIP}">${num(m.calls)}</td>
+      <td class="num mono">${num(m.input_tokens)}</td>
+      <td class="num mono">${num(m.output_tokens)}</td>
+      <td class="num mono">${m.web_searches ? num(m.web_searches) : '—'}</td>
+      <td class="num mono">${money(m.cost_per_call)}</td>
+      <td class="num mono">${money(m.cost_usd)}</td>
+      <td class="num mono">${pct(m.cost_usd / total)}</td>
+    </tr>
+    <tr class="detail-row"><td colspan="10" style="padding-top:0">
+      <span class="hint">${(m.features || []).map(f =>
+        `${esc(f.label)} <span class="mono">${money(f.cost_usd)}</span>`).join(' &nbsp;·&nbsp; ') || 'no feature detail'}</span>
+    </td></tr>`).join('');
+
+  return `${stale}
+    <div class="hint" style="margin-bottom:8px">Who is billing for it, by provider</div>
+    ${split}
+    <div class="hint" style="margin:16px 0 8px">…and by model</div>
+    <div class="tbl-wrap" style="margin-bottom:20px">
+      <table>
+        <thead><tr>
+          <th>Provider</th><th>Model</th>
+          <th class="num">Users</th>
+          <th class="num" title="Billed, attributable calls only.">Billed&nbsp;calls</th>
+          <th class="num">In&nbsp;tokens</th><th class="num">Out&nbsp;tokens</th>
+          <th class="num">Searches</th><th class="num">Cost&nbsp;/&nbsp;call</th>
+          <th class="num">Cost</th><th class="num">Share</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+const PROVIDER_LABEL = k => ((S.userCosts && S.userCosts.providers) || [])
+  .reduce((acc, p) => p.key === k ? p.label : acc, k);
+
+const FEATURE_LABEL = k => ((S.userCosts && S.userCosts.features) || [])
+  .reduce((acc, f) => f.key === k ? f.label : acc, k);
+const SURFACE_LABEL = k => ({ gemini: 'Gemini spend', claude: 'Claude spend',
+                              deadline_check: 'Deadline checks' }[k] || k);
+
+function toggleUserCost(userid) {
+  if (S.expandedUsers.has(userid)) S.expandedUsers.delete(userid);
+  else S.expandedUsers.add(userid);
+  renderUserCostRows();
+}
+
+/* Stacked per-day cost bars. Hand-rolled SVG: this file ships no JS
+   dependencies and has no build step, so a charting CDN would be the only
+   external runtime dependency in the whole console. */
+function renderChart() {
+  const series = S.summary.series || [];
+  const keys = Object.keys(S.config);
+  const W = 1000, H = 200, padL = 46, padR = 8, padB = 22, padT = 10;
+  const innerW = W - padL - padR, innerH = H - padB - padT;
+
+  const dayTotal = d => keys.reduce((sum, k) => sum + ((d.agents[k] || {}).cost_usd || 0), 0);
+  const max = Math.max(0.01, ...series.map(dayTotal));
+  const bw = Math.max(2, (innerW / Math.max(series.length, 1)) - 2);
+
+  let svg = '';
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + innerH - (innerH * i / 4);
+    svg += `<line class="grid-line" x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}"/>`;
+    svg += `<text class="axis-label" x="${padL - 6}" y="${y + 3}" text-anchor="end">$${(max * i / 4).toFixed(2)}</text>`;
+  }
+  series.forEach((d, i) => {
+    const x = padL + (innerW * i / Math.max(series.length, 1)) + 1;
+    let y = padT + innerH;
+    keys.forEach(k => {
+      const cost = (d.agents[k] || {}).cost_usd || 0;
+      if (!cost) return;
+      const h = (cost / max) * innerH;
+      y -= h;
+      svg += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${AGENT_COLOR(k)}" rx="1">`
+           + `<title>${d.date} · ${S.config[k].name}: ${money(cost)}</title></rect>`;
+    });
+    const step = Math.ceil(series.length / 8);
+    if (i % step === 0) {
+      svg += `<text class="axis-label" x="${(x + bw / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle">${d.date.slice(5)}</text>`;
+    }
+  });
+  const chart = $('costChart');
+  chart.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  chart.innerHTML = svg;
+
+  $('chartLegend').innerHTML = keys.map(k => {
+    const t = S.summary.by_agent[k] || {};
+    return `<div class="item"><span class="swatch" style="background:${AGENT_COLOR(k)}"></span>`
+         + `${esc(S.config[k].name)} <span class="mono" style="color:var(--text-3)">${money(t.cost_usd)}</span></div>`;
+  }).join('');
+  const nonZero = series.filter(d => dayTotal(d) > 0).length;
+  $('chartHint').textContent = `${nonZero} active day${nonZero === 1 ? '' : 's'} in the last ${S.range}`;
+}
+
+function sparkline(values) {
+  if (!values.length) return '';
+  const W = 100, H = 34, max = Math.max(...values, 0.0001);
+  const step = values.length > 1 ? W / (values.length - 1) : W;
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(H - 2 - (v / max) * (H - 6)).toFixed(1)}`);
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">`
+       + `<polyline points="${pts.join(' ')}" fill="none" stroke="var(--c)" stroke-width="1.6"`
+       + ` vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
+}
+
+function renderCards() {
+  $('agentCards').innerHTML = Object.entries(S.config).map(([key, cfg]) => {
+    const s = S.status[key] || {};
+    const runs = S.history.filter(h => h.agent === key && h.cost_usd !== null).slice(0, 12).reverse();
+    const spark = sparkline(runs.map(r => Number(r.cost_usd)));
+    const isScraper = cfg.unit === 'seeds';
+
+    const statePill = {
+      running: '<span class="pill info">Running</span>',
+      error: '<span class="pill danger">Last run failed</span>',
+      interrupted: '<span class="pill warn">Interrupted</span>',
+      idle: '<span class="pill">Idle</span>',
+    }[s.status] || '<span class="pill">Idle</span>';
+
+    const silent = (s.silent_search_count || 0) > 0 && cfg.uses_gemini_search
+      ? `<span class="pill warn" title="The model answered from training data without searching on ${s.silent_search_count} item(s) — those were not verified live.">${s.silent_search_count} unverified</span>` : '';
+
+    const metrics = isScraper
+      ? [['Seeds', num(s.items_processed)], ['Created', num(s.items_added)], ['Cost', money(s.cost_usd)]]
+      : [['Rows', num(s.items_processed)], ['Updated', num(s.items_updated)], ['Cost', money(s.cost_usd)]];
+
+    return `<div class="agent-card" style="--c:${AGENT_COLOR(key)}">
+      <div class="accentbar"></div>
+      <div class="inner">
+        <h3><span class="dot ${s.status || 'idle'}"></span>${esc(cfg.name)}</h3>
+        <div class="desc">${esc(cfg.description || '')}</div>
+        <div class="api">${esc(cfg.api || '')}</div>
+        <div class="metrics">${metrics.map(([l, v]) =>
+          `<div class="metric"><div class="m-label">${l}</div><div class="m-value">${v}</div></div>`).join('')}</div>
+        ${spark ? `<div title="Cost of the last ${runs.length} runs">${spark}</div>` : ''}
+        <div class="foot">
+          ${statePill}${silent}
+          <div class="spacer"></div>
+          <span class="hint" style="font-size:11.5px;color:var(--text-3)">${ago(s.last_run)}</span>
+        </div>
+        ${s.error ? `<div class="notice err" style="font-size:11.5px">${esc(String(s.error).slice(0, 220))}</div>` : ''}
+        <button class="btn btn-primary btn-sm" style="width:100%" onclick="openRun('${key}')">Configure &amp; run</button>
+      </div></div>`;
+  }).join('');
+}
+
+function renderHistory() {
+  const agent = $('logAgentFilter').value, status = $('logStatusFilter').value;
+  const rows = S.history.filter(r => (!agent || r.agent === agent) && (!status || r.status === status));
+  if (!rows.length) {
+    $('historyBody').innerHTML = '<tr><td colspan="10" class="empty">No runs match these filters.</td></tr>';
+    return;
+  }
+  const badge = {
+    success: '<span class="pill ok">Success</span>',
+    failed: '<span class="pill danger">Failed</span>',
+    running: '<span class="pill info">Running</span>',
+    interrupted: '<span class="pill warn">Interrupted</span>',
+  };
+  $('historyBody').innerHTML = rows.map(r => {
+    const open = S.expanded.has(r.id);
+    const main = `<tr class="clickable" onclick="toggleRun(${r.id})">
+      <td><span style="display:inline-flex;align-items:center;gap:7px">
+        <span style="width:7px;height:7px;border-radius:2px;background:${AGENT_COLOR(r.agent)}"></span>
+        ${esc(r.name)}${r.known_agent ? '' : ' <span class="pill" title="This agent has no console card — it comes from another script that writes to agent_runs.">external</span>'}
+      </span></td>
+      <td>${badge[r.status] || r.status}${r.dry_run ? ' <span class="pill" title="Called the API at full cost but wrote nothing to the database.">dry</span>' : ''}</td>
+      <td class="mono" style="font-size:12px">${esc(r.mode || '—')}</td>
+      <td class="num mono">${num(r.items_processed)}</td>
+      <td class="num mono">${r.items_updated ? num(r.items_updated) : '—'}</td>
+      <td class="num mono">${r.items_added ? num(r.items_added) : '—'}</td>
+      <td class="num mono" ${r.errors ? 'style="color:var(--danger)"' : ''}>${r.errors || '—'}</td>
+      <td class="num mono" ${r.cost_usd === null ? 'style="color:var(--warn)" title="This run ended without reporting its cost — money was spent but the amount is unknown."' : ''}>${r.cost_usd === null ? 'unknown' : money(r.cost_usd)}</td>
+      <td class="num mono">${duration(r.duration_seconds)}</td>
+      <td style="white-space:nowrap;color:var(--text-2)">${ago(r.finished_at || r.started_at)}</td>
+    </tr>`;
+    if (!open) return main;
+    const d = [
+      ['Run id', r.id], ['Unit', r.unit], ['Started', r.started_at], ['Finished', r.finished_at || '—'],
+      ['Web searches', num(r.total_web_searches)],
+      ['Unverified (no search)', num(r.silent_search_count)],
+      ['Cost per item', r.items_processed ? money(r.cost_usd / r.items_processed) : '—'],
+    ];
+    const warn = r.status === 'interrupted'
+      ? `<div class="notice" style="margin-top:12px">This run never reported its totals — the process ended mid-pass, so its cost and item counts are understated.</div>` : '';
+    const silent = (r.silent_search_count || 0) > 0
+      ? `<div class="notice" style="margin-top:12px">${r.silent_search_count} item(s) were answered from training data without a live search, yet still stamped as freshly checked.</div>` : '';
+    return main + `<tr class="detail-row"><td colspan="10">
+      <div class="detail-grid">${d.map(([k, v]) => `<div class="d"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
+      ${r.notes ? `<div class="d" style="margin-top:12px"><div class="k">Notes</div><div class="v">${esc(r.notes)}</div></div>` : ''}
+      ${warn}${silent}</td></tr>`;
+  }).join('');
+}
+function toggleRun(id) { S.expanded.has(id) ? S.expanded.delete(id) : S.expanded.add(id); renderHistory(); }
+
+/* The delay/timeout cells are live inputs. Edits save per agent and become the values
+   every new run modal prefills, so this table is the place to change an agent's timing
+   permanently rather than per-run. */
+function renderTiming() {
+  const bounds = S.bounds || { min_delay: [0, 300], timeout: [10, 1800] };
+  $('timingBody').innerHTML = Object.entries(S.config).map(([k, c]) => {
+    const builtin = c.builtin_defaults || {};
+    const cell = (field, value) => {
+      const changed = builtin[field] !== undefined && Number(value) !== Number(builtin[field]);
+      const [lo, hi] = bounds[field] || [0, 9999];
+      return `<td class="num">
+        <span class="timing-cell">
+          <input class="timing-input mono ${changed ? 'changed' : ''}" type="number"
+                 id="t-${k}-${field}" value="${value}" min="${lo}" max="${hi}"
+                 step="${field === 'min_delay' ? '0.5' : '10'}"
+                 onchange="saveTiming('${k}','${field}',this.value)"
+                 title="${changed ? `Changed from the built-in default of ${builtin[field]}s` : 'Built-in default'}"><span class="unit">s</span>
+          ${changed ? `<button class="reset-btn" title="Reset to built-in default (${builtin[field]}s)"
+                 onclick="saveTiming('${k}','${field}',null)">reset</button>` : ''}
+        </span></td>`;
+    };
+    const slow = Number(c.defaults.min_delay) < (S.recommendedMinDelay ?? 5);
+    return `<tr>
+      <td><span style="display:inline-flex;align-items:center;gap:7px">
+        <span style="width:7px;height:7px;border-radius:2px;background:${AGENT_COLOR(k)}"></span>${esc(c.name)}</span>
+        ${slow ? `<div><span class="pill danger" title="Below the delay that resolved past HTTP 429 rate limiting.">429 risk</span></div>` : ''}
+      </td>
+      <td class="mono" style="font-size:12px">${esc(c.api || '—')}</td>
+      ${cell('min_delay', c.defaults.min_delay)}
+      ${cell('timeout', c.defaults.timeout)}
+      <td>${c.uses_gemini_search ? '<span class="pill warn">Shared — one at a time</span>' : '<span class="pill">Independent</span>'}</td>
+      <td>${c.writes === 'inserts' ? 'Creates new rows' : 'Updates existing rows'}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function saveTiming(agent, field, value) {
+  try {
+    const d = await api(`/api/agents/settings/${agent}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [field]: value === null ? null : Number(value) }),
+    });
+    S.config[agent].defaults = d.defaults;
+    renderTiming();
+    const label = field === 'min_delay' ? 'Delay' : 'Timeout';
+    toast(value === null
+      ? `${label} reset to default (${d.defaults[field]}s)`
+      : `${S.config[agent].name}: ${label.toLowerCase()} set to ${d.defaults[field]}s`);
+    if (field === 'min_delay' && Number(d.defaults[field]) < (S.recommendedMinDelay ?? 5)) {
+      toast(`Warning: ${d.defaults[field]}s is below the ${S.recommendedMinDelay ?? 5}s floor that fixed past HTTP 429s`);
+    }
+  } catch (e) {
+    toast('Could not save: ' + e.message);
+    renderTiming();   // snap the input back to the stored value
+  }
+}
+
+/* ===========================================================================
+   Scraper angles
+=========================================================================== */
+async function loadSeeds() {
+  try {
+    const d = await api('/api/seeds');
+    S.seeds = d.seeds || [];
+    renderSeeds();
+  } catch (e) {
+    $('seedBody').innerHTML = `<tr><td colspan="10" class="empty">
+      Could not load angles: ${esc(e.message)}<br>
+      <span style="font-size:12px">Run <span class="mono">scraper_seeds_schema.sql</span> in the Supabase SQL editor,
+      then <span class="mono">python migrate_seeds_to_supabase.py</span>.</span></td></tr>`;
+  }
+}
+
+function renderSeeds() {
+  const rows = S.seeds.filter(s => s.mode === S.seedMode).sort((a, b) => {
+    const k = S.seedSort;
+    const av = a[k], bv = b[k];
+    if (av === null || av === undefined) return 1;
+    if (bv === null || bv === undefined) return -1;
+    return bv - av;
+  });
+  if (!rows.length) {
+    $('seedBody').innerHTML = `<tr><td colspan="10" class="empty">No ${S.seedMode} angles yet.</td></tr>`;
+    return;
+  }
+  $('seedBody').innerHTML = rows.map(s => `<tr class="${s.is_enabled ? '' : 'disabled-seed'}">
+    <td><label class="switch"><input type="checkbox" ${s.is_enabled ? 'checked' : ''}
+      onchange="toggleSeed(${s.id}, this.checked)"><span class="track"></span></label></td>
+    <td><span class="pill">${esc(s.category)}</span></td>
+    <td class="seed-angle"><div class="txt" onclick="editSeed(${s.id})" title="Click to edit">${esc(s.angle)}</div></td>
+    <td class="num mono">${num(s.total_runs)}</td>
+    <td class="num mono">${num(s.total_found)}</td>
+    <td class="num mono" ${s.total_added ? 'style="color:var(--ok);font-weight:600"' : ''}>${num(s.total_added)}</td>
+    <td class="num mono">${pct(s.dupe_rate)}</td>
+    <td class="num mono">${money(s.total_cost)}</td>
+    <td class="num mono" ${s.added_per_dollar === 0 ? 'style="color:var(--danger)"' : ''}>${s.added_per_dollar === null ? '—' : s.added_per_dollar}</td>
+    <td class="num"><button class="btn btn-ghost btn-sm" onclick="editSeed(${s.id})">Edit</button></td>
+  </tr>`).join('');
+}
+
+async function toggleSeed(id, enabled) {
+  try {
+    await api(`/api/seeds/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_enabled: enabled }) });
+    const s = S.seeds.find(x => x.id === id); if (s) s.is_enabled = enabled;
+    renderSeeds();
+    toast(enabled ? 'Angle enabled' : 'Angle disabled — it will be skipped on the next run');
+  } catch (e) { toast('Could not update: ' + e.message); loadSeeds(); }
+}
+
+function openSeedModal(seed) {
+  S.editingSeed = seed;
+  $('seedModalTitle').textContent = seed ? 'Edit search angle' : 'Add search angle';
+  $('seedCategory').innerHTML = CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('');
+  $('seedMode').value = seed ? seed.mode : S.seedMode;
+  $('seedCategory').value = seed ? seed.category : 'Program';
+  $('seedAngle').value = seed ? seed.angle : '';
+  $('seedDelete').classList.toggle('hidden', !seed);
+  $('seedError').classList.add('hidden');
+  $('seedModal').classList.add('open');
+}
+function editSeed(id) { openSeedModal(S.seeds.find(s => s.id === id)); }
+
+async function saveSeed() {
+  const payload = {
+    mode: $('seedMode').value, category: $('seedCategory').value,
+    angle: $('seedAngle').value.trim(),
+  };
+  if (!payload.angle) {
+    $('seedError').textContent = 'The search angle cannot be empty.';
+    $('seedError').classList.remove('hidden'); return;
+  }
+  try {
+    if (S.editingSeed) {
+      await api(`/api/seeds/${S.editingSeed.id}`, { method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    } else {
+      await api('/api/seeds', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    }
+    $('seedModal').classList.remove('open');
+    toast(S.editingSeed ? 'Angle updated' : 'Angle added');
+    loadSeeds();
+  } catch (e) {
+    $('seedError').textContent = e.message; $('seedError').classList.remove('hidden');
+  }
+}
+
+async function deleteSeed() {
+  const s = S.editingSeed; if (!s) return;
+  const yieldNote = s.total_runs
+    ? `\n\nIt has ${s.total_runs} run(s) of yield history (${s.total_added} rows added for ${money(s.total_cost)}) which will be lost.`
+    : '';
+  if (!confirm(`Delete this angle permanently?${yieldNote}\n\nDisabling it instead keeps the history and simply skips it on future runs.`)) return;
+  try {
+    await api(`/api/seeds/${s.id}`, { method: 'DELETE' });
+    $('seedModal').classList.remove('open');
+    toast('Angle deleted'); loadSeeds();
+  } catch (e) {
+    $('seedError').textContent = e.message; $('seedError').classList.remove('hidden');
+  }
+}
+
+/* ===========================================================================
+   Run modal
+   Field ids here must match what server.py's build_agent_args() reads —
+   it maps them onto each script's real argparse flags.
+=========================================================================== */
+const SCOPE_FIELDS = {
+  metadata: () => `
+    <div class="field">
+      <label for="cfgScope">Scope</label>
+      <select id="cfgScope" onchange="onScopeChange()">
+        <option value="all">All active rows</option>
+        <option value="sample" selected>Random sample</option>
+      </select>
+      <div class="help">Refreshes name, org, summary, eligibility, pricing and similar fields. Never touches deadlines or review status.</div>
+    </div>
+    <div class="field" id="sampleWrap">
+      <label for="cfgSampleSize">Sample size</label>
+      <input type="number" id="cfgSampleSize" value="25" min="1" max="2000">
+    </div>
+    <div class="field">
+      <label for="cfgExcludeSource">Exclude source (optional)</label>
+      <input type="text" id="cfgExcludeSource" placeholder="e.g. scraper-national-20260820">
+      <div class="help">Skips rows with this <span class="mono">source</span> value — useful right after a scrape.</div>
+    </div>`,
+  reviews: () => `
+    <div class="field">
+      <label for="cfgScope">Scope</label>
+      <select id="cfgScope" onchange="onScopeChange()">
+        <option value="stale">Unchecked or stale rows only (default)</option>
+        <option value="all">All rows due for a check</option>
+        <option value="sample" selected>Random sample</option>
+      </select>
+    </div>
+    <div class="field" id="sampleWrap">
+      <label for="cfgSampleSize">Sample size</label>
+      <input type="number" id="cfgSampleSize" value="25" min="1" max="2000">
+    </div>
+    <div class="check">
+      <input type="checkbox" id="cfgForce">
+      <label for="cfgForce">Force recheck<div class="help">Ignores the 30-day staleness filter and rechecks every active row &mdash; the full catalog, not just what has aged. Preview first.</div></label>
+    </div>`,
+  scraper: () => `
+    <div class="field">
+      <label for="cfgMode">Mode</label>
+      <select id="cfgMode" onchange="onScraperModeChange()">
+        <option value="national">National</option>
+        <option value="seattle">Seattle</option>
+      </select>
+      <div class="help">Selects which set of search angles to run.</div>
+    </div>
+    <div class="field">
+      <label for="cfgSeedIds">Angles to run</label>
+      <select id="cfgSeedIds" multiple size="7" style="font-size:12px"></select>
+      <div class="help">Leave nothing selected to run every enabled angle. Selecting a few is how you retry
+        just the ones that failed without paying for the rest again.</div>
+    </div>
+    <div class="field">
+      <label for="cfgMaxSearches">Max searches per angle</label>
+      <input type="number" id="cfgMaxSearches" value="10" min="1" max="50">
+      <div class="help">A soft budget folded into the prompt — Gemini's search tool has no server-enforced cap, so the model can still exceed it.</div>
+    </div>`,
+  deadline: () => `
+    <div class="field">
+      <label for="cfgScope">Scope</label>
+      <select id="cfgScope" onchange="onScopeChange()">
+        <option value="all">All active rows</option>
+        <option value="sample" selected>Random sample</option>
+      </select>
+      <div class="help">Batch mode. Day-to-day deadline checks already happen on demand in the app, cached for 7 days.</div>
+    </div>
+    <div class="field" id="sampleWrap">
+      <label for="cfgSampleSize">Sample size</label>
+      <input type="number" id="cfgSampleSize" value="25" min="1" max="2000">
+    </div>`,
+};
+
+function onScopeChange() {
+  const wrap = $('sampleWrap');
+  if (wrap) wrap.classList.toggle('hidden', $('cfgScope').value !== 'sample');
+}
+function onScraperModeChange() {
+  const sel = $('cfgSeedIds'); if (!sel) return;
+  const mode = $('cfgMode').value;
+  const rows = S.seeds.filter(s => s.mode === mode && s.is_enabled);
+  sel.innerHTML = rows.length
+    ? rows.map(s => `<option value="${s.id}">[${s.id}] (${esc(s.category)}) ${esc(s.angle.slice(0, 70))}…</option>`).join('')
+    : '<option disabled>No enabled angles for this mode</option>';
+}
+
+function openRun(key) {
+  S.modalAgent = key; S.logCursor = 0;
+  const cfg = S.config[key], s = S.status[key] || {};
+  $('modalTitle').textContent = cfg.name;
+  $('modalDesc').textContent = cfg.description || '';
+  $('modalDot').className = 'dot ' + (s.status || 'idle');
+  $('modalScope').innerHTML = (SCOPE_FIELDS[key] || (() => ''))();
+  $('cfgMinDelay').value = cfg.defaults.min_delay;
+  $('cfgTimeout').value = cfg.defaults.timeout;
+  $('minDelayHelp').textContent = cfg.uses_gemini_search
+    ? '5 s is the floor that fixed past HTTP 429s from Google Search. Lower it only for short samples.'
+    : '5 s between calls. This agent has its own quota and does not contend with the search-enabled agents.';
+  $('estimate').className = 'estimate';
+  $('estimate').innerHTML = 'Run <strong>Preview</strong> to see how many items this would touch and what it would cost. Preview makes no API calls and writes nothing.';
+  $('runConsole').classList.add('hidden'); $('runConsole').innerHTML = '';
+  $('argvLine').classList.add('hidden');
+
+  // Warn up front rather than letting the launch fail a minute in.
+  const blocked = $('modalBlocked');
+  let msg = '';
+  if (s.status === 'running') msg = 'This agent is already running. Watch its output below or wait for it to finish.';
+  else if (cfg.uses_gemini_search) {
+    const other = Object.entries(S.status).find(([k, v]) =>
+      k !== key && v.status === 'running' && (S.config[k] || {}).uses_gemini_search);
+    if (other) msg = `${S.config[other[0]].name} is running and holds the shared Google Search lock. Only one search-enabled agent can run at a time.`;
+  }
+  blocked.textContent = msg;
+  blocked.classList.toggle('hidden', !msg);
+  setRunButtons(!!msg);
+
+  if (key === 'scraper') onScraperModeChange();
+  onScopeChange();
+  $('runModal').classList.add('open');
+  if (s.status === 'running') startLogPolling();
+}
+
+function setRunButtons(disabled) {
+  $('dryRunBtn').disabled = disabled;
+  $('liveRunBtn').disabled = disabled;
+}
+
+function collectConfig() {
+  const key = S.modalAgent, c = {};
+  const val = id => { const el = $(id); return el ? el.value : undefined; };
+  const checked = id => { const el = $(id); return el ? el.checked : false; };
+
+  if (key === 'scraper') {
+    c.mode = val('cfgMode');
+    const sel = $('cfgSeedIds');
+    const ids = sel ? Array.from(sel.selectedOptions).map(o => o.value).filter(Boolean) : [];
+    if (ids.length) c.seedIds = ids.join(',');
+    c.maxSearches = val('cfgMaxSearches');
+  } else {
+    c.scope = val('cfgScope');
+    // Only send the sample size when the scope actually uses it — the previous
+    // console posted it always, since the field is merely hidden with CSS.
+    if (c.scope === 'sample') c.sampleSize = val('cfgSampleSize');
+    if (key === 'reviews') c.force = checked('cfgForce');
+    if (key === 'metadata' && val('cfgExcludeSource')) c.excludeSource = val('cfgExcludeSource').trim();
+  }
+  c.minDelay = val('cfgMinDelay');
+  c.timeout = val('cfgTimeout');
+  return c;
+}
+
+async function doPreview() {
+  const btn = $('previewBtn');
+  btn.disabled = true; btn.textContent = 'Resolving…';
+  const est = $('estimate');
+  try {
+    const d = await api('/api/agents/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: S.modalAgent, config: collectConfig() }),
+    });
+    const cost = (d.est_cost_usd === null || d.est_cost_usd === undefined) ? null : d.est_cost_usd;
+    const costText = d.based_on_runs
+      ? `<span class="big">${money(cost)}</span> estimated <span style="color:var(--text-3)">(from ${d.based_on_runs} prior run${d.based_on_runs === 1 ? '' : 's'})</span>`
+      : `<span style="color:var(--text-3)">no cost history for this agent yet — cost unknown</span>`;
+    const timeText = d.est_seconds ? ` · <span class="big">${duration(d.est_seconds)}</span> estimated` : '';
+    est.className = 'estimate ' + (cost && cost > 1 ? 'spend' : 'free');
+    est.innerHTML = `<div><span class="big">${num(d.count)}</span> ${esc(d.unit)} in scope · ${costText}${timeText}</div>`
+      + (d.sample && d.sample.length
+        ? `<div style="margin-top:8px;font-size:12px;color:var(--text-2)">e.g. ${d.sample.slice(0, 4).map(esc).join(' · ')}${d.count > 4 ? ' …' : ''}</div>` : '')
+      + `<div style="margin-top:8px;font-size:11.5px;color:var(--text-3)">Preview only — no API calls were made and nothing was written.</div>`;
+    $('argvLine').textContent = '$ python ' + (d.argv || []).filter(a => a !== '-u' && a !== '--preview').join(' ');
+    $('argvLine').classList.remove('hidden');
+  } catch (e) {
+    est.className = 'estimate'; est.innerHTML = `<span style="color:var(--danger)">Preview failed: ${esc(e.message)}</span>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Preview (free)';
+  }
+}
+
+async function doRun(dryRun) {
+  const cfg = S.config[S.modalAgent];
+  const label = dryRun ? 'DRY RUN' : 'LIVE RUN';
+  const warn = dryRun
+    ? `A dry run still calls the ${cfg.api} API at full cost — it only skips writing to the database.`
+    : `This writes to the database and spends real money on the ${cfg.api} API.`;
+  if (!confirm(`${label}: ${cfg.name}\n\n${warn}\n\nRun Preview first if you haven't checked the scope and estimated cost.\n\nContinue?`)) return;
+
+  const config = collectConfig();
+  config.dryRun = dryRun;
+  setRunButtons(true);
+  const con = $('runConsole');
+  con.classList.remove('hidden'); con.innerHTML = '';
+  S.logCursor = 0;
+  try {
+    const d = await api('/api/agents/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent: S.modalAgent, config }),
+    });
+    toast(d.message || 'Started');
+    startLogPolling();
+    refreshDashboard();
+  } catch (e) {
+    con.innerHTML = `<div class="l-err">Could not start: ${esc(e.message)}</div>`;
+    setRunButtons(false);
+  }
+}
+
+/* Live output. The server streams each line as the script prints it, so this
+   appends incrementally rather than waiting for the process to exit. */
+function startLogPolling() {
+  clearInterval(S.logTimer);
+  S.logTimer = setInterval(pollLog, 1200);
+  pollLog();
+}
+
+async function pollLog() {
+  if (!S.modalAgent || !$('runModal').classList.contains('open')) {
+    clearInterval(S.logTimer); return;
+  }
+  try {
+    const d = await api(`/api/agents/log?agent=${S.modalAgent}&since=${S.logCursor}`);
+    const con = $('runConsole');
+    if (d.lines && d.lines.length) {
+      con.classList.remove('hidden');
+      const atBottom = con.scrollHeight - con.scrollTop - con.clientHeight < 40;
+      con.innerHTML += d.lines.map(l => {
+        const cls = l.startsWith('$') ? 'l-cmd'
+          : /\[ERROR\]|Traceback|error:/i.test(l) ? 'l-err'
+          : /\[WARN\]|SILENT/i.test(l) ? 'l-warn'
+          : /\[OK\]|\[DONE\]|\[SUMMARY\]/.test(l) ? 'l-ok' : '';
+        return `<div class="${cls}">${esc(l)}</div>`;
+      }).join('');
+      if (atBottom) con.scrollTop = con.scrollHeight;
+    }
+    S.logCursor = d.next || S.logCursor;
+    if (!d.running) {
+      clearInterval(S.logTimer);
+      setRunButtons(false);
+      refreshDashboard();
+      if (S.modalAgent === 'scraper') loadSeeds();
+    }
+  } catch (_) { /* transient; next tick retries */ }
+}
+
+/* ===========================================================================
+   Wiring
+=========================================================================== */
+$('refreshBtn').onclick = () => { refreshDashboard(); loadSeeds(); };
+$('timeRange').onchange = e => { S.range = Number(e.target.value); refreshDashboard(); };
+$('logAgentFilter').onchange = renderHistory;
+$('logStatusFilter').onchange = renderHistory;
+$('userCostSort').onchange = e => { S.userCostSort = e.target.value; renderUserCostRows(); };
+$('activateBtn').onclick = activateSelected;
+$('dupClose').onclick = () => { $('dupModal').classList.remove('open'); S.dupSubject = null; };
+$('dupSave').onclick = saveDuplicate;
+$('dupSearch').oninput = e => {
+  // Debounced: this hits the database on every keystroke otherwise.
+  clearTimeout(S.dupTimer);
+  const q = e.target.value;
+  S.dupTimer = setTimeout(() => searchSurvivors(q), 250);
+};
+$('oppClose').onclick = () => { $('oppModal').classList.remove('open'); S.editingOpp = null; };
+$('oppSave').onclick = saveOpportunity;
+$('rejectBtn').onclick = () => moderateSelected('rejected');
+$('restoreBtn').onclick = () => moderateSelected('pending_review');
+$('pendingSource').onchange = e => { S.pendingSource = e.target.value; renderPending(); };
+[...document.querySelectorAll('#pendingStatusTabs .tab')].forEach(t => {
+  // Switching slices clears the selection: an id selected in the queue means something
+  // different once the buttons on screen are Restore rather than Activate/Reject.
+  t.onclick = () => { S.pendingStatus = t.dataset.status; S.selectedPending.clear(); renderPending(); };
+});
+$('pendingSelectAll').onclick = () => {
+  const inStatus = pendingInStatus(S.pendingStatus);
+  const rows = S.pendingSource ? inStatus.filter(o => o.source === S.pendingSource) : inStatus;
+  rows.forEach(o => S.selectedPending.add(o.id));
+  renderPending();
+};
+$('pendingClear').onclick = () => { S.selectedPending.clear(); renderPending(); };
+$('modalClose').onclick = () => { $('runModal').classList.remove('open'); clearInterval(S.logTimer); };
+$('previewBtn').onclick = doPreview;
+$('dryRunBtn').onclick = () => doRun(true);
+$('liveRunBtn').onclick = () => doRun(false);
+$('addSeedBtn').onclick = () => openSeedModal(null);
+$('seedClose').onclick = () => $('seedModal').classList.remove('open');
+$('seedSave').onclick = saveSeed;
+$('seedDelete').onclick = deleteSeed;
+document.querySelectorAll('#viewTabs .vtab').forEach(t => t.onclick = () => showView(t.dataset.view));
+
+document.querySelectorAll('#seedTabs .tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('#seedTabs .tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active'); S.seedMode = t.dataset.mode; renderSeeds();
+});
+document.querySelectorAll('th.sortable').forEach(th => {
+  th.style.cursor = 'pointer';
+  th.onclick = () => { S.seedSort = th.dataset.sort; renderSeeds(); };
+});
+document.querySelectorAll('.overlay').forEach(o => o.onclick = e => {
+  if (e.target === o) { o.classList.remove('open'); clearInterval(S.logTimer); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.overlay.open').forEach(o => o.classList.remove('open'));
+    clearInterval(S.logTimer);
+  }
+});
+
+(async function init() {
+  try { await loadConfig(); } catch (e) { notice('Could not load agent config: ' + e.message); }
+  await refreshDashboard();
+  await loadSeeds();
+})();
+</script>
+</body>
+</html>

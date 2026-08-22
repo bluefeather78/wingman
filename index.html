@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Main Quest</title>
+  <title>Wingman</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -22,11 +22,11 @@
       <div class="text-center">
         <img src="favicon.svg" alt="" class="w-16 h-16 rounded-2xl mx-auto mb-2">
         <div class="flex items-center justify-center gap-2">
-          <h1 class="font-heading font-extrabold text-2xl">Main Quest</h1>
+          <h1 class="font-heading font-extrabold text-2xl">Wingman</h1>
           <span class="bg-amber-300 text-slate-900 font-extrabold text-[10px] uppercase px-2 py-0.5 rounded-full border-2 border-slate-900">Beta</span>
         </div>
-        <p class="font-heading font-extrabold text-lg mt-3 leading-snug">Follow your passion.<br>Side quest : Get into college.</p>
-        <p class="text-sm text-slate-500 mt-1">Discover research, programs, internships, and more for what you love.</p>
+        <p class="font-heading font-extrabold text-lg mt-3 leading-snug">Find opportunities. Never miss a deadline.</p>
+        <p class="text-sm text-slate-500 mt-1">Discover research, programs, internships, and more matched to what you love.</p>
         <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">🚧 This app is in beta — features are actively evolving and results may occasionally be incomplete or inaccurate.</p>
         <p class="hidden" id="loginTagline"></p>
       </div>
@@ -78,10 +78,76 @@
           <label class="block font-bold text-xs uppercase tracking-wide text-slate-500 mb-2" for="regPasswordConfirm">Confirm password</label>
           <input type="password" id="regPasswordConfirm" autocomplete="new-password" class="w-full border-2 border-slate-900 rounded-xl p-3 font-medium" placeholder="••••••••">
         </div>
+        <!-- Eligibility + consent. Terms of Use §2 limits Wingman to users 13 or older
+             and requires a parent/guardian's permission under 18; the Privacy Policy §8
+             says the same. All three boxes are re-checked server-side in handle_register —
+             this is the readable half of the gate, not the gate itself. The parental row
+             is hidden as soon as someone says they're 18+, so nobody ticks both. -->
+        <div class="border-2 border-slate-900 rounded-xl p-3 space-y-2.5 bg-slate-50">
+          <label class="flex gap-2 items-start text-xs font-medium cursor-pointer" for="regIsAdult">
+            <input type="checkbox" id="regIsAdult" class="mt-0.5 w-4 h-4 shrink-0 accent-indigo-600" onchange="updateRegisterConsent()">
+            <span>I am <strong>18 years of age or older</strong>.</span>
+          </label>
+          <label class="flex gap-2 items-start text-xs font-medium cursor-pointer" for="regParentalConsent" id="regParentalRow">
+            <input type="checkbox" id="regParentalConsent" class="mt-0.5 w-4 h-4 shrink-0 accent-indigo-600">
+            <span>I am <strong>at least 13</strong>, and my parent or legal guardian has given me permission to use Wingman and agrees to the Terms of Use on my behalf.</span>
+          </label>
+          <label class="flex gap-2 items-start text-xs font-medium cursor-pointer border-t border-slate-300 pt-2.5" for="regAcceptedTerms">
+            <input type="checkbox" id="regAcceptedTerms" class="mt-0.5 w-4 h-4 shrink-0 accent-indigo-600">
+            <span>I have read and agree to the <a href="terms.html" target="_blank" rel="noopener" class="font-bold text-indigo-600 hover:underline">Terms of Use</a> and the <a href="privacy.html" target="_blank" rel="noopener" class="font-bold text-indigo-600 hover:underline">Privacy Policy</a>.</span>
+          </label>
+        </div>
+        <p class="text-xs text-slate-500 text-center">Every new account starts with a <strong>3-day free trial</strong>. No card required to start.</p>
         <p class="text-xs font-bold text-rose-600" id="registerError"></p>
         <button type="submit" class="w-full pop-btn font-extrabold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;">Create Account</button>
         <p class="text-xs text-slate-500 text-center">Already have an account? <a href="#" class="font-bold text-indigo-600 hover:underline" onclick="event.preventDefault(); showLoginMode('signin');">Sign In</a></p>
       </form>
+    </div>
+  </section>
+
+  <!-- ============== PAYWALL (shown instead of the app once a trial lapses) ============== -->
+  <!-- Signed in, but subscription_state().has_access is false: the trial ran out and
+       nothing is paid. Deliberately a sibling of #page-login rather than a page inside
+       #appShell — the app shell never renders at all in this state, so there is no
+       half-usable version of the product to navigate around in. See showPaywall(). -->
+  <section id="page-locked" class="hidden min-h-screen flex items-center justify-center px-4">
+    <div class="card-soft p-8 sm:p-10 max-w-md w-full space-y-5">
+      <div class="text-center">
+        <img src="favicon.svg" alt="" class="w-14 h-14 rounded-2xl mx-auto mb-2">
+        <h1 class="font-heading font-extrabold text-2xl" id="lockedTitle">Your free trial has ended</h1>
+        <p class="text-sm text-slate-600 mt-2" id="lockedMessage">Subscribe to keep finding and tracking opportunities.</p>
+      </div>
+
+      <div class="border-2 border-slate-900 rounded-2xl p-5">
+        <div class="flex items-baseline justify-between mb-3">
+          <p class="font-heading font-extrabold text-lg">Pro Plan</p>
+          <p class="font-extrabold text-xl"><span style="color: #1d4e89;">$9.99</span><span class="text-sm font-normal text-slate-600">/month</span></p>
+        </div>
+        <ul class="space-y-1.5 text-sm text-slate-600">
+          <li>✓ Access to all opportunities</li>
+          <li>✓ AI-powered recommendations</li>
+          <li>✓ Deadline reminders</li>
+          <li>✓ Cancel anytime</li>
+        </ul>
+      </div>
+
+      <div>
+        <label class="block font-bold text-[10px] uppercase tracking-wide text-slate-500 mb-1" for="lockedPromoInput">Have a beta or promo code?</label>
+        <div class="flex gap-2">
+          <input type="text" id="lockedPromoInput" class="flex-1 border-2 border-slate-300 rounded-lg px-3 py-2 text-sm font-medium" placeholder="Enter a code">
+          <button class="pop-btn bg-white text-slate-900 font-bold text-xs px-3 py-2 rounded-lg shrink-0" onclick="applyPromoCode('lockedPromoInput', 'lockedPromoStatus')">Apply</button>
+        </div>
+        <p class="text-xs mt-1 min-h-[1em]" id="lockedPromoStatus"></p>
+      </div>
+
+      <button onclick="upgradeSubscription('lockedPromoInput')" class="w-full pop-btn font-extrabold px-6 py-3 text-white" style="background-color: #f79256; border: none; cursor: pointer; border-radius: 999px;">Subscribe — $9.99/month</button>
+      <p class="text-xs text-slate-500 text-center">
+        <a href="#" class="font-bold text-slate-600 hover:underline" onclick="event.preventDefault(); logoutUser();">Log out</a>
+        &nbsp;·&nbsp;
+        <a href="terms.html" target="_blank" rel="noopener" class="font-bold text-slate-600 hover:underline">Terms</a>
+        &nbsp;·&nbsp;
+        <a href="privacy.html" target="_blank" rel="noopener" class="font-bold text-slate-600 hover:underline">Privacy</a>
+      </p>
     </div>
   </section>
 
@@ -93,7 +159,7 @@
     <div class="rounded-full pl-3 pr-2 py-2 flex items-center justify-between gap-2" style="background-color: #1d4e89; box-shadow: 0 10px 25px -5px rgba(29,78,137,0.45);">
       <button onclick="showPage('home')" class="flex items-center gap-2 shrink-0 bg-none border-none cursor-pointer" style="color: inherit;">
         <img src="favicon.svg" alt="" class="w-8 h-8 rounded-lg">
-        <span class="font-heading font-extrabold text-lg text-white tracking-tight hidden sm:inline">Main Quest</span>
+        <span class="font-heading font-extrabold text-lg text-white tracking-tight hidden sm:inline">Wingman</span>
         <span class="font-extrabold text-[9px] uppercase px-2 py-0.5 rounded-full" style="background-color: #f79256; color: #fff;">Beta</span>
       </button>
 
@@ -150,9 +216,24 @@
         </div>
       </div>
 
+      <div class="bg-blue-50 border-2 border-blue-200 rounded-2xl p-3" id="subscriptionPanelSection">
+        <p class="font-bold text-sm text-blue-900 mb-2">📋 Subscription</p>
+        <p class="text-xs text-blue-800 mb-3" id="subscriptionPanelStatus">Trial: 3 days left</p>
+        <button onclick="toggleProfile(); showPage('subscription');" class="pop-btn bg-white text-slate-900 font-bold text-xs px-3 py-2 rounded-lg w-full">Manage Plan</button>
+      </div>
+
       <div class="bg-amber-50 border-2 border-amber-200 rounded-2xl p-3">
         <p class="text-xs font-bold text-amber-800">🚧 Beta product</p>
-        <p class="text-xs text-amber-700 mt-1">You're using an early, actively-evolving version of Main Quest. Thanks for testing it out!</p>
+        <p class="text-xs text-amber-700 mt-1">You're using an early, actively-evolving version of Wingman. Thanks for testing it out!</p>
+      </div>
+
+      <div class="border-2 border-slate-200 rounded-2xl p-3">
+        <p class="font-bold text-sm text-slate-900 mb-1">Legal</p>
+        <p class="text-xs text-slate-500 mb-2">The documents you agreed to when you signed up.</p>
+        <div class="flex gap-2">
+          <a href="terms.html" target="_blank" rel="noopener" class="pop-btn bg-white text-slate-900 font-bold text-xs px-3 py-2 rounded-xl">Terms of Use</a>
+          <a href="privacy.html" target="_blank" rel="noopener" class="pop-btn bg-white text-slate-900 font-bold text-xs px-3 py-2 rounded-xl">Privacy Policy</a>
+        </div>
       </div>
 
       <div class="border-2 border-slate-200 rounded-2xl p-3">
@@ -163,7 +244,8 @@
 
       <div class="border-2 border-slate-200 rounded-2xl p-3">
         <p class="font-bold text-sm text-slate-900 mb-1">About us</p>
-        <p class="text-xs text-slate-500">TBD</p>
+        <p class="text-xs text-slate-500 mb-2">Why we built Wingman.</p>
+        <a href="about.html" target="_blank" rel="noopener" class="pop-btn bg-white text-slate-900 font-bold text-xs px-3 py-2 rounded-xl inline-block">Read our story</a>
       </div>
     </div>
   </div>
@@ -175,15 +257,15 @@
     <section id="page-home" class="space-y-6">
       
       <!-- Welcome Banner -->
-      <div class="p-5 sm:p-6 flex items-center justify-between gap-4" style="background-color: #f79256; border-radius: 22px; box-shadow: 0 2px 18px rgba(15, 23, 42, 0.06);">
+      <div class="card-soft p-5 sm:p-6 flex items-center justify-between gap-4">
         <div class="flex items-center gap-3 min-w-0">
           <svg viewBox="0 0 24 24" class="w-8 h-8 shrink-0" fill="none">
-            <rect x="2" y="14" width="4" height="8" rx="1" fill="#ffffff"/>
-            <rect x="9" y="9" width="4" height="13" rx="1" fill="#ffffff"/>
-            <rect x="16" y="4" width="4" height="18" rx="1" fill="#ffffff"/>
+            <rect x="2" y="14" width="4" height="8" rx="1" fill="#f79256"/>
+            <rect x="9" y="9" width="4" height="13" rx="1" fill="#f79256"/>
+            <rect x="16" y="4" width="4" height="18" rx="1" fill="#f79256"/>
             <circle cx="18" cy="3" r="2.5" fill="#FDE047" stroke="#1d4e89" stroke-width="1"/>
           </svg>
-          <h1 class="font-heading font-extrabold text-xl sm:text-2xl truncate" style="color: #fff;">Hey <span style="color: #1d4e89;" id="homeGreetingName">there</span> — ready?</h1>
+          <h1 class="font-heading font-extrabold text-xl sm:text-2xl truncate" style="color: #1d4e89;">Hey <span style="color: #f79256;" id="homeGreetingName">there</span> — ready?</h1>
         </div>
         <div class="rounded-2xl px-4 py-2 text-center shrink-0" id="homeDueSoonBadge" style="background-color: #1d4e89;">
           <p class="font-heading font-extrabold text-lg leading-none text-white" id="homeDueSoonCount">0</p>
@@ -603,25 +685,9 @@
 
         <!-- LinkedIn Tab -->
         <div id="linkedinTab-content" class="hidden space-y-3">
-          <div class="flex gap-2 mb-3">
-            <button class="text-sm font-bold px-3 py-1.5 rounded-lg" id="linkedinPasteBtn" style="background-color: #e9f7c9; color: #4c6a1a;" onclick="switchLinkedInMode('paste')">Paste Text</button>
-            <button class="text-sm font-bold px-3 py-1.5 rounded-lg hover:bg-slate-100" id="linkedinUrlBtn" style="background-color: transparent; color: #8a93a6;" onclick="switchLinkedInMode('url')">Enter URL</button>
-          </div>
-
-          <!-- LinkedIn Paste Mode -->
-          <div id="linkedinPaste-mode" class="space-y-3">
-            <p class="text-xs text-slate-500">Copy and paste your LinkedIn profile text here</p>
-            <textarea id="linkedinTextInput" class="w-full border-2 border-slate-900 rounded-xl p-3 text-sm font-medium" rows="6" placeholder="Paste your LinkedIn profile content here..."></textarea>
-            <button class="w-full pop-btn bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm" onclick="submitLinkedInExtraction('text')">Extract from LinkedIn Text</button>
-          </div>
-
-          <!-- LinkedIn URL Mode -->
-          <div id="linkedinUrl-mode" class="hidden space-y-3">
-            <p class="text-xs text-slate-500">Enter your LinkedIn profile URL (e.g., linkedin.com/in/yourname)</p>
-            <input type="text" id="linkedinUrlInput" class="w-full border-2 border-slate-900 rounded-xl p-3 text-sm font-medium" placeholder="https://linkedin.com/in/yourname">
-            <button class="w-full pop-btn bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm" onclick="submitLinkedInExtraction('url')">Extract from LinkedIn URL</button>
-          </div>
-
+          <p class="text-xs text-slate-500">Copy and paste your LinkedIn profile text here (LinkedIn blocks direct URL access, so text paste is the only method)</p>
+          <textarea id="linkedinTextInput" class="w-full border-2 border-slate-900 rounded-xl p-3 text-sm font-medium" rows="6" placeholder="Paste your LinkedIn profile content here..."></textarea>
+          <button class="w-full pop-btn bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm" onclick="submitLinkedInExtraction('text')">Extract from LinkedIn Text</button>
           <p class="text-xs text-slate-500 min-h-[1em]" id="linkedinImportStatus"></p>
         </div>
       </div>
@@ -649,6 +715,110 @@
 
     </section>
 
+    <!-- ============== PAGE: SUBSCRIPTION ============== -->
+    <section id="page-subscription" class="hidden space-y-6">
+      <div class="card-soft p-6 sm:p-8 space-y-6">
+        <div class="text-center mb-6">
+          <h1 class="font-heading font-extrabold text-2xl mb-2" style="color: #1d4e89;">Your Subscription</h1>
+          <p class="text-slate-600">Manage your plan and billing</p>
+        </div>
+
+        <!-- Subscription Status Card -->
+        <div id="subscriptionStatusCard" class="p-6 rounded-2xl border-2 border-slate-200 space-y-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="font-bold text-slate-500 text-sm uppercase tracking-wide">Current Plan</p>
+              <p class="font-heading font-bold text-2xl mt-1" id="subPlanName">Loading...</p>
+            </div>
+            <div id="subBadge" class="rounded-full px-4 py-2 font-bold text-sm" style="background-color: #def5b0; color: #1d4e89;">
+              <span id="subBadgeText">Trial</span>
+            </div>
+          </div>
+
+          <!-- Trial Countdown -->
+          <div id="trialCountdown" class="bg-amber-50 border-l-4 border-amber-400 p-4 rounded">
+            <p class="font-bold text-amber-900 mb-1" id="trialCountdownText">3 days left in trial</p>
+            <p class="text-sm text-amber-800"><span id="trialEndLabel">Your trial ends</span> <span id="trialEndDate">...</span></p>
+          </div>
+
+          <!-- Active Subscription Info -->
+          <div id="activeSubInfo" class="bg-emerald-50 border-l-4 border-emerald-400 p-4 rounded hidden">
+            <p class="font-bold text-emerald-900 mb-1" id="subActiveHeading">✓ Subscription Active</p>
+            <p class="text-sm text-emerald-800"><span id="subRenewLabel">Renews</span> <span id="subRenewDate">...</span></p>
+          </div>
+        </div>
+
+        <!-- Pricing Table -->
+        <div class="border-2 border-slate-200 rounded-2xl overflow-hidden">
+          <div class="bg-slate-50 px-6 py-4 border-b-2 border-slate-200">
+            <h2 class="font-heading font-bold text-lg">Plans</h2>
+          </div>
+          <div class="p-6">
+            <!-- Free Trial -->
+            <div class="mb-6 pb-6 border-b-2 border-slate-200">
+              <div class="flex items-start justify-between mb-3">
+                <div>
+                  <p class="font-bold text-lg">Free Trial</p>
+                  <p class="text-2xl font-extrabold mt-1" style="color: #1d4e89;">3 days</p>
+                  <p class="text-xs text-slate-500 mt-1">Includes all features</p>
+                </div>
+                <div class="text-right">
+                  <p class="font-bold text-sm px-3 py-1 rounded-full" id="trialBadge" style="background-color: #def5b0; color: #1d4e89;">Current</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Paid Plan -->
+            <div>
+              <div class="flex items-start justify-between mb-4">
+                <div>
+                  <p class="font-bold text-lg">Pro Plan</p>
+                  <p class="text-2xl font-extrabold mt-1"><span style="color: #1d4e89;">$9.99</span><span class="text-sm font-normal text-slate-600">/month</span></p>
+                  <p class="text-xs text-slate-500 mt-1">After trial ends</p>
+                </div>
+                <button onclick="showPage('subscription'); upgradeSubscription();" class="pop-btn font-bold px-4 py-2 rounded-xl text-white" style="background-color: #f79256; border: none;">Upgrade Now</button>
+              </div>
+              <ul class="space-y-2 text-sm text-slate-600">
+                <li>✓ Access to all opportunities</li>
+                <li>✓ AI-powered recommendations</li>
+                <li>✓ Priority support</li>
+                <li>✓ Deadline reminders</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <!-- Promo Code Section -->
+        <div class="p-4 bg-indigo-50 border-2 border-indigo-200 rounded-2xl">
+          <p class="font-bold text-indigo-900 mb-2">Have a promo code?</p>
+          <div class="flex gap-2">
+            <input type="text" id="promoCodeInput" class="flex-1 border-2 border-indigo-300 rounded-lg px-3 py-2 font-medium" placeholder="Enter promo code">
+            <button onclick="applyPromoCode()" class="pop-btn font-bold px-4 py-2 rounded-lg text-white" style="background-color: #6366f1; border: none;">Apply</button>
+          </div>
+          <p class="text-xs text-indigo-700 mt-2" id="promoStatus"></p>
+        </div>
+
+        <!-- Billing History (placeholder) -->
+        <div class="border-2 border-slate-200 rounded-2xl overflow-hidden">
+          <div class="bg-slate-50 px-6 py-4 border-b-2 border-slate-200">
+            <h2 class="font-heading font-bold text-lg">Billing</h2>
+          </div>
+          <div class="p-6">
+            <p class="text-slate-600 text-sm mb-4">You'll be billed $9.99/month after your trial ends.</p>
+            <div id="billingInfo" class="space-y-2 text-sm text-slate-600">
+              <p>💳 Payment method: Add during checkout</p>
+              <p>📧 Receipts will be sent to your email</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cancel Subscription Button -->
+        <div class="text-center">
+          <button onclick="cancelSubscription()" id="cancelSubBtn" class="font-bold text-rose-600 hover:underline text-sm hidden">Cancel Subscription</button>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <!-- To-Do Detail Modal (Home) -->
@@ -668,6 +838,26 @@
   </div>
   <!-- /#appShell -->
 
-<script src="script.js"></script>
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-analytics.js"></script>
+
+<script>
+  // Initialize Firebase (replace with your config from Firebase Console)
+  const firebaseConfig = {
+    apiKey: "AIzaSyAP04-qg6oYkJqKlDWDv6zdRMcNr_ET3C0",
+         authDomain: "wingman-c69d9.firebaseapp.com",
+         projectId: "wingman-c69d9",
+         storageBucket: "wingman-c69d9.firebasestorage.app",
+         messagingSenderId: "101476322623",
+         appId: "1:101476322623:web:3789e8a1c67ea8c598178a",
+         measurementId: "G-9M96H6LG22"
+  };
+
+  firebase.initializeApp(firebaseConfig);
+  firebase.analytics();
+</script>
+
+<script src="script.js?v=betapromo1"></script>
 </body>
 </html>

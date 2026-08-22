@@ -18,6 +18,16 @@ fetch('/api/opportunities')
 
 let currentUser = null; // { userid, firstName, lastName, email, location } — the signed-in session, cached locally
 
+// Query-string userid for the endpoints that cost money but take no JSON body we can put
+// it in (the deadline check is a GET, the resume import is multipart). It is only used
+// server-side to attribute spend to an account in the admin console's per-user cost card
+// — signed-out calls just omit it and show up there as unattributed.
+function costAttributionQS(){
+  const id = currentUser && currentUser.userid;
+  return id ? `?userid=${encodeURIComponent(id)}` : '';
+}
+
+
 // App state for tracking data sync status (deadlines, etc.)
 let appState = {
   lastDeadlineSync: null,      // ISO timestamp of last successful deadline sync
@@ -100,7 +110,7 @@ async function syncTrackerDeadlines(){
 
     // Fetch deadline data for each opportunity (uses server 7-day cache)
     const deadlinePromises = allIds.map(id =>
-      fetch(`/api/opportunities/${id}/deadline`)
+      fetch(`/api/opportunities/${id}/deadline${costAttributionQS()}`)
         .then(res => res.ok ? res.json() : null)
         .catch(() => null)
     );
@@ -182,11 +192,29 @@ function showLoginMode(mode){
   if(mode === 'register'){
     if(signInForm) signInForm.classList.add('hidden');
     if(registerForm) registerForm.classList.remove('hidden');
+    updateRegisterConsent();
     if(tagline) tagline.textContent = 'Create an account to find and track opportunities built around your projects.';
   }else{
     if(registerForm) registerForm.classList.add('hidden');
     if(signInForm) signInForm.classList.remove('hidden');
     if(tagline) tagline.textContent = 'Sign in to find and track opportunities built around your projects.';
+  }
+}
+
+// The parental-permission checkbox only applies to under-18s, so it disappears the
+// moment someone says they're 18+. Hiding it isn't enough on its own — a box that was
+// ticked before the user corrected their age would still be ticked and would still be
+// submitted, so clear it on the way out.
+function updateRegisterConsent(){
+  const isAdult = document.getElementById('regIsAdult');
+  const parentalRow = document.getElementById('regParentalRow');
+  const parental = document.getElementById('regParentalConsent');
+  if(!isAdult || !parentalRow) return;
+  if(isAdult.checked){
+    parentalRow.classList.add('hidden');
+    if(parental) parental.checked = false;
+  }else{
+    parentalRow.classList.remove('hidden');
   }
 }
 
@@ -200,9 +228,18 @@ async function registerUser(event){
   const location = document.getElementById('regLocation').value.trim();
   const password = document.getElementById('regPassword').value;
   const passwordConfirm = document.getElementById('regPasswordConfirm').value;
+  const isAdult = !!document.getElementById('regIsAdult')?.checked;
+  const parentalConsent = !!document.getElementById('regParentalConsent')?.checked;
+  const acceptedTerms = !!document.getElementById('regAcceptedTerms')?.checked;
 
   if(!firstName || !lastName || !email || !userid || !location || !password || !passwordConfirm){
     if(errorEl) errorEl.textContent = 'Please fill in every field.';
+    return;
+  }
+  // Shape check only. Whether the address is already taken is a question only the server
+  // can answer, and handle_register() answers it for both the user ID and the email.
+  if(!/^[^\s@,()'"]+@[^\s@,()'"]+\.[^\s@,()'"]{2,}$/.test(email)){
+    if(errorEl) errorEl.textContent = 'Please enter a valid email address.';
     return;
   }
   if(password.length < 8){
@@ -213,6 +250,16 @@ async function registerUser(event){
     if(errorEl) errorEl.textContent = 'Passwords do not match.';
     return;
   }
+  // Mirrors handle_register's server-side check; the server is what actually refuses
+  // the account, this just says why without a round-trip.
+  if(!isAdult && !parentalConsent){
+    if(errorEl) errorEl.textContent = 'If you are under 18, confirm that a parent or guardian has given you permission.';
+    return;
+  }
+  if(!acceptedTerms){
+    if(errorEl) errorEl.textContent = 'Please read and accept the Terms of Use and Privacy Policy.';
+    return;
+  }
 
   const passwordHash = await hashPassword(password);
   let data;
@@ -220,7 +267,8 @@ async function registerUser(event){
     const res = await fetch('/api/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ firstName, lastName, email, userid, location, passwordHash })
+      body: JSON.stringify({ firstName, lastName, email, userid, location, passwordHash,
+                             isAdult, parentalConsent, acceptedTerms })
     });
     data = await res.json().catch(() => ({}));
     if(!res.ok){
@@ -234,6 +282,11 @@ async function registerUser(event){
 
   currentUser = { userid, firstName, lastName, email, location };
   await saveUser();
+  if(typeof firebase !== 'undefined' && firebase.analytics) {
+    firebase.analytics().logEvent('user_registered', {
+      'location': location
+    });
+  }
   await showApp();
 }
 
@@ -267,21 +320,86 @@ async function loginUser(event){
   }
 
   currentUser = { userid, firstName: data.firstName, lastName: data.lastName, email: data.email, location: data.location || '' };
+  // /api/login already returns the subscription block, so showApp() can decide between
+  // the app and the paywall without waiting on a second request.
+  if(data.subscription) currentUser.subscription = data.subscription;
   await saveUser();
+  if(typeof firebase !== 'undefined' && firebase.analytics) {
+    firebase.analytics().logEvent('user_login', {
+      'location': data.location || 'unspecified'
+    });
+  }
   await showApp();
 }
 
 function showLoginGate(){
   const loginPage = document.getElementById('page-login');
   const appShell = document.getElementById('appShell');
+  const locked = document.getElementById('page-locked');
   if(loginPage) loginPage.classList.remove('hidden');
   if(appShell) appShell.classList.add('hidden');
+  if(locked) locked.classList.add('hidden');
   showLoginMode('signin');
 }
-async function showApp(){
+
+// Signed in, but out of trial and unpaid. Replaces the app entirely rather than
+// disabling pieces of it — see #page-locked in index.html. The server enforces the
+// same thing on the endpoints that cost money (Handler._subscription_blocks), so
+// this screen is the explanation, not the lock.
+function showPaywall(){
   const loginPage = document.getElementById('page-login');
   const appShell = document.getElementById('appShell');
+  const locked = document.getElementById('page-locked');
   if(loginPage) loginPage.classList.add('hidden');
+  if(appShell) appShell.classList.add('hidden');
+  if(locked) locked.classList.remove('hidden');
+
+  const sub = (currentUser && currentUser.subscription) || {};
+  const title = document.getElementById('lockedTitle');
+  const message = document.getElementById('lockedMessage');
+  if(sub.status === 'canceled'){
+    if(title) title.textContent = 'Your subscription has ended';
+    if(message) message.textContent = 'Resubscribe to pick up where you left off — your profile and tracker are still here.';
+  }else if(sub.status === 'beta'){
+    if(title) title.textContent = 'Your beta access has ended';
+    if(message) message.textContent = 'Subscribe to keep finding and tracking opportunities. Your profile and tracker are still here.';
+  }else if(sub.status === 'past_due'){
+    if(title) title.textContent = 'There was a problem with your payment';
+    if(message) message.textContent = 'We could not charge your card. Update your payment details to restore access.';
+  }else{
+    if(title) title.textContent = 'Your free trial has ended';
+    if(message) message.textContent = 'Subscribe to keep finding and tracking opportunities. Your profile and tracker are still here.';
+  }
+}
+
+// True when the signed-in account may use the app. Absent subscription info means
+// "not yet loaded", not "expired" — locking someone out because a status request
+// failed would be worse than briefly letting them in, so this fails open.
+// The server 402s the paid endpoints for a lapsed account. That can happen mid-session
+// (the trial ran out while the tab was open), so treat it as authoritative: mark the
+// subscription as lapsed locally and show the paywall, instead of surfacing a bare
+// "API error 402" from whatever feature happened to fire first.
+function handleSubscriptionLapsed(){
+  if(!currentUser) return;
+  currentUser.subscription = Object.assign({}, currentUser.subscription, { has_access: false });
+  showPaywall();
+}
+
+function hasSubscriptionAccess(){
+  if(!currentUser || !currentUser.subscription) return true;
+  return currentUser.subscription.has_access !== false;
+}
+async function showApp(){
+  // If the login response already told us the account is locked out, bail before the
+  // app shell is ever unhidden — otherwise the user sees the full app flash past on
+  // the way to the paywall.
+  if(!hasSubscriptionAccess()){ showPaywall(); return; }
+
+  const loginPage = document.getElementById('page-login');
+  const appShell = document.getElementById('appShell');
+  const locked = document.getElementById('page-locked');
+  if(loginPage) loginPage.classList.add('hidden');
+  if(locked) locked.classList.add('hidden');
   if(appShell) appShell.classList.remove('hidden');
 
   const nameEl = document.getElementById('accountName');
@@ -298,6 +416,8 @@ async function showApp(){
   // on every sign-in rather than trusting whatever's still sitting in memory from a
   // previous session in this tab.
   await loadAccountData();
+  await checkSubscriptionStatus();
+  if(!hasSubscriptionAccess()){ showPaywall(); return; }
   showPage('home');
   // Sync deadlines in background (non-blocking) for all tracked opportunities
   syncTrackerDeadlines();
@@ -338,6 +458,296 @@ async function saveAccountLocation(){
     }
   }catch(e){
     if(statusEl) statusEl.textContent = 'Could not save — please try again.';
+  }
+}
+
+// ============================================================
+// Subscription management
+// ============================================================
+async function checkSubscriptionStatus(){
+  if(!currentUser) return;
+  try{
+    const res = await fetch('/api/subscription/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userid: currentUser.userid })
+    });
+    if(!res.ok) return;
+    const data = await res.json();
+    currentUser.subscription = data;
+    updateSubscriptionUI();
+    // A trial can lapse while a tab is sitting open. If the refreshed status says the
+    // account no longer has access, swap to the paywall rather than leaving a live app
+    // on screen whose every AI action would now come back 402.
+    const appShell = document.getElementById('appShell');
+    if(!hasSubscriptionAccess() && appShell && !appShell.classList.contains('hidden')){
+      showPaywall();
+    }
+  }catch(e){
+    console.error('Failed to check subscription status:', e);
+  }
+}
+
+function updateSubscriptionUI(){
+  if(!currentUser || !currentUser.subscription) return;
+  const sub = currentUser.subscription;
+
+  // Update panel section
+  const panelStatus = document.getElementById('subscriptionPanelStatus');
+  if(panelStatus){
+    if(sub.status === 'trial'){
+      const daysLeft = sub.days_left || 0;
+      panelStatus.textContent = `Trial: ${daysLeft} days left`;
+    } else if(sub.status === 'beta'){
+      const daysLeft = sub.days_left || 0;
+      panelStatus.textContent = `Beta access: ${daysLeft} day${daysLeft === 1 ? '' : 's'} left`;
+    } else if(sub.status === 'active'){
+      panelStatus.textContent = 'Active: $9.99/month';
+    } else if(sub.status === 'canceled'){
+      panelStatus.textContent = 'Canceled';
+    }
+  }
+
+  // Update subscription page if visible
+  const statusCard = document.getElementById('subscriptionStatusCard');
+  if(statusCard && !statusCard.classList.contains('hidden')){
+    renderSubscriptionPage();
+  }
+}
+
+function renderSubscriptionPage(){
+  if(!currentUser || !currentUser.subscription) return;
+  const sub = currentUser.subscription;
+
+  // Status badge
+  const badgeEl = document.getElementById('subBadge');
+  const badgeText = document.getElementById('subBadgeText');
+  if(badgeEl && badgeText){
+    if(sub.status === 'trial'){
+      badgeText.textContent = 'Trial';
+      badgeEl.style.backgroundColor = '#def5b0';
+    } else if(sub.status === 'beta'){
+      badgeText.textContent = 'Beta';
+      badgeEl.style.backgroundColor = '#ddd6fe';
+    } else if(sub.status === 'active'){
+      badgeText.textContent = 'Active';
+      badgeEl.style.backgroundColor = '#d1fae5';
+    } else if(sub.status === 'canceled'){
+      badgeText.textContent = 'Canceled';
+      badgeEl.style.backgroundColor = '#fee2e2';
+    }
+  }
+
+  // Plan name
+  const planName = document.getElementById('subPlanName');
+  if(planName){
+    const PLAN_NAMES = { trial: 'Free Trial', beta: 'Beta Access', active: 'Pro Plan' };
+    planName.textContent = PLAN_NAMES[sub.status] || 'No Active Plan';
+  }
+
+  // Trial countdown
+  const trialCountdown = document.getElementById('trialCountdown');
+  const activeSubInfo = document.getElementById('activeSubInfo');
+  if(sub.status === 'trial' || sub.status === 'beta'){
+    const daysLeft = sub.days_left || 0;
+    const isBeta = sub.status === 'beta';
+    const daysText = document.getElementById('trialCountdownText');
+    const endDate = document.getElementById('trialEndDate');
+    const endLabel = document.getElementById('trialEndLabel');
+    const unit = daysLeft === 1 ? 'day' : 'days';
+    if(daysText) daysText.textContent = `${daysLeft} ${unit} left ${isBeta ? 'in beta access' : 'in trial'}`;
+    if(endLabel) endLabel.textContent = isBeta ? 'Your beta access ends' : 'Your trial ends';
+    // A beta grant runs on subscription_end_at; a trial runs on trial_ends_at.
+    const endIso = isBeta ? sub.subscription_end_at : sub.trial_ends_at;
+    if(endDate && endIso){
+      const date = new Date(endIso);
+      endDate.textContent = date.toLocaleDateString('en-US', {weekday: 'short', month: 'short', day: 'numeric'});
+    }
+    if(trialCountdown) trialCountdown.classList.remove('hidden');
+    if(activeSubInfo) activeSubInfo.classList.add('hidden');
+  } else {
+    if(trialCountdown) trialCountdown.classList.add('hidden');
+    // 'canceled' reuses this panel: cancelling takes effect at period end, so there is
+    // still a real date to show, it just means "access ends" rather than "renews".
+    const renewLabel = document.getElementById('subRenewLabel');
+    const renewDate = document.getElementById('subRenewDate');
+    const endIso = sub.subscription_end_at;
+    const heading = document.getElementById('subActiveHeading');
+    if(activeSubInfo && (sub.status === 'active' || (sub.status === 'canceled' && endIso))){
+      activeSubInfo.classList.remove('hidden');
+      if(heading) heading.textContent = sub.status === 'active' ? '✓ Subscription Active' : 'Subscription canceled';
+      if(renewLabel) renewLabel.textContent = sub.status === 'active' ? 'Renews' : 'Access ends';
+      if(renewDate){
+        renewDate.textContent = endIso
+          ? new Date(endIso).toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric'})
+          : '—';
+      }
+    }else if(activeSubInfo){
+      activeSubInfo.classList.add('hidden');
+    }
+  }
+
+  // Cancel button visibility
+  const cancelBtn = document.getElementById('cancelSubBtn');
+  if(cancelBtn){
+    if(sub.status === 'active'){
+      cancelBtn.classList.remove('hidden');
+    } else {
+      cancelBtn.classList.add('hidden');
+    }
+  }
+
+  // Trial badge in pricing table
+  const trialBadge = document.getElementById('trialBadge');
+  if(trialBadge){
+    if(sub.status === 'trial' || sub.status === 'beta'){
+      trialBadge.classList.remove('hidden');
+    } else {
+      trialBadge.classList.add('hidden');
+    }
+  }
+}
+
+// promoInputId lets the paywall screen reuse this with its own promo field; the
+// subscription page passes nothing and gets the default.
+async function upgradeSubscription(promoInputId){
+  if(!currentUser) return;
+  try{
+    // Get Stripe checkout URL
+    const successUrl = window.location.origin + '?payment=success';
+    const cancelUrl = window.location.origin + '?payment=canceled';
+
+    const res = await fetch('/api/subscription/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userid: currentUser.userid,
+        email: currentUser.email,
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        promo_code: document.getElementById(promoInputId || 'promoCodeInput')?.value?.trim() || ''
+      })
+    });
+
+    if(!res.ok){
+      const err = await res.json();
+      alert('Error: ' + (err.error || 'Could not create checkout session'));
+      return;
+    }
+
+    const data = await res.json();
+    if(data.checkout_url){
+      window.location.href = data.checkout_url;
+    }
+  }catch(e){
+    console.error('Upgrade failed:', e);
+    alert('Could not start checkout. Please try again.');
+  }
+}
+
+async function applyPromoCode(inputId, statusId){
+  if(!currentUser) return;
+  const input = document.getElementById(inputId || 'promoCodeInput');
+  const status = document.getElementById(statusId || 'promoStatus');
+  if(!input || !status) return;
+
+  const code = input.value.trim();
+  if(!code){
+    status.textContent = 'Enter a promo code';
+    return;
+  }
+
+  try{
+    const res = await fetch('/api/subscription/validate-promo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userid: currentUser.userid, promo_code: code })
+    });
+
+    if(!res.ok){
+      const err = await res.json();
+      status.textContent = '✗ ' + (err.error || 'Invalid code');
+      status.className = 'text-xs text-rose-600 mt-2';
+      return;
+    }
+
+    const data = await res.json();
+    if(!data.valid) return;
+
+    // A "checkout" code (FREEMONTH, WELCOME10) is only a discount at Stripe — there is
+    // nothing to apply yet, so say so and leave it in the box for upgradeSubscription()
+    // to pass along. A "grant" code (BETAUSER) is redeemed against the account right
+    // now, which is a write, so it goes to a different endpoint.
+    if(data.kind !== 'grant'){
+      status.textContent = '✓ ' + data.description + ' — applied at checkout';
+      status.className = 'text-xs text-emerald-600 mt-2';
+      return;
+    }
+
+    status.textContent = 'Applying…';
+    status.className = 'text-xs text-slate-500 mt-2';
+    const redeem = await fetch('/api/subscription/redeem-promo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userid: currentUser.userid, promo_code: code })
+    });
+    const applied = await redeem.json().catch(() => ({}));
+    if(!redeem.ok){
+      status.textContent = '✗ ' + (applied.error || 'Could not apply code');
+      status.className = 'text-xs text-rose-600 mt-2';
+      return;
+    }
+
+    status.textContent = '✓ ' + (applied.description || 'Code applied');
+    status.className = 'text-xs text-emerald-600 mt-2';
+    input.value = '';
+    if(applied.subscription){
+      currentUser.subscription = applied.subscription;
+      updateSubscriptionUI();
+      renderSubscriptionPage();
+    }
+    // Redeeming from the paywall is the whole point of this code: if it bought them
+    // access back, let them straight into the app rather than leaving them staring at
+    // a lock screen that no longer applies.
+    const locked = document.getElementById('page-locked');
+    if(hasSubscriptionAccess() && locked && !locked.classList.contains('hidden')){
+      await showApp();
+    }
+  }catch(e){
+    status.textContent = 'Could not validate code';
+    status.className = 'text-xs text-rose-600 mt-2';
+  }
+}
+
+async function cancelSubscription(){
+  if(!currentUser || !confirm('Are you sure you want to cancel? You\'ll lose access when your current billing period ends.')) return;
+
+  try{
+    const res = await fetch('/api/subscription/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userid: currentUser.userid })
+    });
+
+    if(!res.ok){
+      const err = await res.json();
+      alert('Error: ' + (err.error || 'Could not cancel'));
+      return;
+    }
+
+    const result = await res.json().catch(() => ({}));
+    // The backend cancels at period end, so name the date access actually stops rather
+    // than the vague "end of your billing period" — it comes back on the response.
+    const endsAt = result.subscription_end_at
+      ? new Date(result.subscription_end_at).toLocaleDateString('en-US', {month: 'long', day: 'numeric', year: 'numeric'})
+      : null;
+    alert(endsAt
+      ? `Subscription canceled. You'll keep full access until ${endsAt}.`
+      : "Subscription canceled. You'll keep access until the end of the period you've already paid for.");
+    await checkSubscriptionStatus();
+  }catch(e){
+    console.error('Cancel failed:', e);
+    alert('Could not cancel subscription. Please try again.');
   }
 }
 
@@ -397,7 +807,7 @@ const KIND_CONFIG = {
     name: 'Research or Project Competition',
     desc: 'Science fairs, app challenges, and project-based contests',
     source: 'local',
-    dbTypes: ['Competition','Research'],
+    dbTypes: ['Research'],
     heading: 'Describe your project',
     sub: 'Tell us what you\'ve built or researched, the techniques or skills involved, and what makes it worth entering into a competition.',
     label: 'Describe your project',
@@ -675,6 +1085,7 @@ async function callGemini(system, userContent, useWebSearch){
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
+  if(res.status === 402){ handleSubscriptionLapsed(); throw new Error("Subscription required"); }
   if(!res.ok){ throw new Error(`API error ${res.status}`); }
   const data = await res.json();
   const textBlocks = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
@@ -695,6 +1106,7 @@ async function callClaude(system, userContent, useWebSearch){
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
+  if(res.status === 402){ handleSubscriptionLapsed(); throw new Error("Subscription required"); }
   if(!res.ok){ throw new Error(`API error ${res.status}`); }
   const data = await res.json();
   const textBlocks = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
@@ -1460,29 +1872,7 @@ function switchImportTab(tabName){
   }
 }
 
-// LinkedIn mode switching (paste vs URL)
-function switchLinkedInMode(mode){
-  const pasteMode = document.getElementById('linkedinPaste-mode');
-  const urlMode = document.getElementById('linkedinUrl-mode');
-  const pasteBtn = document.getElementById('linkedinPasteBtn');
-  const urlBtn = document.getElementById('linkedinUrlBtn');
-
-  if(mode === 'paste'){
-    pasteMode.classList.remove('hidden');
-    urlMode.classList.add('hidden');
-    pasteBtn.style.backgroundColor = '#e9f7c9';
-    pasteBtn.style.color = '#4c6a1a';
-    urlBtn.style.backgroundColor = 'transparent';
-    urlBtn.style.color = '#8a93a6';
-  }else{
-    pasteMode.classList.add('hidden');
-    urlMode.classList.remove('hidden');
-    pasteBtn.style.backgroundColor = 'transparent';
-    pasteBtn.style.color = '#8a93a6';
-    urlBtn.style.backgroundColor = '#e9f7c9';
-    urlBtn.style.color = '#4c6a1a';
-  }
-}
+// LinkedIn extraction — text paste only (URL fetching is blocked by LinkedIn's anti-scraping measures)
 
 // Handle resume file upload
 function handleResumeUpload(input){
@@ -1532,7 +1922,7 @@ async function submitResumeExtraction(){
     const formData = new FormData();
     formData.append('file', window.resumeFileToUpload);
 
-    const response = await fetch('/api/extract-from-resume', {
+    const response = await fetch('/api/extract-from-resume' + costAttributionQS(), {
       method: 'POST',
       body: formData
     });
@@ -1571,39 +1961,25 @@ async function submitResumeExtraction(){
   }
 }
 
-// Submit LinkedIn extraction
+// Submit LinkedIn extraction (text paste only)
 async function submitLinkedInExtraction(mode){
   const statusEl = document.getElementById('linkedinImportStatus');
-  let linkedInInput = '';
+  const linkedInInput = document.getElementById('linkedinTextInput').value.trim();
 
-  if(mode === 'text'){
-    linkedInInput = document.getElementById('linkedinTextInput').value.trim();
-    if(!linkedInInput){
-      statusEl.textContent = '⚠️ Please paste your LinkedIn profile text';
-      statusEl.style.color = '#d64545';
-      return;
-    }
-  }else{
-    linkedInInput = document.getElementById('linkedinUrlInput').value.trim();
-    if(!linkedInInput){
-      statusEl.textContent = '⚠️ Please enter a LinkedIn URL';
-      statusEl.style.color = '#d64545';
-      return;
-    }
+  if(!linkedInInput){
+    statusEl.textContent = '⚠️ Please paste your LinkedIn profile text';
+    statusEl.style.color = '#d64545';
+    return;
   }
 
   statusEl.textContent = 'Extracting from LinkedIn…';
   statusEl.style.color = '#8a93a6';
 
   try{
-    const requestBody = mode === 'text'
-      ? { linkedin_text: linkedInInput }
-      : { linkedin_url: linkedInInput };
-
     const response = await fetch('/api/extract-from-linkedin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody)
+      body: JSON.stringify({ linkedin_text: linkedInInput, userid: currentUser?.userid || null })
     });
 
     if(!response.ok){
@@ -1628,12 +2004,10 @@ async function submitLinkedInExtraction(mode){
 
     // Reset inputs
     document.getElementById('linkedinTextInput').value = '';
-    document.getElementById('linkedinUrlInput').value = '';
 
   }catch(e){
     console.error('LinkedIn extraction failed:', e);
-    const msg = e.message === 'Failed to fetch' ? 'Network error — check your URL and try again' : e.message;
-    statusEl.textContent = `❌ ${msg}`;
+    statusEl.textContent = `❌ ${e.message}`;
     statusEl.style.color = '#d64545';
   }
 }
@@ -2132,6 +2506,14 @@ async function runSearch(){
     selectedIds = new Set();
     resetResultFilters();
     renderResults();
+    if(typeof firebase !== 'undefined' && firebase.analytics) {
+      firebase.analytics().logEvent('search_executed', {
+        'opportunity_type': cfg.name || selectedKind,
+        'result_count': currentResults.length,
+        'source': cfg.source || 'local',
+        'description_length': description.length
+      });
+    }
     unlocked[2] = true;
     resultsBackTarget = 1;
     goStage(2);
@@ -2650,7 +3032,7 @@ function baseDomain(url){
 // adding to or loading the tracker.
 async function fetchDeadlineCheck(oppId){
   try{
-    const res = await fetch(`/api/opportunities/${encodeURIComponent(oppId)}/deadline`);
+    const res = await fetch(`/api/opportunities/${encodeURIComponent(oppId)}/deadline${costAttributionQS()}`);
     if(!res.ok) return null;
     return await res.json();
   }catch(err){
@@ -2820,7 +3202,7 @@ async function saveTrackerSaved(){
 
 // ---------- Page switching (Finder wizard <-> persistent Tracker) ----------
 function showPage(name){
-  ['home','wizard','tracker','profile'].forEach(p => {
+  ['home','wizard','tracker','profile','subscription'].forEach(p => {
     const el = document.getElementById('page-' + p);
     if(el) {
       if(p === name) {
@@ -2866,6 +3248,7 @@ function showPage(name){
   // its starter questions) only opens via focusProfileChat(), triggered by an explicit
   // "deepen my story" action, not just by visiting this tab. See focusProfileChat().
   if(name === 'profile'){ renderProfile(); renderProfileFit(); }
+  if(name === 'subscription'){ checkSubscriptionStatus(); renderSubscriptionPage(); }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 // ---------- Calendar/List toggle + type filter within the Tracker page ----------
@@ -3095,6 +3478,12 @@ const MONTH_NAMES = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT'
 // ---------- Card rendering ----------
 function toggleTrackerSaved(id){
   trackerSavedState[id] = !trackerSavedState[id];
+  if(typeof firebase !== 'undefined' && firebase.analytics) {
+    firebase.analytics().logEvent('opportunity_saved', {
+      'opportunity_id': id,
+      'saved': trackerSavedState[id]
+    });
+  }
   saveTrackerSaved();
   renderTrackerPage();
 }
@@ -4046,6 +4435,14 @@ async function buildTracker(){
 
   await saveTrackerData();
 
+  if(typeof firebase !== 'undefined' && firebase.analytics) {
+    firebase.analytics().logEvent('tracker_items_added', {
+      'item_count': newlyAddedTrackerIds.size,
+      'total_tracked': Object.values(trackerData).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0),
+      'bucket_count': buckets.length
+    });
+  }
+
   btn.disabled = false;
   btn.classList.remove('loading');
   label.textContent = 'Add to my tracker →';
@@ -4168,7 +4565,7 @@ Find EVERY pertinent date — registration opens, early-bird vs. regular deadlin
 Also think through 3-5 short, concrete action items a student would need to do to meet the nearest deadline (e.g. request a recommendation letter, draft an essay, gather transcripts) — infer these from requirements and what's typical for this type of opportunity. Keep every item tactical and administrative — the logistics of applying, never advice about the student's own project or its substance, since you don't know the specifics of their work and must not assume or invent any. Skip if status is not_running.
 For each action item, also give your best-guess direct URL for where the student would actually go to do it — the specific application/submission portal, payment or fee page, account sign-up/registration page, or test-registration page, as applicable. Use the most specific URL you found during search (not just the homepage) whenever one exists; reuse the general apply/info URL if nothing more specific applies; use null only if you genuinely found no plausible page — never invent a URL path that wasn't actually seen.
 
-Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","important_dates":[{"label":"short label","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other"}],"deadline_label":"short text like ROLLING, only if important_dates is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null","action_items":[{"text":"short concrete task, under 10 words","url":"best-guess direct URL for this specific action, or null"}]}. Stay well within 1000 tokens: at most 4 important_dates, 3 requirements, and 5 action_items.`;
+Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"name":"program/opportunity name from the page, or organization name if no program name found, under 50 chars","section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","important_dates":[{"label":"short label","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other"}],"deadline_label":"short text like ROLLING, only if important_dates is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null","action_items":[{"text":"short concrete task, under 10 words","url":"best-guess direct URL for this specific action, or null"}]}. Stay well within 1000 tokens: at most 4 important_dates, 3 requirements, and 5 action_items.`;
   const userContent = `URL: ${url}\n${notes ? `Extra context: ${notes}\n` : ''}\nFetch this URL, classify it, and extract tracking details per the schema.`;
   return callGeminiJSON(system, userContent, true);
 }
@@ -4197,7 +4594,7 @@ async function trackerAnalyzeAndAdd(){
     const id = slugifyTracker(extracted.name || url, bucket);
     const item = {
       id,
-      name: extracted.name || url,
+      name: extracted.name || 'Custom Opportunity',
       url,
       type: extracted.category || '',
       bucket: bucket,
@@ -4254,7 +4651,7 @@ function submitUserOpportunityToDatabase(extracted, url, bucket){
   (async () => {
     try {
       const payload = {
-        name: extracted.name || url,
+        name: extracted.name || 'Custom Opportunity',
         url: url,
         type: extracted.category || 'Program',
         section: bucket,
@@ -4264,7 +4661,11 @@ function submitUserOpportunityToDatabase(extracted, url, bucket){
         important_dates: extracted.important_dates || [],
         requirements: extracted.requirements || [],
         apply_url: extracted.apply_url || url,
-        category: extracted.category || null
+        category: extracted.category || null,
+        // Provenance for the admin review queue — a reviewer judging whether a submitted
+        // row is real wants to know who sent it. Signed-out submissions omit it and show
+        // up unattributed, the same residual the cost attribution reports.
+        userid: (currentUser && currentUser.userid) || null
       };
       const res = await fetch('/api/user-submitted-opportunities', {
         method: 'POST',

@@ -47,6 +47,368 @@ fetched at runtime anymore. `migrate_to_supabase.py` was the one-off script that
 table (from this file plus a sibling `opportunity finder/` project's seed data); not part of
 the regular dev loop.
 
+## The four background agents and the admin console
+
+Four offline Python scripts maintain the catalog. All four cost real money per run (Gemini or
+Anthropic, most with web search). **Never run one without fresh explicit approval in chat** —
+this rule exists because of an unplanned ~$30 spend, and building UI for a run is not
+authorization to trigger it.
+
+| Console key | Script | `agent_runs.agent` | Job | Web search |
+|---|---|---|---|---|
+| `metadata` | `refresh_opportunities.py` | `metadata_refresher` | Core metadata: name, org, summary, eligibility, pricing | no |
+| `reviews` | `check_reviews.py` | `review_checker` | Org legitimacy / reputation from independent sources | Gemini |
+| `scraper` | `scrape_opportunities.py` | `scraper` | Find NEW opportunities (only agent that INSERTs) | Gemini |
+| `deadline` | `check_deadlines.py` | `deadline_checker` | Deadlines + running/not-running status | Claude |
+
+Watch out for two things that have caused real bugs here:
+- The **scraper's `items_processed` counts SEEDS, not rows** — never sum it with the other
+  three agents' row counts. `AGENT_CONFIGS_SCHEMA[key]["unit"]` encodes this.
+- `check_reviews.py` is the *review* checker, not the metadata refresher. An earlier console
+  card labelled "Refresh Agent" actually executed `check_reviews.py`; the keys in the table
+  above are the corrected mapping. Don't rename the `db_agent` literals — the scripts write
+  them and there is existing history under each.
+
+`check_reviews.py` selects rows on **staleness only** (`STALE_AFTER_DAYS = 30`, i.e. never
+reviewed or last reviewed >30 days ago), and `--force` ignores that entirely and re-checks
+every active row. The threshold was 182 (~6 months) until 2026-08-22; at that value an
+ad-hoc run did nothing at all for half a year, so the only way to make the agent act
+between passes was `--force` — the whole catalog or nothing. 30 days keeps a plain run
+idempotent (rows checked yesterday are not re-paid for) while letting an ad-hoc run pick up
+whatever has genuinely aged. Reputation moves on the scale of months, so don't drop it much
+further; the console's **Force recheck** checkbox is the escape hatch for "re-check
+everything now". A `review_status:
+is.null` filter used to sit alongside it, added to protect the August 2026 backlog from
+being re-paid for on every resume; it was removed 2026-08-22 once that backlog finished.
+Do not put it back. With every active row now carrying a verdict it matched nothing, which
+made the staleness threshold dead code, meant the agent could never re-check anything, and
+— because the filter sat *outside* the `if not args.force` branch — made `--force` return 0
+rows too, the opposite of what it documents. Today's selection is 0 rows (everything was checked in
+August). At 30 days the catalog comes due in five batches from **2026-09-17** (825 rows)
+through 2026-09-21, rather than all at once; a full 1327-row pass is roughly $0.70 and
+~110 minutes at the 5s delay floor.
+
+## Cost accounting — what the numbers do and don't include
+
+Every cost figure in this repo is **estimated locally from token counts** against the price
+constants in `gemini_common.py` / `claude_common.py`. Nothing reads provider billing, so
+treat totals as a floor. Known blind spots, all of them deliberate and surfaced in the
+console's "Estimated vs billed" card rather than hidden:
+
+- **A client-side timeout still bills server-side.** Killed requests complete and are
+  charged; the local estimate never sees them. This caused the original ~$30 overspend.
+- **Runs that die before their closing PATCH** leave `cost_usd` NULL. The console shows
+  those as `unknown`, never as `$0` — five such runs exist in current history.
+- **Dry runs ARE logged and ARE counted as spend.** `--dry-run` skips database writes, not
+  API calls, so it costs the same as a live run. Runs are marked with a `-dryrun` suffix on
+  `agent_runs.mode` (chosen over a new column so no migration was needed); the console
+  counts their cost but excludes their would-have-been row counts.
+- **Interactive app calls** (`/api/messages`, `/api/messages-claude`) are costed into
+  **one rolled-up `agent_runs` row per surface per UTC day** (`interactive_gemini` /
+  `interactive_claude`) rather than a row per call. See `record_interactive_cost()`.
+- **On-demand deadline checks** write costed rows to their own `deadline_check_log` table;
+  `fetch_deadline_check_cost()` folds them into the summary. They are deliberately NOT
+  also rolled into `agent_runs` — that would double-count them.
+- **Resume / LinkedIn import** (`_extract_profile_from_text`) used to throw its usage block
+  away, so those Claude calls appeared in no figure anywhere. It now records into the same
+  `interactive_claude` rollup as every other app call.
+- **Every Anthropic call in this repo runs on Haiku 4.5** (`claude-haiku-4-5-20251001`),
+  pinned in three places that must agree: `server.py`'s `CLAUDE_MODEL`,
+  `check_deadlines.py`'s local `CLAUDE_MODEL`, and `claude_common.py`'s `MODEL`. The last
+  of those was left on `claude-sonnet-4-6` when the other two moved, which meant the
+  model depended on which entry point you came through — the resume/LinkedIn import went
+  through `claude_common` and so actually ran on Sonnet while recording its cost under
+  `CLAUDE_MODEL`, i.e. `user_costs.model` named a model that had not served the call.
+- **`claude_common`'s price constants must track its `MODEL`.** `server.py` imports them to
+  cost every `interactive_claude` call, and those run on Haiku — so while that file said
+  Sonnet, the constants were Sonnet's $3/$15 against Haiku's actual $1/$5 and interactive
+  Claude spend was estimated at **3x** what it cost.
+- **`check_deadlines.py` costed its Claude calls with `gemini_common.estimate_cost`** —
+  Gemini's $0.75/$3.75 per MTok plus $0.014/search — against Anthropic calls made by its
+  own local `call_claude()`. It now imports `estimate_cost` from `claude_common`.
+- Both corrections landed 2026-08-22 and are **not applied retroactively**: `agent_runs`,
+  `user_costs` and `deadline_check_log` rows written before then carry the old rates.
+
+**Per-user cost attribution** lives in a Supabase `user_costs` table
+([user_costs_schema.sql](user_costs_schema.sql) — a one-time manual DDL step in the Supabase
+SQL editor; until it is run, `server.py` logs one warning, attribution is off, and the console
+shows the setup step instead of an error). Read it as a **breakdown of interactive spend, never
+as extra spend**: every dollar in `user_costs` is already counted in the `interactive_*`
+`agent_runs` rollups or in `deadline_check_log`. `record_interactive_cost()` computes the cost
+once and writes both, so the two can't drift.
+
+- Grain is one row per `(userid, UTC day, surface, feature)` — a rollup, for the same reason
+  the interactive daily rows are.
+- **Feature is classified server-side from the system prompt** (`classify_feature()` /
+  `_FEATURE_SIGNATURES`), reusing the same signatures `generate_mock_text()` matches on, so no
+  script.js call site had to change. Adding a new AI feature means adding a signature here too,
+  or its spend lands in `other`.
+- `user_costs.calls` counts **billed, attributable calls only** — it is not app traffic. It
+  excludes mock-mode calls, signed-out calls, cached/mock/stale-fallback deadline checks, and
+  calls that errored before returning usage. That last exclusion is the familiar blind spot:
+  an errored or timed-out call still bills server-side, so the count is a floor like every
+  other figure here. The UI labels it "billed calls" and carries the exclusions in a tooltip.
+- Attribution is best-effort: calls with no `userid` (signed-out, pre-login) are not
+  attributed. The console reports that residual as **unattributed** with an attribution rate
+  rather than distributing it across users.
+- Cached/mock/stale-fallback deadline checks are **not** charged to anyone — they make no API
+  call. Only the user whose request actually paid to populate the cache is billed for it.
+- Spend is broken out by **provider and model**, not just by surface. `user_costs.model`
+  stores the exact model id that was billed (`MESSAGES_MODEL` / `CLAUDE_MODEL` /
+  `check_deadlines.CLAUDE_MODEL`, imported rather than re-declared so a bump there can't
+  leave the breakout naming a stale model). Provider is **derived** from that id by
+  `provider_for_model()` — never a stored column, which could drift out of step with
+  `model` after one bad write. Do **not** split by `surface` instead: `gemini`→Google and
+  `claude`/`deadline_check`→Anthropic line up today only because of the current wiring,
+  and the profile chat is already a deliberate Anthropic holdout inside an otherwise
+  Gemini app — one feature moving provider would silently make a surface-based split wrong.
+  Surface is still reported separately; it answers *where in the app*, not *who is billing*.
+- The `model` column arrived after the table did, so **`user_costs_schema.sql` must be
+  re-run** (it is idempotent — `add column if not exists` plus a constraint swap). Until
+  then the console degrades rather than breaking: reads retry with a narrower select,
+  writes retry without the column, `model_ready: false` comes back, and every model reads
+  as `(before model tracking)` while the provider split still works off the surface
+  fallback in `_SURFACE_PROVIDERS`. Totals are correct in both states.
+- The grain constraint **includes `model`** and the column is `not null default ''`, not
+  nullable: Postgres treats NULLs as distinct in a unique constraint, so a nullable model
+  would make every single call insert a fresh row instead of accumulating into one.
+- `GET /api/agents/user-costs?days=&limit=` (localhost-only like the rest of `/api/agents/*`,
+  which matters more here — the response carries names, emails and plan status) backs the
+  console's **Cost per user** tab: attributed vs unattributed, spend by provider, by model
+  (with each model's feature split), by feature, and a per-user table showing cost against
+  the $9.99 plan price. Expanding a user row shows their own provider and model breakdown.
+  Provider colours in the console are **fixed per provider**, unlike the positional feature
+  palette — otherwise a provider overtaking the other swaps colours mid-session and the bar
+  reads backwards.
+- The console has **three top-level views** (`.viewtabs` / `showView()` in
+  [admin_console.html](admin_console.html)): *Agents* (everything about the four background
+  agents, including the dry-run snapshot list), *Review queue* (pending activations), and
+  *Cost per user*. Note the distinct `.vtab` vs `.tab` styling — `.tab` is the
+  inline pill inside a card head (the scraper's National/Seattle switch) and filters one
+  table; `.vtab` swaps the whole page. Keeping them visually different is deliberate.
+- Two endpoints gained a `userid` so their spend can be attributed:
+  `GET /api/opportunities/<id>/deadline?userid=` and `POST /api/extract-from-resume?userid=`
+  (query string because one is a GET and the other is multipart). Both routes had to move off
+  exact-`self.path` matching to survive the query string — the same trap the `/api/agents/*`
+  routes already carry a comment about.
+
+**Pulling real billed spend:** Anthropic exposes `GET /v1/organizations/cost_report`, which
+needs an **Admin key** (`sk-ant-admin…`, set as `ANTHROPIC_ADMIN_KEY` in `.env`) or an
+`org:admin` OAuth token — a regular `sk-ant-api` key returns 401, and the Admin API is
+unavailable to individual (non-organization) accounts. Amounts come back in **cents** as
+decimal strings. Google has **no equivalent**: the Gemini API exposes no billing endpoint at
+all, and the Cloud Billing API can't be authenticated with an AI Studio key — so Gemini gets
+a dashboard link instead of a live figure. See `fetch_anthropic_billed_cost()`.
+
+**Three run tiers**, and only one of them is free:
+- `--preview` — resolves which rows/seeds would be processed, prints a `PREVIEW_JSON:` line,
+  exits before the first API call. **Zero cost, zero writes.** Shared plumbing lives in
+  `agent_common.py`; `server.py`'s `preview_agent()` parses that line and pairs the count with
+  a per-item cost averaged from that agent's real `agent_runs` history.
+- `--dry-run` — **still calls the paid API at full cost**; only skips DB writes and dumps a
+  local JSON snapshot instead. That snapshot can be **committed** later from the console
+  rather than paying to re-run the agent live — see below.
+- neither flag — full run, writes to Supabase.
+
+**Timing** is configurable per run via `--min-delay` and `--timeout` on every agent (three
+layers: module default → env var → flag). The 5-second inter-call delay is what fixed this
+pipeline's repeated HTTP 429s — treat it as a floor. It also dominates wall time: ~1330 rows at
+5s is ~110 minutes regardless of API speed. `gemini_common` and `claude_common` each expose
+`set_min_delay()`/`set_default_timeout()`. Note `check_deadlines.py` has its **own** local
+`call_claude()` (not `claude_common`'s) and its own delay knob defaulting to 0, because
+`check_one()` is shared with server.py's interactive on-demand deadline endpoint, where a
+process-wide delay would make one user's request block on another's; batch mode raises it to 5.
+
+**Committing a dry-run snapshot** ([dryrun_common.py](dryrun_common.py)) replays a snapshot's
+withheld writes into Supabase. It makes **no API calls and costs nothing** — the money was
+already spent by the run that produced the file. `GET /api/agents/snapshots` lists what is on
+disk; `POST /api/agents/snapshots/commit` with `preview: true` resolves the real post-dedupe
+counts without writing, and without it applies them.
+
+- `_patch_updates()` mirrors each agent's live (non-dry) PATCH column-for-column. **If an
+  agent's live write changes, change this too**, or a committed snapshot writes a different
+  shape than a live run of the same agent.
+- The **scraper's snapshot is written on live runs too**, not only dry runs, so it can name
+  rows that already exist. Inserts are deduped by normalized URL against the *whole* table
+  (active and inactive), so committing the same file twice inserts nothing the second time.
+  The dedupe set paginates past PostgREST's 1000-row cap — a single unpaginated request
+  silently truncates it and lets duplicates through.
+- Committed rows always land `is_active = false`. A commit never activates anything.
+- A real commit writes an `agent_runs` row with `mode = "snapshot-commit"` and `cost_usd = 0`.
+  That pairs with the `-dryrun` row the original run wrote: the dry run carries the cost and
+  no row counts, the commit carries the row counts and no cost, so neither is double-counted.
+- **Snapshot filenames are stamped `YYYYMMDD-HHMMSS`** by `agent_common.snapshot_stamp()`,
+  shared by all four agents. Seconds, not just the date: they were date-only until
+  2026-08-22, so a second run on the same day silently overwrote the first one's file —
+  and a `--dry-run` has already paid the API in full by the time it writes, so that
+  destroyed work that cost real money. It also made this list a lie, since the file said
+  `20260819` with no way to tell which of that day's runs it held.
+  - Two shapes exist on disk and **both are read**. Files written before 2026-08-22 keep
+    their date-only names and stay committable; `dryrun_common._run_date()` resolves those
+    to midnight, exactly what the old code returned, so their staleness and ordering are
+    unchanged. The console only prints a time for filenames that actually carry one — a
+    date-only snapshot showing `00:00` would read as a real run time.
+  - The stamp is **local time** (matching `agent_logs/<agent>_<stamp>.log`) but is parsed
+    and served as UTC so every snapshot stays comparable; the console reads it back with
+    `getUTC*` so the digits it prints match the digits in the filename.
+  - The scraper's `source` value stays **date-only** (`scraper-national-20260820`) — a whole
+    day's scrape groups under one source, and existing rows carry those values.
+  - Snapshots are still sorted by full instant, not by date: same-day files would otherwise
+    order by filename, i.e. alphabetically by agent rather than newest-first.
+  - A snapshot still does not correspond to a particular `agent_runs` row — nothing links
+    them — but two same-day runs no longer collapse into one file.
+
+**Activating scraped opportunities** — `GET /api/agents/pending` lists `is_active = false`
+rows and `POST /api/agents/pending/activate` (`{ids, active}`) flips them, backing the
+console's **Review queue** tab. Nothing in this repo ever sets `is_active = true`
+automatically; a scrape always writes inactive and stays that way until a person activates it
+here, because the scraper does return plausible-looking rows that are wrong and the catalog is
+what students see. Activation takes an explicit id list — there is deliberately no
+"activate everything matching" path. `active: false` reverses a mistake without a DB console.
+Both paths bust `_opportunities_cache`, or the operator activates a row and then cannot find
+it in the app for `OPPORTUNITIES_CACHE_TTL` seconds.
+
+**Rejecting a queued row** — `POST /api/agents/pending/moderate` (`{ids, status}`) writes
+`moderation_status` + `reviewed_by`/`reviewed_at`, backing the queue's **Queue / Rejected**
+pills. It is deliberately *not* the same call as activate: `is_active` alone cannot say "a
+human looked and declined", so without it a junk row sat inactive forever and was re-triaged
+every time the queue was opened — the queue only ever grew.
+
+- **Rejecting never deletes.** The row stays in the table so its URL keeps blocking
+  re-submission through `url_dedupe`, and moderating it back to `pending_review` undoes the
+  decision from the Rejected tab. Deleting is destructive and is still not offered anywhere.
+- Rejecting/duplicating also forces `is_active = false`. **Approving does not activate** —
+  that stays the separate, explicit Activate button. Activating *does* stamp
+  `moderation_status = "approved"`, or an activated row keeps a NULL status and comes back
+  round the queue.
+- `GET /api/agents/pending?status=` is `queue` (default) / `rejected` / `all`. The queue
+  filter must spell out the NULL case (`or=(moderation_status.is.null,…in.(…))`): every
+  scraper row has a NULL `moderation_status`, and `NULL NOT IN (…)` is NULL in SQL, so a
+  plain `not.in` would empty the queue outright.
+- The moderation endpoints degrade if
+  [user_submissions_schema.sql](user_submissions_schema.sql) has not been run — the list
+  falls back to the base select (`moderation_ready: false`, the console hides Reject and
+  shows the setup line), and activate drops the approve stamp rather than the whole write.
+
+**Marking a row a duplicate** — the `duplicate` status is its own per-row **Duplicate**
+modal, not a variant of the Reject button, because it is the one verdict that needs a
+*target*.
+
+- **`duplicate_of` is required for `duplicate` and refused for every other status.** A
+  duplicate with no survivor is a rejection wearing a misleading label, and there is then no
+  row for a reader to follow to.
+- The target is checked: it must exist, must not be the row itself, and **must not itself be
+  `rejected`/`duplicate`** — a chain the queue cannot follow, which quietly loses the real
+  survivor.
+- `duplicate_of` is **always written, never merely set**: restoring or rejecting a row that
+  was previously a duplicate clears it, or it keeps naming a survivor for a relationship
+  that no longer exists.
+- `GET /api/agents/opportunities/search?q=&limit=` finds the survivor. It searches **active
+  and inactive rows alike** — the survivor of two queued scrapes is itself still queued —
+  by id (exact, tried first) then `name`/`org`/`url` ilike. Commas, parens, `*` and `%` are
+  stripped from the term: PostgREST's `or=()` list is comma-separated and paren-delimited,
+  so those would parse as syntax rather than as text.
+- The modal offers each row's stored `dup_candidates` first, with the reason and confidence
+  `url_dedupe` recorded at submission time — that is the whole reason the column is stored.
+- `list_pending_opportunities` returns a `duplicate_targets` map (one extra request, only
+  when something is actually marked duplicate) so the queue can name the survivor instead of
+  showing a bare id.
+
+**Editing a queued row** — `POST /api/agents/pending/update` `{id, fields}` fixes a row
+before anyone activates it, backing the queue's per-row **Edit** modal.
+
+- **Only `is_active = false` rows.** The endpoint reads the row first and refuses a live one.
+  Without that guard it is a general catalog editor reachable by id, with no confirmation and
+  no audit trail — not what the Activate/Reject buttons around it lead an operator to expect.
+- `EDITABLE_OPPORTUNITY_FIELDS` is a **whitelist**, and an unknown key is refused *by name*
+  rather than dropped (PostgREST would 400 the whole PATCH on it anyway). Not editable:
+  `is_active`/`moderation_status` (those are the buttons), `id`/`source`/`created_at`
+  (provenance), `review_*` (`check_reviews.py` owns them), and
+  `status`/`important_dates`/`was_estimated`/`dates_last_checked_at` (`check_deadlines.py`
+  owns them — a hand-typed date would be overwritten by the next check).
+- `type` is validated against `OPPORTUNITY_TYPES`; a typo there makes the row invisible to
+  the finder's `KIND_CONFIG` lookup rather than merely ugly. `category` is deliberately *not*
+  validated — it is legacy free text holding `COMPETITION`, `SUMMER_PROGRAM`, mixed case.
+- `_BASE_PENDING_SELECT` carries every editable column so the modal prefills from the list
+  the console already has. **Add a field to the whitelist and it must go in that select too**,
+  or the modal opens with it blank and saving writes the blank.
+- The client sends **only changed fields**; a no-op save would still bump `updated_at` and
+  make the row look freshly touched everywhere else.
+
+**User-submitted opportunities** — the Quest Log's "Add Opportunity" form posts to
+`/api/user-submitted-opportunities`, which writes an `is_active = false`,
+`source = "user-submitted"` row into the same review queue the scraper feeds.
+Matching lives in **[url_dedupe.py](url_dedupe.py)**, kept separate from the `normalize_url()`
+that `scrape_opportunities.py` / `dryrun_common.py` / `migrate_to_supabase.py` each carry —
+those three are deliberately identical to each other and are **not** to be changed to match
+this one.
+
+The governing rule, and the catalog measurements that force it:
+
+- **Only "same normalized URL *and* similar name" is ever auto-rejected.** Not URL alone:
+  `spicestanford.smapply.io` is the application portal for **six** distinct programs
+  (Stanford E-Japan, Sejong Korea Scholars, …) and Girls Who Code's immersion URL backs two.
+  Rejecting on URL alone makes those permanently unsubmittable. URL matches but name differs
+  → insert with a **strong** flag instead. A wrongly-flagged row costs a reviewer seconds; a
+  wrongly-rejected one is lost silently.
+- **Never auto-reject on shared domain.** 969 of 1330 rows (73%) sit on a domain shared with
+  a *different* opportunity — `nyu.edu` alone hosts 36. Bare "same site" is only emitted as a
+  hint when the domain has ≤ `SAME_SITE_MAX_PEERS` existing rows, or it buries the reviewer.
+- **Never auto-reject on name similarity.** The scraper's `DEDUP_RATIO = 0.85` produces 93
+  false-positive pairs against the current catalog (`'1-Week Medical Academy'` vs
+  `'3-Week Medical Academy'` scores 0.95) — i.e. that agent is *already* suppressing real
+  opportunities. Don't copy it here.
+- **The stored `url` is never normalized.** 100 catalog rows have case-sensitive paths
+  (`…/CNIX.html`) that 404 once folded. Normalization happens only in a throwaway
+  `match_key()`. The bug this replaces lowercased the *needle* and compared it with PostgREST
+  `eq.` against un-normalized stored values, so dedupe silently failed for the ~44% of rows
+  holding an uppercase character or trailing slash — visible in the catalog today as
+  `'Clinical Summer Internship'` twice and JSHS three times under three name variants.
+- Tracking params (`utm_*`, `fbclid`, …) are stripped but **all other query params are
+  preserved** — sites keying programs off `?id=` would otherwise collapse into one row.
+- The dedupe read paginates past PostgREST's 1000-row cap (the table is ~1440 rows including
+  inactive ones), and if the catalog can't be read it **refuses to insert** rather than
+  inserting blind.
+- **`apply_url`, `apply_label`, `meta`, `requirements`, `description` and `deadline` are NOT
+  columns on `opportunities`.** PostgREST rejects an entire insert on one unknown key, so an
+  earlier row builder that set them meant *no user submission ever wrote a row* — the empty
+  review queue read as "nobody submitted", not "every insert 400'd". Selecting a nonexistent
+  column 400s reads the same way. Confirm a column exists before adding it here; the AI
+  extraction returns a wider shape than the catalog stores, and the surplus goes in
+  `submission_payload`.
+
+Review-queue columns (`moderation_status`, `submitted_by`, `dup_candidates`, `quality_flags`,
+…) come from **[user_submissions_schema.sql](user_submissions_schema.sql)** — another one-time
+manual DDL step in the Supabase SQL editor. Until it runs the insert is retried with the base
+columns only and logs one warning naming the file; submissions still land inactive.
+`moderation_status` is **separate from `is_active`** on purpose: the boolean alone cannot say
+"a human looked at this and said no", so a rejected row would sit at `is_active = false`
+forever and be re-triaged every time the queue is opened. Do **not** name it `state` (that is
+the 2-letter US state code) or `review_status` (that is `check_reviews.py`'s org-legitimacy
+verdict, already shown to students). The normalized-URL index there is deliberately **not
+unique**, for the shared-portal reason above.
+
+**Scraper search angles** ("seeds") live in a Supabase `scraper_seeds` table
+([scraper_seeds_schema.sql](scraper_seeds_schema.sql)), editable from the admin console, with
+lifetime per-angle yield totals (`total_added`, `total_cost`, …) so unproductive angles can be
+found and retired. `seeds_common.py` loads them and falls back to the hardcoded
+`NATIONAL_SEEDS`/`SEATTLE_SEEDS` literals in `scrape_opportunities.py` if the table is empty or
+unreachable — it logs loudly which source it used. Select angles with `--seed-ids` (stable);
+`--seed-indices` is deprecated because positions shift whenever a seed is added or deleted.
+
+**Admin console** is [admin_console.html](admin_console.html), served at `/admin`. It and every
+`/api/agents/*` and `/api/seeds` route are **restricted to localhost** (`_require_local()`), since
+the server binds all interfaces and these routes spend money. Agent output is streamed line by
+line to a ring buffer and to `agent_logs/<agent>_<stamp>.log`, readable via
+`GET /api/agents/log?agent=&since=`.
+
+**Restarting the dev server**: use [restart_server.ps1](restart_server.ps1), never Bash `&`.
+It kills whoever actually owns port 8000 (via `Get-NetTCPConnection`, not `pkill` — Git Bash
+cannot see native Windows python processes), verifies the port is free, and records the *listening*
+PID. The WindowsApps `python.exe` is an alias shim whose child holds the socket, so the PID
+`Start-Process` returns is not the server. Getting this wrong once left 26 zombie processes
+serving stale code for a whole session.
+
 **Backend (`server.py`)** is a `ThreadingHTTPServer` with a `GET /api/opportunities` route
 plus five POST endpoints:
 - `/api/messages` — proxies to the real Gemini API (model `gemini-3.5-flash-lite`, pinned
@@ -78,6 +440,75 @@ plus five POST endpoints:
   moved the old flat-file `users_db.json` into this table — logic/shape is otherwise
   unchanged, this was a storage-backend swap only.
 
+**Subscription, trial, and signup consent.** Every account starts a **3-day free trial**
+that converts to a **$9.99/month** Stripe plan. `subscription_common.py` talks to Stripe
+over raw HTTP (no SDK, matching the stdlib-only philosophy) and holds the `PROMO_CODES`
+dict; four POST endpoints (`/api/subscription/status|checkout|cancel|validate-promo`) sit
+in `server.py`.
+
+- The `users` table needs the columns in **[subscription_schema.sql](subscription_schema.sql)**
+  — a one-time manual DDL step in the Supabase SQL editor, same as `user_costs_schema.sql`.
+  PostgREST has no DDL endpoint, so nothing in this repo can run it. **Until it runs,
+  registration is down**: `create_user()` writes all of those columns and Postgres rejects
+  the insert entirely if one is missing. `/api/register` detects that case (PostgREST
+  reports it as `42703` on reads but `PGRST204` on writes — both are checked) and returns a
+  **503 naming the file**, rather than the bare `502 Could not reach Supabase` that cost a
+  session of debugging.
+- **`subscription_state(record)` in `server.py` is the single source of truth** for whether
+  an account may use the app. The client paywall and the server-side gate both derive from
+  it, so they cannot disagree. `has_access` is: `active` → yes; `trial` → yes until
+  `trial_ends_at`; `beta` → yes until `subscription_end_at`; `canceled` → yes until
+  `subscription_end_at` (cancelling is cancel-at-period-end, they paid for that time);
+  anything else → no.
+- **Promo codes come in two incompatible kinds**, keyed by `kind` in `PROMO_CODES`.
+  A **`grant`** code (`BETAUSER` → status `beta`, +7 days) is redeemed immediately against
+  the user's row via `POST /api/subscription/redeem-promo`; it touches no Stripe and works
+  with Stripe unconfigured. A **`checkout`** code (`FREEMONTH`, `WELCOME10`) is a discount
+  that only exists once Stripe is involved and is passed to the Checkout Session. Redeeming
+  a checkout code through the grant endpoint is refused — it would burn the code for
+  nothing. `validate-promo` returns `kind` so the client knows which path to take.
+  Grants extend from `max(now, current end)`, so they **add** to a running trial rather
+  than replacing it, and `GRANTABLE_STATUSES` stops a typo'd status from writing a value
+  `subscription_state()` has no branch for (which would read as no access and lock out the
+  user who just redeemed).
+- `promo_codes_used` is what makes a code one-per-account. Before the redeem endpoint
+  existed nothing ever wrote that column, so "one-time use" was unenforced.
+- **A `trial` row with a NULL `trial_ends_at` means "clock not started", not "expired".**
+  That is every account predating the migration. `ensure_trial_started()` stamps a real
+  window on first sign-in. Reading NULL as expired — which `is_trial_expired(None)` does if
+  you take it literally — would paywall every existing user the moment the migration lands.
+- Enforcement is deliberately in **both** halves. `showApp()` checks before the app shell is
+  unhidden (no flash of a usable app), and `Handler._subscription_blocks()` returns **402**
+  from the four endpoints that cost money per call. The client lock is a screen; the 402 is
+  the control. Calls with no `userid` are not blocked — unidentifiable, same residual the
+  cost attribution reports as unattributed.
+- **Both `userid` and `email` must be unique across all accounts**, case-insensitively.
+  `users` has no is_active/deleted column, so every row is a live account and any match is
+  a real conflict. `handle_register()` checks both up front and names the field that
+  clashed — Postgres alone returns a bare 409 that can't say which. Uniqueness is by
+  **normalization, not `ILIKE`**: `userid` is lowercased everywhere already, and
+  `normalize_email()` lowercases/trims on write so an exact `eq.` match *is* the
+  case-insensitive lookup. Don't switch these to `ilike` — `_` is a legitimate email
+  character and an ILIKE wildcard, so it would over-match and refuse valid signups.
+  The check and the INSERT are two round-trips, so simultaneous signups can still race
+  past it; the unique index in **[users_email_unique_schema.sql](users_email_unique_schema.sql)**
+  is what actually closes that, and `EMAIL_UNIQUE_INDEX` in `server.py` must keep matching
+  the index name there or an email collision gets reported as a userid collision.
+- **Signup consent**: three checkboxes (18-or-older; if not, parent/guardian permission
+  per Terms §2; and accepting the Terms + Privacy Policy). `handle_register()` re-checks all
+  three server-side and refuses the account otherwise. What was accepted is stamped on the
+  row (`is_adult`, `parental_consent`, `terms_accepted_at`, `privacy_accepted_at`,
+  `terms_version`). **Bump `TERMS_VERSION` in `server.py` whenever `legal/*.md` changes
+  materially** or old and new acceptances become indistinguishable.
+- **The legal documents are generated.** `legal/terms.md` and `legal/privacy.md` are the
+  source of record; `terms.html` / `privacy.html` are built from them by
+  **`build_legal.py`** and must not be hand-edited — re-run it after any edit under
+  `legal/`. Note Terms §3 still states the beta is free of charge, which the $9.99 plan
+  contradicts.
+- Stripe is **not configured**: `STRIPE_API_KEY`/`STRIPE_PRICE_ID` are absent from `.env`,
+  so `upgradeSubscription()` fails at checkout. Everything upstream of the payment itself
+  (trial, gating, promo validation, cancel bookkeeping) works without it.
+
 **Two persistence layers on the client**, easy to conflate:
 1. `window.storage` (get/set, async) — used for `currentUser` session cache, `studentProfile`,
    `trackerData`, `trackerSavedState`. This API is **not defined anywhere in this repo**; it's
@@ -104,7 +535,10 @@ are the one exception — they call `callClaude(system, userContent, useWebSearc
 POSTing to `/api/messages-claude` (Anthropic, `claude-haiku-4-5-20251001`), same response
 parsing either way.
 
-**App pages** (single-page, no router — `showPage(name)` toggles `#page-*` sections):
+**App pages** (single-page, no router — `showPage(name)` toggles `#page-*` sections).
+Note two sections that live *outside* `#appShell` and are therefore not `showPage()`
+targets: `#page-login` (the sign-in/registration gate) and `#page-locked` (the paywall) —
+both replace the app wholesale rather than rendering inside it.
 Home/Dashboard (progress bars, todo counts), Wizard/Finder (quiz or free-text profile →
 `runSearch()`/`runProfileSuggestSearch()` → ranked results → `buildTracker()`), Tracker
 (calendar + list views across buckets in `ALL_BUCKETS`: summerPrograms, internships,

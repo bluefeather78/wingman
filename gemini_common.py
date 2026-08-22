@@ -85,15 +85,80 @@ import time
 import urllib.error
 import urllib.request
 
-# Rate limiting: Gemini API requires at least 5 seconds between calls.
-# Track the last call time globally to enforce this across all invocations.
+# Rate limiting: a minimum delay between every Gemini API call, enforced process-wide.
+# 5s is the value that resolved the repeated HTTP 429s this pipeline used to hit; treat it
+# as the floor, not a starting point to tune down casually.
+#
+# Configurable in three layers, each overriding the one above:
+#   1. DEFAULT_MIN_DELAY_SECS below
+#   2. the GEMINI_MIN_DELAY_SECS env var (how server.py passes a value into a subprocess
+#      without every script needing a new call signature)
+#   3. set_min_delay(), which the scripts' --min-delay flag calls
+DEFAULT_MIN_DELAY_SECS = 5
+DEFAULT_TIMEOUT_SECS = 120
+
 _last_call_time = 0.0
-_min_delay_secs = 5
+
+
+def _env_number(name, fallback):
+    """Read a numeric env var, falling back silently on anything unparseable — a typo in
+    .env should not take the whole pipeline down, and the default is always safe."""
+    raw = os.environ.get(name, "")
+    if not raw:
+        return fallback
+    try:
+        value = float(raw)
+    except ValueError:
+        print(f"[WARN] {name}={raw!r} is not a number; using {fallback}.")
+        return fallback
+    return value if value >= 0 else fallback
+
+
+_min_delay_secs = _env_number("GEMINI_MIN_DELAY_SECS", DEFAULT_MIN_DELAY_SECS)
+_default_timeout_secs = _env_number("GEMINI_TIMEOUT_SECS", DEFAULT_TIMEOUT_SECS)
+
+
+def set_min_delay(secs):
+    """Override the minimum delay between Gemini calls. Called by each script's
+    --min-delay flag. Warns below the 5s floor rather than refusing, since a small
+    sample run at a lower delay is a legitimate (if riskier) thing to want."""
+    global _min_delay_secs
+    if secs is None:
+        return _min_delay_secs
+    secs = max(0.0, float(secs))
+    if secs < DEFAULT_MIN_DELAY_SECS:
+        print(f"[WARN] Gemini min delay set to {secs}s, below the {DEFAULT_MIN_DELAY_SECS}s "
+              f"floor that fixed past HTTP 429 rate limiting. Expect 429s on longer runs.")
+    _min_delay_secs = secs
+    return _min_delay_secs
+
+
+def get_min_delay():
+    return _min_delay_secs
+
+
+def set_default_timeout(secs):
+    """Override the per-request HTTP read timeout used when a caller doesn't pass one
+    explicitly. Note a client-side timeout does NOT stop or refund the server-side work
+    already in flight — too short a timeout means paying for answers you never see."""
+    global _default_timeout_secs
+    if secs is None:
+        return _default_timeout_secs
+    _default_timeout_secs = max(1.0, float(secs))
+    return _default_timeout_secs
+
+
+def get_default_timeout():
+    return _default_timeout_secs
 
 
 def _enforce_rate_limit():
-    """Ensures at least 5 seconds have passed since the last Gemini API call.
-    Sleeps if necessary to comply with Gemini's rate limit policy."""
+    """Sleep until at least the configured minimum delay has passed since the last call.
+
+    Note the timestamp is stamped at call START, not completion, so the delay and the
+    API call's own latency overlap: an agent whose calls take 3s sees ~5s per item at a
+    5s delay, not 8s. Any extra per-item sleep in a calling script shorter than this
+    window is therefore absorbed by it and has no effect."""
     global _last_call_time
     now = time.time()
     elapsed = now - _last_call_time
@@ -227,7 +292,7 @@ OUTPUT_PRICE_PER_TOKEN = 3.75 / 1_000_000
 WEB_SEARCH_PRICE_PER_SEARCH = 14 / 1000
 
 
-def call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=4000, timeout=120,
+def call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=4000, timeout=None,
                  max_searches=None, thinking_level="low", model=None):
     """POSTs directly to the Gemini generateContent API. Returns (text, usage) — text is
     the concatenated text output with any ```json fences stripped, usage is a dict shaped
@@ -270,6 +335,8 @@ def call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=4
         "systemInstruction": {"parts": [{"text": system}]},
         "generationConfig": {"maxOutputTokens": max_tokens},
     }
+    if timeout is None:
+        timeout = _default_timeout_secs
     if thinking_level:
         body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": thinking_level}
     if use_web_search:

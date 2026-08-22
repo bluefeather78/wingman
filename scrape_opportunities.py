@@ -36,10 +36,11 @@ import difflib
 import json
 import os
 import sys
-import time
 import urllib.error
 
+from agent_common import add_agent_args, apply_timing, emit_preview, snapshot_stamp
 from gemini_common import call_gemini, extract_json, estimate_cost
+from seeds_common import load_seeds, record_seed_result, select_seeds
 from supabase_common import load_dotenv, supabase_get, supabase_post, supabase_insert_one, supabase_patch
 
 VALID_SUBJECTS = ['Mixed', 'STEM', 'Medicine', 'Humanities', 'Art', 'Business', 'Engineering',
@@ -259,11 +260,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["national", "seattle"], required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--seed-ids", type=str, default=None,
+                         help="Comma-separated scraper_seeds ids to run (e.g. '12,15,31') instead "
+                              "of every enabled seed. Ids are stable across edits, so this is the "
+                              "safe way to retry just the seeds that failed in a prior run without "
+                              "re-paying for the ones that succeeded. This is what the admin "
+                              "console sends.")
     parser.add_argument("--seed-indices", type=str, default=None,
-                         help="Comma-separated 0-based indices into the seed list to run "
-                              "(e.g. '0,1,4,9') instead of all seeds. Useful for retrying just "
-                              "the seeds that failed/timed out in a prior run without re-paying "
-                              "for the ones that already succeeded.")
+                         help="DEPRECATED — use --seed-ids. Comma-separated 0-based POSITIONS in "
+                              "the seed list (e.g. '0,1,4,9'). Positions shift whenever a seed is "
+                              "added, deleted or reordered, so a saved index list can silently "
+                              "select different angles than it did when you wrote it down.")
     parser.add_argument("--max-searches", type=int, default=10,
                          help="SOFT budget (folded into the prompt) on how many searches Gemini "
                               "runs per seed (default 10) — unlike Anthropic's web_search "
@@ -271,13 +278,11 @@ def main():
                               "so this is a request the model can still exceed, not a guarantee. "
                               "Still worth setting: it bounds cost ($0.014/search + the tokens "
                               "each result adds to context) and wall time in the common case.")
-    parser.add_argument("--timeout", type=int, default=280,
-                         help="Per-seed HTTP read timeout in seconds (default 280). Broad "
-                              "national-scope seeds with multiple search rounds can take longer "
-                              "than a short timeout; a client-side timeout does NOT stop the "
-                              "request server-side, so a too-short timeout risks paying for a "
-                              "completion without ever seeing the result.")
+    # --timeout comes from add_agent_args at 280s: broad national seeds with multiple
+    # search rounds routinely take longer than the 120s the other agents use.
+    add_agent_args(parser, default_timeout=280)
     args = parser.parse_args()
+    apply_timing(args, gemini=True)
 
     load_dotenv()
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -287,13 +292,25 @@ def main():
         print("[ERROR] SUPABASE_URL / SUPABASE_SERVICE_KEY / GEMINI_API_KEY not set in .env.")
         sys.exit(1)
 
-    all_seeds = NATIONAL_SEEDS if args.mode == "national" else SEATTLE_SEEDS
-    if args.seed_indices:
-        indices = [int(x.strip()) for x in args.seed_indices.split(",") if x.strip()]
-        seeds = [all_seeds[i] for i in indices]
-        print(f"[OK] Running {len(seeds)} of {len(all_seeds)} seed(s): indices {indices}")
-    else:
-        seeds = all_seeds
+    # Seeds live in the scraper_seeds Supabase table so they can be edited from the admin
+    # console; the module-level lists below are the fallback if that table is empty or
+    # unreachable. See seeds_common.load_seeds().
+    fallback = NATIONAL_SEEDS if args.mode == "national" else SEATTLE_SEEDS
+    all_seeds = load_seeds(supabase_url, service_key, args.mode, fallback=fallback)
+    seeds = select_seeds(all_seeds, seed_ids=args.seed_ids, seed_indices=args.seed_indices)
+
+    # Preview: scope resolved, report and stop before the first (paid) Gemini call.
+    if args.preview:
+        emit_preview(len(seeds), "seeds",
+                     [f"[{s.get('id')}] ({s['category']}) {s['angle'][:90]}" for s in seeds],
+                     mode=args.mode,
+                     seed_ids=[s.get("id") for s in seeds])
+        return
+
+    if not seeds:
+        print("[OK] No seeds selected — nothing to do.")
+        return
+
     addendum = "" if args.mode == "national" else SEATTLE_ADDENDUM
     today = datetime.date.today().isoformat()
     run_date = datetime.date.today().strftime("%Y%m%d")
@@ -306,14 +323,15 @@ def main():
     mint_id = next_id_generator({r["id"] for r in existing})
     print(f"[OK] {len(existing)} existing rows loaded.")
 
-    run_id = None
-    if not args.dry_run:
-        run_row = supabase_insert_one(supabase_url, "agent_runs", {
-            "agent": "scraper",
-            "mode": args.mode,
-            "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        }, service_key)
-        run_id = run_row["id"] if run_row else None
+    # Dry runs are logged too: they skip DATABASE writes, not the paid Gemini calls, so a
+    # dry scrape costs the same as a real one. The "-dryrun" mode suffix marks them.
+    run_mode = args.mode + ("-dryrun" if args.dry_run else "")
+    run_row = supabase_insert_one(supabase_url, "agent_runs", {
+        "agent": "scraper",
+        "mode": run_mode,
+        "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }, service_key)
+    run_id = run_row["id"] if run_row else None
 
     inserted_rows = []
     total_cost = 0.0
@@ -324,8 +342,14 @@ def main():
     total_searches = 0
     silent_search_count = 0
 
-    for category, angle in seeds:
-        print(f"\n[SEED] ({category}) {angle[:80]}...")
+    for seed in seeds:
+        category, angle = seed["category"], seed["angle"]
+        seed_label = f"id={seed['id']}" if seed.get("id") is not None else "fallback"
+        print(f"\n[SEED {seed_label}] ({category}) {angle[:80]}...")
+        # Per-seed tallies, so each angle's own yield can be recorded against it. The
+        # run-level counters below still aggregate across all seeds as before.
+        seed_found = seed_added = seed_dupes = 0
+        seed_cost = 0.0
         system = SYSTEM_BASE.format(today=today, angle=angle, subjects=", ".join(VALID_SUBJECTS)) + addendum
         user_content = f"Search now and return the JSON array per the schema for: {angle}"
         try:
@@ -334,6 +358,7 @@ def main():
                                        max_searches=args.max_searches)
             cost = estimate_cost(usage)
             total_cost += cost
+            seed_cost = cost
             searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
             total_searches += searches
             # Silent skip-search: use_web_search=True but Gemini answered from training data
@@ -346,6 +371,7 @@ def main():
             if not isinstance(candidates, list):
                 candidates = [candidates]
             raw_found += len(candidates)
+            seed_found = len(candidates)
             # Report searches against the cap: if a seed consistently pins at the cap, it
             # was cut off mid-research and the cap (not the seed) is limiting result quality.
             capped = " (CAPPED)" if searches >= args.max_searches else ""
@@ -362,6 +388,7 @@ def main():
                     continue
                 if is_duplicate(name, url, seen_urls, seen_names):
                     duplicates_skipped += 1
+                    seed_dupes += 1
                     continue
                 row = build_row(candidate, category, next(mint_id), source)
                 if not row:
@@ -370,13 +397,23 @@ def main():
                 seen_urls.add(normalize_url(url))
                 seen_names.append(name)
                 inserted_rows.append(row)
+                seed_added += 1
         except urllib.error.HTTPError as e:
             errors += 1
             print(f"  [ERROR] HTTP {e.code}: {e.read().decode(errors='replace')[:200]}")
         except Exception as e:
             errors += 1
             print(f"  [ERROR] {e}")
-        time.sleep(1.5)
+
+        # Record this angle's yield against the seed itself, so the console can rank
+        # angles by rows-added-per-dollar and retire the ones that only return dupes.
+        # Skipped on a dry run — nothing was really added, so nothing should be credited.
+        if not args.dry_run:
+            record_seed_result(supabase_url, service_key, seed,
+                               found=seed_found, added=seed_added,
+                               dupes=seed_dupes, cost=seed_cost)
+        # No explicit sleep: gemini_common enforces --min-delay (default 5s) between calls
+        # and stamps its timestamp at call start, so a shorter sleep here did nothing.
 
     print(f"\n[SUMMARY] seeds run: {len(seeds)}, raw candidates found: {raw_found}, "
           f"duplicates skipped: {duplicates_skipped}, invalid skipped: {invalid_skipped}, "
@@ -384,17 +421,20 @@ def main():
           f"searches: {total_searches} (cap {args.max_searches}/seed), "
           f"silent (no-search) seeds: {silent_search_count}/{len(seeds)}, cost: ${total_cost:.4f}")
 
+    # Stamped to the second, unlike `source` above which stays a date so a whole day's
+    # scrape groups under one source value. Two scrapes of the same mode on one day used to
+    # land on the same filename, and the scraper writes this snapshot on LIVE runs too — so
+    # the overwritten one was the record of rows that had actually been inserted.
     review_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                f"scrape_review_{args.mode}_{run_date}.json")
+                                f"scrape_review_{args.mode}_{snapshot_stamp()}.json")
     with open(review_path, "w", encoding="utf-8") as f:
         json.dump(inserted_rows, f, indent=2, ensure_ascii=False)
     print(f"[OK] Wrote review snapshot: {review_path}")
 
     if args.dry_run:
-        print("[DRY RUN] No writes performed (opportunities or agent_runs).")
-        return
-
-    if inserted_rows:
+        print(f"[DRY RUN] No opportunities were written. The run itself is still logged to "
+              f"agent_runs (mode='{run_mode}') because it cost real money.")
+    elif inserted_rows:
         supabase_post(supabase_url, "opportunities", inserted_rows, service_key)
         print(f"[OK] Inserted {len(inserted_rows)} row(s) into opportunities (is_active=false).")
 
@@ -402,14 +442,17 @@ def main():
         supabase_patch(supabase_url, "agent_runs", {"id": f"eq.{run_id}"}, {
             "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "items_processed": len(seeds),
-            "items_added": len(inserted_rows),
+            # On a dry run nothing was actually inserted; report 0 so the row's own
+            # numbers stay truthful, with the would-have-been count in notes.
+            "items_added": 0 if args.dry_run else len(inserted_rows),
             "errors": errors,
             "cost_usd": round(total_cost, 4),
             "total_web_searches": total_searches,
             "silent_search_count": silent_search_count,
-            "notes": f"raw_found={raw_found}, duplicates_skipped={duplicates_skipped}, "
+            "notes": (f"raw_found={raw_found}, duplicates_skipped={duplicates_skipped}, "
                       f"invalid_skipped={invalid_skipped}, "
-                      f"max_searches={args.max_searches}, timeout={args.timeout}s",
+                      f"max_searches={args.max_searches}, timeout={args.timeout}s"
+                      + (f", would_have_added={len(inserted_rows)}" if args.dry_run else "")),
         }, service_key)
         print(f"[OK] Logged agent_runs id={run_id}.")
 

@@ -16,17 +16,24 @@ Fields this agent CAN update:
 
 Run roughly 1x/month on all active opportunities. Uses gemini-3.5-flash-lite (no web search —
 training data only) for cost efficiency and to avoid quota contention with deadline/review agents.
-With 1200+ rows, expect ~$1-2/month cost and 15-25 minutes wall time (fast, no web search overhead).
+With 1200+ rows, expect ~$1-2/month cost.
+
+WALL TIME: dominated by the rate limiter, not by the API. gemini_common enforces a minimum
+delay between every Gemini call (default 5s, see --min-delay), so 1200+ rows is roughly
+1200 x 5s ~= 100 minutes at the default. An earlier version of this docstring claimed
+"15-25 minutes", which predated the rate limiter and was never true alongside it. Lower
+--min-delay shortens the run but risks the HTTP 429s the delay was introduced to fix.
 
 SETUP:
     .env needs SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY.
-    (Does NOT need agent_runs table — this is primarily for cost tracking, not operational
-    recovery — but if you want to log runs, add the same agent_runs schema from check_deadlines.py)
+    Writes to the shared `agent_runs` table (schema in check_deadlines.py's docstring) as
+    agent='metadata_refresher', so runs show up in the admin console alongside the other three.
 
 USAGE:
+    python refresh_opportunities.py --preview      # resolve scope + count only, no API calls, free
     python refresh_opportunities.py --sample 10    # random 10-row sample, prints projected cost
     python refresh_opportunities.py --all          # every active row
-    python refresh_opportunities.py --dry-run      # no writes, just prints results to JSON
+    python refresh_opportunities.py --dry-run      # calls the API but writes nothing; dumps JSON
 """
 import argparse
 import datetime
@@ -34,11 +41,11 @@ import json
 import os
 import random
 import sys
-import time
 import urllib.error
 
+from agent_common import add_agent_args, apply_timing, emit_preview, snapshot_stamp
 from gemini_common import call_gemini, extract_json, estimate_cost
-from supabase_common import load_dotenv, supabase_get, supabase_patch
+from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
 
 VALID_TYPES = {'Program', 'Internship', 'Competition', 'Research', 'Volunteer', 'Journal', 'Conference'}
 VALID_SUBJECTS = ['Mixed', 'STEM', 'Medicine', 'Humanities', 'Art', 'Business', 'Engineering',
@@ -147,7 +154,9 @@ def main():
     group.add_argument("--all", action="store_true", help="Check every active row (default if no flag given).")
     parser.add_argument("--dry-run", action="store_true", help="No writes — just prints and dumps results to JSON.")
     parser.add_argument("--exclude-source", type=str, default=None, help="Exclude opportunities with this source value.")
+    add_agent_args(parser, default_timeout=120)
     args = parser.parse_args()
+    apply_timing(args, gemini=True)
 
     load_dotenv()
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -174,10 +183,32 @@ def main():
         mode = "sample"
         items = random.sample(all_active, min(args.sample, len(all_active)))
 
+    # Preview: scope is now fully resolved, so report it and stop before the first
+    # (paid) Gemini call. Nothing below this line runs.
+    if args.preview:
+        emit_preview(len(items), "rows", [o.get("name", "?") for o in items], mode=mode)
+        return
+
+    # agent_runs row: insert now, patch with the totals at the end. Dry runs are logged
+    # too — they skip DATABASE writes, not API calls, so they cost the same as a live run
+    # and must show up in cost totals. The "-dryrun" mode suffix distinguishes them.
+    run_mode = mode + ("-dryrun" if args.dry_run else "")
+    run_row = supabase_insert_one(supabase_url, "agent_runs", {
+        "agent": "metadata_refresher",
+        "mode": run_mode,
+        "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }, service_key)
+    run_id = run_row["id"] if run_row else None
+
     total_cost = 0.0
     updated = 0
     errors = 0
     total_searches = 0
+    # This agent deliberately runs with use_web_search=False, so "silent search" — the
+    # failure mode where the model was ASKED to search and quietly didn't — cannot apply
+    # to it. Counting every zero-search item as silent (as the search-enabled agents do)
+    # would report 100% silent on every run and train you to ignore a real warning on the
+    # agents where it means something. Stays 0 by construction.
     silent_search_count = 0
     dry_run_results = []
 
@@ -190,8 +221,7 @@ def main():
             total_cost += cost
             total_searches += searches
 
-            if searches == 0:
-                silent_search_count += 1
+            # (No silent-search tracking here — see the counter's declaration above.)
 
             # Extract only valid, non-null fields from the response
             updates = clean_update_dict(info)
@@ -233,13 +263,14 @@ def main():
         except Exception as e:
             errors += 1
             print(f"[ERROR] {e}")
-        # Rate limiting: match scrape_opportunities.py pattern.
-        # gemini_common.call_gemini() enforces 5 seconds between API calls;
-        # this additional sleep ensures we don't burst requests between items.
-        time.sleep(2.0)
+        # No explicit sleep here. gemini_common._enforce_rate_limit() already holds every
+        # call to --min-delay seconds apart (default 5), and it stamps its timestamp at
+        # call START, so any per-item sleep shorter than that window is simply absorbed by
+        # it and does nothing. This used to be time.sleep(2.0), which was a no-op unless a
+        # call returned in under 3s. To slow this agent down, raise --min-delay.
 
     print(f"\n[SUMMARY] checked: {len(items)}, updated: {updated}, errors: {errors}, "
-          f"silent (no-search) checks: {silent_search_count}/{len(items)}, cost: ${total_cost:.4f}")
+          f"cost: ${total_cost:.4f}  (no web search — this agent uses training data only)")
     if mode == "sample" and items:
         per_item = total_cost / len(items)
         projected = per_item * len(all_active)
@@ -247,13 +278,27 @@ def main():
               f"~${projected:.2f} for a full pass.")
 
     if args.dry_run:
-        run_date = datetime.date.today().strftime("%Y%m%d")
+        # Seconds, not just the date: a second run on the same day used to overwrite the
+        # first one's file, and a dry run has already paid the API in full by this point.
+        stamp = snapshot_stamp()
         refresh_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    f"refresh_opportunities_dry_run_{run_date}.json")
+                                    f"refresh_opportunities_dry_run_{stamp}.json")
         with open(refresh_path, "w", encoding="utf-8") as f:
             json.dump(dry_run_results, f, indent=2, ensure_ascii=False)
         print(f"[OK] Wrote dry-run refresh snapshot: {refresh_path}")
         print("[DRY RUN] No writes performed.")
+
+    if run_id is not None:
+        supabase_patch(supabase_url, "agent_runs", {"id": f"eq.{run_id}"}, {
+            "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "items_processed": len(items),
+            "items_updated": updated,
+            "errors": errors,
+            "cost_usd": round(total_cost, 4),
+            "total_web_searches": total_searches,
+            "silent_search_count": silent_search_count,
+        }, service_key)
+        print(f"[OK] Logged agent_runs id={run_id}.")
 
 
 if __name__ == "__main__":

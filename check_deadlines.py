@@ -63,7 +63,15 @@ import time
 import urllib.error
 import urllib.request
 
-from gemini_common import extract_json, estimate_cost
+# Note: no apply_timing here — this script uses its own module-level throttle (set_min_delay
+# above), not gemini_common's, because check_one() is shared with server.py's interactive path.
+from agent_common import add_agent_args, emit_preview, snapshot_stamp
+from gemini_common import extract_json
+# Costed with claude_common's rates, not gemini_common's: check_one() calls THIS module's
+# local call_claude() against Anthropic, and pricing a Claude call at Gemini's per-token
+# and per-search rates ($0.75/$3.75 + $0.014/search) is simply the wrong bill. Every
+# deadline_check_log row written before 2026-08-22 carries that mispricing.
+from claude_common import estimate_cost
 from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
 
 VALID_STATUS = {"running", "not_running", "unknown"}
@@ -72,6 +80,48 @@ VALID_STATUS = {"running", "not_running", "unknown"}
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 CLAUDE_MAX_TOKENS = 1200
+
+# Rate limiting and timeout for this module's own call_claude().
+#
+# Both default to permissive values ON PURPOSE, because check_one() below is shared with
+# server.py's INTERACTIVE per-opportunity deadline check (GET /api/opportunities/<id>/
+# deadline). A process-wide inter-call delay there would make one user's request block on
+# another's. main() raises the delay to --min-delay (default 5) for batch runs only.
+#
+# This module previously had NO throttle and NO timeout, while carrying a comment in main()
+# claiming rate limiting was "enforced at the API level in gemini_common.call_gemini()" —
+# untrue, since nothing here goes through gemini_common. Unthrottled batch runs are the
+# likely cause of the grounding-quota exhaustion recorded in this file's docstring, and an
+# untimed urlopen() could hang a batch indefinitely on one bad row.
+BATCH_MIN_DELAY_SECS = 5
+_min_delay_secs = 0.0
+_default_timeout_secs = 120
+_last_call_time = 0.0
+
+
+def set_min_delay(secs):
+    """Set the minimum seconds between Anthropic calls from this module (--min-delay)."""
+    global _min_delay_secs
+    if secs is not None:
+        _min_delay_secs = max(0.0, float(secs))
+    return _min_delay_secs
+
+
+def set_default_timeout(secs):
+    """Set the HTTP read timeout for calls from this module (--timeout). Note a
+    client-side timeout does not stop or refund server-side work already in flight."""
+    global _default_timeout_secs
+    if secs is not None:
+        _default_timeout_secs = max(1.0, float(secs))
+    return _default_timeout_secs
+
+
+def _enforce_rate_limit():
+    global _last_call_time
+    elapsed = time.time() - _last_call_time
+    if elapsed < _min_delay_secs:
+        time.sleep(_min_delay_secs - elapsed)
+    _last_call_time = time.time()
 
 
 def call_claude(system, user_content, api_key, use_web_search=False):
@@ -84,6 +134,7 @@ def call_claude(system, user_content, api_key, use_web_search=False):
     supported on Haiku and web_fetch carries no extra per-call charge (token cost only), so
     this doesn't change per-check pricing model.
     Returns (text, usage) tuple matching the shape of call_gemini() for compatibility."""
+    _enforce_rate_limit()
     body = {
         "model": CLAUDE_MODEL,
         "max_tokens": CLAUDE_MAX_TOKENS,
@@ -110,7 +161,7 @@ def call_claude(system, user_content, api_key, use_web_search=False):
         },
     )
 
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=_default_timeout_secs) as resp:
         response_data = json.loads(resp.read())
 
     # Extract text content from response
@@ -251,7 +302,15 @@ def main():
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--sample", type=int, help="Check a random N-row sample instead of the full catalog.")
     group.add_argument("--all", action="store_true", help="Check every active row (default if no flag given).")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="No writes (opportunities or agent_runs) — still calls the API at "
+                             "full cost, but dumps results to a local JSON file instead.")
+    add_agent_args(parser, default_timeout=120, default_min_delay=BATCH_MIN_DELAY_SECS)
     args = parser.parse_args()
+    # Batch runs get a real throttle; the module default stays 0 for server.py's
+    # interactive on-demand check, which shares check_one() with this script.
+    set_min_delay(args.min_delay)
+    set_default_timeout(args.timeout)
 
     load_dotenv()
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -280,9 +339,17 @@ def main():
         mode = "sample"
         items = random.sample(all_active, min(args.sample, len(all_active)))
 
+    # Preview: scope resolved, report and stop before the first (paid) Claude call.
+    if args.preview:
+        emit_preview(len(items), "rows", [o.get("name", "?") for o in items], mode=mode)
+        return
+
+    # Dry runs are logged too: they skip DATABASE writes, not API calls, so they cost the
+    # same as a live run. The "-dryrun" mode suffix is how readers tell them apart.
+    run_mode = mode + ("-dryrun" if args.dry_run else "")
     run_row = supabase_insert_one(supabase_url, "agent_runs", {
         "agent": "deadline_checker",
-        "mode": mode,
+        "mode": run_mode,
         "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }, service_key)
     run_id = run_row["id"] if run_row else None
@@ -292,6 +359,7 @@ def main():
     errors = 0
     total_searches = 0
     silent_search_count = 0
+    dry_run_results = []
 
     for i, opp in enumerate(items):
         print(f"[{i + 1}/{len(items)}] {opp['name'][:60]}...", end=" ")
@@ -314,14 +382,28 @@ def main():
             if changed:
                 updated += 1
             now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            supabase_patch(supabase_url, "opportunities", {"id": f"eq.{opp['id']}"}, {
-                "status": status,
-                "important_dates": important_dates,
-                "was_estimated": bool(info.get("was_estimated")),
-                "important_date_note": info.get("important_date_note"),
-                "dates_last_checked_at": now_iso,
-                "updated_at": now_iso,
-            }, service_key)
+            if args.dry_run:
+                dry_run_results.append({
+                    "id": opp["id"],
+                    "name": opp["name"],
+                    "url": opp.get("url"),
+                    "status": status,
+                    "important_dates": important_dates,
+                    "was_estimated": bool(info.get("was_estimated")),
+                    "important_date_note": info.get("important_date_note"),
+                    "changed": changed,
+                    "web_searches": searches,
+                    "cost_usd": round(cost, 4),
+                })
+            else:
+                supabase_patch(supabase_url, "opportunities", {"id": f"eq.{opp['id']}"}, {
+                    "status": status,
+                    "important_dates": important_dates,
+                    "was_estimated": bool(info.get("was_estimated")),
+                    "important_date_note": info.get("important_date_note"),
+                    "dates_last_checked_at": now_iso,
+                    "updated_at": now_iso,
+                }, service_key)
             silent = " [SILENT: no search invoked]" if searches == 0 else ""
             print(f"{status}, {searches} search(es){silent}, ${cost:.4f}" + (" [changed]" if changed else ""))
         except urllib.error.HTTPError as e:
@@ -330,9 +412,10 @@ def main():
         except Exception as e:
             errors += 1
             print(f"[ERROR] {e}")
-        # Rate limiting is now enforced at the API level in gemini_common.call_gemini()
-        # (minimum 5 seconds between calls per Gemini's documented rate limit policy),
-        # so explicit throttle here is no longer needed.
+        # No explicit sleep here: this module's own call_claude() enforces --min-delay
+        # between calls (see _enforce_rate_limit above). This comment previously claimed
+        # the throttle came from gemini_common.call_gemini(), which was wrong — nothing in
+        # this script goes through gemini_common, so batch runs were entirely unthrottled.
 
     print(f"\n[SUMMARY] checked: {len(items)}, updated: {updated}, errors: {errors}, "
           f"silent (no-search) checks: {silent_search_count}/{len(items)}, cost: ${total_cost:.4f}")
@@ -341,6 +424,17 @@ def main():
         projected = per_item * len(all_active)
         print(f"[PROJECTED] ~${per_item:.4f}/item -> full catalog ({len(all_active)} active rows) "
               f"~${projected:.2f} for a full pass.")
+
+    if args.dry_run:
+        # Seconds, not just the date — see snapshot_stamp(). Same-day runs used to
+        # overwrite each other's already-paid-for output.
+        stamp = snapshot_stamp()
+        dry_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                f"deadline_check_dry_run_{stamp}.json")
+        with open(dry_path, "w", encoding="utf-8") as f:
+            json.dump(dry_run_results, f, indent=2, ensure_ascii=False)
+        print(f"[OK] Wrote dry-run deadline snapshot: {dry_path}")
+        print("[DRY RUN] No writes performed.")
 
     if run_id is not None:
         supabase_patch(supabase_url, "agent_runs", {"id": f"eq.{run_id}"}, {

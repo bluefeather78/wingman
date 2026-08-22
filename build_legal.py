@@ -27,7 +27,7 @@ PAGE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title} — Wingman</title>
+<title>{title} - Wingman</title>
 <link rel="icon" href="favicon.svg">
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="stylesheet" href="styles.css">

@@ -248,7 +248,7 @@ Because Wingman is a beta product, we may also discontinue individual features o
 
 You may stop using Wingman at any time.
 
-Sections that by their nature should survive termination—including provisions concerning intellectual property, disclaimers, limitations of liability, indemnification, and dispute resolution—will survive termination.
+Sections that by their nature should survive termination, including provisions concerning intellectual property, disclaimers, limitations of liability, indemnification, and dispute resolution, will survive termination.
 
 ## 19. Changes to These Terms
 

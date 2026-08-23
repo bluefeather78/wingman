@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Loading and scoring the scraper's search angles ("seeds").
 
-A seed is a (category, angle) pair: the category drives the fallback `type` value and
-provenance on any row the seed produces, and the angle is interpolated into the scraper's
-system prompt as the specific thing that call should go looking for.
+A seed is an ANGLE: the specific thing one scraper call should go looking for, interpolated
+into its phase-1 research prompt.
+
+Seeds used to carry a `category` too. It was dropped 2026-08-23 because it was never sent to
+the model at all, nothing in the student-facing app reads the `category` column it was written
+to, and its one live use was a silent `type` fallback that measurement showed guessing wrong
+27% of the time overall (65% for Research seeds). The column still exists in the table and is
+`not null`, so writes supply a placeholder; nothing reads it.
 
 These used to be hardcoded Python lists in scrape_opportunities.py, which meant changing
 what the scraper looks for required editing source, and there was no way to tell which
@@ -16,7 +21,6 @@ enable/disable and delete them, and so each one accumulates its own yield histor
     create table scraper_seeds (
         id           bigint generated always as identity primary key,
         mode         text not null,              -- 'national' | 'seattle'
-        category     text not null,
         angle        text not null,
         is_enabled   boolean not null default true,
         sort_order   integer,
@@ -43,13 +47,15 @@ import datetime
 
 from supabase_common import supabase_get, supabase_patch
 
-SEED_SELECT = "id,mode,category,angle,is_enabled,sort_order,total_runs,total_found,total_added,total_dupes,total_cost"
+# `category` is deliberately NOT selected — see the module docstring. It remains in the
+# table only because dropping a not-null column needs DDL this repo cannot run.
+SEED_SELECT = "id,mode,angle,is_enabled,sort_order,total_runs,total_found,total_added,total_dupes,total_cost"
 
 
 def load_seeds(supabase_url, service_key, mode, fallback=None, include_disabled=False):
     """Return the seed list for `mode` as dicts, newest schema shape.
 
-    Falls back to `fallback` (a list of (category, angle) tuples) if the table is empty
+    Falls back to `fallback` (a list of angle strings) if the table is empty
     or the request fails. Fallback seeds carry id=None, which callers must treat as
     "cannot record yield for this one".
     """
@@ -70,9 +76,8 @@ def load_seeds(supabase_url, service_key, mode, fallback=None, include_disabled=
         print(f"[WARN] scraper_seeds returned no rows for mode={mode} — falling back to the "
               f"{len(fallback)} hardcoded seed(s) in scrape_opportunities.py. Per-seed yield "
               f"tracking is DISABLED for this run (fallback seeds have no database id).")
-        return [{"id": None, "mode": mode, "category": c, "angle": a,
-                 "is_enabled": True, "sort_order": i}
-                for i, (c, a) in enumerate(fallback)]
+        return [{"id": None, "mode": mode, "angle": a, "is_enabled": True, "sort_order": i}
+                for i, a in enumerate(fallback)]
 
     print(f"[ERROR] No seeds available for mode={mode}.")
     return []

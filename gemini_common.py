@@ -74,6 +74,37 @@ about — but do not treat either as a real guarantee. The only dependable mitig
 is what check_deadlines.py/check_reviews.py/scrape_opportunities.py already do: check
 `usage["server_tool_use"]["web_search_requests"]` after the fact and flag zero-search results,
 rather than trying to prevent them up front.
+
+FIFTH finding (2026-08-23) — the THIRD finding above is CONFIRMED, and the search decision is
+outright NON-DETERMINISTIC. scrape_opportunities.py seed 51 was run twice with an identical
+command and prompt (see agent_logs/scraper_20260821-*.log) and returned `0 search(es)` the
+first time and `6 search(es)` the second. There is a bias toward answering from memory when
+the topic feels familiar — an angle like "pre college programs hosted in US universities"
+went silent while "reddit /summerprogramresults" searched — but nothing about the request
+controls it. Output format (JSON-array-only vs prose) was also tested and is NOT established
+as a cause: n=1 per condition against that noise floor proves nothing. Thinking budget was
+ruled out (162 thought tokens with no search, vs 107 with one).
+    Practical consequence: RETRY, don't prompt harder. A silent call is cheap (no $0.014
+    search fees, ~$0.006-0.01 for a scraper seed) and seed 51 shows a retry can flip to a
+    real search. Retry on `web_search_requests == 0`, then flag whatever is still silent.
+
+SIXTH finding (2026-08-23) — what a grounded response carries, and what this module used to
+throw away. When search DOES fire, `candidate.groundingMetadata` holds four keys:
+`searchEntryPoint`, `groundingChunks`, `groundingSupports`, `webSearchQueries`.
+- `groundingChunks[].web.uri` is a `vertexaisearch.cloud.google.com/grounding-api-redirect/…`
+  URL. It RESOLVES TO THE EXACT REAL PAGE in one ordinary (free) HTTP redirect hop.
+  `web.title` is only a bare domain string ("nih.gov"); `web.domain` does not exist on
+  `v1beta/generateContent`.
+- `groundingSupports[]` gives `segment{startIndex, endIndex, text}` plus
+  `groundingChunkIndices` — per-answer-span attribution, not just whole-response.
+This matters because the model does NOT reliably put a retrieved URL in its own answer text:
+with no search it writes URLs from memory, and they come out with the right host and a path
+off by one segment (measured: 30/116 hard 404s in one scrape batch, every one a constructed
+deep path). The grounding chunk is the only place the real URL exists. Measured head-to-head,
+4/4 model-typed URLs 404'd where 4/4 grounding-resolved URLs returned 200 — including the
+catalog's own dead `training.nih.gov/research-training/sip/` vs the real
+`training.nih.gov/research-training/pb/sip/`. Pass `return_grounding=True` to get it, and see
+url_validate.py for resolving and validating. Do not "simplify" that away.
 """
 import atexit
 import json
@@ -293,7 +324,7 @@ WEB_SEARCH_PRICE_PER_SEARCH = 14 / 1000
 
 
 def call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=4000, timeout=None,
-                 max_searches=None, thinking_level="low", model=None):
+                 max_searches=None, thinking_level="low", model=None, return_grounding=False):
     """POSTs directly to the Gemini generateContent API. Returns (text, usage) — text is
     the concatenated text output with any ```json fences stripped, usage is a dict shaped
     like {"input_tokens", "output_tokens", "server_tool_use": {"web_search_requests"}} —
@@ -401,13 +432,26 @@ def call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=4
     text = re.sub(r"```json|```", "", text).strip()
 
     grounding = candidate.get("groundingMetadata") or {}
-    web_search_requests = len(grounding.get("webSearchQueries") or [])
+    # The QUERY STRINGS, not just how many there were. These were reduced to a len() until
+    # 2026-08-23, which meant every caller paid for searches it could never see or tune —
+    # "why did this seed return nothing?" was unanswerable. Additive, so existing callers
+    # that only read web_search_requests are unaffected.
+    queries = list(grounding.get("webSearchQueries") or [])
     usage_raw = data.get("usageMetadata") or {}
     usage = {
         "input_tokens": usage_raw.get("promptTokenCount", 0),
         "output_tokens": usage_raw.get("candidatesTokenCount", 0),
-        "server_tool_use": {"web_search_requests": web_search_requests},
+        "server_tool_use": {
+            "web_search_requests": len(queries),
+            "web_search_queries": queries,
+        },
     }
+    if return_grounding:
+        # Third element only on request, so the five existing `text, usage = ...` call
+        # sites keep working. `raw` is the untouched API response — no run in this repo
+        # saved one before 2026-08-23, which is why several past failures were
+        # undiagnosable after the fact.
+        return text, usage, {"grounding": grounding, "raw": data}
     return text, usage
 
 

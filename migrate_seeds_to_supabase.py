@@ -50,12 +50,14 @@ def main():
 
     rows = []
     for mode, seeds in (("national", NATIONAL_SEEDS), ("seattle", SEATTLE_SEEDS)):
-        for i, (category, angle) in enumerate(seeds):
+        for i, angle in enumerate(seeds):
             if (mode, angle.strip()) in already:
                 continue
             rows.append({
                 "mode": mode,
-                "category": category,
+                # `category` is still not-null in the table but is no longer part of a
+                # seed — see seeds_common.py's docstring. Placeholder only; nothing reads it.
+                "category": "unused",
                 "angle": angle,
                 "is_enabled": True,
                 # Preserve the order the lists shipped in — the scraper reads
@@ -73,7 +75,7 @@ def main():
     print(f"[OK] {len(rows)} new seed(s) to insert: " +
           ", ".join(f"{m}={n}" for m, n in sorted(by_mode.items())))
     for r in rows:
-        print(f"  [{r['mode']}#{r['sort_order']}] ({r['category']}) {r['angle'][:80]}...")
+        print(f"  [{r['mode']}#{r['sort_order']}] {r['angle'][:90]}...")
 
     if args.dry_run:
         print("[DRY RUN] Nothing written.")

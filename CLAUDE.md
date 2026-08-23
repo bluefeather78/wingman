@@ -239,10 +239,11 @@ once and writes both, so the two can't drift.
 - The **By model** table deliberately has no per-model feature detail row: that cut is the
   By feature panel, which states it properly with the model attached. Repeating it under
   every model doubled each row's height to say the same thing worse.
-- The console has **three top-level views** (`.viewtabs` / `showView()` in
-  [admin_console.html](admin_console.html)): *Agents* (everything about the four background
-  agents, including the dry-run snapshot list), *Review queue* (pending activations), and
-  *Cost per user*. Note the distinct `.vtab` vs `.tab` styling — `.tab` is the
+- The console has **five top-level views** (`.viewtabs` / `showView()` in
+  [admin_console.html](admin_console.html)): *Metrics* (the default — see the User metrics
+  section below), *Agents* (everything about the five background agents, including the
+  dry-run snapshot list), *Review queue* (pending activations), *Mailing lists* (recipe
+  review), and *Cost per user*. Note the distinct `.vtab` vs `.tab` styling — `.tab` is the
   inline pill inside a card head (the scraper's National/Seattle switch) and filters one
   table; `.vtab` swaps the whole page. Keeping them visually different is deliberate.
 - Two endpoints gained a `userid` so their spend can be attributed:
@@ -250,6 +251,120 @@ once and writes both, so the two can't drift.
   (query string because one is a GET and the other is multipart). Both routes had to move off
   exact-`self.path` matching to survive the query string — the same trap the `/api/agents/*`
   routes already carry a comment about.
+
+## User metrics — the Metrics view
+
+The console's default view ([admin_console.html](admin_console.html), `#view-metrics`),
+backed by `GET /api/agents/metrics?days=&limit=` (`get_user_metrics()` in `server.py`,
+localhost-only like every `/api/agents/*` route — and it matters more here than anywhere
+else on that router: the payload is a roster of names, emails, plan status and per-account
+behaviour for a user base that is largely minors. **Do not add an export button, and do
+not expose this route.**)
+
+**Cost per user asks what an account costs; this asks whether it got anywhere and whether
+it paid.** Same roster, deliberately separate views — a page computing both computes
+neither well. This one never reports spend totals; that decomposition belongs to the other
+tab, and two places computing the same dollars is how the two drift.
+
+**The blocker this feature was built around: there is no event log.** Everything the repo
+knows about a user is current state (the `users` row and its `data` jsonb) or a cost
+rollup. Two obvious substitutes are both wrong, and both were checked:
+
+- **`users.updated_at` is a trap.** Declared `default now()` in
+  `migrate_users_to_supabase.py` with **no trigger**, and `update_user_data()` never
+  writes it — it equals `created_at` on practically every row. A "last active" metric
+  built on it looks plausible and is fiction. (Contrast `opportunities.updated_at`, which
+  *is* stamped explicitly by `server.py`. Same column name, opposite meaning.)
+- **`user_costs` only sees billed AI calls.** A student who opens the app daily and works
+  their tracker costs $0 and reads as inactive; in mock mode the signal vanishes entirely.
+
+So the view splits in two, and **the state half needs no migration at all**.
+
+**The activation funnel** (`FUNNEL_STAGES`) is **cumulative and strictly ordered** — an
+account counts at stage N only if it satisfies stages 1..N, which is what makes the
+step-over-step percentages mean anything. Rules that follow, several of them got wrong on
+the first pass:
+
+- Every predicate must be genuinely implied by the ones after it, or the cumulative rule
+  silently drops people who are *further* along than the chain can see. That is why
+  `ran_search` accepts "has anything in the tracker" as evidence alongside its billed-call
+  proxy — the proxy is incomplete, the implication is not. It renders with a **proxy**
+  pill for the same reason: mock mode bills nothing, so with no API key the proxy half
+  reads zero for everybody.
+- **"Came back after signup day" is NOT in the chain**, even though it reads like stage 2.
+  Someone can build a profile and track five things the day they join and never return;
+  chaining it would score them as a total failure. It sits beside the funnel with the
+  other side metrics (rich profile, calendar, mailing list, Google signup, consent gaps).
+- **`meaningful_profile` reuses `PROFILE_SUFFICIENT_LENGTH = 20`** from
+  [script.js](script.js) — the bar the app itself already gates on and shows students. A
+  second definition here would let the console and the app disagree about the same
+  student. Move it in both places or in neither.
+- **`tracked_1`/`tracked_3` exclude saved-for-later.** `hs-tracker-saved[id] === true`
+  means the student explicitly parked it, and `script.js` already refuses to count those
+  as actively tracked. Counting them here would inflate the most important number on the
+  page.
+- Each stage carries `missing_userids`, so clicking a bar names exactly who it lost with
+  no second request. At this account count **that is the point of the page**: a percentage
+  is a decoration on a fraction until the roster is in the hundreds, so every tile shows
+  its raw `n/d` and the funnel names people. Same call the Cost per user tab made when it
+  seeded its table from the roster rather than from the cost rows.
+
+**Trial-to-paid conversion's denominator is trials that have actually ENDED**, never all
+accounts. With a 3-day trial, dividing by everyone scores every signup from the last 72
+hours as a failure before they have had a chance to decide. `beta` grants are excluded
+from both halves and reported separately — they never reached the choice. A `canceled` or
+`past_due` account carrying a `stripe_subscription_id` counts as **converted**: cancelling
+later is churn, not a failure to convert, and folding the two together would make the rate
+fall every time a paying customer leaves. Every access gate derives from
+`subscription_state()`, never from re-reading the columns, for the reason that function
+exists.
+
+**Two migrations gate the time-series half**, and both degrade to a setup notice rather
+than an error:
+
+- **[user_activity_schema.sql](user_activity_schema.sql)** → `activity_ready`. Unlocks
+  DAU/WAU/MAU, the retention cohorts, and the "came back" side metric.
+  `touch_user_activity(userid, surface)` is called from the nine handlers that carry a
+  userid (login, data save/load, both AI surfaces, deadline check, subscription status,
+  resume import, mailing-list subscribe). It **buffers in memory and a background thread
+  flushes every 30s**: this table takes *every* authenticated request, not just billed
+  ones, and PostgREST cannot do `SET hits = hits + n` without a stored function, so it is
+  read-modify-write either way and batching turns a round trip per request into one per
+  user per interval. A process that dies between flushes loses at most one interval of
+  counts; **DAU/WAU/retention only need the row to exist**, so only `hits`/`surfaces` are
+  ever approximate. `get_user_metrics()` flushes before reading, or the console trails the
+  buffer and a quiet day looks like a stalled pipeline. A missing table latches the whole
+  path off after one warning; a transient failure deliberately does **not** — the same
+  distinction `record_user_cost` carries, for the same reason.
+- **[user_metrics_daily_schema.sql](user_metrics_daily_schema.sql)** → `snapshots_ready`.
+  Every state metric is computed from the *current* `users` table, and the `data` jsonb
+  holds one profile rather than a history of one — so "how many users had a meaningful
+  profile on 2026-08-01" is not merely unqueried, it is **unrecoverable**. The snapshot is
+  written from the read path (throttled to one write per 5 minutes) rather than on a
+  schedule, because there is no scheduler here and computing it twice is how a chart and a
+  tile come to disagree. `dau`/`wau`/`mau` are **NULL, not 0**, when activity is not set
+  up: a zero is indistinguishable from a genuinely dead day, and these rows can never be
+  recomputed. **Run it on day one even though nothing reads it for weeks** — every day it
+  is not running is a day permanently missing from every trend line this will ever draw.
+
+Both files end with an **ALTER block** for the same reason `mailing_list_schema.sql` does:
+`create table if not exists` is a no-op against a table that already exists in an older
+shape, and PostgREST 400s an entire insert on one unknown key — so a single missing column
+means *nothing* is ever recorded and the view reads as "nobody used the app" rather than
+"every write failed". Add a column to a CREATE there and you must add it to the ALTER too.
+
+Smaller things the view is careful about, each for a reason already documented elsewhere
+in this file: the DAU line is **never drawn back past `activity_since`** (a flat zero
+through a period nobody was measuring reads as "the app was dead", not "we weren't looking
+yet"); a retention cell for a cohort too young to have reached that column shows a dash,
+**not 0%**, which would read as churn that never happened; plan-status colours are **fixed
+per status, not positional**, exactly like the provider colours; and `money()` is
+deliberately not used for MRR, because its magnitude-keyed precision renders `$0.0000`,
+which looks like a rounding artefact rather than nobody paying yet.
+
+See [USER_METRICS_PLAN.md](USER_METRICS_PLAN.md) for the design rationale and the one
+phase still unbuilt (event-level funnel timing — *how long* from signup to first tracked
+opportunity, which needs real events and is not worth it at this account count).
 
 **Pulling real billed spend:** Anthropic exposes `GET /v1/organizations/cost_report`, which
 needs an **Admin key** (`sk-ant-admin…`, set as `ANTHROPIC_ADMIN_KEY` in `.env`) or an
@@ -383,6 +498,13 @@ modal, not a variant of the Reject button, because it is the one verdict that ne
   so those would parse as syntax rather than as text.
 - The modal offers each row's stored `dup_candidates` first, with the reason and confidence
   `url_dedupe` recorded at submission time — that is the whole reason the column is stored.
+- **The queue itself also renders them inline** (`dupeBackLinks()`), one line per candidate:
+  confidence, the suspected row's name as a link to its own page, its id, and the reason.
+  Before that the queue showed only a `2 possible duplicates` count, so finding out *what* a
+  row might duplicate meant opening the modal on every row in turn. Confidence drives the
+  colour (strong = danger, weak = warn) because the two mean genuinely different things here —
+  a strong match is usually a real duplicate and a weak one usually is not, and `url_dedupe`
+  emits far more weak ones by design.
 - `list_pending_opportunities` returns a `duplicate_targets` map (one extra request, only
   when something is actually marked duplicate) so the queue can name the survivor instead of
   showing a bare id.
@@ -427,10 +549,12 @@ The governing rule, and the catalog measurements that force it:
 - **Never auto-reject on shared domain.** 969 of 1330 rows (73%) sit on a domain shared with
   a *different* opportunity — `nyu.edu` alone hosts 36. Bare "same site" is only emitted as a
   hint when the domain has ≤ `SAME_SITE_MAX_PEERS` existing rows, or it buries the reviewer.
-- **Never auto-reject on name similarity.** The scraper's `DEDUP_RATIO = 0.85` produces 93
-  false-positive pairs against the current catalog (`'1-Week Medical Academy'` vs
-  `'3-Week Medical Academy'` scores 0.95) — i.e. that agent is *already* suppressing real
-  opportunities. Don't copy it here.
+- **Never auto-reject on name similarity.** The scraper used to, at `DEDUP_RATIO = 0.85`.
+  Measured against the current catalog that threshold matches **264 pairs, 257 of which have
+  different URLs** and are genuinely distinct opportunities — `'Summer Internship'` collides
+  with everything, and `'1-Week Medical Academy'` vs `'3-Week Medical Academy'` scores 0.95.
+  It was suppressing real opportunities silently and unlogged. `scrape_opportunities.py` now
+  calls `find_duplicates()` here like everything else; do not reintroduce a private rule.
 - **The stored `url` is never normalized.** 100 catalog rows have case-sensitive paths
   (`…/CNIX.html`) that 404 once folded. Normalization happens only in a throwaway
   `match_key()`. The bug this replaces lowercased the *needle* and compared it with PostgREST
@@ -570,6 +694,100 @@ applied. This is harmless for the scraper (inserts dedupe on normalized URL) but
 the three PATCH agents, where a second commit re-applies days-old field values over
 whatever has changed since.
 
+**The scraper is a TWO-PHASE call per seed, and the split is the accuracy design.**
+
+    Phase 1 (research)  prose out, googleSearch on  -> keeps groundingChunks/groundingSupports
+    Phase 2 (extract)   phase 1 notes + RESOLVED urls in -> strict JSON out, no search
+
+Do not collapse these back into one call. Gemini does not put a retrieved URL in its answer
+text: `groundingChunks[].web.uri` is the only place the real URL exists, and a JSON-only
+answer does not carry it back. When the model answers without searching it writes URLs from
+memory, and they come out with the **right host and a path off by one segment** — measured,
+**30 of 116 URLs in the 2026-08-20 batch were hard 404s (26%)**, every one a constructed deep
+path and never a bare domain. Head to head, 4/4 model-typed URLs 404'd where 4/4
+grounding-resolved URLs returned 200, including the catalog's own dead
+`training.nih.gov/research-training/sip/` against the real `…/research-training/pb/sip/`.
+Phase 2 needs no search, so a strict output format is free there.
+
+- **`url_validate.py`** does both halves and is entirely free — no API calls, no keys.
+  `resolve_grounding_chunks()` follows the one redirect hop from
+  `vertexaisearch.cloud.google.com/grounding-api-redirect/…` to the real page (`web.title` is
+  only a bare domain and `web.domain` does not exist on `v1beta/generateContent`, so the hop
+  is the only way). `support_urls_by_span()` uses `groundingSupports` to tie a source to one
+  opportunity's own span — without it you only know which pages were consulted for the whole
+  answer, which cannot say which URL belongs to which of eight results. `check_urls()`
+  separates **dead** (404/410) from **unverified** (403/429/timeout); 403 is ~9% on the
+  existing catalog, so treating it as death would throw away good rows.
+- `spans_for_name()` matches on significant words, not exact substring: a candidate named
+  "NASA Internship Programs (Summer 2027)" whose span reads "NASA Internship Programs:"
+  otherwise keeps its remembered URL while the retrieved one sits unused.
+- **`call_gemini(..., return_grounding=True)`** returns a third element; the default stays a
+  2-tuple so the five other call sites are untouched. `usage["server_tool_use"]` now also
+  carries **`web_search_queries`** — the actual query strings, which were reduced to a
+  `len()` until 2026-08-23, meaning nobody could see or tune what was being searched.
+- Every seed's raw notes, queries, resolved URLs and candidates are written to
+  `agent_logs/scraper_<stamp>_seed<id>.json`. No run before this kept any, which is why past
+  failures ("5 candidates, all invalid, $0.09", twice) were undiagnosable afterwards.
+
+**Silent search cannot be fixed by prompting — retry instead.** Gemini decides per call
+whether to search, non-deterministically: seed 51 was run twice with an *identical* command
+and returned 0 searches once and 6 the next time. Phase 1 therefore retries once on a
+zero-search response (cheap — a silent call pays no $0.014/search fee) and flags whatever is
+still silent. See `gemini_common.py`'s FIFTH and SIXTH findings. Do not try to force it; the
+THIRD finding's conclusion that no reliable forcing mechanism exists is **correct**.
+
+**Discard almost nothing, explain everything.** Every row lands `is_active=false` with
+`moderation_status='pending_review'` and short `quality_flags` saying *what to go and check*.
+Only two things never reach the table: an **exact duplicate** (same normalized URL *and*
+matching name, via `url_dedupe.find_duplicates()`), and a candidate with **no URL** — the URL
+is the row's identity. Both are written to the review snapshot with their raw JSON, so
+nothing vanishes silently. The snapshot is now `{"inserted": [...], "rejected": [...]}` rather
+than a bare list; `dryrun_common.py` reads these files, so **check it if you change that
+shape**. Flags are the `FLAG_*` constants in `scrape_opportunities.py` and must stay short —
+the console renders each as a pill truncated at 90 characters (with the full text in a
+`title=` tooltip).
+
+**A live URL is not a correct URL — the second failure mode.** Fixing the 26% dead-link rate
+did not finish the job, it changed the shape of the problem. Auditing all 166 rows of the
+2026-08-23 batch by fetching each page and comparing its `<title>` to the row found **10 (6%)
+whose URL was a third-party SEO round-up** that merely mentions the program
+(`ladderinternships.com/…/19-selective-internships…` stored for Stanford AIMI,
+`indigoresearch.org/blog/…` for NASA OSTEM). **Every other check passes those**: they return
+200, so `check_urls` is happy; they have a deep path, so `is_bare_domain` is happy; the path
+is not `/faq/`, so `is_low_value_path` is happy. `url_validate.domain_matches_org()` is the
+only signal that catches them, and `FLAG_OFFSITE` is what it writes.
+
+Half of them were `reconcile_url`'s own doing: when grounding attributed a span it took
+`span_urls[0]` **without first asking whether the model's URL was itself one of the retrieved
+pages**. It was, in 33 of the 166 rows — `aimi.stanford.edu/education/summer-research-internship`,
+`stemgateway.nasa.gov/…/high-school-internships` and `nhsjs.com/submit-your-work/` were each
+discarded for a blog. That check is now hoisted above the span fallback: a URL the search
+actually returned is verified no matter which sentence cited it. Replayed over the whole
+batch the hoist changes 33 rows, improves 5 measurably and **worsens none**. The other half
+the model simply typed itself, which no ranking can repair — those get the flag.
+
+`domain_matches_org()` matches by **substring against each domain label**, not by whole
+tokens, because a domain label is words run together with no separator: an exact-token rule
+read `idyllwildarts.org`, `tellurideassociation.org` and `artandwriting.org` as unrelated to
+their own owners and fired on **58%** of the batch against 16% for the substring rule (which
+still catches 10/10). Abbreviations count in both directions (`colum.edu` for Columbia
+College, the `umich`/`upenn` shape), as do acronyms and initials — and initials are taken
+with parentheticals stripped, or "Fermi National Accelerator Laboratory (Fermilab)" yields
+`fnalf` and misses `fnal.gov`. Being generous is the point: a wrong "unrelated" flags a good
+row, and this is a review hint, never a rejection.
+
+**A seed is an ANGLE — nothing else.** It used to be a `(category, angle)` pair; the category
+was dropped 2026-08-23. It was never interpolated into either prompt, so it never influenced
+the search; nothing in the student-facing app reads the `opportunities.category` column it was
+written to (nullable, already NULL on 1139 of 1440 rows, and `preFilter` keys off `type`); and
+its one live use was a silent `type` fallback. Measured across 238 scraper rows, the model's
+type disagreed with the seed's category **27% of the time overall and 65% for Research seeds**
+— so the fallback fired a guess that was usually wrong, at exactly the moment (a malformed
+response) when guessing is least defensible. An invalid type is now a review flag.
+`scraper_seeds.category` still exists because it is `not null` and dropping it needs DDL this
+repo cannot run: `create_seed()` writes `SEED_CATEGORY_PLACEHOLDER` to satisfy the constraint,
+`SEED_SELECT` does not read it, and the console no longer offers it.
+
 **Scraper search angles** ("seeds") live in a Supabase `scraper_seeds` table
 ([scraper_seeds_schema.sql](scraper_seeds_schema.sql)), editable from the admin console, with
 lifetime per-angle yield totals (`total_added`, `total_cost`, …) so unproductive angles can be
@@ -581,10 +799,13 @@ before adding** rather than adding to the copy loaded when the run began: PostgR
 do `SET total = total + n` without a stored function (DDL this repo cannot run), so it
 stays read-modify-write, but the window shrinks from the length of a 110-minute pass to one
 round trip — the stale-snapshot version silently discarded any console edit made mid-run.
-Every angle currently reads zero, which is **correct and not a bug**: dry runs add nothing
-so they credit nothing, and the fallback angles have no id to credit. `seed_yield_state()`
-on `GET /api/seeds` says which of those it is, because a grid of zeros otherwise reads as a
-dead feature. Select angles with `--seed-ids` (stable);
+**Dry runs now credit `found`/`dupes`/`cost` but never `added`.** This is a deliberate
+exception to "--dry-run skips DB writes", of the same kind `agent_runs` already makes: a dry
+run spends real money, so its cost belongs against the angle that spent it. Crediting nothing
+at all is why every angle still read zero after a month — the whole retire-bad-angles feature
+had no data. `added` stays 0 because nothing was actually inserted. Fallback angles have no id
+and still credit nothing; `seed_yield_state()` on `GET /api/seeds` says which case a grid of
+zeros is, because it otherwise reads as a dead feature. Select angles with `--seed-ids` (stable);
 `--seed-indices` is deprecated because positions shift whenever a seed is added or deleted.
 
 **Admin console** is [admin_console.html](admin_console.html), served at `/admin`. It and every

@@ -9,7 +9,294 @@ it's kept current. This folder **is** a git repo (`origin` =
 
 ---
 
-# CURRENT THREAD: Review-queue actions, snapshot stamps, Haiku pin (2026-08-22)
+# CURRENT THREAD: Scraper rewrite — grounding-based URLs (2026-08-23)
+
+## Goal
+Make `scrape_opportunities.py` accurate and efficient. It was producing rows with
+**fabricated URLs**: an HTTP check of all 116 rows in
+`scrape_review_national_20260820.json` found **30 hard 404s (26%)**.
+
+**Status: rewritten and validated live across ALL 40 angles. Both runs finished cleanly
+(`agent_runs` id=49 and id=50). A follow-up audit then found a SECOND failure the
+headline numbers hide - live-but-wrong URLs - now fixed in code but NOT reflected in
+the 166 rows already in the queue. Nothing is committed.**
+
+Full design + measurements: **`SCRAPER_PLAN.md`** (repo root). Read that before changing
+any of this; it carries the numbers behind every decision.
+
+## The root cause (this is the load-bearing finding)
+**Gemini decides per call whether to search, non-deterministically. It cannot be forced.**
+Proof in `agent_logs/`: seed 51 run twice with an *identical* command returned
+`0 search(es)` once and `6 search(es)` the next time.
+
+When it does not search, it writes URLs **from memory** — right host, path off by one
+segment (`juilliard.edu/music/pre-college` for
+`.../music/preparatory-division/juilliard-pre-college`). Every one of the 30 dead URLs was a
+constructed deep path; **none was a bare domain**.
+
+And `gemini_common.call_gemini` was throwing away the fix: it read `groundingMetadata` only
+as `len(webSearchQueries)`. The discarded fields are exactly what repairs this:
+- `groundingChunks[].web.uri` is a `vertexaisearch.cloud.google.com/grounding-api-redirect/…`
+  link that **resolves to the exact real page in one free HTTP hop**. (`web.title` is only a
+  bare domain; `web.domain` does not exist on `v1beta/generateContent`.)
+- `groundingSupports[]` gives `segment{startIndex,endIndex,text}` + `groundingChunkIndices`,
+  i.e. per-opportunity attribution.
+- Measured head-to-head: **4/4 model-typed URLs 404, 4/4 grounding-resolved URLs 200.**
+
+## What was built
+- **`url_validate.py`** (new, free — no API calls). `resolve_grounding_chunks()`,
+  `support_urls_by_span()`, `check_urls()` (separates **dead** 404/410 from **unverified**
+  403/429/timeout — 403 is ~9% on the existing catalog, so treating it as death bins good
+  rows), `is_bare_domain()`, `same_host()`.
+- **Two-phase call per seed** in `scrape_opportunities.py`:
+  `research_seed()` = prose + search (keeps grounding), then `extract_candidates()` = strict
+  JSON, no search, **with the resolved URLs supplied** so the model copies rather than
+  recalls. Do not collapse these back into one call.
+- **Silent-search retry**: `research_seed()` re-sends the **identical** prompt once if
+  `searches == 0`. Not a sterner prompt — the decision is a coin flip, so re-rolling is the
+  mitigation. Still-silent output is flagged, not discarded.
+- **Seed category dropped end to end.** It was never sent to the model, nothing
+  student-facing reads `opportunities.category`, and its only use was a `type` fallback that
+  measurement showed wrong 27% of the time (65% for Research seeds).
+- **Dedupe swapped to `url_dedupe.find_duplicates()`**. The old private rule rejected on URL
+  alone and on bare name similarity >= 0.85 — which matches **264 catalog pairs, 257 of them
+  genuinely distinct**.
+- **"Discard almost nothing, explain everything."** Only an exact duplicate (same normalized
+  URL *and* matching name) and a candidate with no URL are ever withheld, and both go to the
+  snapshot with their raw JSON. Everything else inserts `is_active=false`,
+  `moderation_status='pending_review'`, with `FLAG_*` reasons saying what to check.
+- **Console: duplicate back-links.** `dupeBackLinks()` renders each `dup_candidate` inline —
+  confidence, the suspected row as a **clickable link to its own page**, its id, and the
+  reason. Previously the queue showed only a `2 possible duplicates` count.
+- **Diagnostics**: `webSearchQueries` strings now exposed in `usage`; raw notes/queries/
+  resolved URLs/candidates saved to `agent_logs/scraper_<stamp>_seed<id>.json`; every
+  rejection logged with its reason.
+
+## Validation (live, real money)
+All 40 angles, `agent_runs` id=49 + id=50, **$3.607, 166 rows**, vs the full 116-row
+08-20 batch:
+
+| metric | 08-20 (old) | 08-23 (rewrite) |
+|---|---|---|
+| rows | 116 | 166 |
+| dead links | 30 (**26%**) | **0 (0%)** |
+| confirmed live | 64 (55%) | 146 (**88%**) |
+| bare root domains | 46 (40%) | 13 (8%) |
+
+Of 30 dead old rows, 9 were re-found on the same site and **9/9 came back live**
+(`tisch.nyu.edu/…/summer-filmmakers-workshop` -> `…/filmmakers-workshop`;
+`med.stanford.edu/psychiatry/education/CNIX.html` -> `…/highschool.html`).
+Silent retry fired on 2/40 seeds and **succeeded both times** (final 0/40 silent).
+Rates: **~36s/seed, $0.090/seed, $0.022/row.**
+
+## Both runs COMPLETED (no longer in flight)
+- `agent_runs` id=49 — 12 angles, $1.0517, 62 rows.
+- `agent_runs` id=50 — remaining 28 angles, $2.5557, 104 rows, 0 errors, 0 silent seeds.
+
+Combined across all 40 angles: **166 rows, $3.607**, 192 raw candidates, 26 rejected (all
+exact duplicates), 0 invalid, 0 errors, **0 dead links**. Logs are in the session scratchpad
+(`rerun12.log`, `rerun28.log`); per-seed raw responses are in `agent_logs/`.
+
+**The user began triaging while run 2 was going**: of the 166 rows, 44 are already
+`approved` + activated, 2 rejected, 120 still `pending_review`.
+
+## What worked
+- **Measuring before theorising.** HTTP-checking the actual catalog turned "the scraper
+  seems off" into "26% of URLs are 404 and every one is a constructed deep path", which
+  pointed straight at the mechanism.
+- **Probing cheaply.** Three tiny Gemini calls (**$0.032 total**) settled what the docs
+  could not. Probe scripts are in the session scratchpad, not the repo.
+- **Replaying saved API responses through new code**, so the whole pipeline was verified
+  offline before any paid run.
+- Reusing `url_dedupe.py` instead of writing a second matching rule.
+
+## What did NOT work (do not repeat)
+- **Do not claim the JSON-only prompt suppresses search.** I asserted this from a 3-sample
+  probe (JSON -> 0 searches, prose -> 2). Seed 51's identical-command 0-then-6 split shows
+  the noise floor is far too large for that. The two-phase design is justified by *"a
+  JSON-only call cannot carry grounding data"*, **not** by that claim. An earlier version of
+  the memory entry and `SCRAPER_PLAN.md` said otherwise and were corrected.
+- **`gemini_common.py`'s "THIRD finding" is CORRECT** — no reliable way to force search.
+  I briefly concluded it had missed a lever; it had not. Do not "fix" that docstring.
+- **Do not match "same program" on loose word overlap.** My first comparison paired NIH SIP
+  with an NYU URL and AI4ALL with Stanford Psychiatry. Use same registrable domain **and**
+  `url_dedupe.name_similarity` >= 0.60.
+- **Do not backfill or re-run the pre-2026-08-23 scraper.** The monthly cron
+  (`~/.claude/scheduled-tasks/monthly-national-scrape`) reuses these angles — verify its
+  command matches the new flags before it next fires on the 1st.
+
+## Traps hit (worth not re-learning)
+- **`dryrun_common._load()` returned `[]` for any non-list.** The new snapshot shape is
+  `{"inserted": [...], "rejected": [...]}`, so every future scraper snapshot would have
+  listed as "0 entries" and committed nothing — silently, no error. Fixed to read both
+  shapes; all 7 historical snapshots verified still readable.
+- **Phase 1's cost was only banked after phase 2 returned**, so an exception in phase 2
+  discarded money already spent. Each phase is banked as it completes.
+- `scraper_seeds.category` is **`not null`** and this repo cannot run DDL, so `create_seed()`
+  writes `SEED_CATEGORY_PLACEHOLDER`. `opportunities.category` is nullable (already NULL on
+  1139/1440 rows) so the scraper simply stopped writing it.
+- Console `quality_flags` pills truncate at 90 chars — flags must stay short; a `title=`
+  tooltip now carries the full text.
+
+## Migration / DB state, checked live
+- `user_submissions_schema.sql` **has been run** (`moderation_ready: true`), so flags and
+  `dup_candidates` land correctly. No pending DDL for this thread.
+- The **110 rows from the 08-20 batch were rejected by the user via the admin console** at
+  `2026-08-23T08:09Z` (`reviewed_by='admin-console'`). They are recoverable from the
+  Rejected tab; rejecting never deletes.
+- 62 rows from `source='scraper-national-20260823'` are in the queue awaiting triage, plus
+  whatever the in-flight 28-angle run adds.
+
+## !! The working tree contains TWO threads' work !!
+`git status` is **not** all scraper work. A `git add -A` would bundle two unrelated features.
+
+- **This thread:** `scrape_opportunities.py`, `url_validate.py` (new), `gemini_common.py`,
+  `seeds_common.py`, `dryrun_common.py`, `migrate_seeds_to_supabase.py`,
+  `SCRAPER_PLAN.md` (new).
+- **A different, pre-existing thread (NOT mine):** a user-metrics/activity feature —
+  `USER_METRICS_PLAN.md`, `user_activity_schema.sql`, `user_metrics_daily_schema.sql`, a
+  **+719-line block at `get_user_costs` in `server.py`**, and a **+370-line
+  `renderUserCosts` block in `admin_console.html`**.
+- **`server.py`, `admin_console.html` and `CLAUDE.md` are MIXED** — they carry hunks from
+  both. My `server.py` change is only `SEED_FIELDS` / `SEED_CATEGORY_PLACEHOLDER` /
+  `create_seed()`; my console changes are the seed-category removal, the flag `title=`
+  tooltip, and `dupeBackLinks()`.
+
+Stage by hunk, not by file, if these are to be committed separately.
+
+## Next steps
+1. **Triage the review queue** — 120 of the 166 rows are still `pending_review`. Start from
+   `scratchpad/triage.json` (below): it already says, per row, whether the page's own title
+   corroborates the row. The 15 MISMATCH rows are where the bad ones are.
+2. **Decide about the 10 listicle rows** (`scratchpad/listicles.json`). None reached the live
+   catalog. The `reconcile_url` fix would have repaired 5 of them for free; the other 5 need
+   a URL by hand or a reject. They are the strongest argument for a small re-run of just
+   those seeds, but that costs money and needs approval.
+3. Decide whether to commit, and if so **separate the two threads' hunks**.
+4. ~~The monthly cron~~ **DONE** — paused, and its auto-activate step removed. All agents
+   are run manually now. See "Cron" below before re-enabling anything.
+5. Consider whether the 110 rejected 08-20 rows are worth re-scraping now that URLs resolve
+   — several were real programs killed only by a bad link.
+6. Optional, deliberately not done: feeding the catalog into the prompt to cut the ~40%
+   duplicate rate (needs its own paid A/B); splitting seed `angle` from an explicit
+   `queries` field (see `SCRAPER_PLAN.md` "Change 4").
+
+---
+
+## SESSION 2026-08-23 (later): post-run audit, and the second failure mode
+
+**Nothing was spent this session.** Every check below is HTTP-only or reads local logs.
+
+### Verified the handoff's own claims independently
+Re-measured all 166 rows against the 116-row 08-20 batch: dead links **26% -> 0%**, bare
+domains **40% -> 8%**, confirmed live **53% -> 88%**. Matches what `SCRAPER_PLAN.md` claims.
+(The plan says 55% live for the old batch where I measured 53%; that is 403/timeout
+flakiness between runs, not a discrepancy that matters.)
+
+### Reconciled a 44-row gap that looked like a bug and was not
+166 rows were inserted but only 122 carried `source='scraper-national-20260823'` in the
+inactive set. By row id: **44 of run 1's rows are `is_active = true`**. They were not
+auto-activated — `reviewed_by='admin-console'`, `reviewed_at` 09:04-09:11Z, i.e. a person
+triaged them in the console while run 2 was still going. 44 approved, 2 rejected, 120 left
+pending. Everything reconciles; no rows are missing.
+
+### THE FINDING: fixing dead links exposed a second failure
+Fetched every row's page and compared its title to the row. **10 of 166 (6%) store a
+third-party SEO round-up instead of the program's own page** — `ladderinternships.com`
+for Stanford AIMI, `indigoresearch.org/blog/` for NASA OSTEM, `futureforward.app/blog/`
+for NHSJS. **None of them reached the live catalog.**
+
+Every existing check passes these: HTTP 200 (so `check_urls` is happy), deep path (so
+`is_bare_domain` is happy), not `/faq/` (so `is_low_value_path` is happy). A live-and-wrong
+link is worse for a student than an obviously dead one, and the "0% dead links" headline
+cannot see it.
+
+**Half of them were `reconcile_url`'s own doing.** With a grounding span present it returned
+`span_urls[0]` without first asking whether the model's URL was *itself* a retrieved page.
+It was, in 33 of 166 rows — `aimi.stanford.edu/education/summer-research-internship`,
+`stemgateway.nasa.gov/.../high-school-internships`, `nhsjs.com/submit-your-work/` all thrown
+away for a blog.
+
+### What was changed (code)
+- **`scrape_opportunities.py` `reconcile_url()`** — hoisted `model_url in resolved_urls`
+  above the span fallback. Replayed over the whole batch: **changes 33 rows, improves 5
+  measurably, worsens 0**; ~20 more of the "neutral" changes are better by eye
+  (`naclo.clsp.jhu.edu` over `linguistics.cornell.edu/outreach`).
+- **`url_validate.domain_matches_org()`** (new) + **`FLAG_OFFSITE`** — catches the 5 the
+  model typed itself, which no ranking can repair. **16% of the batch flagged, 10/10 known
+  cases caught**, ~25 of the 27 flagged rows genuinely off-site.
+
+**These changes are NOT reflected in the 166 rows already in the queue** — those were written
+by the code as it stood during the runs. A future run gets the benefit; today's queue does not.
+
+### Traps hit while building the matcher
+- **Whole-token matching does not work on domain labels.** A label is words run together, so
+  an exact-token rule called `idyllwildarts.org`, `tellurideassociation.org` and
+  `artandwriting.org` unrelated to their own owners — **58% fire rate**. Substring matching
+  against tokens of >= 4 chars, with generic words removed, gives 16% at the same recall.
+- Abbreviation must work **both directions**: `colum.edu` (label shorter than the org word)
+  and the `umich`/`upenn` shape both read as third-party sites with containment one way only.
+- Initials must be taken with **parentheticals stripped**: "Fermi National Accelerator
+  Laboratory (Fermilab)" otherwise yields `fnalf` and misses `fnal.gov`.
+- **Heredocs in this environment collapse backslashes.** Patching `url_validate.py` through a
+  `python - <<PY` heredoc wrote a regex word-boundary escape as a literal **backspace byte
+  (0x08)**, so the acronym regex silently matched nothing — and the file still parsed and
+  imported cleanly. If a regex mysteriously matches nothing right after an edit, check for
+  control characters before rewriting the logic. Patch by line index, or build escapes with
+  `chr(92)`.
+
+### Verification
+- `scratchpad/test_matcher.py` — **39/39** unit cases, plus the batch and live-catalog fire
+  rates. Exits non-zero on regression.
+- `reconcile_url` branch tests: 6/6, covering every return path.
+- `python scrape_opportunities.py --mode national --preview` — clean, 43 seeds, free tier.
+- No live agent run. The fix is validated by **offline replay of the saved batch**, the same
+  method the original rewrite used.
+
+### Cron: PAUSED, and its instructions rewritten
+`monthly-national-scrape` (`~/.claude/scheduled-tasks/monthly-national-scrape/SKILL.md`).
+
+**The user's decision, 2026-08-23: all agents are run manually for now.** The task is set
+`enabled: false` (paused, not deleted — the prompt and schedule survive, `nextRunAt` is
+gone). It would otherwise have fired 2026-09-01.
+
+Its instructions used to end with *"After review, activate with... PATCH to set
+is_active=true"*, on an unattended run with nobody reviewing. That step is gone. The prompt
+now opens with the rule instead: **never activate an opportunity, ever** — every row lands
+`is_active = false` / `moderation_status = 'pending_review'` and waits for a person in the
+console, and no flag count or clean run substitutes for that. It also states the ~$3.60 /
+~110-minute cost up front, points at `--preview` as the free way to check, and fixes the
+snapshot filename pattern (stamps carry seconds now).
+
+**Audited: no code path can violate this.** `scrape_opportunities.py:415` and
+`dryrun_common.py:308` hardcode `is_active: False`; every other `is_active` reference in the
+repo is an `eq.true` *read* filter, except `migrate_to_supabase.py` (the one-off historical
+import). The single write path is `activate_opportunities()` (`server.py:3438`) — localhost
+only, explicit id list, no "activate everything matching", stamps `reviewed_by`/`reviewed_at`.
+
+To resume automatic runs later: `update_scheduled_task` with `enabled: true`. Ask first.
+
+### Scratchpad artefacts (this session, all free to re-run)
+`compare_all.py` (40-angle comparison), `triage_check.py` -> `triage.json` (per-row
+page-title corroboration), `aggregator_check.py` -> `listicles.json`, `would_fix.py` and
+`impact.py` (replay of the fix over the batch), `test_matcher.py` (regression suite).
+
+---
+
+## Files changed this thread
+`scrape_opportunities.py` (rewritten), `url_validate.py` (new), `gemini_common.py`
+(`return_grounding`, `web_search_queries`, FIFTH/SIXTH findings), `seeds_common.py`,
+`dryrun_common.py` (`_load` both shapes), `migrate_seeds_to_supabase.py`,
+`server.py` (seed CRUD only), `admin_console.html` (seed category removal, flag tooltip,
+`dupeBackLinks`), `CLAUDE.md`, `SCRAPER_PLAN.md` (new).
+
+Added in the later 2026-08-23 session: `url_validate.py` gains `domain_matches_org()` /
+`_org_tokens()` / `_acronyms()`; `scrape_opportunities.py` gains `FLAG_OFFSITE` and the
+`reconcile_url()` hoist. `CLAUDE.md` and `SCRAPER_PLAN.md` document both.
+
+---
+
+# PRIOR THREAD: Review-queue actions, snapshot stamps, Haiku pin (2026-08-22)
 
 ## Goal
 Close the gap the admin-console thread left open: the review queue could only *activate*.

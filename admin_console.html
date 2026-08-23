@@ -210,6 +210,20 @@ select:focus, input:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .pill.danger { background: var(--danger-soft); color: var(--danger); }
 .pill.info { background: var(--accent-soft); color: var(--accent); }
 
+/* Back-links to the rows a queued item might duplicate. url_dedupe already worked out the
+   id, name, url, reason and confidence at insert time; before this the queue rendered only
+   a "2 possible duplicates" count, so deciding anything meant opening the modal row by row
+   just to find out WHAT it might duplicate. */
+.dupe-back { margin-top: 6px; padding: 6px 8px; border-left: 2px solid var(--warn);
+             background: var(--warn-soft); border-radius: 0 6px 6px 0; }
+.dupe-back-head { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+                  letter-spacing: .04em; color: var(--warn); margin-bottom: 3px; }
+.dupe-back-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px;
+                 font-size: 11.5px; padding: 2px 0; }
+.dupe-back-row + .dupe-back-row { border-top: 1px dashed var(--border); }
+.dupe-back-id { font-size: 10.5px; color: var(--text-2); }
+.dupe-back-why { color: var(--text-2); }
+
 /* ---- charts ---- */
 .chart-wrap { overflow-x: auto; }
 svg.chart { display: block; width: 100%; min-width: 520px; height: 200px; }
@@ -225,6 +239,22 @@ svg.spark { display: block; width: 100%; height: 34px; }
 
 /* ---- tables ---- */
 .tbl-wrap { overflow-x: auto; }
+
+/* ---- Metrics view ---- */
+.funnel-row, .frow { display: grid; grid-template-columns: 220px 1fr 54px 92px;
+  align-items: center; gap: var(--sp-3); padding: 7px var(--sp-2); border-radius: var(--radius-sm); }
+.frow:hover { background: var(--surface-2); }
+.frow .fname { font-size: 12.5px; font-weight: 600; }
+.frow .ftrack { background: var(--surface-3); border-radius: 3px; height: 20px; overflow: hidden; }
+.frow .ffill { height: 100%; border-radius: 3px; transition: width .2s ease; }
+.frow .fcount { font-family: var(--font-mono); font-size: 14px; font-weight: 700; text-align: right; }
+.frow .fstep { font-family: var(--font-mono); font-size: 11.5px; text-align: right; color: var(--text-2); }
+.frow.worst .fstep { color: var(--danger); font-weight: 700; }
+.fdetail { padding: 10px var(--sp-4) 14px; background: var(--surface-2);
+  border-radius: var(--radius-sm); margin: 2px 0 8px; font-size: 12.5px; line-height: 1.6; }
+.status-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.pips { display: inline-flex; gap: 2px; }
+.pip { width: 7px; height: 7px; border-radius: 2px; background: var(--surface-3); }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; font-family: var(--font-head); font-size: 11px; text-transform: uppercase;
   letter-spacing: .05em; color: var(--text-3); font-weight: 600; padding: 10px var(--sp-4);
@@ -365,7 +395,8 @@ tr.disabled-seed { opacity: .48; }
   </div>
 
   <div class="viewtabs" id="viewTabs">
-    <button class="vtab active" data-view="agents">Agents</button>
+    <button class="vtab active" data-view="metrics">Metrics<span class="count" id="metricsTabCount"></span></button>
+    <button class="vtab" data-view="agents">Agents</button>
     <button class="vtab" data-view="review">Review queue<span class="count" id="reviewTabCount"></span></button>
     <button class="vtab" data-view="signups">Mailing lists<span class="count" id="signupTabCount"></span></button>
     <button class="vtab" data-view="users">Cost per user<span class="count" id="userTabCount"></span></button>
@@ -373,7 +404,57 @@ tr.disabled-seed { opacity: .48; }
 
   <div id="globalNotice" class="notice err hidden" style="margin-bottom:24px"></div>
 
-  <div class="view" id="view-agents">
+  <div class="view" id="view-metrics">
+    <div class="view-lead">
+      Who signs up, how far they get, and whether they convert. The
+      <strong>Cost per user</strong> tab answers what that costs &mdash; same roster,
+      deliberately separate question. At this account count the job of this page is to
+      <strong>name accounts, not plot rates</strong>: every percentage carries its raw
+      fraction, and every funnel step will tell you exactly who it lost.
+    </div>
+
+    <div class="kpis" id="metricKpis"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Signups &amp; activity</h2>
+        <div class="spacer"></div>
+      </div>
+      <div class="card-body">
+        <div id="metricChartWrap"></div>
+        <div class="hint" id="metricChartHint" style="margin-top:12px;line-height:1.55"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Where accounts get to</h2>
+        <div class="spacer"></div>
+        <div class="hint" id="metricPanelHint"></div>
+        <select id="metricSort" class="hidden">
+          <option value="stage">Sort by progress</option>
+          <option value="created_at">Sort by signup date</option>
+          <option value="tracked">Sort by tracked</option>
+          <option value="cost_usd">Sort by AI cost</option>
+          <option value="last_active">Sort by last active</option>
+        </select>
+      </div>
+      <div class="card-body tight">
+        <div class="tabs" id="metricTabs" style="padding:14px 14px 12px">
+          <button class="tab active" data-panel="funnel">Funnel</button>
+          <button class="tab" data-panel="retention">Retention</button>
+          <button class="tab" data-panel="subs">Subscriptions</button>
+          <button class="tab" data-panel="musers">Users<span class="count" id="metricUserCount"></span></button>
+        </div>
+        <div id="panel-funnel" style="padding:0 14px 18px"></div>
+        <div id="panel-retention" class="hidden" style="padding:0 14px 18px"></div>
+        <div id="panel-subs" class="hidden" style="padding:0 14px 18px"></div>
+        <div id="panel-musers" class="hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="view hidden" id="view-agents">
 
   <!-- KPI strip -->
   <div class="kpis" id="kpis"></div>
@@ -483,7 +564,7 @@ tr.disabled-seed { opacity: .48; }
       <div class="tbl-wrap">
         <table>
           <thead><tr>
-            <th>On</th><th>Category</th><th class="seed-angle">Search angle</th>
+            <th>On</th><th class="seed-angle">Search angle</th>
             <th class="num sortable" data-sort="total_runs">Runs</th>
             <th class="num sortable" data-sort="total_found">Found</th>
             <th class="num sortable" data-sort="total_added">Added</th>
@@ -852,11 +933,6 @@ tr.disabled-seed { opacity: .48; }
           <label for="seedMode">Mode</label>
           <select id="seedMode"><option value="national">National</option><option value="seattle">Seattle</option></select>
         </div>
-        <div class="field">
-          <label for="seedCategory">Category</label>
-          <select id="seedCategory"></select>
-          <div class="help">Sets the fallback type on rows this angle finds.</div>
-        </div>
       </div>
       <div class="field">
         <label for="seedAngle">Search angle</label>
@@ -881,7 +957,8 @@ tr.disabled-seed { opacity: .48; }
 const S = {
   config: {}, status: {}, history: [], summary: null,
   seeds: [], seedMode: 'national', seedSort: 'added_per_dollar',
-  userCosts: null, userCostSort: 'cost_usd', expandedUsers: new Set(), view: 'agents',
+  userCosts: null, userCostSort: 'cost_usd', expandedUsers: new Set(), view: 'metrics',
+  metrics: null, metricPanel: 'funnel', metricSort: 'stage', expandedStage: null,
   lastRefresh: null, seedYield: null, userPanel: 'provider',
   snapshots: [], pending: [], pendingSource: '', selectedPending: new Set(),
   signups: [], signupStatus: 'pending_review', selectedSignups: new Set(),
@@ -974,12 +1051,13 @@ async function loadConfig() {
 async function refreshDashboard() {
   markRefreshing(true);
   try {
-    const [status, summary, history, billed, userCosts, snapshots, pending] = await Promise.all([
+    const [status, summary, history, billed, userCosts, metrics, snapshots, pending] = await Promise.all([
       api('/api/agents/status'),
       api(`/api/agents/summary?days=${S.range}`),
       api(`/api/agents/history?days=${S.range}&limit=100`),
       api(`/api/agents/billed?days=${S.range}`).catch(() => null),
       api(`/api/agents/user-costs?days=${S.range}`).catch(() => null),
+      api(`/api/agents/metrics?days=${S.range}`).catch(() => null),
       api('/api/agents/snapshots').catch(() => null),
       // status=all fetches both slices at once — the queue and the already-rejected rows
       // are split client-side, so switching tabs costs no round-trip.
@@ -987,13 +1065,14 @@ async function refreshDashboard() {
     ]);
     S.status = status; S.summary = summary; S.history = history; S.billed = billed;
     S.userCosts = userCosts;
+    S.metrics = metrics;
     S.snapshots = (snapshots && snapshots.snapshots) || [];
     S.pending = (pending && pending.opportunities) || [];
     S.pendingSources = (pending && pending.sources) || [];
     S.moderationReady = !pending || pending.moderation_ready !== false;
     S.duplicateTargets = (pending && pending.duplicate_targets) || {};
     notice('');
-    renderKPIs(); renderBilled(); renderUserCosts(); renderChart(); renderCards(); renderHistory();
+    renderKPIs(); renderBilled(); renderUserCosts(); renderMetrics(); renderChart(); renderCards(); renderHistory();
     renderSnapshots(); renderPending();
     S.lastRefresh = Date.now();
   } catch (e) {
@@ -1234,8 +1313,8 @@ function renderPending() {
     const dupes = Array.isArray(o.dup_candidates) ? o.dup_candidates : [];
     const tags = [
       o.submitted_by ? `<span class="pill info">from ${esc(o.submitted_by)}</span>` : '',
-      dupes.length ? `<span class="pill warn">${dupes.length} possible duplicate${dupes.length === 1 ? '' : 's'}</span>` : '',
-      ...flags.map(f => `<span class="pill warn">${esc(String(f).slice(0, 90))}</span>`),
+
+      ...flags.map(f => `<span class="pill warn" title="${esc(String(f))}">${esc(String(f).slice(0, 90))}</span>`),
       isAdjudicated(o) ? `<span class="pill danger">${esc(o.moderation_status)}${o.reviewed_at ? ' ' + ago(o.reviewed_at) : ''}</span>` : '',
       // A bare duplicate_of id means nothing to a reader; name the survivor.
       o.duplicate_of ? `<span class="pill info">of ${esc((S.duplicateTargets[o.duplicate_of] || {}).name || o.duplicate_of)}</span>` : '',
@@ -1244,7 +1323,8 @@ function renderPending() {
       <td><input type="checkbox" ${on ? 'checked' : ''} onchange="togglePending('${esc(o.id)}', this.checked)"></td>
       <td><div>${esc(o.name || '(no name)')}</div>
           ${o.summary ? `<div class="hint" style="margin-top:3px">${esc(String(o.summary).slice(0, 120))}</div>` : ''}
-          ${tags ? `<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px">${tags}</div>` : ''}</td>
+          ${tags ? `<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px">${tags}</div>` : ''}
+          ${dupeBackLinks(dupes)}</td>
       <td>${esc(o.org || '—')}</td>
       <td>${esc(o.type || '—')}</td>
       <td class="mono" style="font-size:11.5px">${esc(o.source || '—')}</td>
@@ -1455,6 +1535,30 @@ const OPP_FIELDS = {
    verdict that needs a target — and a duplicate with no survivor is just a
    rejection wearing a misleading label. The server refuses one without a target.
 --------------------------------------------------------------------------- */
+// One line per stored dup_candidate: how sure the check was, the suspected row as a
+// clickable link to its own page (so the two can be compared side by side in tabs), its id,
+// and WHY it matched. "Mark duplicate" opens the existing modal, which pre-selects from the
+// same list. Confidence drives the colour because strong/weak mean very different things
+// here — a strong match is usually a real duplicate, a weak one usually is not.
+function dupeBackLinks(dupes) {
+  if (!dupes.length) return '';
+  return `<div class="dupe-back">
+    <span class="dupe-back-head">Possible duplicate of</span>
+    ${dupes.map(c => {
+      const label = esc(c.name || c.id || '(unnamed)');
+      const link = c.url
+        ? `<a href="${esc(c.url)}" target="_blank" rel="noopener" title="${esc(c.url)}">${label} &#8599;</a>`
+        : label;
+      return `<div class="dupe-back-row">
+        <span class="pill ${c.confidence === 'strong' ? 'danger' : 'warn'}">${esc(c.confidence || 'match')}</span>
+        ${link}
+        <span class="mono dupe-back-id">${esc(c.id || '')}</span>
+        <span class="dupe-back-why">${esc(c.reason || '')}</span>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
 function markDuplicate(id) {
   const o = (S.pending || []).find(x => x.id === id);
   if (!o) return;
@@ -1647,6 +1751,7 @@ function planPill(status) {
 }
 
 const VIEW_SUBTITLE = {
+  metrics: 'Who signs up, how far they get, and whether they convert',
   agents: 'Background agents that maintain the Wingman opportunity catalog',
   users:  'What each user\u2019s own activity costs, against the plan they pay for',
   review: 'Scraped opportunities waiting on a human before students can see them',
@@ -1750,6 +1855,376 @@ function renderUserCosts() {
 /* Three cuts of one number: by model, by feature, by account. Paged rather than stacked —
    the provider split above stays visible for all three because it is the frame they sit
    in, not a fourth cut of the same money. */
+/* ===========================================================================
+   Metrics — the activation funnel, retention and subscriptions
+   ---------------------------------------------------------------------------
+   Cost per user asks what each account COSTS. This asks whether they got
+   anywhere and whether they paid. Same roster, deliberately separate views.
+=========================================================================== */
+
+/* Ordered stages get an ordered colour: one hue, darkening down the funnel. A
+   categorical palette here would imply the stages are alternatives rather than a
+   sequence, which is the one thing a funnel must not say. */
+/* Plan-scale money. money() keys its precision off magnitude so a sub-cent AI cost
+   keeps four decimals — correct there, wrong for MRR, where $0 must read "$0.00" and
+   not "$0.0000" (which looks like a rounding artefact rather than nobody paying yet). */
+const planMoney = v => (v === null || v === undefined) ? '—'
+  : (Number(v) < 0 ? '-$' : '$') + Math.abs(Number(v)).toFixed(2);
+
+const funnelColor = (i, n) => `hsl(221, 68%, ${Math.round(70 - (36 * i / Math.max(1, n - 1)))}%)`;
+
+/* Fixed per status, never positional — same rule the provider colours follow. A
+   positional palette would swap green and grey the moment one status overtakes
+   another, and the bar would read backwards from one refresh to the next. */
+const STATUS_COLORS = {
+  active: '#059669', trial: '#2563EB', beta: '#7C3AED',
+  canceled: '#A39F9B', past_due: '#D97706',
+};
+const STATUS_LABELS = {
+  active: 'Paying', trial: 'On trial', beta: 'Beta grant',
+  canceled: 'Canceled', past_due: 'Past due',
+};
+
+function metricUserMap() {
+  const m = {};
+  ((S.metrics && S.metrics.users) || []).forEach(u => { m[u.userid] = u; });
+  return m;
+}
+const userLabel = u => u ? (u.name || u.userid) : '—';
+
+function renderMetrics() {
+  const d = S.metrics;
+  const kpiEl = $('metricKpis');
+  if (!d) {
+    kpiEl.innerHTML = '<div class="empty">Could not load metrics.</div>';
+    $('metricChartWrap').innerHTML = '';
+    $('panel-funnel').innerHTML = '<div class="empty">Unavailable.</div>';
+    return;
+  }
+  const t = d.totals;
+  $('metricsTabCount').textContent = d.activity_ready ? (t.wau ?? 0) : t.accounts;
+
+  // Every tile carries its raw n/d. At this account count a bare percentage is a
+  // decoration on a fraction, and "25%" hides that it means one person out of four.
+  const tiles = [
+    { label: 'Accounts', value: num(t.accounts),
+      delta: `${t.signups_in_window} new in ${d.days}d` },
+    d.activity_ready
+      ? { label: 'Weekly active', value: num(t.wau),
+          delta: `${t.dau ?? 0} today · ${t.mau ?? 0} in 30d` }
+      : { label: 'Weekly active', value: '—',
+          delta: `run ${d.setup_sql.activity}`, muted: true },
+    { label: 'Activated', value: `${t.activated}/${t.accounts}`,
+      delta: `${pct(t.activated_rate)} reached a usable profile` },
+    { label: 'Trial → paid', value: d.subscriptions.conversion.eligible
+        ? `${d.subscriptions.conversion.converted}/${d.subscriptions.conversion.eligible}`
+        : '—',
+      // The denominator is trials that have ENDED. Saying so on the tile is the
+      // difference between "nobody converts" and "nobody has been asked yet".
+      delta: d.subscriptions.conversion.eligible
+        ? `${pct(d.subscriptions.conversion.rate)} of ended trials`
+        : `no trial has ended yet · ${d.subscriptions.conversion.still_deciding} running` },
+    { label: 'MRR', value: planMoney(t.mrr_usd),
+      delta: `${t.paying} paying · ${money(t.window_cost_usd)} AI cost in ${d.days}d` },
+    { label: 'Ending ≤48h', value: num(t.ending_soon),
+      delta: t.at_risk ? `${t.at_risk} with no usable profile` : 'all have a profile',
+      danger: t.at_risk > 0 },
+  ];
+  kpiEl.innerHTML = tiles.map(k => `<div class="kpi">
+      <div class="label">${esc(k.label)}</div>
+      <div class="value"${k.danger ? ' style="color:var(--danger)"' : ''}>${k.value}</div>
+      <div class="delta"${k.muted ? ' style="color:var(--warn)"' : ''}>${esc(k.delta)}</div>
+    </div>`).join('');
+
+  renderMetricChart();
+  renderFunnel();
+  renderRetention();
+  renderSubscriptions();
+  renderMetricUsers();
+  showMetricPanel(S.metricPanel);
+}
+
+/* Signups as bars, daily actives as a line. The two answer different questions and
+   share only an x-axis, so they are drawn on independent scales with their own
+   labelled axes rather than stacked into a single misleading total. */
+function renderMetricChart() {
+  const d = S.metrics;
+  const signups = d.signups_by_day || [];
+  const active = d.activity_by_day || [];
+  const W = 1000, H = 170, padL = 34, padR = 34, padB = 22, padT = 10;
+  const innerW = W - padL - padR, innerH = H - padB - padT;
+  const maxS = Math.max(1, ...signups.map(x => x.count));
+  const maxA = Math.max(1, ...active.map(x => x.dau));
+  const bw = Math.max(2, (innerW / Math.max(signups.length, 1)) - 2);
+  let svg = '';
+  for (let i = 0; i <= 2; i++) {
+    const y = padT + innerH - (innerH * i / 2);
+    svg += `<line class="grid-line" x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}"/>`
+         + `<text class="axis-label" x="${padL - 6}" y="${y + 3}" text-anchor="end">${Math.round(maxS * i / 2)}</text>`;
+    if (active.length) {
+      svg += `<text class="axis-label" x="${W - padR + 6}" y="${y + 3}" text-anchor="start" style="fill:var(--accent)">${Math.round(maxA * i / 2)}</text>`;
+    }
+  }
+  const xAt = i => padL + (innerW * i / Math.max(signups.length, 1)) + 1;
+  signups.forEach((s, i) => {
+    if (s.count) {
+      const h = (s.count / maxS) * innerH;
+      svg += `<rect x="${xAt(i).toFixed(1)}" y="${(padT + innerH - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="var(--text-3)" rx="1">`
+           + `<title>${s.date} · ${s.count} signup${s.count === 1 ? '' : 's'}</title></rect>`;
+    }
+    const step = Math.ceil(signups.length / 8);
+    if (i % step === 0) {
+      svg += `<text class="axis-label" x="${(xAt(i) + bw / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle">${s.date.slice(5)}</text>`;
+    }
+  });
+  if (active.length) {
+    const byDate = {};
+    active.forEach(a => { byDate[a.date] = a.dau; });
+    // Only across days that were actually recorded. Drawing back past activity_since
+    // would run a flat zero through a period nobody was measuring, which reads as
+    // "the app was dead" rather than "we weren't looking yet".
+    const pts = signups.map((s, i) => (byDate[s.date] === undefined ? null
+        : `${(xAt(i) + bw / 2).toFixed(1)},${(padT + innerH - (byDate[s.date] / maxA) * innerH).toFixed(1)}`))
+      .filter(Boolean);
+    if (pts.length) {
+      svg += `<polyline points="${pts.join(' ')}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>`;
+    }
+  }
+  $('metricChartWrap').innerHTML =
+    `<div class="chart-wrap"><svg class="chart" id="metricChart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:170px">${svg}</svg></div>`
+    + `<div class="legend">
+         <span class="item"><span class="status-dot" style="background:var(--text-3)"></span>Signups (left axis)</span>
+         ${active.length ? '<span class="item"><span class="status-dot" style="background:var(--accent)"></span>Daily active users (right axis)</span>' : ''}
+       </div>`;
+  $('metricChartHint').innerHTML = d.activity_ready
+    ? (d.activity_since
+        ? `Activity tracking began ${esc(d.activity_since)} — nothing before that was recorded, and it cannot be backfilled.`
+        : 'Activity tracking is on, but nothing has been recorded yet.')
+    : `Only signups are charted. Daily actives need <span class="mono">${esc(d.setup_sql.activity)}</span> run once in the Supabase SQL editor.`;
+}
+
+function renderFunnel() {
+  const d = S.metrics;
+  const stages = d.funnel || [];
+  const map = metricUserMap();
+  const total = d.totals.accounts || 1;
+  const worst = d.biggest_drop ? d.biggest_drop.key : null;
+  const rows = stages.map((s, i) => {
+    const expandable = (s.missing_userids || []).length > 0;
+    const open = S.expandedStage === s.key;
+    const names = (s.missing_userids || []).map(id => {
+      const u = map[id];
+      return `<span class="pill" style="margin:2px 4px 2px 0">${esc(userLabel(u))}${
+        u ? ` · ${esc(u.status)}` : ''}</span>`;
+    }).join('');
+    return `<div class="frow${s.key === worst ? ' worst' : ''}"${
+        expandable ? ` onclick="toggleStage('${esc(s.key)}')"` : ' style="cursor:default"'}
+        title="${esc(s.description)}">
+        <div class="fname">${esc(s.label)}${s.proxy ? ' <span class="pill info" title="Inferred from billed search calls or from anything in the tracker — mock mode bills nothing, so this stage is a proxy.">proxy</span>' : ''}</div>
+        <div class="ftrack"><div class="ffill" style="width:${(100 * s.count / total).toFixed(1)}%;background:${funnelColor(i, stages.length)}"></div></div>
+        <div class="fcount">${s.count}</div>
+        <div class="fstep">${i ? pct(s.step) : ''}${i && s.lost ? ` <span style="color:var(--text-3)">−${s.lost}</span>` : ''}</div>
+      </div>`
+      + (open ? `<div class="fdetail"><strong>${s.lost} account${s.lost === 1 ? '' : 's'} stopped here.</strong>
+           <div style="margin-top:6px">${names}</div></div>` : '');
+  }).join('');
+
+  const side = d.side_metrics || {};
+  $('panel-funnel').innerHTML = rows
+    + `<div class="hint" style="margin-top:14px;line-height:1.6">
+        ${d.biggest_drop
+          ? `Biggest drop: <strong>${esc(d.biggest_drop.label)}</strong> loses ${d.biggest_drop.lost} account${d.biggest_drop.lost === 1 ? '' : 's'}. Click a bar to see exactly who.`
+          : 'No step loses anyone yet.'}
+       </div>`
+    // Deliberately beside the funnel, not in it. "Came back after signup day" reads like
+    // stage 2, but someone can build a profile and track five things the day they join
+    // and never return — chaining it would score them as a total failure.
+    + `<div class="panel-break" style="margin-top:18px"><span>Beside the funnel</span></div>
+       <div style="display:flex;flex-wrap:wrap;gap:18px;padding-top:14px;font-size:12.5px">
+         ${[['Came back after signup day', side.returned, d.activity_ready],
+            ['Rich profile', side.rich_profile, true],
+            ['Connected Calendar', side.calendar, true],
+            ['Joined a mailing list', side.mailing_list, true],
+            ['Signed up with Google', side.google_signup, true],
+            ['Accepted older Terms', side.terms_stale, true],
+            ['No consent on record', side.terms_missing, true]]
+           .map(([label, v, ready]) => `<div>
+              <div class="mono" style="font-size:18px;font-weight:700">${ready ? num(v) : '—'}</div>
+              <div style="color:var(--text-2)">${esc(label)}</div>
+            </div>`).join('')}
+       </div>`;
+}
+
+function toggleStage(key) {
+  S.expandedStage = S.expandedStage === key ? null : key;
+  renderFunnel();
+}
+
+function renderRetention() {
+  const d = S.metrics;
+  if (!d.activity_ready) {
+    $('panel-retention').innerHTML = `<div class="notice" style="line-height:1.6">
+      <strong>Retention needs the activity table.</strong> Run
+      <span class="mono">${esc(d.setup_sql.activity)}</span> once in the Supabase SQL editor,
+      then restart the server. Nothing else on this page depends on it — the funnel, plan mix
+      and conversion all come from the accounts table as it stands.
+      <div style="margin-top:6px">History starts the day it is switched on; it cannot be backfilled.</div>
+    </div>`;
+    return;
+  }
+  const cohorts = d.cohorts || [];
+  if (!cohorts.length) {
+    $('panel-retention').innerHTML = '<div class="empty">No cohorts with recorded activity yet.</div>';
+    return;
+  }
+  const cell = c => {
+    // A blank is not 0%. A cohort that signed up yesterday has not failed D7, it has not
+    // reached it — and printing 0% there would read as churn that never happened.
+    if (!c) return '<td class="num" style="color:var(--text-3)">—</td>';
+    const shade = 0.10 + 0.55 * c.rate;
+    return `<td class="num" style="background:rgba(37,99,235,${shade.toFixed(2)})" title="${c.kept} of ${c.of}">
+      <span class="mono">${pct(c.rate)}</span>
+      <span style="color:var(--text-2);font-size:11px"> ${c.kept}/${c.of}</span></td>`;
+  };
+  $('panel-retention').innerHTML = `<div class="tbl-wrap"><table>
+    <thead><tr><th>Signup week</th><th class="num">Accounts</th>
+      <th class="num">D1</th><th class="num">D3</th><th class="num">D7</th><th class="num">D14</th></tr></thead>
+    <tbody>${cohorts.map(c => `<tr>
+        <td class="mono">${esc(c.cohort)}</td><td class="num mono">${c.n}</td>
+        ${cell(c.d1)}${cell(c.d3)}${cell(c.d7)}${cell(c.d14)}
+      </tr>`).join('')}</tbody></table></div>
+    <div class="hint" style="padding:12px 0 0;line-height:1.6">
+      Retained at D<em>n</em> means the account was active on or after its own day <em>n</em>.
+      Cohorts too young to have reached a column show a dash there rather than a zero.
+    </div>`;
+}
+
+function renderSubscriptions() {
+  const d = S.metrics;
+  const subs = d.subscriptions;
+  const byStatus = subs.by_status || {};
+  const total = Object.values(byStatus).reduce((a, b) => a + b, 0) || 1;
+  const order = ['active', 'trial', 'beta', 'canceled', 'past_due'];
+  const present = order.filter(k => byStatus[k]).concat(
+    Object.keys(byStatus).filter(k => !order.includes(k)));
+
+  const bar = `<div style="display:flex;height:26px;border-radius:var(--radius-sm);overflow:hidden;border:1px solid var(--border)">
+      ${present.map(k => `<div style="width:${(100 * byStatus[k] / total).toFixed(1)}%;background:${STATUS_COLORS[k] || 'var(--text-3)'}"
+         title="${esc(STATUS_LABELS[k] || k)}: ${byStatus[k]}"></div>`).join('')}
+    </div>
+    <div class="legend">${present.map(k => `<span class="item">
+      <span class="status-dot" style="background:${STATUS_COLORS[k] || 'var(--text-3)'}"></span>
+      ${esc(STATUS_LABELS[k] || k)} <span class="mono">${byStatus[k]}</span></span>`).join('')}</div>`;
+
+  const c = subs.conversion;
+  const conv = `<div style="display:flex;flex-wrap:wrap;gap:26px;margin-top:20px">
+      <div><div class="mono" style="font-size:22px;font-weight:700">${c.eligible ? `${c.converted}/${c.eligible}` : '—'}</div>
+        <div style="color:var(--text-2);font-size:12.5px">converted, of trials that ended</div></div>
+      <div><div class="mono" style="font-size:22px;font-weight:700">${c.still_deciding}</div>
+        <div style="color:var(--text-2);font-size:12.5px">trials still running</div></div>
+      <div><div class="mono" style="font-size:22px;font-weight:700">${c.granted}</div>
+        <div style="color:var(--text-2);font-size:12.5px">beta grants (never asked to pay)</div></div>
+      <div><div class="mono" style="font-size:22px;font-weight:700">${planMoney(subs.margin_usd)}</div>
+        <div style="color:var(--text-2);font-size:12.5px">MRR minus AI cost this window</div></div>
+    </div>
+    <div class="hint" style="margin-top:12px;line-height:1.6">
+      The denominator is accounts whose trial has actually <strong>ended</strong>, never all
+      accounts: with a 3-day trial, dividing by everyone scores every signup from the last
+      72 hours as a failure before they have had a chance to decide. Beta grants are left out
+      entirely — they never reached the choice.
+    </div>`;
+
+  const soon = subs.ending_soon || [];
+  const soonTable = soon.length ? `<div class="tbl-wrap"><table>
+      <thead><tr><th>Account</th><th>Plan</th><th class="num">Days left</th><th>Furthest stage</th><th></th></tr></thead>
+      <tbody>${soon.map(u => `<tr>
+        <td><div style="font-weight:600">${esc(u.name || u.userid)}</div>
+            <div style="color:var(--text-3);font-size:11.5px">${esc(u.email || u.userid)}</div></td>
+        <td><span class="pill" style="background:${STATUS_COLORS[u.status] || 'var(--muted-soft)'}22;color:${STATUS_COLORS[u.status] || 'var(--text-2)'}">${esc(STATUS_LABELS[u.status] || u.status)}</span></td>
+        <td class="num mono">${u.days_left}</td>
+        <td>${esc(u.stage_label)}</td>
+        <td>${u.at_risk ? '<span class="pill danger">no usable profile</span>' : ''}</td>
+      </tr>`).join('')}</tbody></table></div>`
+    : '<div class="empty">Nobody loses access in the next 48 hours.</div>';
+
+  const promos = subs.promos || [];
+  const promoTable = promos.length ? `<div class="tbl-wrap"><table>
+      <thead><tr><th>Code</th><th>Kind</th><th>What it does</th><th class="num">Redemptions</th></tr></thead>
+      <tbody>${promos.map(p => `<tr>
+        <td class="mono">${esc(p.code)}</td>
+        <td><span class="pill ${p.kind === 'grant' ? 'ok' : 'info'}">${esc(p.kind)}</span></td>
+        <td>${esc(p.description || '—')}</td>
+        <td class="num mono">${p.uses}</td>
+      </tr>`).join('')}</tbody></table></div>
+      <div class="hint" style="padding:12px 0 0;line-height:1.6">
+        A <strong>grant</strong> code is redeemed against the account directly and needs no
+        Stripe; a <strong>checkout</strong> code is a discount that only exists inside a
+        Checkout Session. One cannot be redeemed through the other's endpoint.
+      </div>`
+    : '<div class="empty">No promo codes redeemed.</div>';
+
+  $('panel-subs').innerHTML = bar + conv
+    + `<div class="panel-break" style="margin-top:22px"><span>Losing access within 48 hours</span></div>
+       <div style="padding-top:12px">${soonTable}</div>
+       <div class="panel-break" style="margin-top:22px"><span>Promo codes</span></div>
+       <div style="padding-top:12px">${promoTable}</div>`;
+}
+
+function renderMetricUsers() {
+  const d = S.metrics;
+  const stages = d.funnel || [];
+  const sort = S.metricSort || 'stage';
+  const users = [...(d.users || [])].sort((a, b) => {
+    if (sort === 'created_at') return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+    if (sort === 'cost_usd') return b.cost_usd - a.cost_usd;
+    if (sort === 'tracked') return b.tracked - a.tracked;
+    if (sort === 'last_active') return String(b.last_active || '').localeCompare(String(a.last_active || ''));
+    return (b.stage - a.stage) || String(b.created_at || '').localeCompare(String(a.created_at || ''));
+  });
+  $('metricUserCount').textContent = users.length;
+  $('panel-musers').innerHTML = `<div class="tbl-wrap"><table>
+    <thead><tr>
+      <th>Account</th><th>Plan</th>
+      <th title="How far down the activation funnel this account got.">Progress</th>
+      <th class="num">Profile</th><th class="num">Tracked</th>
+      <th>Last active</th><th class="num">AI cost</th><th class="num">Margin</th>
+    </tr></thead>
+    <tbody>${users.map(u => `<tr>
+      <td><div style="font-weight:600">${esc(u.name || u.userid)}
+            ${u.google_signup ? '<span class="pill info" title="Signed up with Google">G</span>' : ''}
+            ${u.terms_stale ? `<span class="pill warn" title="Accepted Terms version ${esc(u.terms_version)}; the current version is newer.">old terms</span>` : ''}
+            ${u.terms_missing ? '<span class="pill danger" title="No terms_accepted_at on this row — the account predates consent capture, so there is no record it ever saw the documents.">no consent record</span>' : ''}</div>
+          <div style="color:var(--text-3);font-size:11.5px">${esc(u.email || u.userid)} · joined ${esc((u.created_at || '').slice(0, 10))}</div></td>
+      <td><span class="pill" style="background:${STATUS_COLORS[u.status] || 'var(--muted-soft)'}22;color:${STATUS_COLORS[u.status] || 'var(--text-2)'}">${esc(STATUS_LABELS[u.status] || u.status)}</span>
+          ${u.has_access ? '' : '<span class="pill danger">no access</span>'}</td>
+      <td><span class="pips" title="${esc(u.stage_label)}">${stages.map((s, i) =>
+            `<span class="pip${i <= u.stage ? ' on' : ''}" style="${i <= u.stage ? `background:${funnelColor(i, stages.length)}` : ''}"></span>`).join('')}</span>
+          <div style="color:var(--text-2);font-size:11.5px;margin-top:3px">${esc(u.stage_label)}</div></td>
+      <td class="num mono">${u.profile_words || '—'}${u.profile_words ? '<span style="color:var(--text-3);font-size:11px"> w</span>' : ''}</td>
+      <td class="num mono">${u.tracked || '—'}</td>
+      <td class="mono" style="font-size:12px">${u.last_active ? esc(u.last_active) : (d.activity_ready ? '<span style="color:var(--text-3)">never</span>' : '<span style="color:var(--text-3)">—</span>')}</td>
+      <td class="num mono">${u.cost_usd ? money(u.cost_usd) : '<span class="pill">never used AI</span>'}</td>
+      <td class="num mono" style="${u.margin_usd < 0 ? 'color:var(--danger)' : ''}">${planMoney(u.margin_usd)}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+
+function showMetricPanel(name) {
+  S.metricPanel = name;
+  [...document.querySelectorAll('#metricTabs .tab')]
+    .forEach(t => t.classList.toggle('active', t.dataset.panel === name));
+  ['funnel', 'retention', 'subs', 'musers'].forEach(p =>
+    $('panel-' + p).classList.toggle('hidden', p !== name));
+  // Sorting means nothing against a funnel or a cohort grid — same call the Cost per
+  // user tab makes with its own sort control.
+  $('metricSort').classList.toggle('hidden', name !== 'musers');
+  $('metricPanelHint').textContent = {
+    funnel: 'Every account, and the step that lost the ones who stopped',
+    retention: 'Whether each signup week came back, measured from their own signup day',
+    subs: 'Plan mix, conversion, who is about to lose access, and promo redemptions',
+    musers: 'Every account with how far it got — click a column header order in the sort box',
+  }[name] || '';
+}
+
 function showUserPanel(name) {
   S.userPanel = name;
   [...document.querySelectorAll('#userCostTabs .tab')]
@@ -2334,7 +2809,6 @@ function renderSeeds() {
   $('seedBody').innerHTML = rows.map(s => `<tr class="${s.is_enabled ? '' : 'disabled-seed'}">
     <td><label class="switch"><input type="checkbox" ${s.is_enabled ? 'checked' : ''}
       onchange="toggleSeed(${s.id}, this.checked)"><span class="track"></span></label></td>
-    <td><span class="pill">${esc(s.category)}</span></td>
     <td class="seed-angle"><div class="txt" onclick="editSeed(${s.id})" title="Click to edit">${esc(s.angle)}</div></td>
     <td class="num mono">${num(s.total_runs)}</td>
     <td class="num mono">${num(s.total_found)}</td>
@@ -2359,9 +2833,7 @@ async function toggleSeed(id, enabled) {
 function openSeedModal(seed) {
   S.editingSeed = seed;
   $('seedModalTitle').textContent = seed ? 'Edit search angle' : 'Add search angle';
-  $('seedCategory').innerHTML = CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('');
   $('seedMode').value = seed ? seed.mode : S.seedMode;
-  $('seedCategory').value = seed ? seed.category : 'Program';
   $('seedAngle').value = seed ? seed.angle : '';
   $('seedDelete').classList.toggle('hidden', !seed);
   $('seedError').classList.add('hidden');
@@ -2371,7 +2843,7 @@ function editSeed(id) { openSeedModal(S.seeds.find(s => s.id === id)); }
 
 async function saveSeed() {
   const payload = {
-    mode: $('seedMode').value, category: $('seedCategory').value,
+    mode: $('seedMode').value,
     angle: $('seedAngle').value.trim(),
   };
   if (!payload.angle) {
@@ -2494,7 +2966,7 @@ function onScraperModeChange() {
   const mode = $('cfgMode').value;
   const rows = S.seeds.filter(s => s.mode === mode && s.is_enabled);
   sel.innerHTML = rows.length
-    ? rows.map(s => `<option value="${s.id}">[${s.id}] (${esc(s.category)}) ${esc(s.angle.slice(0, 70))}…</option>`).join('')
+    ? rows.map(s => `<option value="${s.id}">[${s.id}] ${esc(s.angle.slice(0, 80))}…</option>`).join('')
     : '<option disabled>No enabled angles for this mode</option>';
 }
 
@@ -2709,6 +3181,8 @@ $('seedClose').onclick = () => $('seedModal').classList.remove('open');
 $('seedSave').onclick = saveSeed;
 $('seedDelete').onclick = deleteSeed;
 document.querySelectorAll('#viewTabs .vtab').forEach(t => t.onclick = () => showView(t.dataset.view));
+document.querySelectorAll('#metricTabs .tab').forEach(t => t.onclick = () => showMetricPanel(t.dataset.panel));
+$('metricSort').onchange = e => { S.metricSort = e.target.value; renderMetricUsers(); };
 
 document.querySelectorAll('#signupStatusTabs .tab').forEach(t => t.onclick = () => {
   S.signupStatus = t.dataset.status; S.selectedSignups.clear(); loadSignups();

@@ -46,7 +46,7 @@ from subscription_common import (
     create_checkout_session, validate_promo_code, get_or_create_customer,
     get_customer_subscriptions, trial_ends_at_iso, is_trial_expired,
     days_until_trial_end, cancel_subscription, promo_kind, extend_from,
-    GRANTABLE_STATUSES
+    GRANTABLE_STATUSES, PROMO_CODES
 )
 import subprocess
 import tempfile
@@ -2257,6 +2257,725 @@ def get_user_costs(days=30, limit=200):
     }
 
 
+# ---------- User metrics: the activation funnel, retention, and the daily snapshot ----------
+# The Cost per user tab measures dollars out. This measures usage and revenue in. They
+# share the `users` roster and cross-link, but they stay separate views: one is a spend
+# ledger, the other a product funnel, and a page that computes both computes neither well.
+#
+# Two migrations gate the time-series half (see the .sql files for why each exists):
+#   user_activity_schema.sql       -> DAU/WAU/MAU, retention, "came back after signup day"
+#   user_metrics_daily_schema.sql  -> trend lines for state metrics, which are otherwise
+#                                     unrecoverable (the `data` jsonb holds one profile,
+#                                     not a history of one)
+# Neither is required for the funnel, plan mix, conversion or the roster. Those come from
+# the `users` table as it stands today, which is why they shipped first.
+USER_ACTIVITY_SETUP_SQL = "user_activity_schema.sql"
+USER_METRICS_SETUP_SQL = "user_metrics_daily_schema.sql"
+
+# Mirrors PROFILE_SUFFICIENT_LENGTH in script.js — the bar the app itself already uses to
+# decide a profile is usable for auto-matching, and the "aim for at least 20 words"
+# guidance students are shown. Deliberately NOT a second threshold invented here: two
+# definitions of "meaningful profile" would let this console and the app disagree about
+# the same student. If the bar should move, move it in both places.
+PROFILE_SUFFICIENT_WORDS = 20
+# "Rich" is a side metric, never a funnel gate — a student can search and track with a
+# 20-word profile, so putting this in the chain would drop people who are further along.
+PROFILE_RICH_WORDS = 100
+PROFILE_RICH_ROUNDS = 3
+
+# The three keys AppStorage writes into users.data (see the top of script.js).
+PROFILE_DATA_KEY = "student-profile"
+TRACKER_DATA_KEY = "hs-tracker-data"
+TRACKER_SAVED_KEY = "hs-tracker-saved"
+# Mirrors ALL_BUCKETS in script.js.
+TRACKER_BUCKETS = ("summerPrograms", "internships", "researchCompetitions",
+                   "pureCompetitions", "conferences", "journals")
+
+# A billed call under one of these features is direct evidence the student ran a search.
+# It is only ever a PROXY: mock mode bills nothing, so with no API key this reads zero for
+# everybody. The stage predicate below therefore also accepts "has tracked something",
+# which cannot happen without a search having run.
+SEARCH_FEATURES = ("ranking", "infer_subjects", "venue_search")
+
+# The funnel is CUMULATIVE and strictly ordered: a user counts at stage N only if they
+# satisfy stages 1..N. That is what makes the step-over-step percentages mean anything.
+# Two consequences worth stating, because both were got wrong first:
+#
+#  * Every predicate must be genuinely implied by the ones after it, or the cumulative
+#    rule silently drops people who are further along than the chain can see. That is why
+#    `ran_search` accepts tracked items as evidence — the proxy is incomplete, the
+#    implication is not.
+#  * "Came back after signup day" is NOT in this chain even though it reads like stage 2.
+#    Someone can build a profile and track five things on the day they sign up and never
+#    return; putting return-visits in the chain would score them as a total failure. It is
+#    reported beside the funnel as a side metric instead.
+FUNNEL_STAGES = [
+    ("signed_up",          "Signed up",              "An account exists."),
+    ("saved_data",         "Saved anything",         "Any profile or tracker data reached the server."),
+    ("has_profile",        "Has a profile",          "A synthesized profile with any text in it."),
+    ("meaningful_profile", "Meaningful profile",     f"That profile is at least {PROFILE_SUFFICIENT_WORDS} words — the same bar the app uses."),
+    ("ran_search",         "Ran a search",           "A billed ranking/subject call, or anything in the tracker (which needs a search)."),
+    ("tracked_1",          "Tracked an opportunity", "At least one opportunity actively tracked, excluding saved-for-later."),
+    ("tracked_3",          "Tracked 3 or more",      "A real shortlist rather than a single trial run."),
+    ("action_started",     "Started the work",       "Moved at least one action item off Not Started."),
+]
+FUNNEL_STAGE_KEYS = [k for k, _, _ in FUNNEL_STAGES]
+# Everything below this index on the funnel is an account that has not got a usable
+# profile — the population the "trial ending, no profile" warning is about.
+ACTIVATED_STAGE_INDEX = FUNNEL_STAGE_KEYS.index("meaningful_profile")
+
+
+def _json_obj(value):
+    """A dict out of a users.data entry, whatever shape it arrived in.
+
+    /api/data/save JSON.parses before writing, so these are normally real jsonb objects —
+    but AppStorage hands round JSON *strings* client-side, and a value written by any
+    other path could be either. Tolerate both rather than scoring a real profile as absent.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _profile_facts(data):
+    """(profile text word count, chat rounds, has any profile) for one user's data blob."""
+    profile = _json_obj((data or {}).get(PROFILE_DATA_KEY))
+    text = (profile.get("synthesized") or "").strip()
+    rounds = profile.get("chatRounds")
+    return (len(text.split()) if text else 0,
+            int(rounds) if isinstance(rounds, (int, float)) else 0,
+            bool(text),
+            # The derived-filter slots are set the first time a profile is actually used
+            # to search, so their presence is search evidence that survives mock mode.
+            bool(profile.get("filterValues") or profile.get("filterTags")))
+
+
+def _tracker_facts(data):
+    """(actively tracked count, any action item started) for one user's data blob.
+
+    Saved-for-later items are excluded. `hs-tracker-saved` maps an item id to true when
+    the student explicitly parked it, and renderTracker() in script.js already refuses to
+    count those as actively tracked — counting them here would inflate the single most
+    important number on the page.
+    """
+    tracker = _json_obj((data or {}).get(TRACKER_DATA_KEY))
+    saved = _json_obj((data or {}).get(TRACKER_SAVED_KEY))
+    count = 0
+    started = False
+    for bucket in TRACKER_BUCKETS:
+        for item in (tracker.get(bucket) or []):
+            if not isinstance(item, dict):
+                continue
+            if saved.get(str(item.get("id"))):
+                continue
+            count += 1
+            for action in (item.get("actionItems") or []):
+                # Three states, from NEXT_ACTION_STATE in script.js: not_started ->
+                # in_progress -> completed. Anything off not_started is work begun.
+                if isinstance(action, dict) and action.get("state") not in (None, "", "not_started"):
+                    started = True
+    return count, started
+
+
+def _stage_flags(record, searched_ids, returned_ids):
+    """The ordered stage predicates for one account, before the cumulative rule applies."""
+    uid = str(record.get("userid") or "").strip().lower()
+    data = record.get("data") or {}
+    words, rounds, has_profile, has_filters = _profile_facts(data)
+    tracked, action_started = _tracker_facts(data)
+    return {
+        "signed_up": True,
+        "saved_data": bool(data),
+        "has_profile": has_profile,
+        "meaningful_profile": words >= PROFILE_SUFFICIENT_WORDS,
+        # Proxy OR implication — see SEARCH_FEATURES.
+        "ran_search": uid in searched_ids or has_filters or tracked > 0,
+        "tracked_1": tracked >= 1,
+        "tracked_3": tracked >= 3,
+        "action_started": action_started,
+        # --- side metrics, deliberately outside the ordered chain ---
+        "_returned": uid in returned_ids,
+        "_rich_profile": words >= PROFILE_SUFFICIENT_WORDS and (
+            words >= PROFILE_RICH_WORDS or rounds >= PROFILE_RICH_ROUNDS),
+        "_calendar": bool(record.get("google_calendar_connected_at")),
+        "_google_signup": bool(record.get("google_id")),
+        "_words": words,
+        "_rounds": rounds,
+        "_tracked": tracked,
+    }
+
+
+def _cumulative_stage(flags):
+    """How far down the funnel this account got: the index before the first failed stage."""
+    reached = 0
+    for i, key in enumerate(FUNNEL_STAGE_KEYS):
+        if not flags.get(key):
+            break
+        reached = i
+    return reached
+
+
+# ---------- user_activity: the one new write path ----------
+# Counts are accumulated in memory and flushed by a background thread, rather than written
+# per request. Two reasons, and the second is the load-bearing one:
+#   * this table takes EVERY authenticated request, not just billed ones, so a write per
+#     request would multiply the app's Supabase traffic by a large constant; and
+#   * `hits` and `surfaces` need real increments, which PostgREST cannot express without
+#     a stored function (DDL this repo cannot run) — so it is read-modify-write either
+#     way, and batching turns a round trip per request into one per user per interval.
+# A process that dies between flushes loses at most one interval of counts. DAU, WAU and
+# retention only need the row to EXIST, so they are unaffected; only `hits`/`surfaces`
+# are approximate, and they are colour rather than headline figures.
+_activity_lock = threading.Lock()
+_activity_buffer = {}          # (userid, day) -> {"hits", "surfaces", "first_at", "last_at"}
+_activity_available = True     # latched off if the table isn't there
+_activity_flusher = None
+ACTIVITY_FLUSH_SECONDS = 30.0
+
+
+def touch_user_activity(userid, surface):
+    """Record that this user did something. Never raises, never blocks the request."""
+    if not userid or not _activity_available:
+        return
+    try:
+        uid = str(userid).strip().lower()
+        if not uid:
+            return
+        now = datetime.datetime.now(datetime.timezone.utc)
+        key = (uid, now.date().isoformat())
+        stamp = now.isoformat()
+        with _activity_lock:
+            entry = _activity_buffer.setdefault(
+                key, {"hits": 0, "surfaces": {}, "first_at": stamp, "last_at": stamp})
+            entry["hits"] += 1
+            entry["surfaces"][surface] = entry["surfaces"].get(surface, 0) + 1
+            entry["last_at"] = stamp
+        _start_activity_flusher()
+    except Exception as e:
+        # Activity logging must never be the reason a user's request fails. Same posture
+        # as log_conversation().
+        print(f"[WARN] Could not buffer activity for {userid}: {e}")
+
+
+def _start_activity_flusher():
+    global _activity_flusher
+    if _activity_flusher is not None:
+        return
+    with _activity_lock:
+        if _activity_flusher is not None:
+            return
+        _activity_flusher = threading.Thread(target=_activity_flush_loop, daemon=True)
+        _activity_flusher.start()
+
+
+def _activity_flush_loop():
+    while True:
+        time.sleep(ACTIVITY_FLUSH_SECONDS)
+        if not _activity_available:
+            return
+        flush_user_activity()
+
+
+def flush_user_activity():
+    """Drain the buffer into user_activity. Called on a timer and before reading metrics."""
+    global _activity_available
+    with _activity_lock:
+        pending = dict(_activity_buffer)
+        _activity_buffer.clear()
+    if not pending:
+        return
+    for (uid, day), delta in pending.items():
+        try:
+            _activity_apply(uid, day, delta)
+        except Exception as e:
+            if _missing_table_error(e):
+                _activity_available = False
+                print(f"[WARN] user_activity table unavailable - DAU/WAU/retention are "
+                      f"off. Run {USER_ACTIVITY_SETUP_SQL} in the Supabase SQL editor.")
+                return
+            # A transient failure loses this interval's counts for one user. Put nothing
+            # back in the buffer: retrying forever would let one poisoned key grow without
+            # bound, and the row this drops is a count, not the day's existence.
+            print(f"[WARN] Could not record activity for {uid} on {day}: {e}")
+
+
+def _activity_apply(uid, day, delta):
+    existing = _supabase_request_strict("user_activity", params={
+        "select": "hits,surfaces,first_at", "userid": f"eq.{uid}",
+        "day": f"eq.{day}", "limit": "1"})
+    if existing:
+        row = existing[0]
+        surfaces = dict(row.get("surfaces") or {})
+        for k, v in delta["surfaces"].items():
+            surfaces[k] = surfaces.get(k, 0) + v
+        _supabase_request_strict("user_activity", method="PATCH",
+                                 params={"userid": f"eq.{uid}", "day": f"eq.{day}"},
+                                 data={"hits": int(row.get("hits") or 0) + delta["hits"],
+                                       "surfaces": surfaces,
+                                       # first_at is only ever set by the insert below;
+                                       # re-sending it would walk the day's start forward.
+                                       "last_at": delta["last_at"]})
+    else:
+        _supabase_request_strict("user_activity", method="POST", data=[{
+            "userid": uid, "day": day, "hits": delta["hits"],
+            "surfaces": delta["surfaces"],
+            "first_at": delta["first_at"], "last_at": delta["last_at"]}])
+
+
+def fetch_user_activity(since_day):
+    """{userid: set(day)} for every recorded day at/after since_day, or None if unavailable."""
+    rows = _supabase_request("user_activity", params={
+        "select": "userid,day", "day": f"gte.{since_day}",
+        "order": "day.desc", "limit": "50000"})
+    if rows is None:
+        return None
+    by_user = {}
+    for r in rows:
+        uid = str(r.get("userid") or "").strip().lower()
+        if uid and r.get("day"):
+            by_user.setdefault(uid, set()).add(r["day"])
+    return by_user
+
+
+def _activity_first_day():
+    """The earliest day ever recorded — where the DAU chart is allowed to start.
+
+    Charting back past this would draw a line along zero through a period nobody was
+    measuring, which reads as "the app was dead" rather than "we weren't looking yet".
+    """
+    rows = _supabase_request("user_activity", params={
+        "select": "day", "order": "day.asc", "limit": "1"})
+    return (rows or [{}])[0].get("day") if rows else None
+
+
+# ---------- The metrics themselves ----------
+
+def _fetch_all_accounts():
+    """Every account, paginated past PostgREST's 1000-row cap.
+
+    Selects `*` on purpose: google_id and google_calendar_connected_at only exist once
+    their own migrations have run, and PostgREST 400s an entire read on one unknown
+    column — a named select would make this endpoint fail wholesale on a database that is
+    merely missing an optional feature. Nothing sensitive from these rows is ever put in
+    the response; see _shape_account.
+    """
+    page_size, offset, out = 1000, 0, []
+    while True:
+        batch = _users_request("GET", "?" + urllib.parse.urlencode({
+            "select": "*", "order": "created_at.asc",
+            "limit": str(page_size), "offset": str(offset)})) or []
+        out.extend(batch)
+        if len(batch) < page_size:
+            return out
+        offset += page_size
+
+
+def _fetch_user_spend(since_day):
+    """({userid: {cost, calls}}, {userids that ran a search}) from user_costs."""
+    rows = _supabase_request("user_costs", params={
+        "select": "userid,feature,calls,cost_usd", "day": f"gte.{since_day}",
+        "limit": "20000"})
+    spend, searched = {}, set()
+    if rows is None:
+        return spend, searched, False
+    for r in rows:
+        uid = str(r.get("userid") or "").strip().lower()
+        if not uid:
+            continue
+        e = spend.setdefault(uid, {"cost_usd": 0.0, "calls": 0})
+        e["cost_usd"] += float(r.get("cost_usd") or 0)
+        e["calls"] += int(r.get("calls") or 0)
+        if r.get("feature") in SEARCH_FEATURES:
+            searched.add(uid)
+    return spend, searched, True
+
+
+def _fetch_mailing_list_users():
+    rows = _supabase_request("mailing_list_subscriptions",
+                             params={"select": "userid", "limit": "20000"})
+    if rows is None:
+        return set()
+    return {str(r.get("userid") or "").strip().lower() for r in rows if r.get("userid")}
+
+
+def _week_start(d):
+    return (d - datetime.timedelta(days=d.weekday())).isoformat()
+
+
+def get_user_metrics(days=30, limit=500):
+    """Everything behind the console's Metrics view.
+
+    Reads the `users` table (the funnel, plan mix and conversion — no migration needed),
+    user_activity (DAU/WAU/retention — degrades to activity_ready: false) and user_costs
+    (cost per user, and the search proxy). Never raises for a missing optional table.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    today = now.date()
+    window_start = today - datetime.timedelta(days=days)
+
+    # Any counts still sitting in memory belong in this reading. Without this the console
+    # trails the buffer by up to one flush interval, which looks like a stalled pipeline
+    # on a quiet day.
+    flush_user_activity()
+
+    accounts = _fetch_all_accounts()
+    spend, searched_ids, costs_ready = _fetch_user_spend(window_start.isoformat())
+    mailing_ids = _fetch_mailing_list_users()
+
+    # Retention needs history from before the window, so activity is read from the earlier
+    # of (window start) and (oldest signup + 30d) — a 7-day window must still be able to
+    # say whether a user who signed up in April ever came back.
+    activity_since = min(window_start, today - datetime.timedelta(days=max(days, 60)))
+    activity = fetch_user_activity(activity_since.isoformat())
+    activity_ready = activity is not None
+    activity = activity or {}
+    first_recorded = _activity_first_day() if activity_ready else None
+
+    returned_ids = set()
+    for record in accounts:
+        uid = str(record.get("userid") or "").strip().lower()
+        created = _parse_iso(record.get("created_at"))
+        if not uid or not created:
+            continue
+        signup_day = created.date().isoformat()
+        if any(d > signup_day for d in activity.get(uid, ())):
+            returned_ids.add(uid)
+
+    # --- per-account facts ---
+    shaped, stage_counts, direct_counts = [], [0] * len(FUNNEL_STAGES), [0] * len(FUNNEL_STAGES)
+    stage_members = [[] for _ in FUNNEL_STAGES]
+    stage_missing = [[] for _ in FUNNEL_STAGES]
+    by_status, sides = {}, {"returned": 0, "rich_profile": 0, "deep_engagement": 0,
+                            "calendar": 0, "mailing_list": 0, "google_signup": 0,
+                            "terms_stale": 0, "terms_missing": 0}
+    signups_by_day = {}
+    # Kept beside `shaped` rather than inside it: "has a Stripe subscription id" is
+    # conversion evidence the code below needs, not something the console should render.
+    # Zipping `shaped` against `accounts` to recover it would misalign the moment one
+    # account is skipped for a blank userid.
+    has_stripe_sub = {}
+
+    for record in accounts:
+        uid = str(record.get("userid") or "").strip().lower()
+        if not uid:
+            continue
+        flags = _stage_flags(record, searched_ids, returned_ids)
+        reached = _cumulative_stage(flags)
+        state = subscription_state(record)
+        status = state["status"]
+        by_status[status] = by_status.get(status, 0) + 1
+
+        for i, key in enumerate(FUNNEL_STAGE_KEYS):
+            if flags.get(key):
+                direct_counts[i] += 1
+            if i <= reached:
+                stage_counts[i] += 1
+                stage_members[i].append(uid)
+            elif i == reached + 1:
+                # The people this exact step lost. Held per-stage so clicking a bar can
+                # name them without a second request — the whole point of the page at
+                # this account count.
+                stage_missing[i].append(uid)
+
+        days_active = activity.get(uid, set())
+        last_active = max(days_active) if days_active else None
+        sides["returned"] += 1 if flags["_returned"] else 0
+        sides["rich_profile"] += 1 if flags["_rich_profile"] else 0
+        sides["calendar"] += 1 if flags["_calendar"] else 0
+        sides["google_signup"] += 1 if flags["_google_signup"] else 0
+        on_list = uid in mailing_ids
+        sides["mailing_list"] += 1 if on_list else 0
+        sides["deep_engagement"] += 1 if (flags["_calendar"] or on_list) else 0
+        if not record.get("terms_accepted_at"):
+            sides["terms_missing"] += 1
+        elif record.get("terms_version") and record.get("terms_version") != TERMS_VERSION:
+            sides["terms_stale"] += 1
+
+        created = _parse_iso(record.get("created_at"))
+        if created:
+            signups_by_day[created.date().isoformat()] = \
+                signups_by_day.get(created.date().isoformat(), 0) + 1
+
+        has_stripe_sub[uid] = bool(record.get("stripe_subscription_id"))
+        money = spend.get(uid) or {"cost_usd": 0.0, "calls": 0}
+        name = " ".join(x for x in [record.get("first_name"), record.get("last_name")] if x).strip()
+        shaped.append({
+            "userid": uid,
+            "name": name or None,
+            "email": record.get("email"),
+            "created_at": record.get("created_at"),
+            "status": status,
+            "has_access": state["has_access"],
+            "days_left": state["days_left"],
+            "trial_ends_at": state["trial_ends_at"],
+            "subscription_end_at": state["subscription_end_at"],
+            "stage": reached,
+            "stage_key": FUNNEL_STAGE_KEYS[reached],
+            "stage_label": FUNNEL_STAGES[reached][1],
+            "activated": reached >= ACTIVATED_STAGE_INDEX,
+            "profile_words": flags["_words"],
+            "chat_rounds": flags["_rounds"],
+            "tracked": flags["_tracked"],
+            "returned": flags["_returned"],
+            "calendar": flags["_calendar"],
+            "mailing_list": on_list,
+            "google_signup": flags["_google_signup"],
+            "last_active": last_active,
+            "active_days": len(days_active),
+            "cost_usd": round(money["cost_usd"], 6),
+            "calls": money["calls"],
+            "margin_usd": round(PLAN_PRICE_USD - money["cost_usd"], 4),
+            # Consent bookkeeping, so "who never saw the current Terms" is answerable here
+            # rather than from the SQL editor.
+            "is_adult": record.get("is_adult"),
+            "terms_version": record.get("terms_version"),
+            "terms_stale": bool(record.get("terms_version")
+                                and record.get("terms_version") != TERMS_VERSION),
+            # Distinct from stale, and more serious: these accounts predate consent
+            # capture entirely, so there is no record they ever saw the documents. A
+            # stale version at least names what they agreed to.
+            "terms_missing": not record.get("terms_accepted_at"),
+        })
+
+    total_accounts = len(shaped)
+    funnel = []
+    for i, (key, label, description) in enumerate(FUNNEL_STAGES):
+        prev = stage_counts[i - 1] if i else stage_counts[0]
+        funnel.append({
+            "key": key, "label": label, "description": description,
+            "count": stage_counts[i],
+            # What the predicate alone says, ignoring the cumulative rule. Equal to `count`
+            # unless a stage's evidence is weaker than the stage below it — which is how a
+            # proxy going stale announces itself instead of quietly deflating the funnel.
+            "direct": direct_counts[i],
+            "of_all": round(stage_counts[i] / total_accounts, 4) if total_accounts else 0,
+            "step": round(stage_counts[i] / prev, 4) if prev else 0,
+            "lost": max(0, prev - stage_counts[i]) if i else 0,
+            "userids": stage_members[i][:limit],
+            "missing_userids": stage_missing[i][:limit],
+            "proxy": key == "ran_search",
+        })
+    # The single worst step, named in a sentence under the bars. A funnel that makes you
+    # compute the diff yourself is just a table with rounded corners.
+    biggest_drop = max(funnel[1:], key=lambda s: s["lost"], default=None)
+
+    # --- subscriptions ---
+    converted, eligible, granted = [], [], []
+    for u in shaped:
+        status = u["status"]
+        # A canceled or past_due account that carries a Stripe subscription id did convert
+        # at some point — cancelling later is churn, not a failure to convert, and folding
+        # the two together would make the rate fall every time a paying user leaves.
+        paid = status == "active" or (status in ("canceled", "past_due")
+                                      and has_stripe_sub.get(u["userid"], False))
+        if status == "beta":
+            # A grant is not a conversion decision — they never reached the choice. Left
+            # out of the denominator and reported on its own so the rate isn't diluted by
+            # accounts that were handed access.
+            granted.append(u["userid"])
+            continue
+        if paid:
+            converted.append(u["userid"])
+            eligible.append(u["userid"])
+        elif status == "trial" and u["trial_ends_at"] and is_trial_expired(u["trial_ends_at"]):
+            eligible.append(u["userid"])
+    # Denominator is accounts whose trial has actually ENDED, never all accounts: with a
+    # 3-day trial, dividing by everyone scores every signup from the last 72 hours as a
+    # failure before they have had a chance to decide.
+    conversion = {
+        "converted": len(converted), "eligible": len(eligible),
+        "rate": round(len(converted) / len(eligible), 4) if eligible else None,
+        "granted": len(granted),
+        "still_deciding": sum(1 for u in shaped if u["status"] == "trial"
+                              and not (u["trial_ends_at"] and is_trial_expired(u["trial_ends_at"]))),
+    }
+
+    ending_soon = sorted(
+        ({"userid": u["userid"], "name": u["name"], "email": u["email"],
+          "status": u["status"], "days_left": u["days_left"],
+          "ends_at": u["trial_ends_at"] or u["subscription_end_at"],
+          "stage": u["stage"], "stage_label": u["stage_label"],
+          # The actual worked list: about to lose access, with nothing to lose.
+          "at_risk": u["stage"] < ACTIVATED_STAGE_INDEX}
+         for u in shaped
+         if u["status"] in ("trial", "beta") and u["has_access"] and u["days_left"] <= 2),
+        key=lambda x: x["days_left"])
+
+    promos = {}
+    for record in accounts:
+        for code in (record.get("promo_codes_used") or []):
+            entry = promos.setdefault(str(code).upper(), {"code": str(code).upper(), "uses": 0})
+            entry["uses"] += 1
+    for code, entry in promos.items():
+        definition = PROMO_CODES.get(code)
+        # grant and checkout codes travel through different endpoints and one cannot be
+        # redeemed through the other's path, so the kind is not decoration.
+        entry["kind"] = promo_kind(definition) if definition else "unknown"
+        entry["description"] = (definition or {}).get("description")
+
+    # --- series ---
+    signup_series, activity_series = [], []
+    for i in range(days, -1, -1):
+        day = (today - datetime.timedelta(days=i)).isoformat()
+        signup_series.append({"date": day, "count": signups_by_day.get(day, 0)})
+        if activity_ready and (first_recorded is None or day >= first_recorded):
+            activity_series.append({"date": day,
+                                    "dau": sum(1 for d in activity.values() if day in d)})
+
+    def _active_within(n):
+        cutoff = (today - datetime.timedelta(days=n - 1)).isoformat()
+        return sum(1 for d in activity.values() if any(x >= cutoff for x in d))
+
+    dau = wau = mau = None
+    if activity_ready:
+        dau, wau, mau = _active_within(1), _active_within(7), _active_within(30)
+
+    # --- retention cohorts, by signup week ---
+    cohorts = []
+    if activity_ready:
+        grouped = {}
+        for u in shaped:
+            created = _parse_iso(u["created_at"])
+            if created:
+                grouped.setdefault(_week_start(created.date()), []).append(u)
+        for week in sorted(grouped, reverse=True):
+            members = grouped[week]
+            row = {"cohort": week, "n": len(members)}
+            for n in (1, 3, 7, 14):
+                # Only ask the question of cohorts old enough to answer it. A cohort that
+                # signed up yesterday has not failed D7; it has not reached it, and a 0%
+                # there would read as churn.
+                mature = [u for u in members
+                          if (_parse_iso(u["created_at"]).date()
+                              + datetime.timedelta(days=n)) <= today]
+                if not mature:
+                    row[f"d{n}"] = None
+                    continue
+                kept = 0
+                for u in mature:
+                    threshold = (_parse_iso(u["created_at"]).date()
+                                 + datetime.timedelta(days=n)).isoformat()
+                    if any(d >= threshold for d in activity.get(u["userid"], ())):
+                        kept += 1
+                row[f"d{n}"] = {"kept": kept, "of": len(mature),
+                                "rate": round(kept / len(mature), 4)}
+            cohorts.append(row)
+
+    active_count = by_status.get("active", 0)
+    activated = sum(1 for u in shaped if u["activated"])
+    window_spend = round(sum(u["cost_usd"] for u in shaped), 6)
+    result = {
+        "days": days,
+        "generated_at": now.isoformat(),
+        "activity_ready": activity_ready,
+        "activity_since": first_recorded,
+        "costs_ready": costs_ready,
+        "setup_sql": {"activity": USER_ACTIVITY_SETUP_SQL, "snapshots": USER_METRICS_SETUP_SQL},
+        "price_per_month_usd": PLAN_PRICE_USD,
+        "totals": {
+            "accounts": total_accounts,
+            "signups_in_window": sum(s["count"] for s in signup_series),
+            "dau": dau, "wau": wau, "mau": mau,
+            "stickiness": round(dau / mau, 4) if (dau and mau) else None,
+            "activated": activated,
+            "activated_rate": round(activated / total_accounts, 4) if total_accounts else 0,
+            "paying": active_count,
+            "mrr_usd": round(active_count * PLAN_PRICE_USD, 2),
+            "ending_soon": len(ending_soon),
+            "at_risk": sum(1 for e in ending_soon if e["at_risk"]),
+            "window_cost_usd": window_spend,
+            "cost_per_activated_usd": round(window_spend / activated, 6) if activated else None,
+        },
+        "funnel": funnel,
+        "biggest_drop": ({"key": biggest_drop["key"], "label": biggest_drop["label"],
+                          "lost": biggest_drop["lost"]}
+                         if biggest_drop and biggest_drop["lost"] else None),
+        "side_metrics": sides,
+        "signups_by_day": signup_series,
+        "activity_by_day": activity_series,
+        "cohorts": cohorts,
+        "subscriptions": {
+            "by_status": by_status,
+            "conversion": conversion,
+            "ending_soon": ending_soon,
+            "promos": sorted(promos.values(), key=lambda p: p["uses"], reverse=True),
+            "mrr_usd": round(active_count * PLAN_PRICE_USD, 2),
+            "margin_usd": round(active_count * PLAN_PRICE_USD - window_spend, 4),
+        },
+        "users": sorted(shaped, key=lambda u: (u["stage"], u["created_at"] or ""), reverse=True)[:limit],
+    }
+    record_metrics_snapshot(result)
+    result["snapshots_ready"] = _metrics_snapshot_available
+    return result
+
+
+# ---------- The daily snapshot ----------
+_snapshot_lock = threading.Lock()
+_metrics_snapshot_available = True
+_snapshot_last_write = {"day": None, "at": 0.0}
+SNAPSHOT_MIN_INTERVAL = 300.0   # seconds between rewrites of today's row
+
+
+def record_metrics_snapshot(metrics):
+    """Freeze today's funnel and plan mix into user_metrics_daily.
+
+    Written from the read path rather than on a schedule because there is no scheduler
+    here, and because the alternative — computing it twice — is the kind of duplication
+    that lets a chart and a tile disagree. Today's row is rewritten as the day progresses;
+    past days stay as they last read.
+
+    Throttled to one write per SNAPSHOT_MIN_INTERVAL so an open console tab polling the
+    endpoint doesn't turn into a write every refresh.
+    """
+    global _metrics_snapshot_available
+    if not _metrics_snapshot_available:
+        return
+    day = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    now = time.time()
+    with _snapshot_lock:
+        if (_snapshot_last_write["day"] == day
+                and now - _snapshot_last_write["at"] < SNAPSHOT_MIN_INTERVAL):
+            return
+        _snapshot_last_write.update({"day": day, "at": now})
+    totals = metrics["totals"]
+    row = {
+        "day": day,
+        "accounts": totals["accounts"],
+        "funnel": {s["key"]: s["count"] for s in metrics["funnel"]},
+        "by_status": metrics["subscriptions"]["by_status"],
+        "mrr_usd": totals["mrr_usd"],
+        # NULL rather than 0 when activity isn't set up: a zero here is indistinguishable
+        # from a genuinely dead day, and these rows can never be recomputed.
+        "dau": totals["dau"], "wau": totals["wau"], "mau": totals["mau"],
+        "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    try:
+        _supabase_request_strict(
+            "user_metrics_daily", method="POST", data=[row],
+            extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+    except Exception as e:
+        if _missing_table_error(e):
+            _metrics_snapshot_available = False
+            print(f"[WARN] user_metrics_daily unavailable - no history is being recorded, "
+                  f"and it cannot be backfilled later. Run {USER_METRICS_SETUP_SQL} in "
+                  f"the Supabase SQL editor.")
+            return
+        print(f"[WARN] Could not write today's metrics snapshot: {e}")
+
+
+def fetch_metrics_snapshots(days=30):
+    """Past days' funnel counts, for the trend lines. [] when the table isn't there."""
+    since = (datetime.datetime.now(datetime.timezone.utc).date()
+             - datetime.timedelta(days=days)).isoformat()
+    rows = _supabase_request("user_metrics_daily", params={
+        "select": "day,accounts,funnel,by_status,mrr_usd,dau,wau,mau",
+        "day": f"gte.{since}", "order": "day.asc", "limit": "400"})
+    return rows or []
+
+
 # ---------- Committing a dry-run snapshot, and activating what the scraper found ----------
 # Two operations that write to the catalog but call no API and cost nothing. They are the
 # other half of the three run tiers: --dry-run already pays full price for an answer, and
@@ -3961,8 +4680,14 @@ def run_agent_subprocess(agent_name, config):
 
 # ---------- Scraper seeds (the editable search angles) ----------
 
-SEED_FIELDS = ("mode", "category", "angle", "is_enabled", "sort_order")
-SEED_SELECT = ("id,mode,category,angle,is_enabled,sort_order,total_runs,total_found,"
+# A seed is an ANGLE. `category` was dropped from the editable/selected set 2026-08-23 —
+# it was never sent to the model, nothing student-facing reads the column it fed, and its
+# one live use was a `type` fallback that guessed wrong 27% of the time. The column stays
+# in the table because it is `not null` and dropping it needs DDL this repo cannot run, so
+# create_seed() writes SEED_CATEGORY_PLACEHOLDER to satisfy the constraint. Nothing reads it.
+SEED_FIELDS = ("mode", "angle", "is_enabled", "sort_order")
+SEED_CATEGORY_PLACEHOLDER = "unused"
+SEED_SELECT = ("id,mode,angle,is_enabled,sort_order,total_runs,total_found,"
                "total_added,total_dupes,total_cost,last_run_at,created_at")
 
 
@@ -4022,8 +4747,10 @@ def seed_yield_state(rows):
 
 def create_seed(payload):
     row = {k: payload[k] for k in SEED_FIELDS if k in payload}
-    if not row.get("mode") or not row.get("angle") or not row.get("category"):
-        return None, "mode, category and angle are all required"
+    if not row.get("mode") or not row.get("angle"):
+        return None, "mode and angle are both required"
+    # Satisfies the surviving not-null column; see SEED_CATEGORY_PLACEHOLDER.
+    row["category"] = SEED_CATEGORY_PLACEHOLDER
     if row["mode"] not in ("national", "seattle"):
         return None, "mode must be 'national' or 'seattle'"
     row.setdefault("is_enabled", True)
@@ -4106,6 +4833,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self.handle_signups_list(query)
             elif path == "/api/agents/user-costs":
                 self.handle_agents_user_costs(query)
+            elif path == "/api/agents/metrics":
+                self.handle_agents_metrics(query)
             elif path == "/api/agents/billed":
                 self.handle_agents_billed(query)
             elif path == "/api/agents/log":
@@ -4348,6 +5077,7 @@ class Handler(SimpleHTTPRequestHandler):
         if record.get("password_hash") != password_hash:
             return self.send_json_error(401, "Incorrect password.")
         record = ensure_trial_started(key, record)
+        touch_user_activity(key, "login")
         self._relay(200, json.dumps(_login_payload(record)).encode())
 
     # ---------- Google Sign-In ----------
@@ -4846,6 +5576,9 @@ class Handler(SimpleHTTPRequestHandler):
         key = body.get("key")
         if not userid or not key:
             return self.send_json_error(400, "Missing userid or key.")
+        # "Changed something", as opposed to data_load's "opened the app". Keeping the
+        # two surfaces apart is the whole reason user_activity.surfaces exists.
+        touch_user_activity(userid, "data_save")
         try:
             ok = update_user_data(userid, key, body.get("value"))
         except Exception as e:
@@ -4858,6 +5591,7 @@ class Handler(SimpleHTTPRequestHandler):
         body = self._read_json_body()
         userid = (body.get("userid") or "").strip().lower()
         key = body.get("key")
+        touch_user_activity(userid, "data_load")
         try:
             record = get_user(userid)
         except Exception as e:
@@ -4870,9 +5604,11 @@ class Handler(SimpleHTTPRequestHandler):
         # userid rides in on the query string here, not the body — this is a multipart
         # upload. Gate before reading the file so a lapsed account can't make us parse
         # a PDF, let alone call Claude on it.
-        if self._subscription_blocks(self._qs(
-                urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query), "userid")):
+        resume_userid = self._qs(
+            urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query), "userid")
+        if self._subscription_blocks(resume_userid):
             return
+        touch_user_activity(resume_userid, "resume_import")
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type:
             return self.send_json_error(400, "Request must be multipart/form-data with file field.")
@@ -5494,6 +6230,7 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
         userid = (body.get("userid") or "").strip()
         if self._subscription_blocks(userid):
             return
+        touch_user_activity(userid, "mailing_list")
         status, payload = subscribe_user_to_list(
             userid, opp_id, body.get("email"), bool(body.get("consent")))
         self._relay(status, json.dumps(payload, default=str).encode())
@@ -5509,6 +6246,20 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
         limit = self._qs(query, "limit", 200, int) or 200
         self._relay(200, json.dumps(
             get_user_costs(days=max(1, min(days, 365)), limit=max(1, min(limit, 1000))),
+            default=str).encode())
+
+    def handle_agents_metrics(self, query=None):
+        """GET /api/agents/metrics?days=&limit= — the Metrics view's whole payload.
+
+        Localhost-only along with the rest of /api/agents/*, and that matters more here
+        than anywhere else on this router: this response is a roster of names, emails,
+        plan status and per-account behaviour for a user base that is largely minors.
+        Never expose it, and do not add an export button to the view it backs.
+        """
+        days = self._qs(query, "days", 30, int) or 30
+        limit = self._qs(query, "limit", 500, int) or 500
+        self._relay(200, json.dumps(
+            get_user_metrics(days=max(1, min(days, 365)), limit=max(1, min(limit, 2000))),
             default=str).encode())
 
     def handle_agents_billed(self, query=None):
@@ -5618,8 +6369,12 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
         silent search skips (searches == 0) and falls back to cached value if no searches occurred."""
         # Gate before any Supabase or Claude work: a fresh check is a paid web-search
         # call. userid arrives on the query string (this is a GET).
-        if self._subscription_blocks(self._qs(query, "userid")):
+        deadline_userid = self._qs(query, "userid")
+        if self._subscription_blocks(deadline_userid):
             return
+        # Counts as activity even when the answer comes from cache and costs nothing —
+        # this measures use of the app, not spend. user_costs is the other question.
+        touch_user_activity(deadline_userid, "deadline_check")
         if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
             return self.send_json_error(500, "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured.")
         try:
@@ -5688,8 +6443,10 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
     def handle_messages(self):
         length = int(self.headers.get("Content-Length", 0))
         raw_body = self.rfile.read(length)
-        if self._subscription_blocks(self._userid_from_body(raw_body)):
+        userid = self._userid_from_body(raw_body)
+        if self._subscription_blocks(userid):
             return
+        touch_user_activity(userid, "ai_gemini")
         if GEMINI_API_KEY:
             self.proxy_to_gemini(raw_body)
         else:
@@ -5763,8 +6520,10 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
     def handle_messages_claude(self):
         length = int(self.headers.get("Content-Length", 0))
         raw_body = self.rfile.read(length)
-        if self._subscription_blocks(self._userid_from_body(raw_body)):
+        userid = self._userid_from_body(raw_body)
+        if self._subscription_blocks(userid):
             return
+        touch_user_activity(userid, "ai_claude")
         if ANTHROPIC_API_KEY:
             self.proxy_to_anthropic(raw_body)
         else:
@@ -5857,6 +6616,7 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
         if not record:
             return self.send_json_error(404, "User not found.")
 
+        touch_user_activity(userid, "subscription_status")
         self._relay(200, json.dumps(subscription_state(
             ensure_trial_started(userid, record))).encode())
 

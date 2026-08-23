@@ -92,9 +92,27 @@ def _now_iso():
 # --------------------------------------------------------------------------- reading
 
 def _load(path):
+    """The committable entries in a snapshot file. Two shapes exist and BOTH are read.
+
+    Snapshots written before 2026-08-23 are a bare JSON list. From that date
+    scrape_opportunities.py writes {"inserted": [...], "rejected": [...]} instead, so that
+    every candidate it declined is preserved with the reason — previously they vanished and
+    a run's discards could not be audited. Only `inserted` is committable; `rejected` rows
+    were deliberately not written to the catalog.
+
+    Returning [] for an unrecognised shape (the previous behaviour for any non-list) is a
+    silent failure mode: a snapshot would list as "0 entries" and commit nothing, with no
+    error to explain why. Anything dict-shaped without `inserted` therefore still yields the
+    empty list, but the two known shapes must both keep working.
+    """
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return data if isinstance(data, list) else []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        entries = data.get("inserted")
+        return entries if isinstance(entries, list) else []
+    return []
 
 
 def _pending_count(agent, entries):

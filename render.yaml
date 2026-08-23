@@ -1,0 +1,31 @@
+# Render Web Service for the Highschool Wingman FastAPI app (PLAN_1_decompose.md).
+#
+# Ships app/ only. WINGMAN_ENABLE_OPS is deliberately NOT set here, so the deployed
+# service mounts no /api/agents/*, /api/seeds, or /admin route — the ops console and the
+# offline agents run locally, never on Render. Secrets are set in the Render dashboard
+# (sync: false keeps them out of this file / git); SUPABASE_SERVICE_KEY must live only in
+# the server environment and never reach any client.
+services:
+  - type: web
+    name: wingman
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.2"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false

@@ -1,2 +1,14 @@
-# This project uses only Python standard library (http.server, urllib, json, etc.)
-# No external dependencies required
+# Web service (app/) — shipped to Render.
+#
+# The offline agent toolkit at the repo root is still stdlib-only (http.server was
+# dropped from the *web* layer only); those scripts add no third-party deps here.
+# Phase 1 of the rearchitecture (PLAN_1_decompose.md) moved the public web layer from
+# a hand-rolled http.server monolith to FastAPI + uvicorn.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# Optional, used by the resume/LinkedIn import endpoint when present. The handler
+# degrades to a plain-text fallback if these are missing, so they are not hard deps,
+# but the Render service should install them so uploads parse.
+PyPDF2>=3.0
+python-docx>=1.1

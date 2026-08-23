@@ -13,8 +13,7 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { colors, popShadow, radius, space, type } from './theme';
+import { colors, popShadow, radius, softShadow, space, type } from './theme';
 
 // ---------- Text ----------
 type TypeVariant = keyof typeof type;
@@ -37,7 +36,8 @@ export function Txt({
 }
 
 // ---------- Screen ----------
-// Cream canvas + safe area. `scroll` wraps children in a ScrollView with comfortable padding.
+// Cream canvas with a centered content column. The top nav is rendered by the (app) layout,
+// so Screen only owns scrolling + padding.
 export function Screen({
   children,
   scroll = true,
@@ -47,60 +47,59 @@ export function Screen({
   scroll?: boolean;
   contentStyle?: StyleProp<ViewStyle>;
 }) {
-  const inner = (
-    <View style={[styles.screenInner, contentStyle]}>{children}</View>
-  );
+  const inner = <View style={[styles.inner, contentStyle]}>{children}</View>;
+  if (!scroll) return <View style={styles.screen}>{inner}</View>;
   return (
-    <SafeAreaView style={styles.screen} edges={['top', 'left', 'right']}>
-      {scroll ? (
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {inner}
-        </ScrollView>
-      ) : (
-        inner
-      )}
-    </SafeAreaView>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={styles.scrollContent}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      {inner}
+    </ScrollView>
   );
 }
 
-// ---------- PopCard ----------
+// ---------- SoftCard (white content surface) ----------
+export function SoftCard({
+  children,
+  style,
+  color = colors.card,
+}: {
+  children: ReactNode;
+  style?: StyleProp<ViewStyle>;
+  color?: string;
+}) {
+  return <View style={[styles.softCard, { backgroundColor: color }, softShadow(), style]}>{children}</View>;
+}
+
+// ---------- PopCard (bordered emphasis surface) ----------
 export function PopCard({
   children,
   color = colors.card,
   style,
-  offset = 4,
+  offset = 3,
 }: {
   children: ReactNode;
   color?: string;
   style?: StyleProp<ViewStyle>;
   offset?: number;
 }) {
-  return (
-    <View style={[styles.popCard, { backgroundColor: color }, popShadow(offset), style]}>
-      {children}
-    </View>
-  );
+  return <View style={[styles.popCard, { backgroundColor: color }, popShadow(offset), style]}>{children}</View>;
 }
 
 // ---------- PopButton ----------
-type ButtonVariant = 'primary' | 'secondary' | 'accent' | 'purple' | 'ghost' | 'danger';
-const BUTTON_BG: Record<ButtonVariant, string> = {
-  primary: colors.lime,
+type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
+const BG: Record<ButtonVariant, string> = {
+  primary: colors.orange,
   secondary: colors.white,
-  accent: colors.orange,
-  purple: colors.purple,
   ghost: 'transparent',
   danger: colors.white,
 };
-const BUTTON_FG: Record<ButtonVariant, string> = {
-  primary: colors.ink,
+const FG: Record<ButtonVariant, string> = {
+  primary: colors.white,
   secondary: colors.navy,
-  accent: colors.white,
-  purple: colors.white,
   ghost: colors.navy,
   danger: colors.red,
 };
@@ -113,6 +112,7 @@ export function PopButton({
   disabled,
   style,
   full,
+  small,
 }: {
   label: string;
   onPress?: PressableProps['onPress'];
@@ -121,41 +121,43 @@ export function PopButton({
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
   full?: boolean;
+  small?: boolean;
 }) {
   const [pressed, setPressed] = useState(false);
-  const isOff = disabled || loading;
+  const off = disabled || loading;
   const ghost = variant === 'ghost';
   return (
     <Pressable
       onPress={onPress}
       onPressIn={() => setPressed(true)}
       onPressOut={() => setPressed(false)}
-      disabled={isOff}
+      disabled={off}
       style={[
         styles.btn,
-        { backgroundColor: BUTTON_BG[variant] },
+        small && styles.btnSmall,
+        { backgroundColor: BG[variant] },
         ghost ? styles.btnGhost : popShadow(pressed ? 1 : 3),
         pressed && !ghost ? { transform: [{ translateX: 2 }, { translateY: 2 }] } : null,
         full && styles.btnFull,
-        isOff && styles.btnOff,
+        off && styles.btnOff,
         style,
       ]}
     >
       {loading ? (
-        <ActivityIndicator color={BUTTON_FG[variant]} />
+        <ActivityIndicator color={FG[variant]} />
       ) : (
-        <Text style={[styles.btnText, { color: BUTTON_FG[variant] }]}>{label}</Text>
+        <Text style={[styles.btnText, small && styles.btnTextSmall, { color: FG[variant] }]}>{label}</Text>
       )}
     </Pressable>
   );
 }
 
-// ---------- Chip (selectable pill) ----------
+// ---------- Chip ----------
 export function Chip({
   label,
   active,
   onPress,
-  color = colors.purple,
+  color = colors.orange,
 }: {
   label: string;
   active?: boolean;
@@ -165,11 +167,7 @@ export function Chip({
   return (
     <Pressable
       onPress={onPress}
-      style={[
-        styles.chip,
-        { borderColor: colors.navy },
-        active ? { backgroundColor: color } : { backgroundColor: colors.white },
-      ]}
+      style={[styles.chip, active ? { backgroundColor: color, borderColor: color } : { backgroundColor: colors.white, borderColor: colors.navy }]}
     >
       <Text style={[styles.chipText, { color: active ? colors.white : colors.navy }]}>{label}</Text>
     </Pressable>
@@ -177,19 +175,19 @@ export function Chip({
 }
 
 // ---------- Badge ----------
-export function Badge({ label, bg, fg }: { label: string; bg: string; fg: string }) {
+export function Badge({ label, bg, fg, outline }: { label: string; bg: string; fg: string; outline?: boolean }) {
   return (
-    <View style={[styles.badge, { backgroundColor: bg }]}>
+    <View style={[styles.badge, { backgroundColor: outline ? 'transparent' : bg, borderColor: fg, borderWidth: outline ? 1.5 : 0 }]}>
       <Text style={[styles.badgeText, { color: fg }]}>{label}</Text>
     </View>
   );
 }
 
-// ---------- Field (labeled input) ----------
+// ---------- Field ----------
 export function Field({
   label,
-  style,
   hint,
+  style,
   ...props
 }: { label?: string; hint?: string } & TextInputProps) {
   return (
@@ -205,46 +203,62 @@ export function Field({
   );
 }
 
+// ---------- ProgressBar ----------
+export function ProgressBar({ value, color = colors.orange }: { value: number; color?: string }) {
+  const pct = Math.max(0, Math.min(1, value)) * 100;
+  return (
+    <View style={styles.track}>
+      <View style={[styles.fill, { width: `${pct}%`, backgroundColor: color }]} />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.cream },
-  scrollContent: { flexGrow: 1 },
-  screenInner: { padding: space.xl, gap: space.lg, width: '100%', maxWidth: 760, alignSelf: 'center' },
+  scrollContent: { flexGrow: 1, paddingBottom: space.xxl },
+  inner: { padding: space.lg, gap: space.lg, width: '100%', maxWidth: 820, alignSelf: 'center' },
 
-  popCard: { borderWidth: 3, borderColor: colors.navy, borderRadius: radius.lg, padding: space.lg },
+  softCard: { borderRadius: radius.xl, padding: space.xl },
+  popCard: { borderWidth: 2, borderColor: colors.navy, borderRadius: radius.lg, padding: space.lg },
 
   btn: {
     borderWidth: 2,
     borderColor: colors.navy,
-    borderRadius: radius.md,
-    paddingVertical: 13,
-    paddingHorizontal: 20,
+    borderRadius: radius.pill,
+    paddingVertical: 12,
+    paddingHorizontal: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  btnSmall: { paddingVertical: 8, paddingHorizontal: 14 },
   btnGhost: { borderColor: 'transparent' },
   btnFull: { alignSelf: 'stretch' },
   btnOff: { opacity: 0.5 },
   btnText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 15 },
+  btnTextSmall: { fontSize: 13 },
 
   chip: { borderWidth: 2, borderRadius: radius.pill, paddingVertical: 7, paddingHorizontal: 14 },
   chipText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13 },
 
   badge: { borderRadius: radius.pill, paddingVertical: 3, paddingHorizontal: 10, alignSelf: 'flex-start' },
-  badgeText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 11, letterSpacing: 0.3 },
+  badgeText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 10, letterSpacing: 0.5 },
 
   field: { gap: 6 },
-  fieldLabel: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12, color: colors.navy, letterSpacing: 0.4 },
+  fieldLabel: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 11, color: colors.muted, letterSpacing: 0.6 },
   input: {
-    borderWidth: 2,
-    borderColor: colors.navy,
+    borderWidth: 1,
+    borderColor: colors.borderSoft,
     borderRadius: radius.md,
     paddingVertical: 12,
     paddingHorizontal: 14,
     fontFamily: 'PlusJakartaSans_400Regular',
     fontSize: 15,
     color: colors.ink,
-    backgroundColor: colors.white,
+    backgroundColor: colors.lavender,
   },
-  inputMultiline: { minHeight: 120, textAlignVertical: 'top' },
-  fieldHint: { fontFamily: 'PlusJakartaSans_400Regular', fontSize: 12, color: colors.muted },
+  inputMultiline: { minHeight: 130, textAlignVertical: 'top' },
+  fieldHint: { fontFamily: 'PlusJakartaSans_400Regular', fontSize: 12, color: colors.muted, textAlign: 'right' },
+
+  track: { height: 10, borderRadius: radius.pill, backgroundColor: colors.lavender, borderWidth: 1, borderColor: colors.borderSoft, overflow: 'hidden' },
+  fill: { height: '100%', borderRadius: radius.pill },
 });

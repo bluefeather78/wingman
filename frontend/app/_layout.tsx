@@ -38,6 +38,7 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.cream } }}>
           <Stack.Screen name="index" />
+          <Stack.Screen name="landing" />
           <Stack.Screen name="login" />
           <Stack.Screen name="google-auth" />
           <Stack.Screen name="(app)" />

@@ -1,59 +1,18 @@
-import { Ionicons } from '@expo/vector-icons';
-import { Redirect, Tabs } from 'expo-router';
+import { Redirect, Slot } from 'expo-router';
+import { View } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
-import { colors, fonts } from '@/ui/theme';
+import { NavBar } from '@/ui/NavBar';
+import { colors } from '@/ui/theme';
 
-// The authed app shell. Four destinations from the app's page model. Signed-out users
-// (or a dropped session via AuthExpiredError) are bounced to login.
+// The authed app shell: the branded top nav over the active route. Matches the live app's
+// top-nav layout (rather than bottom tabs) on every platform. Signed-out users bounce to login.
 export default function AppLayout() {
   const { ready, user } = useAuth();
   if (ready && !user) return <Redirect href="/login" />;
-
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: colors.navy,
-        tabBarInactiveTintColor: colors.muted,
-        tabBarLabelStyle: { fontFamily: fonts.bodyBold, fontSize: 11 },
-        tabBarStyle: {
-          backgroundColor: colors.card,
-          borderTopWidth: 2,
-          borderTopColor: colors.navy,
-          height: 62,
-          paddingBottom: 8,
-          paddingTop: 6,
-        },
-      }}
-    >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="finder"
-        options={{
-          title: 'Finder',
-          tabBarIcon: ({ color, size }) => <Ionicons name="compass" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="tracker"
-        options={{
-          title: 'Tracker',
-          tabBarIcon: ({ color, size }) => <Ionicons name="calendar" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: 'Profile',
-          tabBarIcon: ({ color, size }) => <Ionicons name="person" size={size} color={color} />,
-        }}
-      />
-    </Tabs>
+    <View style={{ flex: 1, backgroundColor: colors.cream }}>
+      <NavBar />
+      <Slot />
+    </View>
   );
 }

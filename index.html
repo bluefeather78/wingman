@@ -72,7 +72,41 @@
       </div>
     </section>
 
+    <!-- The 37-second product film. walkthrough.html is a self-contained ~1.5MB bundle
+         (its own React runtime + fonts), so it is deferred behind a poster and mounted by
+         mountWalkthrough() in script.js only when this section scrolls into view — the film
+         autoplays once on load, so an eagerly-embedded iframe below the fold would finish
+         playing before anyone saw it. The player's own transport bar handles replay. -->
     <section id="page-landing-how" class="max-w-[1100px] mx-auto px-4 sm:px-6 pb-16 sm:pb-20">
+      <div class="text-center mb-6 sm:mb-8">
+        <h2 class="font-heading font-extrabold text-2xl sm:text-[32px] mb-2" style="color: #1d4e89;">See how it works</h2>
+        <p class="text-sm sm:text-base text-slate-500 max-w-xl mx-auto leading-relaxed">Thirty-seven seconds, start to finish: a student's story goes in, opportunities that actually fit come back, and every deadline lands on the calendar.</p>
+      </div>
+      <!-- Deliberately not .pop-card: that class lifts the whole card on hover, which reads
+           wrong on a video player. Same border/shadow, no transform. -->
+      <div class="rounded-2xl overflow-hidden" style="border: 3px solid #1d4e89; box-shadow: 4px 4px 0px #1d4e89;">
+        <div id="walkthroughStage" class="relative w-full" style="aspect-ratio: 16 / 9; background-color: #0a0a0a;">
+          <button type="button" id="walkthroughPoster" onclick="mountWalkthrough()" aria-label="Play the Wingman walkthrough"
+                  class="absolute inset-0 w-full h-full flex flex-col items-center justify-center gap-4 cursor-pointer">
+            <span class="flex items-center gap-2.5">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="2" y="14" width="4" height="8" rx="1" fill="#f79256"/>
+                <rect x="9" y="9" width="4" height="13" rx="1" fill="#f79256"/>
+                <rect x="16" y="4" width="4" height="18" rx="1" fill="#f79256"/>
+                <circle cx="18" cy="3" r="2.5" fill="#FDE047" stroke="#1d4e89" stroke-width="1"/>
+              </svg>
+              <span class="font-heading font-extrabold text-white text-lg sm:text-xl">Wingman, in 37 seconds</span>
+            </span>
+            <span class="play-chip flex items-center justify-center rounded-full w-14 h-14 sm:w-16 sm:h-16" style="background-color: #f4791d;">
+              <svg width="22" height="22" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3 2l9 5-9 5V2z" fill="#fff"/></svg>
+            </span>
+            <span class="text-xs font-semibold" style="color: #8a93a6;">No sound. Nothing to sign up for.</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="max-w-[1100px] mx-auto px-4 sm:px-6 pb-16 sm:pb-20">
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
         <div class="card-soft p-8">
           <div class="font-heading font-extrabold text-lg mb-2" style="color: #1d4e89;">Find What Fits</div>
@@ -85,28 +119,6 @@
         <div class="card-soft p-8">
           <div class="font-heading font-extrabold text-lg mb-2" style="color: #1d4e89;">Don't Miss the Deadline</div>
           <p class="text-sm leading-relaxed" style="color: #1a2540;">High school is four years and three summers. Wingman keeps deadlines in view so you know what's coming and when to act.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="max-w-[1100px] mx-auto px-4 sm:px-6 pb-16 sm:pb-20">
-      <div class="card-soft p-6 sm:p-12 grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-10 items-center">
-        <div>
-          <h2 class="font-heading font-extrabold text-2xl sm:text-[28px] mb-3" style="color: #1d4e89;">What You're Chasing</h2>
-          <p class="text-sm text-slate-500 leading-relaxed mb-5">A live progress bar across every opportunity you're tracking: happening now, coming up, or already past.</p>
-          <div class="flex w-full h-[22px] rounded-full overflow-hidden border-2" style="border-color: #1d4e89; background-color: #FBF8F3;">
-            <div style="width:40%;background-color:#00b2ca"></div><div style="width:35%;background-color:#7dcfb6"></div><div style="width:25%;background-color:#fbd1a2"></div>
-          </div>
-        </div>
-        <div class="flex flex-col gap-2.5">
-          <div class="card-soft px-5 py-4 flex justify-between items-center gap-3">
-            <span class="font-bold text-sm" style="color: #1a2540;">Coastal Marine Research Internship</span>
-            <span class="font-extrabold text-[10px] uppercase px-2.5 py-[3px] rounded-full border-2 shrink-0" style="background-color: #CDEAF2; color: #00697A; border-color: #1d4e89;">Future Event</span>
-          </div>
-          <div class="card-soft px-5 py-4 flex justify-between items-center gap-3">
-            <span class="font-bold text-sm" style="color: #1a2540;">National Robotics Design Challenge</span>
-            <span class="font-extrabold text-[10px] uppercase px-2.5 py-[3px] rounded-full border-2 shrink-0" style="background-color: #D8F0E9; color: #1A6E58; border-color: #1d4e89;">Happening Now</span>
-          </div>
         </div>
       </div>
     </section>
@@ -1094,6 +1106,6 @@
   firebase.analytics();
 </script>
 
-<script src="script.js?v=betapromo1"></script>
+<script src="script.js?v=walkthrough1"></script>
 </body>
 </html>

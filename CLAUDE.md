@@ -1018,6 +1018,34 @@ Home/Dashboard (progress bars, todo counts), Wizard/Finder (quiz or free-text pr
 (calendar + list views across buckets in `ALL_BUCKETS`: summerPrograms, internships,
 researchCompetitions, pureCompetitions, conferences, journals).
 
+**The landing page's walkthrough film** is [walkthrough.html](walkthrough.html) — a
+**vendored, self-extracting bundle** exported from a design canvas, holding its own React
+runtime, the composition source and every webfont in one ~1.5MB file. **Do not hand-edit
+it**: the real source is a `<script type="__bundler/manifest">` block of gzipped,
+base64'd assets, so every apparent line of it is machine-written. Re-export and replace
+the whole file to change the film. It is 1920x1080, 37 seconds, autoplays **once** on
+load, and ships its own dark play/scrub transport bar — that bar is the replay control,
+which is why nothing on the landing page draws one.
+
+Those two facts (heavy, and self-starting) are why it is **not** a plain `<iframe>` in
+the markup. `mountWalkthrough()`/`unmountWalkthrough()`/`initWalkthrough()` in
+[script.js](script.js) inject the frame only once `#page-landing-how` is ≥35% on screen,
+so the film starts when it is actually being watched rather than finishing unseen while
+the visitor is still reading the hero, and no landing visit pays the 1.5MB unless someone
+scrolls that far. `prefers-reduced-motion` suppresses the auto-mount; the poster stays
+clickable, which is also the fallback where `IntersectionObserver` is missing. The three
+`showPage`-adjacent functions that hide the landing page (`showLoginGate`, `showPaywall`,
+`showApp`) each call `unmountWalkthrough()` explicitly rather than trusting the observer
+to notice the section went `display:none`.
+
+It replaced the old "What You're Chasing" mock-progress-bar card, and took over that
+section's `id="page-landing-how"` so the hero's **See how it works** button lands on the
+film with the three explainer cards reading as its captions underneath. The film is
+authored for desktop: below ~500px wide its in-frame text is too small to read, and those
+three cards are deliberately the readable version of the same story. Note the *other*
+"What You're Chasing" in [index.html](index.html) is the in-app tracker header inside
+`#appShell` and is unrelated.
+
 ## Security notes for this repo
 
 - `.env` (holds `ANTHROPIC_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`,

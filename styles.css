@@ -658,3 +658,11 @@ textarea:focus, input:focus, select:focus {
   50%  { content: '..'; }
   75%  { content: '...'; }
 }
+
+/* ---------- Landing walkthrough poster ---------- */
+/* The still shown in place of walkthrough.html until it is mounted — see
+   mountWalkthrough() in script.js. */
+#walkthroughPoster { transition: background-color 0.2s ease; }
+#walkthroughPoster:hover { background-color: rgba(255, 255, 255, 0.04); }
+#walkthroughPoster .play-chip { transition: transform 0.15s ease; }
+#walkthroughPoster:hover .play-chip { transform: scale(1.08); }

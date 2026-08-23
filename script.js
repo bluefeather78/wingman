@@ -497,12 +497,64 @@ function showLandingPage(){
   if(locked) locked.classList.add('hidden');
 }
 
+// ---------- Landing-page walkthrough film ----------
+// walkthrough.html is a self-contained bundle (~1.5MB: its own React runtime, the
+// composition and every font) that autoplays once as soon as it loads. Both facts push
+// the same way: embed it eagerly and every landing visit pays 1.5MB for a film that has
+// already played itself out by the time the visitor scrolls down to it. So the iframe is
+// injected only when #page-landing-how is actually on screen, and torn down when it is
+// not — which also covers showLoginGate()/showApp() hiding the whole landing page,
+// since a display:none section stops intersecting.
+let walkthroughArmed = false;   // set by a click on the poster, so a manual play survives
+                                // scrolling away and back even under reduced motion.
+
+function mountWalkthrough(){
+  walkthroughArmed = true;
+  const stage = document.getElementById('walkthroughStage');
+  if(!stage || stage.querySelector('iframe')) return;
+  const poster = document.getElementById('walkthroughPoster');
+  if(poster) poster.style.display = 'none';
+  const frame = document.createElement('iframe');
+  frame.src = 'walkthrough.html';
+  frame.title = 'Wingman product walkthrough';
+  frame.setAttribute('scrolling', 'no');
+  frame.className = 'absolute inset-0 w-full h-full';
+  frame.style.border = '0';
+  stage.appendChild(frame);
+}
+
+function unmountWalkthrough(){
+  const stage = document.getElementById('walkthroughStage');
+  if(!stage) return;
+  const frame = stage.querySelector('iframe');
+  if(frame) frame.remove();
+  const poster = document.getElementById('walkthroughPoster');
+  if(poster) poster.style.display = '';
+}
+
+function initWalkthrough(){
+  const section = document.getElementById('page-landing-how');
+  if(!section || typeof IntersectionObserver === 'undefined') return;  // poster stays clickable
+  const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      // Fully out of view (which includes the landing page being hidden outright) —
+      // stop the film rather than leaving it running behind the app.
+      if(entry.intersectionRatio === 0){ unmountWalkthrough(); return; }
+      // Enough of it is on screen that the film will be watched from the top.
+      if(entry.intersectionRatio >= 0.35 && (!reducedMotion || walkthroughArmed)) mountWalkthrough();
+    });
+  }, { threshold: [0, 0.35] }).observe(section);
+}
+initWalkthrough();
+
 function showLoginGate(mode){
   const landingPage = document.getElementById('page-landing');
   const loginPage = document.getElementById('page-login');
   const appShell = document.getElementById('appShell');
   const locked = document.getElementById('page-locked');
   if(landingPage) landingPage.classList.add('hidden');
+  unmountWalkthrough();
   if(loginPage) loginPage.classList.remove('hidden');
   if(appShell) appShell.classList.add('hidden');
   if(locked) locked.classList.add('hidden');
@@ -519,6 +571,7 @@ function showPaywall(){
   const appShell = document.getElementById('appShell');
   const locked = document.getElementById('page-locked');
   if(landingPage) landingPage.classList.add('hidden');
+  unmountWalkthrough();
   if(loginPage) loginPage.classList.add('hidden');
   if(appShell) appShell.classList.add('hidden');
   if(locked) locked.classList.remove('hidden');
@@ -569,6 +622,7 @@ async function showApp(){
   const appShell = document.getElementById('appShell');
   const locked = document.getElementById('page-locked');
   if(landingPage) landingPage.classList.add('hidden');
+  unmountWalkthrough();
   if(loginPage) loginPage.classList.add('hidden');
   if(locked) locked.classList.add('hidden');
   if(appShell) appShell.classList.remove('hidden');

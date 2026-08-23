@@ -15,17 +15,52 @@ Tailwind CSS is loaded via CDN in [index.html](index.html).
 python server.py
 ```
 
-Serves the static site and API on `http://localhost:8000`. `server.py` is a Python
-stdlib-only (`http.server`) dev server — no dependencies to install, no build/lint/test
-tooling exists in this repo.
+or, equivalently, `uvicorn app.main:app --host 0.0.0.0 --port 8000`. Serves the static site
+and API on `http://localhost:8000`.
+
+**As of the Phase 1 rearchitecture (2026-08-23, `PLAN_1_decompose.md`), the web layer is a
+FastAPI app under `app/`, not the old `http.server` monolith.** `server.py` is now a thin
+shim that boots uvicorn (`app.main:app`) with the local ops console enabled — so
+`python server.py` still works and still serves `/admin`. See the **Web layer** section
+below for the module map. `requirements.txt` now installs `fastapi` + `uvicorn`; the offline
+agents at the repo root remain stdlib-only.
 
 - `.env` (gitignored) holds `GEMINI_API_KEY` and `ANTHROPIC_API_KEY`. If either is unset,
   that endpoint (`/api/messages` or `/api/messages-claude` respectively) runs in **MOCK
   mode**, fabricating plausible pattern-matched responses (see `generate_mock_text` in
-  [server.py](server.py)) so the app is fully click-through-able offline.
+  [app/services/ai.py](app/services/ai.py)) so the app is fully click-through-able offline.
 - Never pass an API key inline on the command line (e.g.
   `GEMINI_API_KEY=... python server.py`) — it gets recorded in shell history / Claude Code's
   local settings allowlist and has leaked before. Always put it in `.env`.
+
+## Web layer (`app/` ships, `ops/` is local-only)
+
+Phase 1 sliced the former 6,956-line `server.py` into two packages. **The old `server.py`
+line-number references elsewhere in this file are historical** — the code moved but did not
+change (it was extracted verbatim), so the rationale still applies; look for the same
+function name in its new home.
+
+- **`app/`** — the FastAPI web service, the only thing deployed to Render
+  (`render.yaml`, start command `uvicorn app.main:app`). `app/config.py` (env + constants),
+  `app/core.py` (the shared seam: Supabase plumbing, account CRUD, cost/activity accounting,
+  `subscription_state`), `app/services/*.py` (opportunities, deadlines, ai mocks,
+  mailing_list, google_oauth, resume), `app/routes/*.py` (one router per domain),
+  `app/main.py` (the app; serves the SPA from the repo root via a deny-listed static route).
+- **`ops/`** — the local-only operations console: `ops/core.py` (agent orchestration,
+  metrics, user-costs, seeds, snapshots, review-queue moderation — everything that backed
+  `/api/agents/*` and `/api/seeds`) and `ops/admin.py` (the router, every route
+  localhost-gated), plus `ops/admin_console.html` (moved from the repo root). **This is
+  mounted only when `WINGMAN_ENABLE_OPS` is set** (the `server.py` shim sets it; Render does
+  not), so the shipped service exposes no agent/seed/admin route — they 404 there.
+- **Shared offline layer stays at the repo root.** The 6 agents and their libs
+  (`gemini_common`, `claude_common`, `agent_common`, `supabase_common`,
+  `subscription_common`, `mailing_list_common`, `url_dedupe`, `dryrun_common`,
+  `check_deadlines`, ...) were NOT moved: `app/` imports several of them (the deadline
+  endpoint reuses `check_deadlines.check_one`), the agents import each other by bare name,
+  and their `__file__`-anchored log/snapshot I/O assumes the repo root. Moving them would
+  break both, and the plan forbids changing agent internals — so they remain the shared layer
+  both `app/` and `ops/` import. `ops/core.py` anchors agent paths via an explicit
+  `REPO_ROOT` (it sits one level down from where `server.py` used to).
 
 ## Architecture
 

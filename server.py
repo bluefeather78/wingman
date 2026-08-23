@@ -25,9 +25,12 @@ shipped service exposes no /api/agents/*, /api/seeds, or /admin route.
 """
 import os
 
-# Local dev convenience: expose the admin console at /admin, as the old server did. Never
-# set in the Render environment — see app.main.
-os.environ.setdefault("WINGMAN_ENABLE_OPS", "1")
+# Local dev convenience: expose the admin console at /admin, as the old server did. Guarded
+# so it is NEVER enabled on Render (which sets RENDER=true) — even if the service's start
+# command is still `python server.py`, the public deploy must not expose /admin or the
+# money-spending /api/agents/* routes. See app.main for the mount.
+if not os.environ.get("RENDER"):
+    os.environ.setdefault("WINGMAN_ENABLE_OPS", "1")
 
 if __name__ == "__main__":
     import uvicorn

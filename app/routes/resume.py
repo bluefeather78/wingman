@@ -5,21 +5,22 @@ lives in app.services.resume; these are the HTTP glue.
 """
 import threading
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends
 
 from app.core import touch_user_activity
 from app.deps import read_json_body, json_response, json_error, subscription_block_reason
+from app.auth import get_current_user, get_optional_user, AuthedUser
 from app.services import resume as resume_service
 
 router = APIRouter()
 
 
 @router.post("/api/extract-from-resume")
-async def handle_extract_from_resume(request: Request):
+async def handle_extract_from_resume(request: Request, user: AuthedUser = Depends(get_current_user)):
     """Extract profile-relevant information from a resume (PDF or DOCX)."""
-    # userid rides in on the query string (this is a multipart upload). Gate before
+    # Identity is token-derived (was a query-string userid). Gate on subscription before
     # reading the file so a lapsed account can't make us parse a PDF or call Claude.
-    resume_userid = request.query_params.get("userid")
+    resume_userid = user.id
     reason = subscription_block_reason(resume_userid)
     if reason:
         return json_error(402, reason)
@@ -62,8 +63,13 @@ async def handle_extract_from_resume(request: Request):
 
 
 @router.post("/api/extract-from-linkedin")
-async def handle_extract_from_linkedin(request: Request):
+async def handle_extract_from_linkedin(request: Request, user: AuthedUser = Depends(get_current_user)):
     """Extract profile-relevant information from LinkedIn profile (text paste only)."""
+    # Paid Claude call that writes into a profile, so it is token-gated and subscription-
+    # gated exactly like the resume path — identity comes from the token, not the body.
+    reason = subscription_block_reason(user.id)
+    if reason:
+        return json_error(402, reason)
     try:
         body = await read_json_body(request)
     except Exception:
@@ -80,7 +86,7 @@ async def handle_extract_from_linkedin(request: Request):
             return json_response(200, {"extracted_text": "", "source": "linkedin"})
 
         extracted = resume_service.extract_profile_from_text(
-            text, "linkedin", userid=(body.get("userid") or "").strip() or None)
+            text, "linkedin", userid=user.id)
         if not isinstance(extracted, str):
             extracted = str(extracted) if extracted else ""
 
@@ -90,9 +96,14 @@ async def handle_extract_from_linkedin(request: Request):
 
 
 @router.post("/api/user-submitted-opportunities")
-async def handle_user_submitted_opportunity(request: Request):
+async def handle_user_submitted_opportunity(request: Request,
+                                            user: AuthedUser = Depends(get_optional_user)):
     """Accept user-submitted opportunity data, dedupe by URL, and insert into the
-    opportunities table with is_active=false. Runs asynchronously."""
+    opportunities table with is_active=false. Runs asynchronously.
+
+    Soft auth: the userid here is provenance for the review queue, not access control (the
+    row is public-review-queue data, not owned data). Use the token's identity when signed
+    in, else record it as an unattributed submission — same residual as before."""
     try:
         body = await read_json_body(request)
     except Exception:
@@ -110,7 +121,7 @@ async def handle_user_submitted_opportunity(request: Request):
     requirements = body.get("requirements") or []
     apply_url = (body.get("apply_url") or "").strip()
     category = (body.get("category") or "").strip()
-    userid = (body.get("userid") or "").strip().lower() or None
+    userid = user.id if user else None
 
     if not url or not name:
         return json_error(400, "URL and name are required.")

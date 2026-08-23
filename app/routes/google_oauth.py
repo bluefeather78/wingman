@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends
 from fastapi.responses import RedirectResponse
 
 from app.config import (
@@ -21,10 +21,12 @@ from app.config import (
 )
 from app.core import (
     get_user, get_user_by_email, get_user_by_google_id, create_user, ensure_trial_started,
-    _login_payload, _check_signup_consent, _unique_userid_from_email, _users_request,
+    _check_signup_consent, _unique_userid_from_email, _users_request,
     _is_missing_column_error, MissingUserColumns, DuplicateEmail,
 )
-from app.deps import read_json_body, json_response, json_error
+from app.deps import read_json_body, json_response, json_error, login_response
+from app.auth import get_current_user, AuthedUser
+from app.auth.tokens import verify_access_token, AuthError, AuthConfigError
 from app.services import google_oauth as g
 
 router = APIRouter()
@@ -157,7 +159,10 @@ def handle_google_session(request: Request):
     if not record:
         return json_error(404, "No account found.")
     record = ensure_trial_started(record["userid"], record)
-    return json_response(200, _login_payload(record))
+    try:
+        return json_response(200, login_response(record))
+    except AuthConfigError as e:
+        return json_error(503, str(e))
 
 
 @router.post("/api/auth/google/finish")
@@ -203,7 +208,10 @@ async def handle_google_finish(request: Request):
         return json_error(502, f"Could not reach Supabase: {e}")
 
     record = get_user(userid)
-    return json_response(200, _login_payload(record))
+    try:
+        return json_response(200, login_response(record))
+    except AuthConfigError as e:
+        return json_error(503, str(e))
 
 
 @router.get("/api/auth/google/calendar/start")
@@ -211,9 +219,17 @@ def handle_google_calendar_start(request: Request):
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         return json_error(503, "Google Sign-In is not configured: set "
                                "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env.")
-    userid = (request.query_params.get("userid") or "").strip().lower()
-    if not userid:
-        return json_error(400, "Missing userid.")
+    # This is a top-level browser navigation (location.href), so it cannot carry an
+    # Authorization header — the access token rides in the query string instead, and the
+    # userid is derived from it, never taken from the URL directly. Same trust model as the
+    # rest of the app: identity comes from the signed token.
+    token = request.query_params.get("token") or ""
+    try:
+        userid = verify_access_token(token)
+    except AuthConfigError:
+        return json_error(503, "Authentication is temporarily unavailable.")
+    except AuthError:
+        return json_error(401, "Please sign in to connect Google Calendar.")
     try:
         if not get_user(userid):
             return json_error(404, "No account found.")
@@ -303,12 +319,10 @@ def handle_google_calendar_callback(request: Request):
 
 
 @router.post("/api/calendar/sync")
-async def handle_calendar_sync(request: Request):
+async def handle_calendar_sync(request: Request, user: AuthedUser = Depends(get_current_user)):
     body = await read_json_body(request)
-    userid = (body.get("userid") or "").strip().lower()
+    userid = user.id
     events = body.get("events") or []
-    if not userid:
-        return json_error(400, "Missing userid.")
     if not isinstance(events, list) or not events:
         return json_error(400, "No events to sync.")
 

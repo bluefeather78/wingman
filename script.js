@@ -19,13 +19,94 @@ fetch('/api/opportunities')
 let currentUser = null; // { userid, firstName, lastName, email, location } — the signed-in session, cached locally
 let googlePendingToken = null; // set while #googleFinishForm is showing — see handleGoogleRedirect()
 
-// Query-string userid for the endpoints that cost money but take no JSON body we can put
-// it in (the deadline check is a GET, the resume import is multipart). It is only used
-// server-side to attribute spend to an account in the admin console's per-user cost card
-// — signed-out calls just omit it and show up there as unattributed.
-function costAttributionQS(){
-  const id = currentUser && currentUser.userid;
-  return id ? `?userid=${encodeURIComponent(id)}` : '';
+// ============================================================
+// Session tokens (Phase 2 auth — PLAN_2_auth.md).
+// Identity is proven by a signed JWT the server mints at login, not by a userid in the
+// request body — that is what closed the IDOR. The client stores the access+refresh pair
+// and sends `Authorization: Bearer <access>` on every gated request via authFetch().
+//
+// Tokens live in localStorage, NOT window.storage: window.storage silently no-ops in a
+// plain browser tab (see AppStorage below), which would drop the token on every reload and
+// log the user out each visit. localStorage is the reliable store here.
+// ============================================================
+const ACCESS_TOKEN_KEY = 'hs-access-token';
+const REFRESH_TOKEN_KEY = 'hs-refresh-token';
+const USER_CACHE_KEY = 'hs-user';
+
+function getAccessToken(){ try{ return localStorage.getItem(ACCESS_TOKEN_KEY) || null; }catch(e){ return null; } }
+function getRefreshToken(){ try{ return localStorage.getItem(REFRESH_TOKEN_KEY) || null; }catch(e){ return null; } }
+function setTokens(access, refresh){
+  try{
+    if(access) localStorage.setItem(ACCESS_TOKEN_KEY, access);
+    if(refresh) localStorage.setItem(REFRESH_TOKEN_KEY, refresh);
+  }catch(e){ /* private-mode / storage disabled — session stays in-memory only */ }
+}
+function clearTokens(){
+  try{ localStorage.removeItem(ACCESS_TOKEN_KEY); localStorage.removeItem(REFRESH_TOKEN_KEY); }catch(e){}
+}
+
+// Persist the tokens (and subscription block, when present) from a login/register/google/
+// refresh response. The identity fields are handled by each caller's own currentUser build.
+function applySession(data){
+  if(!data) return;
+  if(data.token || data.refresh_token) setTokens(data.token, data.refresh_token);
+}
+
+// Coalesce concurrent refreshes so a burst of 401s triggers exactly one /api/auth/refresh.
+let _refreshInFlight = null;
+function refreshAccessToken(){
+  if(_refreshInFlight) return _refreshInFlight;
+  const refresh = getRefreshToken();
+  if(!refresh) return Promise.resolve(false);
+  _refreshInFlight = (async () => {
+    try{
+      const res = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refresh })
+      });
+      if(!res.ok) return false;
+      const data = await res.json().catch(() => ({}));
+      if(!data.token) return false;
+      setTokens(data.token, data.refresh_token);
+      // Refresh also returns fresh identity/subscription — keep the cached session current.
+      if(currentUser && data.subscription) currentUser.subscription = data.subscription;
+      return true;
+    }catch(e){ return false; }
+  })();
+  const done = _refreshInFlight;
+  done.finally(() => { _refreshInFlight = null; });
+  return done;
+}
+
+// Called when the session is truly gone (refresh failed / no refresh token): drop the
+// local session and bounce to the sign-in gate.
+function handleAuthExpired(){
+  clearTokens();
+  currentUser = null;
+  try{ localStorage.removeItem(USER_CACHE_KEY); }catch(e){}
+  try{ showLoginGate('signin'); }catch(e){}
+}
+
+// fetch() for gated routes: attaches the bearer token, and on a 401 refreshes once and
+// retries. A 401 that survives the refresh means re-login. Signed-out/soft routes can also
+// use this safely — they just won't 401.
+async function authFetch(url, options){
+  options = options || {};
+  const build = () => {
+    const headers = Object.assign({}, options.headers || {});
+    const tok = getAccessToken();
+    if(tok) headers['Authorization'] = 'Bearer ' + tok;
+    return Object.assign({}, options, { headers });
+  };
+  let res = await fetch(url, build());
+  if(res.status === 401 && getRefreshToken()){
+    if(await refreshAccessToken()){
+      res = await fetch(url, build());
+    }
+  }
+  if(res.status === 401){ handleAuthExpired(); }
+  return res;
 }
 
 
@@ -53,10 +134,11 @@ const AppStorage = {
     }
     if(!currentUser || !currentUser.userid) return null;
     try{
-      const res = await fetch('/api/data/load', {
+      // Identity comes from the bearer token (authFetch); the server ignores any body userid.
+      const res = await authFetch('/api/data/load', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userid: currentUser.userid, key })
+        body: JSON.stringify({ key })
       });
       if(!res.ok) return null;
       const data = await res.json();
@@ -70,10 +152,10 @@ const AppStorage = {
     }
     if(!currentUser || !currentUser.userid) return;
     try{
-      await fetch('/api/data/save', {
+      await authFetch('/api/data/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userid: currentUser.userid, key, value: JSON.parse(value) })
+        body: JSON.stringify({ key, value: JSON.parse(value) })
       });
     }catch(e){ /* best-effort — worst case this save is lost */ }
   }
@@ -111,7 +193,7 @@ async function syncTrackerDeadlines(){
 
     // Fetch deadline data for each opportunity (uses server 7-day cache)
     const deadlinePromises = allIds.map(id =>
-      fetch(`/api/opportunities/${id}/deadline${costAttributionQS()}`)
+      authFetch(`/api/opportunities/${id}/deadline`)
         .then(res => res.ok ? res.json() : null)
         .catch(() => null)
     );
@@ -162,6 +244,12 @@ async function syncTrackerDeadlines(){
 }
 
 async function loadUser(){
+  // localStorage is the reliable store (survives reload even when window.storage no-ops),
+  // and it's where the tokens live too, so the cached identity stays paired with them.
+  try{
+    const raw = localStorage.getItem(USER_CACHE_KEY);
+    if(raw){ currentUser = JSON.parse(raw); return; }
+  }catch(e){}
   try{
     if(window.storage){
       const r = await window.storage.get('hs-user');
@@ -170,8 +258,12 @@ async function loadUser(){
   }catch(e){ /* nothing saved yet, or storage unavailable */ }
 }
 async function saveUser(){
-  try{ if(window.storage) await window.storage.set('hs-user', JSON.stringify(currentUser)); }
-  catch(e){ /* storage unavailable — stays in-memory only for this session */ }
+  try{
+    if(currentUser) localStorage.setItem(USER_CACHE_KEY, JSON.stringify(currentUser));
+    else localStorage.removeItem(USER_CACHE_KEY);
+  }catch(e){ /* storage disabled — stays in-memory only for this session */ }
+  try{ if(window.storage) await window.storage.set('hs-user', currentUser ? JSON.stringify(currentUser) : ''); }
+  catch(e){}
 }
 
 // Hashes a password with SHA-256 and returns it as a hex string.
@@ -296,6 +388,9 @@ async function registerUser(event){
   }
 
   currentUser = { userid, firstName, lastName, email, location };
+  // Register auto-logs-in server-side and returns the token pair + subscription block.
+  applySession(data);
+  if(data.subscription) currentUser.subscription = data.subscription;
   await saveUser();
   if(typeof firebase !== 'undefined' && firebase.analytics) {
     firebase.analytics().logEvent('user_registered', {
@@ -335,8 +430,9 @@ async function loginUser(event){
   }
 
   currentUser = { userid, firstName: data.firstName, lastName: data.lastName, email: data.email, location: data.location || '' };
-  // /api/login already returns the subscription block, so showApp() can decide between
-  // the app and the paywall without waiting on a second request.
+  // /api/login returns the subscription block AND the token pair, so showApp() can decide
+  // between the app and the paywall and every later gated call is authenticated.
+  applySession(data);
   if(data.subscription) currentUser.subscription = data.subscription;
   await saveUser();
   if(typeof firebase !== 'undefined' && firebase.analytics) {
@@ -422,6 +518,7 @@ async function handleGoogleRedirect(){
   }
 
   currentUser = { userid: data.userid, firstName: data.firstName, lastName: data.lastName, email: data.email, location: data.location || '' };
+  applySession(data);
   if(data.subscription) currentUser.subscription = data.subscription;
   await saveUser();
   await showApp();
@@ -474,6 +571,7 @@ async function finishGoogleSignup(event){
 
   googlePendingToken = null;
   currentUser = { userid: data.userid, firstName: data.firstName, lastName: data.lastName, email: data.email, location: data.location || '' };
+  applySession(data);
   if(data.subscription) currentUser.subscription = data.subscription;
   await saveUser();
   if(typeof firebase !== 'undefined' && firebase.analytics) {
@@ -649,6 +747,7 @@ async function showApp(){
 }
 async function logoutUser(){
   currentUser = null;
+  clearTokens();
   await saveUser();
   // Clear in-memory app data so it can't leak into a different account that signs
   // in next in this same tab — the next login re-fetches everything fresh via
@@ -669,10 +768,10 @@ async function saveAccountLocation(){
     return;
   }
   try{
-    const res = await fetch('/api/account/location', {
+    const res = await authFetch('/api/account/location', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userid: currentUser.userid, location })
+      body: JSON.stringify({ location })
     });
     if(!res.ok) throw new Error('request failed');
     currentUser.location = location;
@@ -692,10 +791,10 @@ async function saveAccountLocation(){
 async function checkSubscriptionStatus(){
   if(!currentUser) return;
   try{
-    const res = await fetch('/api/subscription/status', {
+    const res = await authFetch('/api/subscription/status', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userid: currentUser.userid })
+      body: JSON.stringify({})
     });
     if(!res.ok) return;
     const data = await res.json();
@@ -842,11 +941,10 @@ async function upgradeSubscription(promoInputId){
     const successUrl = window.location.origin + '?payment=success';
     const cancelUrl = window.location.origin + '?payment=canceled';
 
-    const res = await fetch('/api/subscription/checkout', {
+    const res = await authFetch('/api/subscription/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        userid: currentUser.userid,
         email: currentUser.email,
         success_url: successUrl,
         cancel_url: cancelUrl,
@@ -883,10 +981,10 @@ async function applyPromoCode(inputId, statusId){
   }
 
   try{
-    const res = await fetch('/api/subscription/validate-promo', {
+    const res = await authFetch('/api/subscription/validate-promo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userid: currentUser.userid, promo_code: code })
+      body: JSON.stringify({ promo_code: code })
     });
 
     if(!res.ok){
@@ -911,10 +1009,10 @@ async function applyPromoCode(inputId, statusId){
 
     status.textContent = 'Applying…';
     status.className = 'text-xs text-slate-500 mt-2';
-    const redeem = await fetch('/api/subscription/redeem-promo', {
+    const redeem = await authFetch('/api/subscription/redeem-promo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userid: currentUser.userid, promo_code: code })
+      body: JSON.stringify({ promo_code: code })
     });
     const applied = await redeem.json().catch(() => ({}));
     if(!redeem.ok){
@@ -948,10 +1046,10 @@ async function cancelSubscription(){
   if(!currentUser || !confirm('Are you sure you want to cancel? You\'ll lose access when your current billing period ends.')) return;
 
   try{
-    const res = await fetch('/api/subscription/cancel', {
+    const res = await authFetch('/api/subscription/cancel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userid: currentUser.userid })
+      body: JSON.stringify({})
     });
 
     if(!res.ok){
@@ -1304,8 +1402,8 @@ function slugify(text){
 // into a {content:[{type:"text",text:...}]} envelope (both live and mock modes), so the
 // parsing below stays the same either way.
 async function callGemini(system, userContent, useWebSearch){
-  const body = { system, userContent, useWebSearch: !!useWebSearch, userid: currentUser?.userid || null };
-  const res = await fetch("/api/messages", {
+  const body = { system, userContent, useWebSearch: !!useWebSearch };
+  const res = await authFetch("/api/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
@@ -1335,9 +1433,9 @@ async function callClaude(system, userContent, useWebSearch, maxTokens){
 // response. That is exactly how half-finished profiles used to reach the page. maxTokens is
 // optional and is clamped server-side (see _clamped_max_tokens in server.py).
 async function callClaudeDetailed(system, userContent, useWebSearch, maxTokens){
-  const body = { system, userContent, useWebSearch: !!useWebSearch, userid: currentUser?.userid || null };
+  const body = { system, userContent, useWebSearch: !!useWebSearch };
   if(maxTokens) body.maxTokens = maxTokens;
-  const res = await fetch("/api/messages-claude", {
+  const res = await authFetch("/api/messages-claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
@@ -2553,7 +2651,7 @@ async function submitResumeExtraction(){
     const formData = new FormData();
     formData.append('file', window.resumeFileToUpload);
 
-    const response = await fetch('/api/extract-from-resume' + costAttributionQS(), {
+    const response = await authFetch('/api/extract-from-resume', {
       method: 'POST',
       body: formData
     });
@@ -2607,10 +2705,10 @@ async function submitLinkedInExtraction(mode){
   statusEl.style.color = '#8a93a6';
 
   try{
-    const response = await fetch('/api/extract-from-linkedin', {
+    const response = await authFetch('/api/extract-from-linkedin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ linkedin_text: linkedInInput, userid: currentUser?.userid || null })
+      body: JSON.stringify({ linkedin_text: linkedInInput })
     });
 
     if(!response.ok){
@@ -3722,7 +3820,7 @@ function baseDomain(url){
 // adding to or loading the tracker.
 async function fetchDeadlineCheck(oppId){
   try{
-    const res = await fetch(`/api/opportunities/${encodeURIComponent(oppId)}/deadline${costAttributionQS()}`);
+    const res = await authFetch(`/api/opportunities/${encodeURIComponent(oppId)}/deadline`);
     if(!res.ok) return null;
     return await res.json();
   }catch(err){
@@ -5257,7 +5355,11 @@ function connectGoogleCalendar(){
     alert('Please sign in first.');
     return;
   }
-  location.href = `/api/auth/google/calendar/start?userid=${encodeURIComponent(currentUser.userid)}`;
+  // A top-level navigation can't carry an Authorization header, so the access token rides
+  // in the query string; the server derives the userid from it (never from the URL directly).
+  const tok = getAccessToken();
+  if(!tok){ handleAuthExpired(); return; }
+  location.href = `/api/auth/google/calendar/start?token=${encodeURIComponent(tok)}`;
 }
 
 // Pushes every tracked deadline to the signed-in user's primary Google Calendar via
@@ -5280,11 +5382,10 @@ async function syncToGoogleCalendar(){
   if(btn){ btn.disabled = true; btn.textContent = '⏳ Syncing...'; }
 
   try{
-    const res = await fetch('/api/calendar/sync', {
+    const res = await authFetch('/api/calendar/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        userid: currentUser.userid,
         events: events.map(e => ({
           id: `${e.itemId}::${e.dateIdx}`,
           title: e.org ? `${e.name} (${e.org})` : e.name,
@@ -5728,13 +5829,11 @@ function submitUserOpportunityToDatabase(extracted, url, bucket){
         important_dates: extracted.important_dates || [],
         requirements: extracted.requirements || [],
         apply_url: extracted.apply_url || url,
-        category: extracted.category || null,
-        // Provenance for the admin review queue — a reviewer judging whether a submitted
-        // row is real wants to know who sent it. Signed-out submissions omit it and show
-        // up unattributed, the same residual the cost attribution reports.
-        userid: (currentUser && currentUser.userid) || null
+        category: extracted.category || null
+        // Provenance for the review queue is taken server-side from the bearer token (via
+        // authFetch), not from the body — a signed-out submission is simply unattributed.
       };
-      const res = await fetch('/api/user-submitted-opportunities', {
+      const res = await authFetch('/api/user-submitted-opportunities', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -5784,8 +5883,8 @@ async function refreshMailingListStatus(ids){
   const wanted = (ids || []).filter(Boolean);
   if(!wanted.length || !currentUser) return;
   try{
-    const qs = `?userid=${encodeURIComponent(currentUser.userid)}&ids=${encodeURIComponent(wanted.join(','))}`;
-    const res = await fetch(`/api/mailing-list/status${qs}`);
+    const qs = `?ids=${encodeURIComponent(wanted.join(','))}`;
+    const res = await authFetch(`/api/mailing-list/status${qs}`);
     if(!res.ok) return;
     const data = await res.json();
     mailingListStatus = Object.assign({}, mailingListStatus, (data && data.items) || {});
@@ -5869,9 +5968,9 @@ async function submitSubscribe(){
 
   btn.disabled = true; spinner.classList.remove('hidden'); label.textContent = 'Sending...';
   try{
-    const res = await fetch(`/api/opportunities/${encodeURIComponent(subscribeTarget.id)}/subscribe`, {
+    const res = await authFetch(`/api/opportunities/${encodeURIComponent(subscribeTarget.id)}/subscribe`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userid: currentUser && currentUser.userid, email, consent: true }),
+      body: JSON.stringify({ email, consent: true }),
     });
     const data = await res.json().catch(() => ({}));
     if(!res.ok){
@@ -5908,7 +6007,7 @@ async function loadMailingListSubscriptions(){
   if(!section || !currentUser) return;
   let rows = [];
   try{
-    const res = await fetch(`/api/mailing-list/subscriptions?userid=${encodeURIComponent(currentUser.userid)}`);
+    const res = await authFetch('/api/mailing-list/subscriptions');
     if(res.ok){ rows = ((await res.json()) || {}).subscriptions || []; }
   }catch(e){ /* leave the section hidden */ }
 

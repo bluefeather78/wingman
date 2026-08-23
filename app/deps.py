@@ -6,7 +6,8 @@ import json
 
 from fastapi import Request, Response
 
-from app.core import get_user, subscription_state
+from app.core import get_user, subscription_state, _login_payload
+from app.auth import issue_tokens
 
 
 def json_response(status, obj, default=None):
@@ -52,6 +53,21 @@ async def read_json_body_strict(request: Request):
 
 def client_ip(request: Request):
     return request.client.host if request.client else ""
+
+
+def login_response(record):
+    """The signed-in payload every login path returns: the identity block _login_payload
+    already built, plus a freshly minted access+refresh token pair (PLAN_2_auth.md).
+
+    This is the single convergence point the plan asks for — password login
+    (handle_login), Google sign-in (handle_google_session) and Google signup
+    (handle_google_finish) all return through here, so all three get the same tokens with
+    no duplicated minting. Wrapping _login_payload rather than editing it keeps app.core
+    free of the auth layer (core is the seam ops/ imports too).
+    """
+    payload = _login_payload(record)
+    payload.update(issue_tokens(record["userid"], record.get("token_version") or 0))
+    return payload
 
 
 def subscription_block_reason(userid):

@@ -6,13 +6,14 @@ Translated from server.py's handle_opportunities / handle_deadline_check
 import datetime
 import json
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends
 
 from app.config import (
     SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
 )
 from app.core import touch_user_activity, record_user_cost_async
 from app.deps import json_response, json_error, subscription_block_reason
+from app.auth import get_current_user, AuthedUser
 from app.services.opportunities import fetch_opportunities
 from app.services import deadlines
 from check_deadlines import (
@@ -36,14 +37,16 @@ def handle_opportunities():
 
 
 @router.get("/api/opportunities/{opp_id}/deadline")
-def handle_deadline_check(opp_id: str, request: Request):
+def handle_deadline_check(opp_id: str, request: Request,
+                          user: AuthedUser = Depends(get_current_user)):
     """On-demand, cross-user-cached deadline check. Serves cached status/important_dates
     if last_checked_at is under DEADLINE_STALE_DAYS old; otherwise runs a fresh Claude
     Haiku web_search check (check_deadlines.check_one), re-caches, and returns it.
     Rejects silent search skips and falls back to cache if no searches occurred."""
     # Gate before any Supabase or Claude work: a fresh check is a paid web-search call.
-    # userid arrives on the query string (this is a GET).
-    deadline_userid = request.query_params.get("userid")
+    # Identity is token-derived (was a query-string userid). Hard-gating also closes the
+    # old fail-open, where omitting userid slipped past the subscription paywall.
+    deadline_userid = user.id
     reason = subscription_block_reason(deadline_userid)
     if reason:
         return json_error(402, reason)
@@ -86,7 +89,7 @@ def handle_deadline_check(opp_id: str, request: Request):
             deadlines.log_deadline_check(opp_id, "unverified-fallback", opp.get("status"), 0,
                                          _cost, opp.get("was_estimated"),
                                          "Silent after retry; not written")
-            record_user_cost_async(request.query_params.get("userid"), "deadline_check",
+            record_user_cost_async(deadline_userid, "deadline_check",
                                    "deadline_check", cost=_cost, searches=0,
                                    model=DEADLINE_CHECK_MODEL)
             return json_response(200, payload)
@@ -111,7 +114,7 @@ def handle_deadline_check(opp_id: str, request: Request):
         response = {**patch, "source": source_flag}
         deadlines.log_deadline_check(opp_id, source_flag, status, searches, _cost,
                                      bool(info.get("was_estimated")))
-        record_user_cost_async(request.query_params.get("userid"), "deadline_check",
+        record_user_cost_async(deadline_userid, "deadline_check",
                                "deadline_check", cost=_cost, searches=searches,
                                model=DEADLINE_CHECK_MODEL)
         return json_response(200, response)

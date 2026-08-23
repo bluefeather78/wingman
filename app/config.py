@@ -164,6 +164,23 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")  # Kept for other uses; no
 EMAIL_RE = re.compile(r"^[^\s@,()\x22\x27]+@[^\s@,()\x22\x27]+\.[^\s@,()\x22\x27]{2,}$")
 
 
+# ---------- Session auth (Phase 2 — PLAN_2_auth.md) ----------
+# Identity is carried in a signed JWT, never in the request body — that is what closes
+# the pre-migration IDOR on /api/data/*. Two-token model:
+#   * a short-lived ACCESS token, verified statelessly on every gated request (no DB hit);
+#   * a longer-lived REFRESH token, presented only to /api/auth/refresh, where the
+#     account's `token_version` is checked against the DB. Bumping users.token_version
+#     invalidates every outstanding refresh token ("log out everywhere" / account kill),
+#     so all sessions die within one access-token lifetime.
+# JWT_SECRET signs both. If it is unset the auth layer fails closed (see app/auth/tokens.py)
+# rather than signing with a guessable key. Set it in .env locally and as a Render env var
+# (render.yaml lists it sync:false); never commit it or send it to any client.
+JWT_SECRET = os.environ.get("JWT_SECRET", "")
+JWT_ALGORITHM = "HS256"
+ACCESS_TOKEN_TTL_SECONDS = 45 * 60           # 45 minutes
+REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
+
+
 # ---------- User metrics: the activation funnel, retention, and the daily snapshot ----------
 # The Cost per user tab measures dollars out. This measures usage and revenue in. They
 # share the `users` roster and cross-link, but they stay separate views: one is a spend

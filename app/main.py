@@ -13,12 +13,13 @@ exposes no agent/seed/admin route. Importing app.config (via the routers) loads 
 import os
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import GEMINI_API_KEY, ANTHROPIC_API_KEY
 from app.routes import (
     ai, opportunities, account, user_data, google_oauth, mailing_list,
-    subscription, resume,
+    subscription, resume, auth,
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -37,9 +38,21 @@ async def no_cache(request: Request, call_next):
     return response
 
 
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_as_error(request: Request, exc: StarletteHTTPException):
+    """Render HTTPException as {"error": ...} to match the app's wire format (json_error).
+
+    The auth dependencies raise HTTPException(401/503); without this they'd come back as
+    FastAPI's default {"detail": ...}, and the client parses errors as `data.error`. The
+    static 404 below also flows through here, which is fine — its body is never read."""
+    detail = exc.detail if isinstance(exc.detail, str) else "Request failed."
+    return JSONResponse(status_code=exc.status_code, content={"error": detail},
+                        headers=getattr(exc, "headers", None))
+
+
 # ---------------- Public API routers ----------------
 for module in (ai, opportunities, account, user_data, google_oauth, mailing_list,
-               subscription, resume):
+               subscription, resume, auth):
     app.include_router(module.router)
 
 

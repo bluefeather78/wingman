@@ -3,13 +3,14 @@ PLAN_1_decompose.md). Translated from server.py's handle_subscription_* handlers
 """
 import datetime
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends
 
 from app.core import (
     get_user, ensure_trial_started, subscription_state, touch_user_activity,
     update_subscription,
 )
 from app.deps import read_json_body, json_response, json_error
+from app.auth import get_current_user, get_optional_user, AuthedUser
 from subscription_common import (
     get_or_create_customer, create_checkout_session, cancel_subscription,
     validate_promo_code, promo_kind, extend_from, GRANTABLE_STATUSES,
@@ -19,11 +20,8 @@ router = APIRouter()
 
 
 @router.post("/api/subscription/status")
-async def handle_subscription_status(request: Request):
-    body = await read_json_body(request)
-    userid = (body.get("userid") or "").strip().lower()
-    if not userid:
-        return json_error(400, "Missing userid.")
+async def handle_subscription_status(request: Request, user: AuthedUser = Depends(get_current_user)):
+    userid = user.id
     try:
         record = get_user(userid)
     except Exception as e:
@@ -35,16 +33,16 @@ async def handle_subscription_status(request: Request):
 
 
 @router.post("/api/subscription/checkout")
-async def handle_subscription_checkout(request: Request):
+async def handle_subscription_checkout(request: Request, user: AuthedUser = Depends(get_current_user)):
     body = await read_json_body(request)
-    userid = (body.get("userid") or "").strip().lower()
+    userid = user.id
     email = (body.get("email") or "").strip()
     promo_code = (body.get("promo_code") or "").strip()
     success_url = (body.get("success_url") or "").strip()
     cancel_url = (body.get("cancel_url") or "").strip()
 
-    if not all([userid, email, success_url, cancel_url]):
-        return json_error(400, "Missing required fields: userid, email, success_url, cancel_url.")
+    if not all([email, success_url, cancel_url]):
+        return json_error(400, "Missing required fields: email, success_url, cancel_url.")
 
     try:
         record = get_user(userid)
@@ -74,12 +72,8 @@ async def handle_subscription_checkout(request: Request):
 
 
 @router.post("/api/subscription/cancel")
-async def handle_subscription_cancel(request: Request):
-    body = await read_json_body(request)
-    userid = (body.get("userid") or "").strip().lower()
-    if not userid:
-        return json_error(400, "Missing userid.")
-
+async def handle_subscription_cancel(request: Request, user: AuthedUser = Depends(get_current_user)):
+    userid = user.id
     try:
         record = get_user(userid)
     except Exception as e:
@@ -113,12 +107,12 @@ async def handle_subscription_cancel(request: Request):
 
 
 @router.post("/api/subscription/redeem-promo")
-async def handle_redeem_promo(request: Request):
+async def handle_redeem_promo(request: Request, user: AuthedUser = Depends(get_current_user)):
     body = await read_json_body(request)
-    userid = (body.get("userid") or "").strip().lower()
+    userid = user.id
     code = (body.get("promo_code") or "").strip().upper()
-    if not userid or not code:
-        return json_error(400, "Missing userid or promo_code.")
+    if not code:
+        return json_error(400, "Missing promo_code.")
 
     promo_data, error = validate_promo_code(code)
     if error:
@@ -170,10 +164,12 @@ async def handle_redeem_promo(request: Request):
 
 
 @router.post("/api/subscription/validate-promo")
-async def handle_validate_promo(request: Request):
+async def handle_validate_promo(request: Request, user: AuthedUser = Depends(get_optional_user)):
+    # Not gated: this only reads a promo code's shape and (if signed in) whether this
+    # account already used it. Soft auth — a signed-out caller still gets validity/kind.
     body = await read_json_body(request)
     promo_code = (body.get("promo_code") or "").strip()
-    userid = (body.get("userid") or "").strip().lower()
+    userid = user.id if user else ""
 
     if not promo_code:
         return json_error(400, "Missing promo_code.")

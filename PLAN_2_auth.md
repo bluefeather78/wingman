@@ -215,3 +215,84 @@ request/response shape (endpoints, fields, where the token comes back), how the 
 (`Authorization: Bearer`), which routes are gated, the header/`get_current_user` contract the
 RN client must satisfy, and the password-migration approach. Then tell the user the path and
 stop. Do not start phase 3.
+
+---
+
+## Addendum — field notes from the Phase 1 session (read before starting)
+
+Concrete specifics found while actually building Phase 1, to save Phase 2 the rediscovery.
+Nothing here overrides the plan above; it makes the "where exactly" answerable.
+
+**1. There is ONE place to mint the token for all three login paths.** `_login_payload(record)`
+in **`app/core.py`** is the single response builder returned by every login-completion handler:
+`handle_login` (`app/routes/account.py`, password), and `handle_google_session` +
+`handle_google_finish` (`app/routes/google_oauth.py`, Google). Add the JWT to what
+`_login_payload` returns (or wrap it) and all three converge for free — this is exactly the
+"password and Google converge on one step" the plan asks for, already unified. Each path calls
+`ensure_trial_started(...)` before building the payload; keep that order. `_login_payload`
+already returns `userid` — keep returning it (the client still uses it for display); just add
+the token alongside.
+
+**2. Exact inventory of where `userid` enters today** (what you're switching to token-derived):
+- **Body `userid`:** `/api/data/save`, `/api/data/load`, `/api/account/location`,
+  `/api/calendar/sync`, `/api/subscription/*`, `/api/opportunities/<id>/subscribe`,
+  `/api/messages`, `/api/messages-claude`, `/api/extract-from-linkedin`,
+  `/api/user-submitted-opportunities`.
+- **Query `userid`:** `/api/opportunities/<id>/deadline?userid=`,
+  `/api/extract-from-resume?userid=` (multipart, so it uses the query string),
+  `/api/auth/google/calendar/start?userid=`.
+Confirmed: **`/api/messages` and `/api/messages-claude` DO attribute cost per user AND gate on
+subscription** (they call `subscription_block_reason(userid)` and
+`record_interactive_cost_async(..., userid=...)`), so they are the plan's "attribution-only,
+use token if present" case — do **not** hard-401 them or you break mock mode and signed-out
+usage.
+
+**3. The subscription gate is your ready-made choke point.**
+`subscription_block_reason(userid)` in **`app/deps.py`** is already called at the top of every
+money-spending route (messages, messages-claude, deadline, subscribe, resume). It currently
+**fails OPEN on missing userid** (signed-out allowed). Compose `get_current_user` with it: for
+**owned-data** routes require the token (hard 401) and pass `user.id` into everything that took
+`userid`; for **attribution-only** routes use the token's userid when present but keep the
+signed-out path. Feed the token userid into `record_interactive_cost_async` /
+`record_user_cost_async` (both in `app/core.py`) so per-user cost accounting keeps working.
+
+**4. Password migration — you can avoid changing the client contract entirely.** Today the
+**client** SHA-256s the password (`hashPassword` in `script.js`) and sends `passwordHash`; the
+server NEVER sees plaintext and stores that SHA-256 as `password_hash`. So "server-side
+hashing" here cannot mean hashing a plaintext — you don't have one. Cleanest path that keeps
+the old frontend working unchanged: **argon2/bcrypt OVER the client SHA-256**, i.e. store
+`argon2(passwordHash)`. Migration with no lockout and no client change: on login, if the stored
+value is a legacy raw SHA-256 (not an argon2/bcrypt string), compare it directly to the
+incoming `passwordHash`; on match, overwrite it with `argon2(passwordHash)`. Existing accounts
+upgrade transparently on next login. (If you insist on hashing the *real* password server-side,
+you must change `script.js` register + login to send plaintext over TLS instead of
+`passwordHash` — bigger, client-touching change. Record whichever you choose.)
+
+**5. Client token persistence is UNVERIFIED — check it before trusting `window.storage`.**
+`script.js` persists the session only via `window.storage` (10 sites, **zero `localStorage`**),
+and its own comment (`script.js:40-46`) says `window.storage` **silently no-ops when it doesn't
+exist** (e.g. a plain browser tab). It is unclear whether `window.storage` is even present on
+the deployed site, so a token stored there may not survive a page reload — logging the user out
+every visit. Verify in a real browser on **highschoolwingman.com** (the live site). If it
+no-ops, store the token in `localStorage` (small, contained change) so login persists. Do not
+assume the plan's "store via window.storage" works in production without checking.
+
+**6. New deps + secrets, and they ship the moment you touch `main`.**
+- Add a JWT lib (`PyJWT`) and a password-hash lib (`argon2-cffi` or `bcrypt`) to
+  `requirements.txt` — Render installs on deploy (both have Linux wheels).
+- Add `JWT_SECRET` (and any pepper) to `.env` locally **and** to Render's env, and add it to
+  `render.yaml`'s `envVars` as `sync: false`. If it's unset, fail closed.
+- **The backend is now LIVE on highschoolwingman.com (Render auto-deploys from `main`).** The
+  old `script.js` is the live client until Phase 3, so a broken auth change on `main` breaks
+  real users (largely minors). Build/test on a branch; keep a rollback point (a tag, or Render's
+  previous deploy). Phase 1 verified prod is serving correctly (`/` and `/api/opportunities`
+  200, `/admin` + `/api/agents/*` + `/api/seeds` + `/server.py` + `/.env` all 404).
+
+**7. Do NOT gate the ops console.** `get_current_user` belongs only on `app/routes/*`. The ops
+routes (`ops/admin.py`) are localhost-gated by `require_local` and not mounted in production —
+leave them tokenless. Auth is an `app/` concern only.
+
+**8. Bonus foresight for Phase 3.** The `Authorization: Bearer` model (vs cookies) is
+CORS-friendly — exactly what Phase 3 needs when the Expo web build moves to a separate Render
+Static Site origin. No cookie/SameSite headaches; keep it header-based. (Same-origin today, so
+there is no CORS middleware yet — you'll add one in Phase 3, not here.)

@@ -29,3 +29,7 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
+      # Signing secret for session-auth JWTs (Phase 2, PLAN_2_auth.md). Set this in the
+      # Render dashboard; if it is unset the auth layer fails closed. Never commit its value.
+      - key: JWT_SECRET
+        sync: false

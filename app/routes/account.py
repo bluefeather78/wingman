@@ -9,15 +9,21 @@ from fastapi import APIRouter, Request
 from app.config import EMAIL_RE
 from app.core import (
     get_user, get_user_by_email, create_user, MissingUserColumns, DuplicateEmail,
-    _check_signup_consent, ensure_trial_started, touch_user_activity, _login_payload,
+    _check_signup_consent, ensure_trial_started, touch_user_activity,
+    update_password_hash,
 )
-from app.deps import read_json_body, json_response, json_error
+from app.deps import read_json_body, json_response, json_error, client_ip, login_response
+from app.auth import hash_password, verify_password, AuthConfigError
+from app.auth.ratelimit import login_limiter, register_limiter
 
 router = APIRouter()
 
 
 @router.post("/api/register")
 async def handle_register(request: Request):
+    if not register_limiter.allow(client_ip(request)):
+        return json_error(429, "Too many sign-up attempts. Please wait a few minutes "
+                               "and try again.")
     body = await read_json_body(request)
     first_name = (body.get("firstName") or "").strip()
     last_name = (body.get("lastName") or "").strip()
@@ -51,8 +57,12 @@ async def handle_register(request: Request):
                                "address. Sign in instead, or use a different "
                                "email.")
 
+    # Store argon2(client SHA-256), not the bare client hash. The client contract is
+    # unchanged — it still sends passwordHash — but the value at rest is no longer
+    # password-equivalent. See app/auth/passwords.py.
+    stored_hash = hash_password(password_hash)
     try:
-        create_user(key, first_name, last_name, email, password_hash, location,
+        create_user(key, first_name, last_name, email, stored_hash, location,
                     is_adult=is_adult, parental_consent=parental_consent)
     except MissingUserColumns:
         return json_error(503, "Accounts are temporarily unavailable: the "
@@ -69,11 +79,22 @@ async def handle_register(request: Request):
         return json_error(502, f"Could not reach Supabase: {e}")
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
-    return json_response(200, {"ok": True})
+
+    # Auto-login the new account: the client goes straight to showApp() after register, so
+    # it needs a token immediately or every gated call would 401. Fetch the fresh row and
+    # return the same signed-in payload login does (identity + access/refresh tokens).
+    record = get_user(key)
+    try:
+        return json_response(200, login_response(record))
+    except AuthConfigError as e:
+        return json_error(503, str(e))
 
 
 @router.post("/api/login")
 async def handle_login(request: Request):
+    if not login_limiter.allow(client_ip(request)):
+        return json_error(429, "Too many sign-in attempts. Please wait a few minutes "
+                               "and try again.")
     body = await read_json_body(request)
     userid = (body.get("userid") or "").strip()
     password_hash = body.get("passwordHash") or ""
@@ -84,8 +105,24 @@ async def handle_login(request: Request):
         return json_error(502, f"Could not reach Supabase: {e}")
     if not record:
         return json_error(404, "No account found with that user ID.")
-    if record.get("password_hash") != password_hash:
+
+    # Verify against the stored hash. verify_password handles both argon2 rows and legacy
+    # bare-SHA-256 rows; a legacy row that matches is transparently upgraded to argon2 here,
+    # so accounts migrate one login at a time with no lockout and no client change.
+    ok, needs_upgrade = verify_password(record.get("password_hash"), password_hash)
+    if not ok:
         return json_error(401, "Incorrect password.")
+    if needs_upgrade:
+        try:
+            update_password_hash(key, hash_password(password_hash))
+        except Exception as e:
+            # Non-fatal: the login still succeeds on the legacy hash; we just retry the
+            # upgrade next time rather than failing a valid sign-in over it.
+            print(f"[WARN] Could not upgrade password hash for {key}: {e}")
+
     record = ensure_trial_started(key, record)
     touch_user_activity(key, "login")
-    return json_response(200, _login_payload(record))
+    try:
+        return json_response(200, login_response(record))
+    except AuthConfigError as e:
+        return json_error(503, str(e))

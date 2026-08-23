@@ -7,6 +7,12 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 
+# Session auth (Phase 2, PLAN_2_auth.md): PyJWT signs/verifies the access+refresh tokens;
+# argon2-cffi hashes the (already client-SHA-256'd) password server-side. Both ship Linux
+# wheels, so Render installs them without a compiler.
+PyJWT>=2.8
+argon2-cffi>=23.1
+
 # Optional, used by the resume/LinkedIn import endpoint when present. The handler
 # degrades to a plain-text fallback if these are missing, so they are not hard deps,
 # but the Render service should install them so uploads parse.

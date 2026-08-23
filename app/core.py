@@ -771,6 +771,14 @@ def update_user_location(userid, location):
     return True
 
 
+def update_password_hash(userid, password_hash):
+    """Overwrite an account's stored password hash. Used by the login-time upgrade that
+    rewrites a legacy client-SHA-256 row as argon2 (PLAN_2_auth.md)."""
+    query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
+    _users_request("PATCH", query, data={"password_hash": password_hash})
+    return True
+
+
 def update_user_data(userid, key, value):
     record = get_user(userid)
     if not record:
@@ -790,6 +798,34 @@ def update_subscription(userid, updates):
     query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
     _users_request("PATCH", query, data=updates)
     return True
+
+
+def bump_token_version(userid):
+    """Invalidate every outstanding refresh token for this account (PLAN_2_auth.md).
+
+    The refresh route compares a token's `ver` claim against users.token_version, so
+    incrementing that column makes all existing refresh tokens fail to renew — sessions
+    then die within one access-token lifetime. This is the revocation primitive behind
+    "log out everywhere" and account-kill. Returns the new version, or None on failure.
+
+    Degrades if auth_schema.sql has not run yet: the column simply isn't there, so revocation
+    is a no-op (nothing to bump), consistent with how the rest of auth treats a version of 0.
+    """
+    record = get_user(userid)
+    if not record:
+        return None
+    current = int(record.get("token_version") or 0)
+    new_version = current + 1
+    query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
+    try:
+        _users_request("PATCH", query, data={"token_version": new_version})
+    except urllib.error.HTTPError as e:
+        if _is_missing_column_error(e):
+            print("[WARN] users.token_version missing - session revocation is off. "
+                  "Run auth_schema.sql in the Supabase SQL editor.")
+            return None
+        raise
+    return new_version
 
 
 def _supabase_headers():

@@ -10,7 +10,7 @@ import json
 import urllib.error
 import urllib.request
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request, Response, Depends
 
 from app.config import (
     GEMINI_API_KEY, MESSAGES_MODEL, MESSAGES_MAX_TOKENS,
@@ -21,17 +21,11 @@ from app.core import (
     touch_user_activity, record_interactive_cost_async, log_conversation_async,
 )
 from app.deps import json_response, json_error, subscription_block_reason, client_ip
+from app.auth import get_optional_user, AuthedUser
 from app.services.ai import generate_mock_text
 from gemini_common import call_gemini
 
 router = APIRouter()
-
-
-def _userid_from_body(raw_body):
-    try:
-        return json.loads(raw_body).get("userid")
-    except Exception:
-        return None
 
 
 def _clamped_max_tokens(requested):
@@ -43,14 +37,13 @@ def _clamped_max_tokens(requested):
     return max(CLAUDE_MAX_TOKENS, min(n, CLAUDE_MAX_TOKENS_CEILING))
 
 
-def _mock_response(raw_body, ip):
+def _mock_response(raw_body, ip, userid):
     try:
         payload = json.loads(raw_body)
         system = payload.get("system", "") or ""
         user_content = payload.get("userContent", "")
-        userid = payload.get("userid")
     except Exception:
-        system, user_content, userid = "", "", None
+        system, user_content = "", ""
     text = generate_mock_text(system, user_content)
     resp = json_response(200, {"content": [{"type": "text", "text": text}]})
     log_conversation_async(userid, ip, "mock", system,
@@ -59,7 +52,7 @@ def _mock_response(raw_body, ip):
     return resp
 
 
-def _proxy_to_gemini(raw_body, ip):
+def _proxy_to_gemini(raw_body, ip, userid):
     try:
         payload = json.loads(raw_body)
     except Exception:
@@ -67,7 +60,6 @@ def _proxy_to_gemini(raw_body, ip):
     system = payload.get("system", "") or ""
     user_content = payload.get("userContent", "")
     user_content = user_content if isinstance(user_content, str) else json.dumps(user_content)
-    userid = payload.get("userid")
     use_web_search = bool(payload.get("useWebSearch"))
     try:
         text, usage = call_gemini(
@@ -86,7 +78,7 @@ def _proxy_to_gemini(raw_body, ip):
     return resp
 
 
-def _proxy_to_anthropic(raw_body, ip):
+def _proxy_to_anthropic(raw_body, ip, userid):
     try:
         payload = json.loads(raw_body)
     except Exception:
@@ -94,7 +86,6 @@ def _proxy_to_anthropic(raw_body, ip):
     system = payload.get("system", "") or ""
     user_content = payload.get("userContent", "")
     user_content = user_content if isinstance(user_content, str) else json.dumps(user_content)
-    userid = payload.get("userid")
     use_web_search = bool(payload.get("useWebSearch"))
     body = {
         "model": CLAUDE_MODEL,
@@ -142,28 +133,30 @@ def _proxy_to_anthropic(raw_body, ip):
 
 
 @router.post("/api/messages")
-async def handle_messages(request: Request):
+async def handle_messages(request: Request, user: AuthedUser = Depends(get_optional_user)):
     raw_body = await request.body()
-    userid = _userid_from_body(raw_body)
+    # Attribution-only: identity comes from the token if present, else None (signed-out /
+    # mock mode still work — never a 401 here). subscription_block_reason(None) fails open.
+    userid = user.id if user else None
     reason = subscription_block_reason(userid)
     if reason:
         return json_error(402, reason)
     touch_user_activity(userid, "ai_gemini")
     ip = client_ip(request)
     if GEMINI_API_KEY:
-        return _proxy_to_gemini(raw_body, ip)
-    return _mock_response(raw_body, ip)
+        return _proxy_to_gemini(raw_body, ip, userid)
+    return _mock_response(raw_body, ip, userid)
 
 
 @router.post("/api/messages-claude")
-async def handle_messages_claude(request: Request):
+async def handle_messages_claude(request: Request, user: AuthedUser = Depends(get_optional_user)):
     raw_body = await request.body()
-    userid = _userid_from_body(raw_body)
+    userid = user.id if user else None
     reason = subscription_block_reason(userid)
     if reason:
         return json_error(402, reason)
     touch_user_activity(userid, "ai_claude")
     ip = client_ip(request)
     if ANTHROPIC_API_KEY:
-        return _proxy_to_anthropic(raw_body, ip)
-    return _mock_response(raw_body, ip)
+        return _proxy_to_anthropic(raw_body, ip, userid)
+    return _mock_response(raw_body, ip, userid)

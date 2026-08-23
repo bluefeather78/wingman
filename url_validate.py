@@ -236,7 +236,12 @@ def same_host(a, b):
     """Do two URLs share a hostname, ignoring a leading www.?"""
     def host(u):
         try:
-            return (urllib.parse.urlsplit(u or "").hostname or "").lower().lstrip("www.")
+            name = (urllib.parse.urlsplit(u or "").hostname or "").lower()
+            # Strip a literal leading "www." only. lstrip("www.") would eat any leading
+            # run of 'w'/'.' characters (mangling e.g. a host that starts with "w").
+            if name.startswith("www."):
+                name = name[4:]
+            return name
         except ValueError:
             return ""
     ha, hb = host(a), host(b)

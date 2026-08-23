@@ -38,3 +38,8 @@ scrape_review_*.json
 
 #gitignore
 .gitignore
+
+# pytest / coverage artifacts
+.coverage
+.pytest_cache/
+htmlcov/

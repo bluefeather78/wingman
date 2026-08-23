@@ -214,15 +214,25 @@ def verify_stripe_webhook_signature(payload, signature):
         return False
 
     try:
-        timestamp, signed_content = signature.split(",")[0].split("=")[1], ",".join(signature.split(",")[1:])
+        # Stripe's Signature header is a comma-separated list of key=value pairs,
+        # e.g. "t=1620000000,v1=abc123...". Sign "<timestamp>.<payload>" and compare
+        # the result against the v1 signature — NOT against any slice of the content.
+        parts = {}
+        for item in signature.split(","):
+            key, _, value = item.partition("=")
+            parts[key.strip()] = value
+        timestamp = parts.get("t")
+        v1 = parts.get("v1")
+        if not timestamp or not v1:
+            return False
         signed_content = timestamp + "." + payload.decode()
         expected_sig = hmac.new(
             STRIPE_WEBHOOK_SECRET.encode(),
             signed_content.encode(),
             hashlib.sha256
         ).hexdigest()
-        return hmac.compare_digest(expected_sig, signed_content.split("=")[1])
-    except:
+        return hmac.compare_digest(expected_sig, v1)
+    except Exception:
         return False
 
 

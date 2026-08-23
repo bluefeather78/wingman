@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+# Measure the modules we actually write unit tests for. The offline agents and app/
+# package both count; migrate_* one-offs and the frontend are excluded from the plan.
+branch = true
+omit = [
+    "tests/*",
+    "migrate_*.py",
+    "frontend/*",
+]

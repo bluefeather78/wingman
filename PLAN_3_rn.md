@@ -178,9 +178,71 @@ Done, all auth-independent, `tsc --noEmit` clean and `expo export -p web` produc
   follow-ups-live behavior preserved), `tracker` (`extractTrackerInfo`/`findBucketForKind`/
   `applyDeadlineCheckToInfo`). All model access is dependency-injected → pure & testable.
 
-Not started (blocked on the `## Phase 2 result` contract): auth-stack wiring, the real
-Bearer/401 interceptor, OpenAPI client generation, and screen data-binding that needs a
-running authed backend.
+**Auth layer wired against the Phase 2 contract (2026-08-23, verified in-browser).**
+- Token storage: `src/api/tokenStore.ts` — expo-secure-store (native) / localStorage (web).
+- Password: `src/api/hash.ts` — expo-crypto SHA-256 hex (matches the contract's client hash).
+- `src/api/httpClient.ts` now implements `initAuth`/`login`/`register`/`logout`/`loadData`/
+  `saveData` and the **401 → single shared refresh → retry → AuthExpiredError** flow (Bearer
+  header, `{"error"}` parsing). `src/auth/AuthContext.tsx` + the `app/index.tsx` gate,
+  `(app)/_layout.tsx` guard, real `app/login.tsx` (login/register + consent), Home authed
+  round-trip, Profile logout.
+- **Backend change:** added `CORSMiddleware` to `app/main.py` (env `CORS_ALLOW_ORIGINS`,
+  default `*`; bearer auth ⇒ credentials off). The RN-web client is a separate origin from the
+  API in dev AND on Render (Static Site → Web Service), so this was required.
+- Verified end-to-end in the in-app browser against a live `uvicorn app.main:app`:
+  register→auto-login→app, UI login, reload-persistence, Bearer data save/load round-trip,
+  garbage-access-token→refresh-rotates-and-recovers, both-tokens-garbage→bounce-to-login.
+  Also confirmed the raw API contract by script (register/login/refresh/data/401s all match).
+  Test accounts created in Supabase: `rn_browser_test_a1`, `rn_contract_test_*`.
+
+**Screens wired to the salvaged logic (2026-08-23, verified live).**
+- **Finder** (`app/(app)/finder.tsx`): kind picker → free-text → inferSubjects → preFilter →
+  rankCandidates → ranked cards (tier badge, reason, Open link, Add to tracker). Degrades to
+  keyword-only pre-filter if the AI rank fails.
+- **Tracker** (`app/(app)/tracker.tsx`): items grouped by `ALL_BUCKETS`, reload-on-focus,
+  remove, and the on-demand cross-user deadline check. Backed by `src/api/trackerStore.ts`
+  (server-persisted via the data key/value store).
+- **Profile** (`app/(app)/profile.tsx`): profile card + inline chat (openers batch, live
+  follow-ups, transcript incl. bot lines), synthesis on finish, "Tidy it up" repair, logout.
+- Verified two ways: (a) full auth UI click-through on Metro earlier; (b) a deterministic
+  `frontend/scripts/verify.ts` (`npx tsx`) that runs the exact ported modules against the live
+  backend — getOpportunities(1239) → inferSubjects → preFilter → rankCandidates(10, e.g. MIT
+  BWSI with grounded reasons) → assessProfileReadiness → synthesizeProfile → deadline check.
+  ALL PASSED. Finder also confirmed in-browser loading 1239 real opps with `/api/messages` 200.
+- **Backend note (not a Phase-3 client bug):** `GET /api/opportunities/<id>/deadline` returns
+  **502** live (the on-demand deadline check errors server-side; every other Supabase call is
+  200). The RN client catches it and shows "No deadline info available". Worth an ops look.
+- **Preview flakiness observed:** Metro's HMR websocket in the in-app browser repeatedly
+  full-reloaded the app ("Disconnected from Metro 1006"), resetting state mid-search. The
+  static export (`expo export -p web`, the actual Render Static Site artifact) has no such
+  websocket; verification used it + the Node script.
+
+**Google sign-in wired (2026-08-23).**
+- **Backend change (`app/routes/google_oauth.py` + `app/services/google_oauth.py`):** the
+  sign-in `/callback` historically redirected to the backend-root SPA (`/?google_token=`).
+  It now accepts an allowlisted `app_redirect` at `/start` (kept in a state-keyed map) and
+  sends the one-time token to the app instead — web origin or native `wingman://` scheme.
+  Allowlist defaults to the native scheme + local dev origins; override in prod with
+  `GOOGLE_APP_REDIRECTS`. An un-allowlisted redirect is silently ignored (falls back to the
+  SPA root) so this can't become an open redirect. `/start` still always proceeds to Google.
+- **Client:** `src/auth/googleSignIn.ts` (web = full-page redirect, native =
+  `WebBrowser.openAuthSessionAsync`), `googleStartUrl`/`googleSession`/`googleFinish` on the
+  ApiClient + AuthContext, a "Continue with Google" button on `login.tsx`, and the
+  `app/google-auth.tsx` completion screen (resolves the handoff → enters app, or collects
+  consent + location for a new account → `/finish`). Installed `expo-web-browser`.
+- Verified: backend `/start` → `accounts.google.com` (302) with the app_redirect allowlist
+  gating the callback target; `/session` & `/finish` return `400 {"error"}` on a bad token;
+  the login screen shows the Google button; and `/google-auth?google_token=bogus` drives the
+  completion screen through resolve → backend 400 → the "sign-in link has expired" error UI.
+  tsc clean; static export includes `/google-auth`.
+- **Not verifiable here (needs config, not code):** the actual Google account round-trip.
+  Google must have the backend host's `…/api/auth/google/callback` registered as an authorized
+  redirect URI (same requirement the old SPA already had — the redirect_uri is derived from
+  the request Host). The `app_redirect` is NOT a Google redirect_uri, so it needs no console
+  entry. On Render, set `GOOGLE_APP_REDIRECTS` to the static-site origin.
+
+Not started: a native target run (EAS/simulator), OpenAPI-generated client, and retiring the
+old frontend after full parity.
 
 **Note for the merge:** Phase 2 is editing `script.js` in place, so its line numbers move —
 port by grepping function names, not line numbers. The salvaged logic above is not what

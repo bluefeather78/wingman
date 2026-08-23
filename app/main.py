@@ -13,6 +13,7 @@ exposes no agent/seed/admin route. Importing app.config (via the routers) loads 
 import os
 
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -25,6 +26,24 @@ from app.routes import (
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 app = FastAPI(title="Highschool Wingman", docs_url=None, redoc_url=None, openapi_url=None)
+
+# ---------------- CORS ----------------
+# Phase 3 (PLAN_3_rn.md): the Expo/RN-web client is a SEPARATE ORIGIN from this API — in dev
+# (Metro on :8081 -> API on :8000) and in prod (Render Static Site -> Render Web Service) —
+# so the browser needs CORS to call it. Auth is a Bearer header, not a cookie, so credentials
+# mode is off and a "*" origin is safe (nothing rides on the ambient session). Set
+# CORS_ALLOW_ORIGINS (comma-separated) to lock this to the static-site origin in production.
+_cors_origins = os.environ.get("CORS_ALLOW_ORIGINS", "*")
+_allow_origins = ["*"] if _cors_origins.strip() == "*" else [
+    o.strip() for o in _cors_origins.split(",") if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allow_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.middleware("http")

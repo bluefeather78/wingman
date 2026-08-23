@@ -5,6 +5,7 @@ preserved exactly; redirect URIs are still derived from the request Host header.
 """
 import datetime
 import json
+import os
 import secrets
 import time
 import urllib.error
@@ -46,6 +47,26 @@ def _redirect_home(query_suffix=""):
     return RedirectResponse(f"/{query_suffix}", status_code=302)
 
 
+# Phase 3: where the Expo app (web origin or native scheme) may receive the one-time
+# google_token. An allowlist prevents this from becoming an open redirect — the callback
+# will send a signed sign-in handoff to whatever this points at, so it must only ever be
+# our own app. Native scheme + local dev origins by default; override/extend in production
+# with GOOGLE_APP_REDIRECTS (comma-separated origin/scheme prefixes) for the Render static
+# site's origin.
+_DEFAULT_APP_REDIRECTS = [
+    "wingman://", "exp://",
+    "http://localhost:8081", "http://localhost:8082",
+    "http://127.0.0.1:8081", "http://127.0.0.1:8082",
+]
+_ALLOWED_APP_REDIRECTS = [
+    p.strip() for p in os.environ.get("GOOGLE_APP_REDIRECTS", "").split(",") if p.strip()
+] or _DEFAULT_APP_REDIRECTS
+
+
+def _is_allowed_app_redirect(uri: str) -> bool:
+    return bool(uri) and any(uri.startswith(prefix) for prefix in _ALLOWED_APP_REDIRECTS)
+
+
 @router.get("/api/auth/google/start")
 def handle_google_start(request: Request):
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
@@ -60,6 +81,16 @@ def handle_google_start(request: Request):
         "state": state,
         "prompt": "select_account",
     }
+    # Phase 3: if the caller is the Expo app (separate origin / native scheme), remember an
+    # allowlisted redirect keyed by this handshake's state, so the callback can hand the
+    # sign-in token back to the app instead of to the backend-root SPA.
+    app_redirect = request.query_params.get("app_redirect") or ""
+    if app_redirect and _is_allowed_app_redirect(app_redirect):
+        g._prune_google_login_redirects()
+        g._google_login_redirects[state] = {
+            "app_redirect": app_redirect,
+            "expires_at": time.time() + GOOGLE_TOKEN_TTL_SECONDS,
+        }
     resp = RedirectResponse(f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(params)}", status_code=302)
     # Short-lived, HttpOnly CSRF protection for the handshake only (not an app session).
     resp.set_cookie("google_oauth_state", state, max_age=GOOGLE_TOKEN_TTL_SECONDS,
@@ -134,6 +165,15 @@ def handle_google_callback(request: Request):
             "first_name": first_name,
             "last_name": last_name,
         })
+    # Phase 3: if the app registered a redirect for this handshake, send the one-time token
+    # there (the Expo app captures it); otherwise fall back to the backend-root SPA.
+    g._prune_google_login_redirects()
+    redirect_entry = g._google_login_redirects.pop(req_state, None)
+    if redirect_entry:
+        dest = redirect_entry["app_redirect"]
+        sep = "&" if "?" in dest else "?"
+        return RedirectResponse(f"{dest}{sep}google_token={urllib.parse.quote(token)}",
+                                status_code=302)
     return _redirect_home(f"?google_token={urllib.parse.quote(token)}")
 
 

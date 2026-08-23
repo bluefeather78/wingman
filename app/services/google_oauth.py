@@ -60,6 +60,22 @@ def _prune_google_calendar_states():
         del _google_calendar_states[s]
 
 
+# state -> {"app_redirect": ..., "expires_at": ...}. Phase 3 (PLAN_3_rn.md): the sign-in
+# redirect flow historically ended at the SPA served from the backend root ("/"). The Expo
+# app is a SEPARATE origin (web) or a native app (custom scheme), so it passes its own
+# redirect URI to /start; the callback sends the one-time google_token there instead of to
+# "/". Keyed by the OAuth state so it can't be set for someone else's handshake, and the
+# target is allowlist-checked at /start before it is ever stored here.
+_google_login_redirects = {}
+
+
+def _prune_google_login_redirects():
+    now = time.time()
+    expired = [s for s, entry in _google_login_redirects.items() if entry["expires_at"] < now]
+    for s in expired:
+        del _google_login_redirects[s]
+
+
 # ---------- Google Calendar token refresh + dedicated-calendar helpers ----------
 # Converted from Handler methods in server.py (PLAN_1_decompose.md). The redirect-uri
 # derivation stays in the route (it needs the request Host header); these need only the

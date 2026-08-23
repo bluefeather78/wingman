@@ -34,9 +34,23 @@ server (which is where the history already lives).
 """
 import datetime
 import json
+import re
 
 PREVIEW_PREFIX = "PREVIEW_JSON:"
 SAMPLE_LIMIT = 12  # how many example names to include; enough to eyeball, not to flood
+
+# Loose shape check only — not the RFC. Shared by the scraper and metadata refresher so a
+# model hallucinating "contact us via our website" or similar prose doesn't get written to
+# opportunities.contact_email as if it were a real address.
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]{2,}$")
+
+
+def clean_email(value):
+    """A model-returned contact_email candidate, or None if it doesn't look like one."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value if EMAIL_RE.match(value) else None
 
 
 def add_agent_args(parser, default_timeout=120, default_min_delay=5):

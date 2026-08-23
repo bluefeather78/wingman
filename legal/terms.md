@@ -1,6 +1,6 @@
 # Wingman Beta Terms of Use
 
-**Effective Date:** August 21, 2026
+**Effective Date:** August 22, 2026
 
 These Beta Terms of Use ("Terms") govern your access to and use of Wingman ("Wingman," the "Service," "we," "us," or "our"), a beta product operated by **Shama Bildikar** ("Operator").
 
@@ -186,6 +186,25 @@ We do not control those third parties and are not responsible for their:
 - products or services.
 
 Your interactions with third parties are between you and those third parties.
+
+## 14A. Mailing-List Signup
+
+Wingman offers an optional feature that submits a mailing-list signup to a third-party organization on your behalf.
+
+This feature only ever runs when you ask for it:
+
+- you choose a single opportunity and tap the signup button;
+- you confirm the email address to be used, which you may change from the one on your account; and
+- you tick a box confirming it is okay to send your details to that organization.
+
+There is no bulk or automatic signup. Wingman will never subscribe you to a mailing list you did not individually select.
+
+When you use this feature, Wingman sends your first and last name and the email address you confirmed to the organization's mailing-list provider. That is the same information you would type into the organization's own signup form.
+
+Two limits are worth understanding:
+
+- **Submitting a signup is not the same as being subscribed.** Most organizations send a confirmation email and only add you to their list once you click the link in it. Wingman cannot see that email or click that link for you.
+- **Once your details reach the organization, they are the organization's to handle.** Their emails, their privacy practices, and their unsubscribe process are theirs, not ours. Section 14 above applies. To stop receiving their mail, use the unsubscribe link in their email or contact them directly — removing the opportunity from Wingman does not unsubscribe you.
 
 ## 15. No Warranties
 

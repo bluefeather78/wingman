@@ -63,6 +63,12 @@ SNAPSHOT_SPECS = {
         "dry_only": True,
         "label": "Deadline check",
     },
+    "contact_email": {
+        "glob": "find_contact_emails_dry_run_*.json",
+        "kind": "patch",
+        "dry_only": True,
+        "label": "Contact email finder",
+    },
     "scraper": {
         "glob": "scrape_review_*.json",
         "kind": "insert",
@@ -98,7 +104,7 @@ def _pending_count(agent, entries):
     looked at, including the ones the model returned no changes for, so "412 entries" and
     "6 rows would change" are very different numbers to put in front of somebody.
     """
-    if agent == "metadata":
+    if agent in ("metadata", "contact_email"):
         return sum(1 for e in entries if isinstance(e, dict) and e.get("changes"))
     if agent == "reviews":
         return sum(1 for e in entries if isinstance(e, dict)
@@ -209,7 +215,7 @@ def _patch_updates(agent, entry):
     run of the same agent.
     """
     now = _now_iso()
-    if agent == "metadata":
+    if agent in ("metadata", "contact_email"):
         changes = entry.get("changes") or {}
         if not changes:
             return None

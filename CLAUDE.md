@@ -47,9 +47,9 @@ fetched at runtime anymore. `migrate_to_supabase.py` was the one-off script that
 table (from this file plus a sibling `opportunity finder/` project's seed data); not part of
 the regular dev loop.
 
-## The four background agents and the admin console
+## The five background agents and the admin console
 
-Four offline Python scripts maintain the catalog. All four cost real money per run (Gemini or
+Five offline Python scripts maintain the catalog. All five cost real money per run (Gemini or
 Anthropic, most with web search). **Never run one without fresh explicit approval in chat** —
 this rule exists because of an unplanned ~$30 spend, and building UI for a run is not
 authorization to trigger it.
@@ -60,6 +60,7 @@ authorization to trigger it.
 | `reviews` | `check_reviews.py` | `review_checker` | Org legitimacy / reputation from independent sources | Gemini |
 | `scraper` | `scrape_opportunities.py` | `scraper` | Find NEW opportunities (only agent that INSERTs) | Gemini |
 | `deadline` | `check_deadlines.py` | `deadline_checker` | Deadlines + running/not-running status | Claude |
+| `mailinglist` | `find_mailing_lists.py` | `mailing_list_finder` | Find each program's mailing-list signup form, store a replayable recipe | no |
 
 Watch out for two things that have caused real bugs here:
 - The **scraper's `items_processed` counts SEEDS, not rows** — never sum it with the other
@@ -68,6 +69,14 @@ Watch out for two things that have caused real bugs here:
   card labelled "Refresh Agent" actually executed `check_reviews.py`; the keys in the table
   above are the corrected mapping. Don't rename the `db_agent` literals — the scripts write
   them and there is existing history under each.
+
+`find_mailing_lists.py` is the odd one out on cost, and deliberately so: it fetches each
+row's page with `urllib` and finds provider embeds by **regex**, and only calls the model
+when a form was actually found — to answer the one question a regex cannot, *is this form
+THIS program's list or the host institution's?* Rows with no form resolve for **free**, no
+API call at all. Do not "improve" it by handing the whole page to a model: a hallucinated
+Mailchimp endpoint is a recipe that fails silently for every student who ever taps the
+button, where a regex cannot invent one.
 
 `check_reviews.py` selects rows on **staleness only** (`STALE_AFTER_DAYS = 30`, i.e. never
 reviewed or last reviewed >30 days ago), and `--force` ignores that entirely and re-checks
@@ -85,7 +94,7 @@ made the staleness threshold dead code, meant the agent could never re-check any
 — because the filter sat *outside* the `if not args.force` branch — made `--force` return 0
 rows too, the opposite of what it documents. Today's selection is 0 rows (everything was checked in
 August). At 30 days the catalog comes due in five batches from **2026-09-17** (825 rows)
-through 2026-09-21, rather than all at once; a full 1327-row pass is roughly $0.70 and
+through 2026-09-21, rather than all at once; a full 1327-row pass is roughly $1.42 and
 ~110 minutes at the 5s delay floor.
 
 ## Cost accounting — what the numbers do and don't include
@@ -176,7 +185,27 @@ once and writes both, so the two can't drift.
   which matters more here — the response carries names, emails and plan status) backs the
   console's **Cost per user** tab: attributed vs unattributed, spend by provider, by model
   (with each model's feature split), by feature, and a per-user table showing cost against
-  the $9.99 plan price. Expanding a user row shows their own provider and model breakdown.
+  the $9.99 plan price.
+  - The table is seeded from the **`users` table**, not from `user_costs`. Built from the
+    cost rows alone it was a spend ledger wearing a roster's name: an account with no
+    billed call has no rows at all, so 9 of 15 accounts — every recent signup among them —
+    could not appear at any range setting. A trial that costs $0 is not missing data, it
+    is the most important thing this page can say. Zero-spend rows carry a **never used
+    AI** pill, sort below every spender, and are not expandable.
+  - The headline day figure is **`latest_day` — the most recent day with spend — never
+    "today"**. Rows are bucketed on the UTC day, which rolls at 5pm Pacific, so a "today"
+    figure reads `$0.00` every evening on a day that cost real money, which is
+    indistinguishable from the pipeline having stopped. A rolling 24h window was
+    considered and rejected: the daily grain cannot say how much of yesterday's single
+    rollup row falls inside it, so it would have to estimate. `latest_day` is exact.
+  - **The unattributed residual is split in two.** `pre_attribution_cost_usd` is spend
+    billed before the first `user_costs` row ever existed (`_attribution_start()`) and
+    could never have been attributed to anybody; `signed_out_cost_usd` is the real
+    no-userid traffic. Reported as one number the first swamps the second — it read as
+    "$2.92 from calls with no signed-in user" when the true signed-out figure was ~$0.06
+    — and pinned the rate at 37% until those rows aged out of the window. `attribution_rate`
+    is measured against `attributable_total_usd`, so it describes how well attribution
+    works rather than how old the window is. Expanding a user row shows their own provider and model breakdown.
   Provider colours in the console are **fixed per provider**, unlike the positional feature
   palette — otherwise a provider overtaking the other swaps colours mid-session and the bar
   reads backwards.
@@ -205,6 +234,20 @@ a dashboard link instead of a live figure. See `fetch_anthropic_billed_cost()`.
   exits before the first API call. **Zero cost, zero writes.** Shared plumbing lives in
   `agent_common.py`; `server.py`'s `preview_agent()` parses that line and pairs the count with
   a per-item cost averaged from that agent's real `agent_runs` history.
+  - That average takes **successful runs only, and never `mode = "snapshot-commit"`**.
+    Both exclusions matter and both were missing until 2026-08-22: a *failed* run counted
+    every row it touched but errored out of most of them before paying for them, so it
+    lands in the sample as an implausibly cheap per-item rate, and a snapshot commit
+    carries real item counts against `cost_usd = 0` **by construction** (the dry run that
+    produced the file already paid). With 6 of `review_checker`'s 10 qualifying runs being
+    failures and a 7th a commit, the estimate came out at $0.000528/row against the
+    ~$0.00091 its clean runs measure — i.e. the one feature whose whole job is to price a
+    run before you authorise it was under-quoting by about half. The old $0.70 full-pass
+    figure quoted above for `check_reviews.py` was this same skewed number; it is $1.42 now.
+  - `est_cost_low_usd`/`est_cost_high_usd` carry the **spread** across the sample, and
+    `provisional` is set below three clean runs. A lone mean reads as a precision the
+    number does not have — the scraper's own history spans three orders of magnitude per
+    seed depending on how much web search a run triggered.
 - `--dry-run` — **still calls the paid API at full cost**; only skips DB writes and dumps a
   local JSON snapshot instead. That snapshot can be **committed** later from the console
   rather than paying to re-run the agent live — see below.
@@ -388,12 +431,114 @@ the 2-letter US state code) or `review_status` (that is `check_reviews.py`'s org
 verdict, already shown to students). The normalized-URL index there is deliberately **not
 unique**, for the shared-portal reason above.
 
+**Mailing-list signup** lets a student join one program's mailing list with one tap. It is
+split into two halves that are deliberately far apart in trust, and the split *is* the
+accuracy design:
+
+- **Discovery** (`find_mailing_lists.py`) writes one **recipe** per opportunity into
+  `opportunity_signups` — how to POST a signup for that program — always at
+  `status = 'pending_review'`. It cannot verify its own work.
+- **Execution** (`subscribe_user_to_list()` in server.py, `POST
+  /api/opportunities/<id>/subscribe`) replays a recipe for one real user and **refuses
+  anything not promoted to `verified`** by a person in the console's *Mailing lists* tab.
+  No AI, no cost, fully replayable. Same shape as `is_active` on scraped rows, for the
+  same reason — except here a wrong answer lands in a student's inbox.
+
+- **The success state is `submitted`, never `subscribed`** — in
+  [mailing_list_common.py](mailing_list_common.py), in the `state` column, and in the
+  button label. Every supported provider double opt-ins, and we sign the student up with
+  **their own address** (there is no wingman-owned relay to read), so nothing in this repo
+  can observe the confirmation link being clicked. Claiming otherwise is the exact silent
+  failure the feature is measured against; do not tidy the wording up.
+- **Four providers only**: Mailchimp, Substack, Kit/ConvertKit, MailerLite — the ones with
+  a documented, key-free public endpoint that answers with a readable success/failure.
+  Deliberately excluded: **beehiiv** (its embed carries a bot-check token), **bare HTML
+  forms** (no success signal; the failure mode is a 200 that did nothing), **portals**
+  (that is account creation) and **anything CAPTCHA-guarded**. Those all degrade to the
+  "Open signup page" handoff, which is the honest answer. `mailto:` "email us to join"
+  programs were considered and dropped — they need a sending identity we do not have.
+- **`scope_evidence` is the field that matters** on a recipe: the quote proving the form
+  belongs to *this program*. 73% of the catalog shares a domain with a different
+  opportunity and one SMApply portal backs six programs, so "a newsletter form exists on
+  this page" proves nothing. The console shows it as a wide column and confidence as a
+  narrow one on purpose — confidence is the model grading its own work, which is the thing
+  being checked. There is deliberately **no** "verify everything above confidence X".
+- **Consent is re-checked server-side**, like the signup checkboxes in `handle_register`:
+  a per-list tap, an explicitly confirmed email address, and a ticked box. There is no
+  bulk "subscribe me to all results" path and there must not be one — most users here are
+  minors, and bulk sending is also how the outbound address gets blacklisted.
+  `legal/terms.md` §14A and `legal/privacy.md` §6A cover it (re-run `build_legal.py`);
+  `TERMS_VERSION` moved to `2026-08-22` for it.
+- The email is **prefilled from the account but editable**. A Google signup often carries a
+  school address that blocks outside mail, and making the address an explicit choice is
+  better consent hygiene than silently using whatever is on file. The address actually used
+  is stored per attempt — "which address did you sign up with" is the first question when a
+  student says the mail never arrived.
+- Attempts are one row per `(userid, opportunity_id)` in `mailing_list_subscriptions`, and
+  a repeat tap **updates** it. The honest question is "did this student sign up", not "how
+  many times did they press the button". A per-user throttle of 10/hour sits on top — not
+  for our cost (a subscribe is free) but so a stuck button does not look like an attack to
+  someone else's mail provider.
+- If the attempt cannot be recorded the response carries **`recorded: false`**: the signup
+  went out, but the button will reset and the Quest Log cannot list it. Surfaced rather
+  than hidden, because it reads as a mystery otherwise.
+- **[mailing_list_schema.sql](mailing_list_schema.sql)** is another one-time manual DDL
+  step. Unlike the other schema files it ends with an **ALTER block**, because
+  `create table if not exists` is a no-op against a table that already exists in an older
+  shape — and PostgREST 400s an entire insert on one unknown key, so a single missing
+  column means the finder writes *nothing* and the queue reads as "the agent found
+  nothing" rather than "every insert failed". **Add a column to a CREATE there and you
+  must add it to the ALTER block too.** Until the file is (re-)run, discovery aborts
+  naming it, the console tab shows the setup step, and every opportunity degrades to the
+  handoff — which is the correct behaviour with no verified recipe.
+- **[grade_mailing_lists.py](grade_mailing_lists.py)** is the measuring instrument, and is
+  free. `--sample` picks a deterministic, deliberately adversarial 10-row stratified
+  sample (it includes shared-portal rows on purpose); `--worksheet` turns the finder's
+  output into a form a human fills in by opening each page; `--score` computes
+  **precision** (correct / proposed) and **recall** (correct / lists a human found).
+  Recall can only be measured by a person, because the finder cannot report the lists it
+  missed. `--verify` additionally POSTs each recipe for real using
+  `MAILING_LIST_TEST_EMAIL`, which measures execution separately from discovery. There is
+  **no confirmed-delivery metric and there cannot be one** under the current design — do
+  not add a fourth number that quietly assumes it.
+
+**The console's spend chart draws every key in the series, not the five with cards.**
+`get_agents_summary()` returns `series_keys` (each labelled and grouped `agent`/`app`/
+`other`) and folds on-demand deadline spend under a `deadline_ondemand` key via
+`fetch_deadline_check_cost_by_day()`. Iterating the card list instead dropped the
+interactive rollups, the deadline checks (which are in `deadline_check_log`, not
+`agent_runs`, so they were never in the series at all) and any agent run from a script
+with no card — $4.84 of a $14.24 KPI printed ten pixels above the bars. The chart hint now
+states the charted total and flags any gap rather than letting two adjacent figures
+disagree in silence. Note `fetch_deadline_check_cost(start, end)` **accepted and ignored
+`end`** until 2026-08-22, which made the summary's previous-period deadline cost include
+the current period too, so every KPI delta touching deadline spend was wrong.
+
+**A committed snapshot is marked as committed.** `dryrun_common._pending_count()` is
+computed purely from the file on disk and is never compared against the database, so a
+snapshot read identically before and after being applied. `annotate_committed_snapshots()`
+recovers the link from the `notes` string the commit already writes (`Committed dry-run
+snapshot <file>`) rather than adding a column — no migration, and every historical commit
+is recognised retroactively. The button becomes **Commit again…** and says when it was
+applied. This is harmless for the scraper (inserts dedupe on normalized URL) but not for
+the three PATCH agents, where a second commit re-applies days-old field values over
+whatever has changed since.
+
 **Scraper search angles** ("seeds") live in a Supabase `scraper_seeds` table
 ([scraper_seeds_schema.sql](scraper_seeds_schema.sql)), editable from the admin console, with
 lifetime per-angle yield totals (`total_added`, `total_cost`, …) so unproductive angles can be
 found and retired. `seeds_common.py` loads them and falls back to the hardcoded
 `NATIONAL_SEEDS`/`SEATTLE_SEEDS` literals in `scrape_opportunities.py` if the table is empty or
-unreachable — it logs loudly which source it used. Select angles with `--seed-ids` (stable);
+unreachable — it logs loudly which source it used.
+Yield totals are credited by `record_seed_result()`, which **re-reads the seed immediately
+before adding** rather than adding to the copy loaded when the run began: PostgREST cannot
+do `SET total = total + n` without a stored function (DDL this repo cannot run), so it
+stays read-modify-write, but the window shrinks from the length of a 110-minute pass to one
+round trip — the stale-snapshot version silently discarded any console edit made mid-run.
+Every angle currently reads zero, which is **correct and not a bug**: dry runs add nothing
+so they credit nothing, and the fallback angles have no id to credit. `seed_yield_state()`
+on `GET /api/seeds` says which of those it is, because a grid of zeros otherwise reads as a
+dead feature. Select angles with `--seed-ids` (stable);
 `--seed-indices` is deprecated because positions shift whenever a seed is added or deleted.
 
 **Admin console** is [admin_console.html](admin_console.html), served at `/admin`. It and every
@@ -428,7 +573,27 @@ plus five POST endpoints:
   `ANTHROPIC_API_KEY` is set. Client sends the same plain `{system, userContent,
   useWebSearch}` shape as `callGemini()`; `proxy_to_anthropic()` translates that into
   Anthropic's content-block/messages envelope server-side, so the client stays
-  backend-agnostic regardless of which endpoint it's calling.
+  backend-agnostic regardless of which endpoint it's calling. The client may also send
+  `maxTokens`, clamped server-side into `[CLAUDE_MAX_TOKENS, CLAUDE_MAX_TOKENS_CEILING]`
+  by `_clamped_max_tokens()`. That exists for **profile synthesis**, which rewrites the
+  whole profile on every merge and so produces a longer answer as the profile grows — at
+  the flat 1000-token default it was silently cut off mid-sentence, and Anthropic hands
+  back the partial text looking like a normal, complete response. `callClaudeDetailed()`
+  in script.js surfaces `stop_reason` so `synthesizeProfile()` can retry at the ceiling
+  and, if it is *still* truncated, throw rather than save a fragment over a complete
+  profile. There is deliberately no word limit on the profile in the prompt, in storage,
+  or in the display. Note **which end of the profile a truncation eats**: the prompt
+  emits general paragraphs first, then `Passion Project: ` paragraphs, then
+  `Research Project: ` ones, so a response that ran out of budget always lost its tail —
+  i.e. the projects — which is how this surfaced ("passion projects cut off") rather than
+  as a visibly half-written profile. A profile damaged that way does **not** heal on its
+  own: `existing` is handed to the next merge as ground truth under "do not drop details
+  from the current profile", so the fragment is copied forward indefinitely, and the card
+  is read-only apart from Clear profile. The system prompt therefore carries a repair
+  clause (finish the thought only if the rest of the profile makes it unambiguous,
+  otherwise drop it, never invent), which fixes it on the next ordinary merge, and
+  `profileHasTruncatedTail()` / `repairProfile()` back a **Tidy it up** button that runs
+  that pass on its own for students who don't chat again.
 - `/api/register`, `/api/login`, `/api/data/save`, `/api/data/load` — backed by a Supabase
   `users` table (`get_user`/`create_user`/`update_user_data` in server.py), queried with the
   `SUPABASE_SERVICE_KEY` (service_role — bypasses RLS). That table has RLS **enabled with no
@@ -530,10 +695,52 @@ commentary and attempts best-effort repair of truncated/token-limited responses)
 `KIND_CONFIG` kind — Conference/Journal Venue used it until the Supabase `opportunities`
 table gained real `Conference`/`Journal`-typed rows and moved to the local-database path
 like every other kind; it's kept as a fallback for a future kind whose type is too sparse
-locally. The profile chat's `profileChatNextQuestion`/`profileChatStarterQuestionsFromAI`
-are the one exception — they call `callClaude(system, userContent, useWebSearch)` instead,
-POSTing to `/api/messages-claude` (Anthropic, `claude-haiku-4-5-20251001`), same response
-parsing either way.
+locally. The profile chat's `profileChatNextQuestion`/`profileChatStarterQuestionsFromAI`/
+`starterQuestionPoolFromAI` are the one exception — they call `callClaude(system,
+userContent, useWebSearch)` instead, POSTing to `/api/messages-claude` (Anthropic,
+`claude-haiku-4-5-20251001`), same response parsing either way.
+
+**The profile chat's two halves are cached asymmetrically, and the asymmetry is the point.**
+Openers are cached; follow-ups are deliberately not. Both are `callClaude()`, so the
+difference is not visible from the call sites — only from what each one depends on.
+
+- **Openers** (the 3 questions offered when the drawer opens) depend on the profile text and
+  nothing else. There is no conversation yet for them to react to, which is exactly what
+  makes them safe to cache. They live in a `starterPool` slot in `PROFILE_DERIVED_SLOTS`
+  alongside `filterValues`/`filterTags`/`basics`: **10** questions generated per profile
+  "version", from which each drawer open serves a rotating window of **3**
+  (`drawStarterWindow`), so four opens pass before anything repeats. Being a slot also means
+  `refreshProfileFilterValues()` pre-warms the pool right after every merge — it walks every
+  slot — so the drawer opens on a warm cache (measured: ~3.8s cold, 0ms warm) and
+  regeneration is tied to the existing `PROFILE_FILTER_REFRESH_WORDS` bar rather than a
+  second threshold meaning the same thing. **Regenerate stays a live call**: that button is
+  the explicit "these don't suit me", which is the one place paying is clearly warranted.
+- **Follow-ups** (`profileChatNextQuestion`) are one live call per bot turn, and must stay
+  that way. A follow-up's whole job is to react to what the student just said, and a
+  pre-generated question cannot. This was tried and reverted: with pooled follow-ups, a
+  student who answered "I'm writing a paper on grapheme-to-phoneme error rates in
+  Finno-Ugric languages with two friends from a summer camp" got a generic non-sequitur
+  back, because that detail did not exist when the pool was built and does not reach the
+  profile until the drawer closes and synthesis runs. **Do not "optimize" this into a pool.**
+- The transcript sent with a follow-up includes the **bot lines, not just the student's
+  answers**. Answers are routinely meaningless alone ("Yes." says nothing), and the bot lines
+  are also what stop the model re-asking what it already asked.
+- Both question prompts carry two style rules worth preserving: **one short sentence, never a
+  run-on or two questions joined by "and"/"or"**, and **at most 2-3 profile details per
+  question** — chaining four or more produces the elaborate connect-the-dots questions this
+  replaced.
+- Cost note: this is roughly a **wash in dollars**, and was never mainly a cost change — it
+  spends where responsiveness is bought and caches where it cannot be. The per-turn question
+  is not the expensive call in this flow; **synthesis on drawer close is** (it rewrites the
+  whole profile at a 4-8k output budget, ~6x a follow-up turn). If real savings are ever
+  wanted, that is where to look. Both opener paths classify as `chat_starters` in
+  `_FEATURE_SIGNATURES` and follow-ups as `profile_chat`, so the console can tell them apart.
+- **Closing the drawer always ends the session** (`resetProfileChatSession()` clears the
+  transcript, the starters, and any unsent input). Synthesis still runs only when the student
+  actually answered something — an empty transcript would pay the most expensive call in the
+  flow to rewrite an unchanged profile. Before that reset existed, a starter question the
+  student read but never answered stayed in `profileChatHistory`, and reopening rendered that
+  stale bubble instead of a fresh set of starters.
 
 **App pages** (single-page, no router — `showPage(name)` toggles `#page-*` sections).
 Note two sections that live *outside* `#appShell` and are therefore not `showPage()`

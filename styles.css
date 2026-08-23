@@ -597,6 +597,50 @@ textarea:focus, input:focus, select:focus {
 }
 .import-overlay.hidden { display: none; }
 
+/* ---------- "This looks cut off" repair prompt ---------- */
+/* Deliberately calmer than an error: the profile is still usable, one paragraph just ends
+   early. Only rendered when profileHasTruncatedTail() is true. */
+.vibe-truncated {
+  border-color: #e6d5f5;
+  background: #fbf7ff;
+}
+.vibe-truncated .vibe-label { color: #7c5cad; }
+.vibe-truncated .vibe-value { color: #57407d; font-weight: 600; }
+
+/* ---------- "Synthesis in progress" strip on the My Vibe card ---------- */
+/* Shown for the entire merge, from the moment new text is handed to synthesizeProfile
+   until the rewritten profile is on the page. Every entry point uses it (chat drawer,
+   resume/LinkedIn import, wizard, free-text), not just the drawer - the others used to
+   sit silent for the several seconds the call takes. */
+.synth-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border: 2px solid #f7d9bd;
+  border-radius: 12px;
+  background: #fffaf5;
+  color: #c2743a;
+  font-size: 13px;
+  font-weight: 700;
+}
+.synth-status.hidden { display: none; }
+.synth-spinner {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border: 2px solid #f2c79b;
+  border-top-color: #c2743a;
+  border-radius: 50%;
+  animation: synthSpin 0.7s linear infinite;
+}
+@keyframes synthSpin { to { transform: rotate(360deg); } }
+/* Honour a reduced-motion preference: the strip still reads as busy via the dots. */
+@media (prefers-reduced-motion: reduce) {
+  .synth-spinner { animation: none; }
+}
+
 /* ---------- The optimistic "just shared" tile, shown while synthesis is in flight ---------- */
 .vibe-pending {
   border-color: #f7d9bd;

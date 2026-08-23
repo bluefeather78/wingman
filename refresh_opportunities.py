@@ -12,7 +12,7 @@ Fields NEVER touched by this agent (reserved for other agents):
 
 Fields this agent CAN update:
   - name, org, summary, url, type, price, state, location, intl, season, category,
-    eligibility, grade_min, grade_max, cost, subject_tags
+    eligibility, grade_min, grade_max, cost, subject_tags, contact_email
 
 Run roughly 1x/month on all active opportunities. Uses gemini-3.5-flash-lite (no web search —
 training data only) for cost efficiency and to avoid quota contention with deadline/review agents.
@@ -43,7 +43,8 @@ import random
 import sys
 import urllib.error
 
-from agent_common import add_agent_args, apply_timing, emit_preview, snapshot_stamp
+from agent_common import add_agent_args, apply_timing, clean_email, emit_preview, snapshot_stamp
+from contact_email_common import resolve_contact_email
 from gemini_common import call_gemini, extract_json, estimate_cost
 from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
 
@@ -86,7 +87,8 @@ or null", "url": "string or null", "type": "one of {', '.join(sorted(VALID_TYPES
 Spring, Fall, or Winter or null", "eligibility": "concise description or null", \
 "grade_min": "integer (9-12) or null", "grade_max": "integer (9-12) or null", \
 "cost": "string (e.g. '$2000-3500') or null", "subject_tags": "[array of tags from the list: \
-{', '.join(VALID_SUBJECTS)}] or null"}}.
+{', '.join(VALID_SUBJECTS)}] or null", "contact_email": "a real contact email address for the \
+program if you find one (e.g. admissions or info@), else null — never guess or construct one"}}.
 
 Return ONLY the raw JSON object, no markdown, no preamble. Keep response under 800 tokens. \
 Do NOT include deadline/status fields — those are handled separately. For fields you cannot \
@@ -116,6 +118,10 @@ def clean_update_dict(info):
         val = info.get(field)
         if isinstance(val, str) and val.strip():
             update[field] = val.strip()
+
+    contact_email = clean_email(info.get("contact_email"))
+    if contact_email:
+        update["contact_email"] = contact_email
 
     # Enum fields
     if info.get("type") in VALID_TYPES:
@@ -154,6 +160,13 @@ def main():
     group.add_argument("--all", action="store_true", help="Check every active row (default if no flag given).")
     parser.add_argument("--dry-run", action="store_true", help="No writes — just prints and dumps results to JSON.")
     parser.add_argument("--exclude-source", type=str, default=None, help="Exclude opportunities with this source value.")
+    parser.add_argument("--skip-contact-email", action="store_true",
+                        help="Don't run the contact-email lookup (contact_email_common."
+                             "resolve_contact_email) alongside the metadata refresh. On by "
+                             "default because most rows resolve for free — see that "
+                             "module's docstring for why this agent's own Gemini call "
+                             "essentially never knows a program's contact address from "
+                             "training data alone.")
     add_agent_args(parser, default_timeout=120)
     args = parser.parse_args()
     apply_timing(args, gemini=True)
@@ -162,13 +175,18 @@ def main():
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     service_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not supabase_url or not service_key or not gemini_key:
         print("[ERROR] SUPABASE_URL / SUPABASE_SERVICE_KEY / GEMINI_API_KEY not set in .env.")
         sys.exit(1)
+    if not args.skip_contact_email and not anthropic_key:
+        print("[WARN] ANTHROPIC_API_KEY not set — contact-email lookups will only resolve "
+              "pages with 0 or 1 candidate address; multi-candidate pages are left unresolved.")
 
     print("[OK] Fetching all active catalog rows from Supabase...")
     params = {
-        "select": "id,name,org,url,summary,type,price,location,intl,season,eligibility,grade_min,grade_max,cost,subject_tags",
+        "select": "id,name,org,url,summary,type,price,location,intl,season,eligibility,"
+                  "grade_min,grade_max,cost,subject_tags,contact_email",
         "is_active": "eq.true",
     }
     if args.exclude_source:
@@ -211,6 +229,8 @@ def main():
     # agents where it means something. Stays 0 by construction.
     silent_search_count = 0
     dry_run_results = []
+    contact_found = 0
+    contact_model_calls = 0
 
     for i, opp in enumerate(items):
         # Handle Unicode chars in opportunity names that may not render in console
@@ -225,6 +245,18 @@ def main():
 
             # Extract only valid, non-null fields from the response
             updates = clean_update_dict(info)
+
+            # contact_email almost never comes back from the training-data-only call above
+            # (see contact_email_common.py's docstring) — chain the regex-first lookup for
+            # any row that doesn't already have one, so a normal refresh pass fills it in
+            # without needing find_contact_emails.py run separately.
+            if not args.skip_contact_email and "contact_email" not in updates and not opp.get("contact_email"):
+                email, c_cost, used_model, _ = resolve_contact_email(opp, anthropic_key)
+                total_cost += c_cost
+                contact_model_calls += 1 if used_model else 0
+                if email:
+                    updates["contact_email"] = email
+                    contact_found += 1
 
             if not updates:
                 print(f"{searches} search(es), no changes, ${cost:.4f}")
@@ -270,7 +302,9 @@ def main():
         # call returned in under 3s. To slow this agent down, raise --min-delay.
 
     print(f"\n[SUMMARY] checked: {len(items)}, updated: {updated}, errors: {errors}, "
-          f"cost: ${total_cost:.4f}  (no web search — this agent uses training data only)")
+          f"contact emails found: {contact_found} ({contact_model_calls} model call(s)), "
+          f"cost: ${total_cost:.4f}  (metadata via training data only; contact_email via "
+          f"regex + occasional Haiku call — see contact_email_common.py)")
     if mode == "sample" and items:
         per_item = total_cost / len(items)
         projected = per_item * len(all_active)
@@ -297,6 +331,7 @@ def main():
             "cost_usd": round(total_cost, 4),
             "total_web_searches": total_searches,
             "silent_search_count": silent_search_count,
+            "notes": f"contact_emails_found={contact_found}, contact_model_calls={contact_model_calls}",
         }, service_key)
         print(f"[OK] Logged agent_runs id={run_id}.")
 

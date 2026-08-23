@@ -746,6 +746,19 @@
           </div>
           <div class="space-y-4 cards" id="savedCards"></div>
         </div>
+
+        <!-- Mailing lists — every signup Wingman submitted on this student's behalf.
+             Without this the feature is a button that does something invisible: they
+             need to be able to find what was sent, to which address, and when. -->
+        <div class="mt-10 hidden" id="mailingListSection">
+          <div class="flex items-center gap-2 mb-1">
+            <h2 class="font-heading font-bold text-xl" style="color:#1a2540;">Mailing Lists</h2>
+            <span class="bg-white border-2 border-slate-900 text-xs font-bold px-2.5 py-1 rounded-full count" id="mailingListCount">00</span>
+          </div>
+          <p class="text-xs font-medium text-slate-500 mb-4">Signups we submitted for you. Most
+            organizations only add you once you click the confirmation link in their email.</p>
+          <div class="space-y-3" id="mailingListRows"></div>
+        </div>
       </div>
 
     </section>
@@ -798,6 +811,14 @@
           </div>
         </div>
 
+        <!-- Shown for the whole time a merge is in flight (see renderProfileSynthesisStatus).
+             Lives outside #profileContent so it survives that element being rewritten, and
+             so it still shows on a first-ever merge when the card is otherwise empty. -->
+        <div id="profileSynthesisStatus" class="synth-status hidden" role="status" aria-live="polite">
+          <span class="synth-spinner" aria-hidden="true"></span>
+          <span>Synthesis into profile in progress<span class="vibe-dots"></span></span>
+        </div>
+
         <!-- Basics, read out of the profile text itself (see renderProfileBasics) -->
         <div id="profileBasicsGrid" class="vibe-grid"></div>
 
@@ -842,6 +863,33 @@
       </aside>
 
       <!-- ---------- Resume / LinkedIn quick-add modal ---------- -->
+      <!-- Mailing-list signup. The email is prefilled from the account but stays editable:
+           a school address often blocks outside mail, and making the address an explicit
+           choice is better consent hygiene than silently using whatever we have on file. -->
+      <div class="import-overlay hidden" id="subscribeModal" onclick="if(event.target===this) closeSubscribeModal();">
+        <div class="card-soft" style="width:100%; max-width:420px; padding:26px;">
+          <div class="flex items-center justify-between mb-1.5">
+            <h2 class="font-heading font-bold text-lg" style="color:#1a2540;">Join the mailing list</h2>
+            <button type="button" onclick="closeSubscribeModal()" style="background:none; border:none; font-size:18px; font-weight:800; color:#8a93a6; cursor:pointer;">&#10005;</button>
+          </div>
+          <p class="text-xs mb-4 leading-relaxed" style="color:#8a93a6;" id="subscribeIntro"></p>
+
+          <label class="block font-bold text-[10px] uppercase text-slate-500 mb-1" for="subscribeEmail">Email to sign up with</label>
+          <input type="email" id="subscribeEmail" class="w-full border-2 border-slate-900 rounded-lg p-2 text-sm mb-3 font-medium" placeholder="you@example.com">
+
+          <label class="flex items-start gap-2 text-xs font-medium text-slate-600 mb-4 cursor-pointer">
+            <input type="checkbox" id="subscribeConsent" class="mt-0.5 shrink-0">
+            <span id="subscribeConsentLabel"></span>
+          </label>
+
+          <button class="w-full pop-btn bg-slate-900 text-white font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2" id="subscribeSubmitBtn" onclick="submitSubscribe()">
+            <span class="spin hidden w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+            <span id="subscribeSubmitLabel">Sign me up</span>
+          </button>
+          <p class="text-xs mt-3 leading-relaxed min-h-[1em]" id="subscribeStatus"></p>
+        </div>
+      </div>
+
       <div class="import-overlay hidden" id="importModal" onclick="if(event.target===this) closeImportModal();">
         <div class="card-soft" style="width:100%; max-width:440px; padding:26px;" id="importCard">
           <div class="flex items-center justify-between mb-1.5">

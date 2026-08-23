@@ -110,6 +110,18 @@ def select_seeds(seeds, seed_ids=None, seed_indices=None):
     return seeds
 
 
+def _current_seed(supabase_url, service_key, seed_id):
+    """This seed's totals as they stand right now, or None if the read fails."""
+    try:
+        rows = supabase_get(supabase_url, "scraper_seeds",
+                            {"select": SEED_SELECT, "id": f"eq.{seed_id}", "limit": "1"},
+                            service_key)
+        return (rows or [None])[0]
+    except Exception as e:
+        print(f"  [WARN] Could not re-read seed {seed_id} before crediting it: {e}")
+        return None
+
+
 def record_seed_result(supabase_url, service_key, seed, found=0, added=0, dupes=0, cost=0.0):
     """PATCH one seed's lifetime yield totals after it finishes.
 
@@ -119,12 +131,18 @@ def record_seed_result(supabase_url, service_key, seed, found=0, added=0, dupes=
     seed_id = seed.get("id")
     if seed_id is None:
         return False
+    # Re-read immediately before adding, rather than adding to the copy loaded when the
+    # run started. PostgREST cannot do `SET total = total + n` without a stored function
+    # (which needs DDL this repo cannot run), so this stays read-modify-write — but the
+    # window shrinks from "the whole length of a 110-minute pass" to one round trip. The
+    # stale-snapshot version silently discarded any console edit made during a run.
+    current = _current_seed(supabase_url, service_key, seed_id) or seed
     patch = {
-        "total_runs": (seed.get("total_runs") or 0) + 1,
-        "total_found": (seed.get("total_found") or 0) + found,
-        "total_added": (seed.get("total_added") or 0) + added,
-        "total_dupes": (seed.get("total_dupes") or 0) + dupes,
-        "total_cost": round(float(seed.get("total_cost") or 0) + cost, 4),
+        "total_runs": (current.get("total_runs") or 0) + 1,
+        "total_found": (current.get("total_found") or 0) + found,
+        "total_added": (current.get("total_added") or 0) + added,
+        "total_dupes": (current.get("total_dupes") or 0) + dupes,
+        "total_cost": round(float(current.get("total_cost") or 0) + cost, 4),
         "last_run_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     try:

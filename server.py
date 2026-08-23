@@ -40,6 +40,7 @@ from check_deadlines import (check_one as check_deadline_one,
                              CLAUDE_MODEL as DEADLINE_CHECK_MODEL)
 from gemini_common import call_gemini
 from claude_common import call_claude
+import mailing_list_common
 import url_dedupe
 from subscription_common import (
     create_checkout_session, validate_promo_code, get_or_create_customer,
@@ -107,7 +108,16 @@ MESSAGES_MAX_TOKENS = 2000
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+# Default for the short profile-chat questions this endpoint was built for. Callers that
+# produce a long answer (profile synthesis rewrites the WHOLE profile every merge, so its
+# output grows with the profile) send their own "maxTokens" and are clamped to the ceiling
+# below rather than to this. At the flat 1000 the synthesized profile was silently cut off
+# mid-sentence once a student's story got past a few paragraphs — Anthropic returns the
+# partial text with stop_reason "max_tokens", so it looked like a complete answer.
 CLAUDE_MAX_TOKENS = 1000
+# Ceiling on a client-supplied maxTokens. Haiku 4.5 allows far more; this is a cost guard
+# on an endpoint any signed-in browser can post to, not a model limit.
+CLAUDE_MAX_TOKENS_CEILING = 8000
 
 # ---------- Opportunities catalog (Supabase-backed) ----------
 # The opportunity catalog lives in a Supabase (hosted Postgres) table rather than
@@ -235,7 +245,7 @@ def ensure_trial_started(userid, record):
 # TERMS_VERSION is what gets recorded per account. It is the effective date printed at
 # the top of both documents — bump it whenever legal/*.md changes materially, so rows
 # accepted under the old text are distinguishable from rows accepted under the new.
-TERMS_VERSION = "2026-08-21"
+TERMS_VERSION = "2026-08-22"
 
 # ---------- Persistent user account database (Supabase-backed) ----------
 # Account records live in a Supabase `users` table rather than the old flat
@@ -682,7 +692,11 @@ _FEATURE_SIGNATURES = [
     ("find real, current",                                        "venue_search"),
     ("maintain a single, coherent running profile",               "profile_synthesis"),
     ("decide whether a student's profile has enough detail",      "profile_readiness"),
+    # Both the 3-at-a-time regenerate and the 10-at-a-time cached pool are the same feature
+    # (chat openers) and must be tested before the generic profile-chat signature below,
+    # which their prompts also contain.
     ("exactly THREE distinct",                                    "chat_starters"),
+    ("exactly TEN distinct",                                      "chat_starters"),
     ("helping a high schooler build a detailed personal profile", "profile_chat"),
     ("distill a casual chat conversation into new facts",         "chat_findings"),
     ("classify and extract structured tracking data",             "tracker_extract"),
@@ -755,25 +769,44 @@ def record_user_cost(userid, surface, feature, cost, input_tokens=0, output_toke
                     "surface": f"eq.{surface}", "feature": f"eq.{feature}", "limit": "1"}
                 if _user_costs_has_model:
                     lookup["model"] = f"eq.{model}"
-                existing = _supabase_request("user_costs", params=lookup)
-                if existing is None and _user_costs_has_model:
-                    # Could be a missing table OR a table that predates the model column —
-                    # PostgREST 400s on an unknown filter column either way. Retry without
-                    # the model filter before concluding attribution is off entirely.
-                    lookup.pop("model")
-                    existing = _supabase_request("user_costs", params=lookup)
-                    if existing is not None:
-                        _user_costs_has_model = False
-                        print("[WARN] user_costs has no `model` column - provider/model "
-                              "breakout is off. Re-run user_costs_schema.sql in the "
+                # Strict, so a missing table/column can be told apart from a network
+                # blip. _supabase_request returns None for both alike, and the latches
+                # below are permanent for the life of the process: swallowing one timed
+                # out lookup as "the table does not exist" silently stopped attributing
+                # every later call, which reads as a console frozen mid-day.
+                try:
+                    existing = _supabase_request_strict("user_costs", params=lookup)
+                except Exception as e:
+                    if not _missing_table_error(e):
+                        print(f"[WARN] user_costs lookup failed (transient, attribution "
+                              f"still on): {e}")
+                        return
+                    if _user_costs_has_model and "model" in lookup:
+                        # A missing COLUMN and a missing TABLE report codes that overlap,
+                        # so retry without the model filter before concluding the table
+                        # itself is absent.
+                        lookup.pop("model")
+                        try:
+                            existing = _supabase_request_strict("user_costs", params=lookup)
+                        except Exception as e2:
+                            if not _missing_table_error(e2):
+                                print(f"[WARN] user_costs lookup failed (transient, "
+                                      f"attribution still on): {e2}")
+                                return
+                            existing = None
+                        if existing is not None:
+                            _user_costs_has_model = False
+                            print("[WARN] user_costs has no `model` column - provider/model "
+                                  "breakout is off. Re-run user_costs_schema.sql in the "
+                                  "Supabase SQL editor.")
+                    else:
+                        existing = None
+                    if existing is None:
+                        _user_costs_available = False
+                        print("[WARN] user_costs table unavailable - per-user cost "
+                              "attribution is off. Run user_costs_schema.sql in the "
                               "Supabase SQL editor.")
-                if existing is None:
-                    # None (not []) means the request itself failed — most likely the
-                    # table does not exist yet. Stop trying until the server restarts.
-                    _user_costs_available = False
-                    print("[WARN] user_costs table unavailable - per-user cost attribution "
-                          "is off. Run user_costs_schema.sql in the Supabase SQL editor.")
-                    return
+                        return
                 if existing:
                     row_id = existing[0]["id"]
                 else:
@@ -1194,6 +1227,13 @@ def mock_profile_chat_starters():
     return json.dumps(random.sample(MOCK_CHAT_QUESTIONS, 3))
 
 
+def mock_profile_chat_starter_pool():
+    # The cached 10-opener bank. Mock mode has fewer canned questions than the real pool asks
+    # for, so sample what's available rather than erroring on random.sample's
+    # no-replacement requirement — the client draws 3 at a time from whatever it gets back.
+    return json.dumps(random.sample(MOCK_CHAT_QUESTIONS, min(10, len(MOCK_CHAT_QUESTIONS))))
+
+
 def mock_profile_chat_question(user_content):
     # Mock mode: cycle through a fixed bank of questions based on how long the
     # conversation-so-far is, so repeated turns don't just repeat the same question.
@@ -1323,6 +1363,8 @@ def generate_mock_text(system, user_content):
         return mock_assess_profile_readiness()
     if "exactly THREE distinct" in system:
         return mock_profile_chat_starters()
+    if "exactly TEN distinct" in system:
+        return mock_profile_chat_starter_pool()
     if "helping a high schooler build a detailed personal profile" in system:
         return mock_profile_chat_question(user_content)
     if "distill a casual chat conversation into new facts" in system:
@@ -1380,6 +1422,9 @@ def fetch_opportunities():
 
 
 DEADLINE_PATH_RE = re.compile(r"^/api/opportunities/([^/]+)/deadline$")
+# Same prefix-matching care as DEADLINE_PATH_RE: matching on self.path directly would
+# break the moment a query string is appended.
+SUBSCRIBE_PATH_RE = re.compile(r"^/api/opportunities/([^/]+)/subscribe$")
 SEED_PATH_RE = re.compile(r"^/api/seeds/(\d+)$")
 AGENT_SETTINGS_PATH_RE = re.compile(r"^/api/agents/settings/([a-z_]+)$")
 
@@ -1461,6 +1506,22 @@ AGENT_CONFIGS_SCHEMA = {
         "writes": "updates",
         "uses_gemini_search": True,
         "api": "Gemini 3.6-flash + googleSearch",
+        "defaults": {"min_delay": 5, "timeout": 120},
+    },
+    "mailinglist": {
+        "name": "Mailing List Finder",
+        "description": "Find each program's mailing-list signup form and store a recipe for it",
+        "script": "find_mailing_lists.py",
+        "db_agent": "mailing_list_finder",
+        "unit": "rows",
+        "writes": "updates",
+        "uses_gemini_search": False,  # Claude, and no web search at all — see below
+        # Most rows never reach the model: the page is fetched and regex-scanned locally,
+        # and a row with no provider embed resolves for free. The one Haiku call, made
+        # only when a form IS found, answers attribution ("is this THIS program's list?").
+        # So this agent's per-row average is far below the others' and is dominated by
+        # how many rows happen to have a form.
+        "api": "Claude Haiku (no web search); most rows resolve locally for free",
         "defaults": {"min_delay": 5, "timeout": 120},
     },
 }
@@ -1747,6 +1808,27 @@ USER_COSTS_SETUP_SQL = "user_costs_schema.sql"
 PLAN_PRICE_USD = 9.99  # mirrors subscription_common.PLAN_PRICE_CENTS
 
 
+_attribution_start_cache = {"at": None, "checked": None}
+
+
+def _attribution_start():
+    """Timestamp of the very first user_costs row, i.e. when attribution began recording.
+
+    Everything billed before this could never have been attributed to anybody, and must
+    not be reported as "signed-out users". Cached for an hour: it is a fixed historical
+    fact that only moves once, on the first row ever written.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    checked = _attribution_start_cache["checked"]
+    if checked and (now - checked).total_seconds() < 3600:
+        return _attribution_start_cache["at"]
+    rows = _supabase_request("user_costs", params={
+        "select": "first_at", "order": "first_at.asc", "limit": "1"})
+    at = _parse_iso((rows or [{}])[0].get("first_at")) if rows else None
+    _attribution_start_cache.update({"at": at, "checked": now})
+    return at
+
+
 def get_user_costs(days=30, limit=200):
     """Per-user breakdown of interactive spend, for the console's cost-per-user card.
 
@@ -1761,6 +1843,7 @@ def get_user_costs(days=30, limit=200):
     """
     now = datetime.datetime.now(datetime.timezone.utc)
     cutoff_day = (now - datetime.timedelta(days=days)).date()
+    today_iso = now.date().isoformat()  # reported for reference only — never a headline
 
     base_select = ("userid,day,surface,feature,calls,input_tokens,output_tokens,"
                    "web_searches,cost_usd,first_at,last_at")
@@ -1801,10 +1884,22 @@ def get_user_costs(days=30, limit=200):
         u = users.setdefault(uid, {
             "userid": uid, "calls": 0, "web_searches": 0, "cost_usd": 0.0,
             "input_tokens": 0, "output_tokens": 0,
+            # Per-day totals for this user, folded down at the edge into "their most
+            # recent day with spend". A calendar "today" cannot answer "is this still
+            # recording?" — the rows are bucketed on the UTC day, which rolls at 5pm
+            # Pacific, so a working pipeline reads $0.00 every evening. The latest ACTIVE
+            # day is exact (no partial-day estimation the daily grain cannot support) and
+            # never reads zero while there is recent activity.
+            "by_day": {},
             "features": {}, "surfaces": {}, "providers": {}, "models": {},
             "first_at": None, "last_at": None,
         })
         u["calls"] += int(r.get("calls") or 0)
+        day_key = r.get("day")
+        if day_key:
+            dd = u["by_day"].setdefault(day_key, {"cost_usd": 0.0, "calls": 0})
+            dd["cost_usd"] += cost
+            dd["calls"] += int(r.get("calls") or 0)
         u["web_searches"] += int(r.get("web_searches") or 0)
         u["input_tokens"] += int(r.get("input_tokens") or 0)
         u["output_tokens"] += int(r.get("output_tokens") or 0)
@@ -1874,7 +1969,7 @@ def get_user_costs(days=30, limit=200):
     try:
         accounts = _users_request("GET", "?" + urllib.parse.urlencode({
             "select": "userid,first_name,last_name,email,subscription_status,trial_ends_at,"
-                      "subscription_end_at",
+                      "subscription_end_at,created_at",
             "limit": "5000",
         })) or []
     except Exception as e:
@@ -1883,6 +1978,23 @@ def get_user_costs(days=30, limit=200):
         print(f"[WARN] Could not load accounts for per-user cost card: {e}")
         accounts = []
     by_id = {str(a.get("userid") or "").lower(): a for a in accounts}
+
+    # Every account gets a row, spend or not. Built from user_costs alone this table was a
+    # spend ledger wearing a roster's name: an account that signs up and never triggers a
+    # billed call has no rows at all, so 9 of 15 accounts — including every recent signup —
+    # could not appear at any range setting. A trial that costs $0 is not missing data, it
+    # is the single most important thing this page can tell you.
+    for a in accounts:
+        uid = str(a.get("userid") or "").strip().lower()
+        if not uid or uid in users:
+            continue
+        users[uid] = {
+            "userid": uid, "calls": 0, "web_searches": 0, "cost_usd": 0.0,
+            "input_tokens": 0, "output_tokens": 0, "by_day": {},
+            "features": {}, "surfaces": {}, "providers": {}, "models": {},
+            "first_at": None, "last_at": None,
+        }
+
     for uid, u in users.items():
         a = by_id.get(uid) or {}
         name = " ".join(x for x in [a.get("first_name"), a.get("last_name")] if x).strip()
@@ -1892,6 +2004,16 @@ def get_user_costs(days=30, limit=200):
         u["subscription_status"] = a.get("subscription_status") or ("unknown" if a else "no account")
         u["trial_ends_at"] = a.get("trial_ends_at")
         u["cost_usd"] = round(u["cost_usd"], 6)
+        u["created_at"] = a.get("created_at")
+        u["has_spend"] = u["cost_usd"] > 0 or u["calls"] > 0
+        # The most recent day this user actually spent anything, and what it cost. Exact
+        # at the daily grain the rows are stored at — unlike a rolling 24h window, which
+        # would have to guess how much of yesterday's single rollup row falls inside it.
+        by_day = u.pop("by_day", {})
+        recent_day = max(by_day) if by_day else None
+        u["recent_day"] = recent_day
+        u["recent_day_cost_usd"] = round(by_day[recent_day]["cost_usd"], 6) if recent_day else 0.0
+        u["recent_day_calls"] = by_day[recent_day]["calls"] if recent_day else 0
         # What this user's usage costs measured against one month of the plan. Over 100%
         # means the account loses money on inference alone, before any other cost.
         u["pct_of_plan"] = round(u["cost_usd"] / PLAN_PRICE_USD, 4) if PLAN_PRICE_USD else None
@@ -1902,9 +2024,19 @@ def get_user_costs(days=30, limit=200):
         u["models"] = sorted(u["models"].values(), key=lambda mm: mm["cost_usd"],
                              reverse=True)
 
-    ranked = sorted(users.values(), key=lambda x: x["cost_usd"], reverse=True)
+    # Spend first, then never-active accounts newest-first — a zero row is not a tie to be
+    # broken arbitrarily, it is a signup worth reading in the order they arrived.
+    ranked = sorted(users.values(),
+                    key=lambda x: (x["has_spend"], x["cost_usd"], x.get("created_at") or ""),
+                    reverse=True)
     truncated = max(0, len(ranked) - limit)
     ranked = ranked[:limit]
+    accounts_total = len(accounts)
+    # Known accounts only. Three userids carry attributed spend with no matching row in
+    # `users` (leftover test ids) — counting those as accounts made both halves of the
+    # Accounts tile wrong: 6 active / 9 idle, against a true 3 active / 12 idle.
+    accounts_with_spend = sum(1 for u in users.values()
+                              if u["has_spend"] and u.get("known_account"))
 
     # --- reconcile against the window's interactive total ---
     cutoff = now - datetime.timedelta(days=days)
@@ -1922,9 +2054,35 @@ def get_user_costs(days=30, limit=200):
     # or in-flight difference must not surface as a negative "unattributed" figure.
     unattributed = round(max(0.0, interactive_total - attributed), 6)
 
+    # The residual is two unrelated things, and lumping them together libels your users.
+    # Spend that predates the attribution feature could never have been attributed to
+    # anyone; spend since then that carries no userid is genuinely signed-out traffic.
+    # Reported as one number, the first swamps the second and pins the attribution rate
+    # at a figure that cannot improve until the old rows age out of the window.
+    attribution_started_at = _attribution_start()
+    pre_attribution = 0.0
+    if attribution_started_at and attribution_started_at > cutoff:
+        for r in recent_runs():
+            if r.get("agent") not in INTERACTIVE_AGENTS:
+                continue
+            started = _parse_iso(r.get("started_at"))
+            if started and cutoff <= started < attribution_started_at:
+                pre_attribution += float(r.get("cost_usd") or 0)
+        pre_attribution += float(
+            fetch_deadline_check_cost(cutoff, attribution_started_at).get("cost_usd") or 0)
+    pre_attribution = round(min(pre_attribution, unattributed), 6)
+    signed_out = round(max(0.0, unattributed - pre_attribution), 6)
+    # Rate over the attributable period only — the period the number can actually speak to.
+    attributable_total = round(max(0.0, interactive_total - pre_attribution), 6)
+
+    # days + 1 buckets, anchored on today rather than counted forward from the cutoff:
+    # range(days) stops one short, so the current day — where every figure above is still
+    # accumulating — was dropped from the series entirely and the card read as frozen at
+    # yesterday while the totals beside it moved.
     series = []
-    for i in range(days):
-        day = (cutoff + datetime.timedelta(days=i)).date().isoformat()
+    today = now.date()
+    for i in range(days, -1, -1):
+        day = (today - datetime.timedelta(days=i)).isoformat()
         d = per_day.get(day)
         series.append({"date": day,
                        "cost_usd": round(d["cost_usd"], 6) if d else 0.0,
@@ -1956,7 +2114,14 @@ def get_user_costs(days=30, limit=200):
             key=lambda f: f["cost_usd"], reverse=True)) for m in models.values()),
         key=lambda m: m["cost_usd"], reverse=True)
 
-    costs = [u["cost_usd"] for u in users.values()]
+    # The most recent day with any spend at all, which is what the console leads with.
+    # per_day only ever holds days that had activity, so max() IS "latest active day".
+    latest_day = max(per_day) if per_day else None
+    latest = per_day.get(latest_day) if latest_day else None
+    last_activity_at = max((u["last_at"] for u in users.values() if u["last_at"]),
+                           default=None)
+    spenders = [u for u in users.values() if u["has_spend"]]
+    costs = [u["cost_usd"] for u in spenders]
     return {
         "table_ready": True,
         # False means the table exists but predates the provider/model breakout. Every
@@ -1972,15 +2137,39 @@ def get_user_costs(days=30, limit=200):
         "users_truncated": truncated,
         "features": feature_list,
         "series": series,
+        # Server's UTC "today", so the console labels its own column with the same day
+        # boundary the rows were bucketed on rather than the viewer's local one.
+        "today": today_iso,
+        # When attribution began recording. Everything billed before it is unattributable
+        # by construction, not evidence of signed-out traffic.
+        "attribution_started_at": (attribution_started_at.isoformat()
+                                   if attribution_started_at else None),
         "totals": {
+            # Latest day with spend — NOT "today". See the by_day comment above: a UTC
+            # calendar day rolls at 5pm Pacific, so a "today" figure reads $0.00 all
+            # evening on a day that cost real money.
+            "latest_day": latest_day,
+            "latest_day_cost_usd": round(latest["cost_usd"], 6) if latest else 0.0,
+            "latest_day_calls": latest["calls"] if latest else 0,
+            "latest_day_users": len(latest["users"]) if latest else 0,
+            "last_activity_at": last_activity_at,
             "attributed_cost_usd": attributed,
             "unattributed_cost_usd": unattributed,
+            "pre_attribution_cost_usd": pre_attribution,
+            "signed_out_cost_usd": signed_out,
+            "attributable_total_usd": attributable_total,
             "interactive_total_usd": round(interactive_total, 6),
-            "attribution_rate": round(attributed / interactive_total, 4) if interactive_total else 0,
-            "active_users": len(users),
+            # Measured against attributable spend, so the rate reflects how well
+            # attribution works rather than how old the window is.
+            "attribution_rate": (round(attributed / attributable_total, 4)
+                                 if attributable_total else 0),
+            "accounts_total": accounts_total,
+            "accounts_with_spend": accounts_with_spend,
+            "accounts_no_spend": max(0, accounts_total - accounts_with_spend),
+            "active_users": len(spenders),
             "calls": sum(u["calls"] for u in users.values()),
             "web_searches": sum(u["web_searches"] for u in users.values()),
-            "avg_cost_per_user": round(attributed / len(users), 6) if users else 0.0,
+            "avg_cost_per_user": round(attributed / len(spenders), 6) if spenders else 0.0,
             "max_cost_per_user": round(max(costs), 6) if costs else 0.0,
             "users_over_plan": sum(1 for c in costs if c > PLAN_PRICE_USD),
         },
@@ -2079,7 +2268,7 @@ def commit_dryrun_snapshot(file_name, dry=False):
 # from the list it already has, without a per-row round-trip.
 _BASE_PENDING_SELECT = ("id,name,org,type,url,summary,source,created_at,review_status,state,"
                         "price,category,cost,location,intl,season,eligibility,grade_min,"
-                        "grade_max,subject_tags")
+                        "grade_max,subject_tags,contact_email")
 _MODERATION_SELECT = ("moderation_status,submitted_by,submitted_at,reviewed_by,reviewed_at,"
                       "duplicate_of,dup_candidates,quality_flags")
 
@@ -2200,7 +2389,7 @@ EDITABLE_OPPORTUNITY_FIELDS = {
     "name": "text", "org": "text", "summary": "text", "url": "text",
     "type": "text", "category": "text", "price": "text", "cost": "text",
     "state": "text", "location": "text", "intl": "text", "season": "text",
-    "eligibility": "text",
+    "eligibility": "text", "contact_email": "text",
     "grade_min": "int", "grade_max": "int",
     "subject_tags": "list",
 }
@@ -2488,6 +2677,398 @@ def activate_opportunities(ids, active=True):
             "errors": errors, "error_details": details}
 
 
+# ---------- Mailing-list signup ----------
+#
+# Two halves, deliberately far apart in trust:
+#
+#   DISCOVERY (find_mailing_lists.py) writes a RECIPE per opportunity into
+#   opportunity_signups, always at status 'pending_review'. It cannot verify its own work.
+#
+#   EXECUTION (here) replays a recipe for one real user, and refuses to touch anything a
+#   person has not promoted to 'verified' in the admin console. There is no AI on this
+#   path and it costs nothing — the model was spent once, offline, per opportunity.
+#
+# The wording matters as much as the mechanism. Every provider we support double opt-ins,
+# and because the student's own address is used (there is no wingman-owned relay to read),
+# nothing here can observe the confirmation being clicked. The success state is
+# 'submitted', never 'subscribed', all the way from mailing_list_common through the
+# database column to the button label. Do not "tidy" that up.
+
+SIGNUPS_TABLE = "opportunity_signups"
+SUBSCRIPTIONS_TABLE = "mailing_list_subscriptions"
+
+# Recipe statuses a reviewer may set from the console. 'pending_review' is here so a
+# verdict can be undone; discovery writes 'pending_review'/'none' and nothing else.
+SIGNUP_REVIEW_STATUSES = ("verified", "rejected", "pending_review", "none")
+
+# Per-user throttle on outbound subscribes. This is not about our cost — a subscribe is
+# free — it is about not letting a stuck button, or a user working through a long result
+# list, look like an attack to somebody else's mail provider. In-memory and per-process,
+# which is enough for a single dev server; the unique (userid, opportunity_id) row is the
+# real backstop against repeat submissions of the SAME list.
+SUBSCRIBE_MAX_PER_HOUR = 10
+_subscribe_history = {}  # {userid: [monotonic timestamps]}
+_subscribe_lock = threading.Lock()
+
+
+def _subscribe_rate_limited(userid):
+    """True if this user has already sent SUBSCRIBE_MAX_PER_HOUR subscribes this hour."""
+    now = time.monotonic()
+    with _subscribe_lock:
+        recent = [t for t in _subscribe_history.get(userid, []) if now - t < 3600]
+        if len(recent) >= SUBSCRIBE_MAX_PER_HOUR:
+            _subscribe_history[userid] = recent
+            return True
+        recent.append(now)
+        _subscribe_history[userid] = recent
+        return False
+
+
+def _missing_table_error(exc):
+    """True when PostgREST rejected the call because mailing_list_schema.sql has not run.
+
+    An unknown TABLE reports PGRST205 (and 42P01 from Postgres itself), where an unknown
+    COLUMN reports the codes _is_missing_column_error already knows about. Both mean "run
+    the .sql file", and both must be told apart from a real failure so the console can
+    show a setup step instead of an error.
+    """
+    if not isinstance(exc, urllib.error.HTTPError):
+        return False
+    code = (_error_body(exc) or {}).get("code")
+    return code in ("PGRST205", "42P01") or code in _MISSING_COLUMN_CODES
+
+
+# Covers both halves of the same setup step: the tables missing entirely, and the tables
+# existing in an older shape with columns missing. The fix is identical either way, and
+# the second case is the easier one to misread as a bug.
+MAILING_LIST_SETUP_HINT = ("The mailing-list tables are missing or out of date. Run "
+                           "mailing_list_schema.sql in the Supabase SQL editor (it is "
+                           "idempotent, and its ALTER block adds anything missing from an "
+                           "existing table), then restart the server.")
+
+
+_SNAPSHOT_COMMIT_RE = re.compile(r"Committed dry-run snapshot (\S+)")
+
+
+def annotate_committed_snapshots(snapshots):
+    """Mark snapshots that have already been committed, from agent_runs' own history.
+
+    `pending` is computed purely from the file on disk and never compared against the
+    database, and nothing links a snapshot to the commit that consumed it — so a snapshot
+    read identically before and after being applied, and the console offered "Commit…" on
+    a file whose writes had already landed. Harmless for the scraper (inserts dedupe on
+    normalized URL, so a second commit writes nothing) but not for the three PATCH agents,
+    where re-committing re-applies days-old field values over whatever has changed since.
+
+    The filename is recovered from the `notes` string commit_snapshot_file() already
+    writes, rather than by adding a column — no migration, and every existing commit in
+    the table is recognised retroactively.
+    """
+    committed = {}
+    for r in recent_runs():
+        if (r.get("mode") or "") != "snapshot-commit":
+            continue
+        m = _SNAPSHOT_COMMIT_RE.search(r.get("notes") or "")
+        if not m:
+            continue
+        prev = committed.get(m.group(1))
+        at = r.get("finished_at") or r.get("started_at")
+        if prev is None or (at or "") > (prev.get("at") or ""):
+            committed[m.group(1)] = {
+                "at": at,
+                "applied": (r.get("items_updated") or 0) + (r.get("items_added") or 0),
+            }
+    for snap in snapshots:
+        hit = committed.get(snap.get("file"))
+        snap["committed"] = bool(hit)
+        snap["committed_at"] = hit["at"] if hit else None
+        snap["committed_applied"] = hit["applied"] if hit else None
+    return snapshots
+
+
+def _supabase_request_strict(table, method="GET", params=None, data=None, extra_headers=None):
+    """_supabase_request, but raising instead of swallowing.
+
+    _supabase_request returns None for every failure alike, which cannot tell "the table
+    does not exist yet" from "Supabase is unreachable". Those need different answers — one
+    is a setup step the operator can act on, the other is an outage — so the console read
+    below uses this and classifies the error itself.
+    """
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        raise RuntimeError("SUPABASE_URL/SUPABASE_SERVICE_KEY not configured.")
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    headers = dict(_supabase_headers())
+    headers["Content-Type"] = "application/json"
+    if extra_headers:
+        headers.update(extra_headers)
+    body = json.dumps(data).encode("utf-8") if data is not None else None
+    req = urllib.request.Request(url, data=body, method=method, headers=headers)
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        raw = resp.read()
+        return json.loads(raw) if raw else []
+
+
+def get_signup_recipe(opp_id):
+    """The stored recipe for one opportunity, or None. Never raises."""
+    rows = _supabase_request(SIGNUPS_TABLE, params={
+        "select": "*", "opportunity_id": f"eq.{opp_id}", "limit": "1"})
+    return (rows or [None])[0] if rows else None
+
+
+def list_signup_recipes(status="pending_review", limit=200):
+    """Recipes for the console's Mailing lists tab, newest discovery first.
+
+    Joined against the catalog in a second request rather than with a PostgREST embed:
+    the embed needs a declared foreign-key relationship name, and one wrong guess there
+    400s the whole read — the same trap CLAUDE.md records for selecting a column that
+    does not exist.
+    """
+    params = {"select": "*", "order": "discovered_at.desc", "limit": str(limit)}
+    if status and status != "all":
+        params["status"] = f"eq.{status}"
+    try:
+        rows = _supabase_request_strict(SIGNUPS_TABLE, params=params)
+    except Exception as e:
+        if _missing_table_error(e):
+            return {"ok": True, "mailing_list_ready": False, "recipes": [], "counts": {},
+                    "setup_hint": MAILING_LIST_SETUP_HINT}
+        return {"ok": False, "error": f"Could not read {SIGNUPS_TABLE}: {e}"}
+
+    ids = [r["opportunity_id"] for r in rows]
+    catalog = {}
+    if ids:
+        # PostgREST in.() is comma-separated and paren-delimited; ids in this catalog are
+        # hex-ish slugs, but strip anything that could be read as syntax regardless.
+        safe = ",".join(re.sub(r"[(),*%]", "", str(i)) for i in ids)
+        found = _supabase_request("opportunities", params={
+            "select": "id,name,org,url,type,is_active", "id": f"in.({safe})"}) or []
+        catalog = {row["id"]: row for row in found}
+
+    counts = {}
+    for row in rows:
+        row["opportunity"] = catalog.get(row["opportunity_id"])
+        row["provider_name"] = mailing_list_common.PROVIDER_NAMES.get(row.get("method"))
+        counts[row.get("status")] = counts.get(row.get("status"), 0) + 1
+    return {"ok": True, "mailing_list_ready": True, "recipes": rows, "counts": counts}
+
+
+def moderate_signup_recipes(ids, status, reviewed_by="admin-console"):
+    """Record a human verdict on an explicit list of recipes.
+
+    Promoting to 'verified' is the ONLY way a recipe becomes executable, and it is the
+    whole accuracy control for this feature: discovery proposes, a person decides. There
+    is deliberately no "verify everything above confidence X" path — the confidence score
+    is the model's opinion of its own work, which is exactly what review exists to check.
+    """
+    ids = [str(i).strip() for i in (ids or []) if str(i).strip()]
+    if status not in SIGNUP_REVIEW_STATUSES:
+        return {"ok": False, "error": f"Unknown recipe status: {status!r}. "
+                                      f"Expected one of {', '.join(SIGNUP_REVIEW_STATUSES)}."}
+    if not ids:
+        return {"ok": False, "error": "No recipe ids given."}
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    updates = {"status": status, "reviewed_by": reviewed_by, "reviewed_at": now,
+               "updated_at": now}
+    done, errors, details = 0, 0, []
+    for opp_id in ids:
+        try:
+            _supabase_request_strict(SIGNUPS_TABLE, method="PATCH",
+                                     params={"opportunity_id": f"eq.{opp_id}"},
+                                     data=updates)
+            done += 1
+        except Exception as e:
+            # A table created from an older version of the schema fails here on every
+            # row with an opaque error. Name the file instead: this is a setup step, not
+            # a bug, and "Supabase PATCH failed" sends the reader looking in the wrong
+            # place. Strict (raising) so the cause is actually visible — the swallowing
+            # helper collapses every failure into an indistinguishable None.
+            if _missing_table_error(e):
+                return {"ok": False, "mailing_list_ready": False,
+                        "error": MAILING_LIST_SETUP_HINT}
+            errors += 1
+            if len(details) < 5:
+                details.append(f"{opp_id}: {str(e)[:160]}")
+    return {"ok": errors == 0, "moderated": done, "status": status,
+            "errors": errors, "error_details": details}
+
+
+def get_subscription_states(userid, opp_ids):
+    """What this user has already attempted, keyed by opportunity id.
+
+    Drives the button's third state ("Submitted 12 Aug") so a student is not invited to
+    re-send a signup they already sent.
+    """
+    userid = (userid or "").strip().lower()
+    ids = [str(i).strip() for i in (opp_ids or []) if str(i).strip()]
+    if not userid or not ids:
+        return {}
+    safe = ",".join(re.sub(r"[(),*%]", "", i) for i in ids)
+    rows = _supabase_request(SUBSCRIPTIONS_TABLE, params={
+        "select": "opportunity_id,state,email,message,attempted_at",
+        "userid": f"eq.{userid}", "opportunity_id": f"in.({safe})"}) or []
+    return {r["opportunity_id"]: r for r in rows}
+
+
+def get_signup_availability(userid, opp_ids):
+    """Per-opportunity: can we subscribe automatically, and has this user already?
+
+    One call for a whole screenful of cards. Returns only what the client needs to pick a
+    button state — never the endpoint or field map, which are ours and are not a student's
+    business to see or to be able to replay.
+    """
+    ids = [str(i).strip() for i in (opp_ids or []) if str(i).strip()][:200]
+    if not ids:
+        return {"ok": True, "items": {}}
+    safe = ",".join(re.sub(r"[(),*%]", "", i) for i in ids)
+    try:
+        recipes = _supabase_request(SIGNUPS_TABLE, params={
+            "select": "opportunity_id,method,status,double_optin",
+            "opportunity_id": f"in.({safe})", "status": "eq.verified"}) or []
+    except Exception:
+        recipes = []
+    verified = {r["opportunity_id"]: r for r in recipes}
+    attempts = get_subscription_states(userid, ids)
+
+    items = {}
+    for opp_id in ids:
+        recipe = verified.get(opp_id)
+        attempt = attempts.get(opp_id)
+        items[opp_id] = {
+            "eligible": bool(recipe),
+            "provider": mailing_list_common.PROVIDER_NAMES.get((recipe or {}).get("method")),
+            "double_optin": bool((recipe or {}).get("double_optin")),
+            "state": (attempt or {}).get("state"),
+            "email": (attempt or {}).get("email"),
+            "attempted_at": (attempt or {}).get("attempted_at"),
+        }
+    return {"ok": True, "items": items}
+
+
+def _record_subscription_attempt(userid, opp_id, email, state, message, provider, detail):
+    """Upsert the attempt. Returns True if it was recorded.
+
+    Never raises: the provider has already accepted the signup by the time this runs, and
+    a bookkeeping failure must not be reported to the student as a failed signup. But it
+    is not nothing either — an unrecorded attempt means their button never updates and the
+    Quest Log cannot show them what we sent, so the caller passes `recorded` back and the
+    warning below names the row.
+    """
+    row = {
+        "userid": userid, "opportunity_id": opp_id, "email": email,
+        "state": state, "message": (message or "")[:500], "provider": provider,
+        "provider_detail": (detail or "")[:500],
+        "attempted_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    try:
+        _supabase_request_strict(
+            SUBSCRIPTIONS_TABLE, method="POST",
+            params={"on_conflict": "userid,opportunity_id"}, data=[row],
+            extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+        return True
+    except Exception as e:
+        hint = f" {MAILING_LIST_SETUP_HINT}" if _missing_table_error(e) else ""
+        print(f"[WARN] Signup for {userid}/{opp_id} was SENT but not recorded: {e}.{hint}")
+        return False
+
+
+def subscribe_user_to_list(userid, opp_id, email, consented):
+    """Subscribe one user to one opportunity's mailing list. Returns a client payload.
+
+    Consent is re-checked here and not merely in the UI, for the same reason the signup
+    checkboxes are re-checked in handle_register: the client-side control is a screen, and
+    this one sends a minor's name and address to a third party.
+    """
+    userid = (userid or "").strip().lower()
+    email = (email or "").strip()
+    if not userid:
+        return 401, {"error": "Sign in to use automatic mailing-list signup."}
+    if not consented:
+        return 400, {"error": "We need your OK before sending your details to the organization."}
+    if not EMAIL_RE.match(email):
+        return 400, {"error": "Please enter a valid email address."}
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return 500, {"error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
+
+    opp = _supabase_request("opportunities", params={
+        "select": "id,name,org,url", "id": f"eq.{opp_id}", "limit": "1"})
+    if not opp:
+        return 404, {"error": "Opportunity not found."}
+    opp = opp[0]
+
+    recipe = get_signup_recipe(opp_id)
+    # The gate. An unreviewed recipe is not a slightly-worse verified one — it is an
+    # unattributed form that may belong to the whole university, and sending a student
+    # there is the exact silent failure this feature is measured against.
+    if not recipe or recipe.get("status") != "verified":
+        return 200, {"state": "handoff", "url": opp.get("url"),
+                     "message": "We don't have a verified mailing list for this one yet — "
+                                "open their page to sign up directly."}
+
+    if _subscribe_rate_limited(userid):
+        return 429, {"error": f"That's {SUBSCRIBE_MAX_PER_HOUR} signups in an hour — give it "
+                              f"a little time before sending more."}
+
+    user = None
+    try:
+        user = get_user(userid)
+    except Exception:
+        pass
+    values = {
+        "email": email,
+        "first_name": (user or {}).get("first_name") or "",
+        "last_name": (user or {}).get("last_name") or "",
+    }
+    values["full_name"] = " ".join(v for v in (values["first_name"], values["last_name"]) if v)
+
+    state, message, detail = mailing_list_common.execute(recipe, values)
+    recorded = _record_subscription_attempt(userid, opp_id, email, state, message,
+                                            recipe.get("method"), detail)
+    payload = {"state": state, "message": message, "email": email,
+               "provider": mailing_list_common.PROVIDER_NAMES.get(recipe.get("method")),
+               "double_optin": bool(recipe.get("double_optin")),
+               # False means the signup went out but we could not store it — the button
+               # will reset and the Quest Log will not list it. Surfaced rather than
+               # hidden so this shows up as a bug report and not as a mystery.
+               "recorded": recorded}
+    if state in ("failed", "handoff"):
+        payload["url"] = opp.get("url")
+    return 200, payload
+
+
+def list_user_subscriptions(userid, limit=200):
+    """Every mailing list this user has signed up for, for the Quest Log's own list.
+
+    A student must be able to find what we sent on their behalf. Without this the feature
+    is a button that does something invisible.
+    """
+    userid = (userid or "").strip().lower()
+    if not userid:
+        return {"ok": True, "subscriptions": []}
+    try:
+        rows = _supabase_request(SUBSCRIPTIONS_TABLE, params={
+            "select": "opportunity_id,state,email,message,provider,attempted_at",
+            "userid": f"eq.{userid}", "order": "attempted_at.desc",
+            "limit": str(limit)}) or []
+    except Exception:
+        rows = []
+    if not rows:
+        return {"ok": True, "subscriptions": []}
+    safe = ",".join(re.sub(r"[(),*%]", "", r["opportunity_id"]) for r in rows)
+    catalog = {c["id"]: c for c in (_supabase_request("opportunities", params={
+        "select": "id,name,org,url", "id": f"in.({safe})"}) or [])}
+    for row in rows:
+        entry = catalog.get(row["opportunity_id"]) or {}
+        row["name"] = entry.get("name") or row["opportunity_id"]
+        row["org"] = entry.get("org")
+        row["url"] = entry.get("url")
+    return {"ok": True, "subscriptions": rows}
+
+
 def get_agents_summary(days=30):
     """Aggregates for the dashboard KPI strip and charts.
 
@@ -2564,10 +3145,39 @@ def get_agents_summary(days=30):
         entry["runs"] += 1
         entry["rows"] += (r.get("items_updated") or 0) + (r.get("items_added") or 0)
 
+    # On-demand deadline checks, folded in under their own key. Without this the chart
+    # could not sum to the KPI no matter what the console drew, because this spend is not
+    # in agent_runs at all.
+    for day, cost in fetch_deadline_check_cost_by_day(cutoff, now).items():
+        bucket = per_day.setdefault(day, {})
+        entry = bucket.setdefault("deadline_ondemand", {"cost_usd": 0.0, "runs": 0, "rows": 0})
+        entry["cost_usd"] = round(entry["cost_usd"] + cost, 4)
+
+    # Anchored on today and inclusive of it — see the same loop in get_user_costs(). A
+    # forward count from the cutoff ends at yesterday, so today's runs never got a bar.
     series = []
-    for i in range(days):
-        day = (cutoff + datetime.timedelta(days=i)).date().isoformat()
+    today = now.date()
+    for i in range(days, -1, -1):
+        day = (today - datetime.timedelta(days=i)).isoformat()
         series.append({"date": day, "agents": per_day.get(day, {})})
+
+    # Every key the series actually contains, labelled, so the chart can draw all of them
+    # instead of only the five with console cards. It used to iterate the card list, which
+    # silently dropped the interactive rollups, on-demand deadline checks, and any agent
+    # run from a script with no card (subject_tags_backfill) — $4.84 of $14.24, invisible
+    # directly under a KPI that included it.
+    series_keys = []
+    for key in sorted({k for bucket in per_day.values() for k in bucket}):
+        if key in AGENT_CONFIGS_SCHEMA:
+            series_keys.append({"key": key, "label": AGENT_CONFIGS_SCHEMA[key]["name"],
+                                "group": "agent"})
+        elif key in INTERACTIVE_AGENTS:
+            series_keys.append({"key": key, "label": INTERACTIVE_AGENTS[key], "group": "app"})
+        elif key == "deadline_ondemand":
+            series_keys.append({"key": key, "label": "App — deadline checks", "group": "app"})
+        else:
+            # A real run from a script with no console card. Named, not hidden.
+            series_keys.append({"key": key, "label": key.replace("_", " "), "group": "other"})
 
     by_agent = {}
     for key in AGENT_CONFIGS_SCHEMA:
@@ -2593,6 +3203,7 @@ def get_agents_summary(days=30):
         },
         "deadline_checks": dl_now,
         "series": series,
+        "series_keys": series_keys,
         # What the totals above still cannot see, stated rather than implied.
         "caveats": [
             "Costs are estimated locally from token counts, not read from provider billing.",
@@ -2602,6 +3213,29 @@ def get_agents_summary(days=30):
     }
 
 
+def fetch_deadline_check_cost_by_day(start, end):
+    """On-demand deadline spend per UTC day, for the spend chart.
+
+    These checks are the single largest thing the chart used to omit: they live in
+    deadline_check_log, never in agent_runs, so they were absent from the series entirely
+    while still counting toward the KPI directly above it.
+    """
+    rows = _supabase_request("deadline_check_log", params={
+        "select": "cost_usd,checked_at",
+        "checked_at": f"gte.{start.isoformat()}",
+        "and": f"(checked_at.lt.{end.isoformat()})",
+        "limit": "10000",
+    }) or []
+    per_day = {}
+    for r in rows:
+        cost = r.get("cost_usd")
+        day = (r.get("checked_at") or "")[:10]
+        if cost is None or not day:
+            continue
+        per_day[day] = round(per_day.get(day, 0.0) + float(cost), 6)
+    return per_day
+
+
 def fetch_deadline_check_cost(start, end):
     """Cost of on-demand deadline checks in a window, from deadline_check_log.
 
@@ -2609,9 +3243,14 @@ def fetch_deadline_check_cost(start, end):
     agent_runs — so they were absent from every figure the console showed. Cached rows
     have a null cost because they made no API call; only fresh checks are billed.
     """
+    # Both bounds. `end` used to be accepted and ignored, which made the summary's
+    # "previous period" deadline cost include the current period as well — the two figures
+    # the KPI deltas are computed from overlapped, so every delta involving deadline spend
+    # was wrong.
     rows = _supabase_request("deadline_check_log", params={
         "select": "cost_usd,source,web_searches",
         "checked_at": f"gte.{start.isoformat()}",
+        "and": f"(checked_at.lt.{end.isoformat()})",
         "limit": "10000",
     }) or []
     rows = [r for r in rows if (r.get("cost_usd") is not None)]
@@ -2915,6 +3554,18 @@ def build_agent_args(agent_name, config, preview=False):
         else:
             args.append("--all")
 
+    elif agent_name == "mailinglist":
+        # find_mailing_lists.py: [--all | --ids A,B] [--limit N] [--force] [--dry-run]
+        if config.get("ids"):
+            args += ["--ids", str(config["ids"])]
+        else:
+            args.append("--all")
+        limit = _int_or_none(config.get("limit"))
+        if limit:
+            args += ["--limit", str(limit)]
+        if config.get("force"):
+            args.append("--force")
+
     # Timing applies to every agent identically.
     min_delay = config.get("minDelay")
     if min_delay not in (None, ""):
@@ -3003,13 +3654,30 @@ def estimate_agent_cost(agent_name, count, min_delay=None):
     db_agent = cfg.get("db_agent")
     rows = [r for r in recent_runs()
             if r.get("agent") == db_agent and r.get("finished_at")
-            and (r.get("items_processed") or 0) > 0 and r.get("cost_usd") is not None]
+            and (r.get("items_processed") or 0) > 0 and r.get("cost_usd") is not None
+            # Successful runs only. A FAILED run still counted every row it touched but
+            # errored out of most of them before paying for them, so it lands here as an
+            # implausibly cheap per-item rate and drags the mean down — for review_checker,
+            # 6 of the 10 most recent qualifying runs were failures and the estimate came
+            # out at roughly half the rate the clean runs measure.
+            and _run_status(r) == "success"
+            # snapshot-commit rows carry real item counts against cost_usd = 0 BY
+            # CONSTRUCTION (the dry run that produced the file already paid), so averaging
+            # one in is averaging in a free run that never existed.
+            and (r.get("mode") or "") != "snapshot-commit"]
 
     per_item = None
     per_item_secs = None
+    per_item_low = None
+    per_item_high = None
     if rows:
         sample = rows[:10]
-        per_item = sum(float(r["cost_usd"]) / r["items_processed"] for r in sample) / len(sample)
+        rates = [float(r["cost_usd"]) / r["items_processed"] for r in sample]
+        per_item = sum(rates) / len(rates)
+        # The spread, not just the mean. This agent's own history ranges over three orders
+        # of magnitude per item depending on how much web search a run triggered; a lone
+        # average hides that completely and reads as a precision the number does not have.
+        per_item_low, per_item_high = min(rates), max(rates)
         durations = []
         for r in sample:
             t0, t1 = _parse_iso(r.get("started_at")), _parse_iso(r.get("finished_at"))
@@ -3027,11 +3695,17 @@ def estimate_agent_cost(agent_name, count, min_delay=None):
         delay = float(agent_defaults(agent_name).get("min_delay") or 0)
     secs_each = max(per_item_secs or 0, delay)
 
+    n = len(rows[:10])
     return {
         "est_cost_usd": round(per_item * count, 4) if per_item is not None else None,
         "est_cost_per_item": round(per_item, 6) if per_item is not None else None,
+        "est_cost_low_usd": round(per_item_low * count, 4) if per_item_low is not None else None,
+        "est_cost_high_usd": round(per_item_high * count, 4) if per_item_high is not None else None,
         "est_seconds": round(secs_each * count) if secs_each else None,
-        "based_on_runs": len(rows[:10]),
+        "based_on_runs": n,
+        # Fewer than three clean runs is not an estimate, it is one anecdote multiplied by
+        # count. Say so rather than printing it at the same weight as a settled figure.
+        "provisional": n < 3,
     }
 
 
@@ -3207,6 +3881,39 @@ def list_seeds(mode=None):
     return rows
 
 
+def seed_yield_state(rows):
+    """Why the yield columns are empty, when they are.
+
+    A grid of zeros reads as a broken feature. It usually isn't: record_seed_result() is
+    deliberately skipped on dry runs (nothing was added, so nothing should be credited),
+    and the hardcoded fallback seeds have no id and so cannot be credited at all. Both are
+    correct, and both are invisible unless the console says so.
+    """
+    credited = sum(1 for r in rows if (r.get("total_runs") or 0) > 0)
+    if credited:
+        return {"credited_seeds": credited, "ever_credited": True, "reason": None}
+    live_runs = dry_runs = 0
+    for r in recent_runs():
+        if r.get("agent") != "scraper" or not r.get("finished_at"):
+            continue
+        if str(r.get("mode") or "").endswith("-dryrun"):
+            dry_runs += 1
+        else:
+            live_runs += 1
+    if dry_runs and not live_runs:
+        reason = (f"No angle has been credited yet: all {dry_runs} scraper run(s) on record "
+                  f"were dry runs, and a dry run adds nothing so it credits nothing. "
+                  f"Figures appear after the first live run.")
+    elif live_runs:
+        reason = (f"No angle has been credited yet. {live_runs} live run(s) exist, but they "
+                  f"predate this table and used the hardcoded fallback angles, which have "
+                  f"no id and cannot be credited.")
+    else:
+        reason = "No angle has been credited yet: no scraper run has completed."
+    return {"credited_seeds": 0, "ever_credited": False, "reason": reason,
+            "live_runs": live_runs, "dry_runs": dry_runs}
+
+
 def create_seed(payload):
     row = {k: payload[k] for k in SEED_FIELDS if k in payload}
     if not row.get("mode") or not row.get("angle") or not row.get("category"):
@@ -3289,6 +3996,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self.handle_pending_list(query)
             elif path == "/api/agents/opportunities/search":
                 self.handle_opportunity_search(query)
+            elif path == "/api/agents/signups":
+                self.handle_signups_list(query)
             elif path == "/api/agents/user-costs":
                 self.handle_agents_user_costs(query)
             elif path == "/api/agents/billed":
@@ -3299,6 +4008,10 @@ class Handler(SimpleHTTPRequestHandler):
                 self.handle_seeds_list(query)
             else:
                 self.send_error(404)
+        elif path == "/api/mailing-list/status":
+            self.handle_mailing_list_status(query)
+        elif path == "/api/mailing-list/subscriptions":
+            self.handle_mailing_list_subscriptions(query)
         elif self.path.startswith("/api/opportunities"):
             self.handle_opportunities()
         elif path == "/api/auth/google/start":
@@ -3356,6 +4069,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path, _ = self._split_path()
+        subscribe_match = SUBSCRIBE_PATH_RE.match(path)
+        if subscribe_match:
+            return self.handle_mailing_list_subscribe(subscribe_match.group(1))
         if path.startswith("/api/agents/") or path == "/api/seeds":
             if not self._require_local():
                 return
@@ -3367,6 +4083,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self.handle_pending_moderate()
             elif path == "/api/agents/pending/update":
                 self.handle_pending_update()
+            elif path == "/api/agents/signups/moderate":
+                self.handle_signups_moderate()
             elif path == "/api/agents/run":
                 self.handle_agents_run()
             elif path == "/api/agents/preview":
@@ -4540,7 +5258,8 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
     def handle_snapshots_list(self):
         """GET /api/agents/snapshots — dry-run snapshots on disk that could be committed."""
         self._relay(200, json.dumps(
-            {"snapshots": dryrun_common.list_snapshots()}, default=str).encode())
+            {"snapshots": annotate_committed_snapshots(dryrun_common.list_snapshots())},
+            default=str).encode())
 
     def handle_snapshot_commit(self):
         """POST /api/agents/snapshots/commit — replay a snapshot into the catalog.
@@ -4618,6 +5337,60 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
         result = activate_opportunities(body.get("ids") or [], active=bool(active))
         self._relay(200 if result.get("ok") else 400,
                     json.dumps(result, default=str).encode())
+
+    # ---------- Mailing-list signup ----------
+
+    def handle_signups_list(self, query=None):
+        """GET /api/agents/signups?status=&limit= — the recipe review queue.
+
+        Localhost-only with the rest of /api/agents/*. Backs the console's Mailing lists
+        tab, which is the only place a recipe can be promoted to `verified` — i.e. the
+        only place anything becomes executable against a real student's address.
+        """
+        status = self._qs(query, "status", "pending_review")
+        limit = self._qs(query, "limit", 200, int) or 200
+        result = list_signup_recipes(status=status, limit=max(1, min(limit, 1000)))
+        self._relay(200 if result.get("ok") else 502,
+                    json.dumps(result, default=str).encode())
+
+    def handle_signups_moderate(self):
+        """POST /api/agents/signups/moderate — {ids, status} verdict on recipes."""
+        body = self._read_json_body()
+        result = moderate_signup_recipes(body.get("ids") or [],
+                                         (body.get("status") or "").strip())
+        self._relay(200 if result.get("ok") else 400,
+                    json.dumps(result, default=str).encode())
+
+    def handle_mailing_list_status(self, query=None):
+        """GET /api/mailing-list/status?userid=&ids=a,b,c — button state for a screenful.
+
+        Not subscription-gated: this only decides which of three labels a button shows,
+        makes no outbound request, and costs nothing. The gate belongs on the action.
+        """
+        ids = [i for i in (self._qs(query, "ids", "") or "").split(",") if i.strip()]
+        result = get_signup_availability(self._qs(query, "userid"), ids)
+        self._relay(200, json.dumps(result, default=str).encode())
+
+    def handle_mailing_list_subscriptions(self, query=None):
+        """GET /api/mailing-list/subscriptions?userid= — what we sent on this user's behalf."""
+        result = list_user_subscriptions(self._qs(query, "userid"))
+        self._relay(200, json.dumps(result, default=str).encode())
+
+    def handle_mailing_list_subscribe(self, opp_id):
+        """POST /api/opportunities/<id>/subscribe — {userid, email, consent}.
+
+        Sends a student's name and address to a third party, so three things are checked
+        server-side and not merely in the UI: that the account is in good standing, that
+        consent was actually given, and that a PERSON verified this recipe. The client
+        controls for all three are screens; these are the controls.
+        """
+        body = self._read_json_body()
+        userid = (body.get("userid") or "").strip()
+        if self._subscription_blocks(userid):
+            return
+        status, payload = subscribe_user_to_list(
+            userid, opp_id, body.get("email"), bool(body.get("consent")))
+        self._relay(status, json.dumps(payload, default=str).encode())
 
     def handle_agents_user_costs(self, query=None):
         """GET /api/agents/user-costs?days=&limit= — per-user breakdown of app spend.
@@ -4702,7 +5475,9 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
             return self.send_json_error(
                 502, "Could not read scraper_seeds. Has the table been created? "
                      "See scraper_seeds_schema.sql.")
-        self._relay(200, json.dumps({"ok": True, "seeds": rows}, default=str).encode())
+        self._relay(200, json.dumps(
+            {"ok": True, "seeds": rows, "yield": seed_yield_state(rows)},
+            default=str).encode())
 
     def handle_seed_create(self):
         body, parse_error = self._read_json_body_strict()
@@ -4889,6 +5664,19 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
         else:
             self.mock_response(raw_body)
 
+    @staticmethod
+    def _clamped_max_tokens(requested):
+        """Client-requested output budget, clamped into [CLAUDE_MAX_TOKENS, ceiling].
+
+        A bad/absent value falls back to the default rather than erroring — this is a
+        rendering budget, not a correctness input.
+        """
+        try:
+            n = int(requested)
+        except (TypeError, ValueError):
+            return CLAUDE_MAX_TOKENS
+        return max(CLAUDE_MAX_TOKENS, min(n, CLAUDE_MAX_TOKENS_CEILING))
+
     def proxy_to_anthropic(self, raw_body):
         # Client (script.js's callClaude()) sends the same plain {system, userContent,
         # useWebSearch, userid} shape as callGemini() — translated into Anthropic's content-block/
@@ -4904,7 +5692,7 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
         use_web_search = bool(payload.get("useWebSearch"))
         body = {
             "model": CLAUDE_MODEL,
-            "max_tokens": CLAUDE_MAX_TOKENS,
+            "max_tokens": self._clamped_max_tokens(payload.get("maxTokens")),
             "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             "messages": [{"role": "user", "content": user_content}],
         }

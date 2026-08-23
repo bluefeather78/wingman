@@ -38,7 +38,7 @@ import os
 import sys
 import urllib.error
 
-from agent_common import add_agent_args, apply_timing, emit_preview, snapshot_stamp
+from agent_common import add_agent_args, apply_timing, clean_email, emit_preview, snapshot_stamp
 from gemini_common import call_gemini, extract_json, estimate_cost
 from seeds_common import load_seeds, record_seed_result, select_seeds
 from supabase_common import load_dotenv, supabase_get, supabase_post, supabase_insert_one, supabase_patch
@@ -185,7 +185,9 @@ useful detail (this is the only descriptive text shown to students, so don't be 
 "grade_min": integer or null, "grade_max": integer or null, \
 "eligibility": "short freeform eligibility note, or null", \
 "subject_tags": ["3-5 short tags: one broad category from {subjects}, plus 2-4 more specific tags \
-naming the actual field, skill, or activity"]}}"""
+naming the actual field, skill, or activity"], \
+"contact_email": "a real contact email address for the program if you actually found one on its \
+site (e.g. an admissions or info@ address), else null — never guess or construct one"}}"""
 
 SEATTLE_ADDENDUM = """
 
@@ -251,6 +253,7 @@ def build_row(candidate, seed_category, mint_id, source):
         "grade_max": candidate.get("grade_max") if isinstance(candidate.get("grade_max"), int) else None,
         "cost": candidate.get("cost_detail"),
         "subject_tags": tags or None,
+        "contact_email": clean_email(candidate.get("contact_email")),
         "is_active": False,
         "source": source,
     }

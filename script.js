@@ -1270,8 +1270,19 @@ async function callGemini(system, userContent, useWebSearch){
 // (Haiku 4.5) rather than moving to Gemini with the rest of the app — same client body
 // shape as callGemini ({system, userContent, useWebSearch}), just posted to a separate
 // endpoint so server.py can translate it into Anthropic's request format internally.
-async function callClaude(system, userContent, useWebSearch){
+async function callClaude(system, userContent, useWebSearch, maxTokens){
+  return (await callClaudeDetailed(system, userContent, useWebSearch, maxTokens)).text;
+}
+
+// Same call, but also reports whether the model was cut off. Callers whose answer has no
+// natural length bound - profile synthesis rewrites the ENTIRE profile on every merge, so
+// its output grows with the profile - need to tell "the model finished" apart from "the
+// model hit max_tokens", because the latter comes back looking like a normal, complete
+// response. That is exactly how half-finished profiles used to reach the page. maxTokens is
+// optional and is clamped server-side (see _clamped_max_tokens in server.py).
+async function callClaudeDetailed(system, userContent, useWebSearch, maxTokens){
   const body = { system, userContent, useWebSearch: !!useWebSearch, userid: currentUser?.userid || null };
+  if(maxTokens) body.maxTokens = maxTokens;
   const res = await fetch("/api/messages-claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1283,7 +1294,8 @@ async function callClaude(system, userContent, useWebSearch){
   const textBlocks = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
   const clean = textBlocks.replace(/```json|```/g, "").trim();
   if(!clean){ throw new Error("Empty response from API"); }
-  return clean;
+  // Mock mode returns no stop_reason at all; a missing one reads as a clean finish.
+  return { text: clean, truncated: data.stop_reason === "max_tokens" };
 }
 
 // Finds the JSON value in a text blob by scanning brace/bracket depth
@@ -1584,6 +1596,24 @@ const PROFILE_DERIVED_SLOTS = {
     async compute(text){
       return { fields: await extractProfileBasics(text) };
     }
+  },
+  // The Profile Builder chat's OPENING questions — a bank of 10 generated once per profile
+  // "version", from which each drawer open serves a rotating window of 3 (see
+  // loadProfileChatStarters). Openers are the one half of this chat that depends on nothing
+  // but the profile text, which is exactly what makes them safe to cache: there is no
+  // conversation yet for them to be responsive to. Follow-ups are the opposite and are
+  // deliberately NOT pooled — see profileChatNextQuestion.
+  //
+  // Being a slot here buys two things beyond the cache itself: regeneration is tied to the
+  // same PROFILE_FILTER_REFRESH_WORDS "significant change" bar the other slots use rather
+  // than a second threshold meaning the same thing, and refreshProfileFilterValues() already
+  // walks every slot after a merge — so the pool is pre-warmed in the background the moment
+  // the profile changes, and the drawer never opens onto a loading state.
+  starterPool: {
+    key: 'questions',
+    async compute(text){
+      return { questions: await starterQuestionPoolFromAI(text) };
+    }
   }
 };
 // slot -> { text, promise } for a computation already running, so a background refresh
@@ -1731,6 +1761,14 @@ function openStoryDrawer(){
 // which then flashes the newly-added sentences. The drawer shuts immediately rather than
 // waiting on that call — the merge takes a couple of API round-trips, and holding a
 // dismissed drawer open for them reads as broken.
+//
+// Closing also ENDS the session either way, so the next open always starts clean. When the
+// student answered something, finishProfileChatSession does that clearing at the end of the
+// merge; when they answered nothing there is nothing to merge (synthesis on an empty
+// transcript would pay the most expensive call in the flow to rewrite an unchanged profile),
+// so the reset happens here instead. Without that second branch a starter question the
+// student read but never answered stayed in profileChatHistory, and reopening the drawer
+// rendered that stale bubble instead of a fresh set of starters.
 function closeStoryDrawer(){
   const drawer = document.getElementById('storyDrawer');
   const overlay = document.getElementById('storyDrawerOverlay');
@@ -1739,6 +1777,18 @@ function closeStoryDrawer(){
   drawer.classList.remove('open');
   drawer.setAttribute('aria-hidden', 'true');
   if(profileChatHistory.some(m => m.role === 'user')) finishProfileChatSession();
+  else resetProfileChatSession();
+}
+
+// Wipes every trace of a chat session — the transcript, the starters shown with it, and any
+// text typed into the box but never sent.
+function resetProfileChatSession(){
+  profileChatHistory = [];
+  profileChatStarters = null;
+  profileChatStartersLoading = false;
+  const input = document.getElementById('profileChatInput');
+  if(input) input.value = '';
+  renderProfileChatMessages();
 }
 
 // Kept as the app-wide alias so existing "deepen your story" call sites keep working.
@@ -1794,24 +1844,133 @@ async function clearProfile(btn){
   if(drawer && drawer.classList.contains('open')) initProfileChat();
 }
 
+// Output budget for a synthesis call. Not a limit on how much profile a student may have —
+// it is headroom, and unused headroom is not billed. See the retry in synthesizeProfile.
+const PROFILE_SYNTH_MAX_TOKENS = 4000;
+const PROFILE_SYNTH_MAX_TOKENS_RETRY = 8000;
+
 // Merges a block of new text into the single synthesized profile via the API — adding,
 // updating, or dropping details as the new information warrants — so only one current
 // version ever exists. Falls back to a plain append if the API is unavailable, so
 // nothing the student wrote is lost even without live access.
-async function synthesizeProfile(existing, newText){
-  const system = `You maintain a single, coherent running profile of a high school student's academic and extracurricular interests, built up over multiple sessions. You'll be given the student's CURRENT profile (may be empty) and NEW information they just added. Merge the new information in: add genuinely new details, and update or remove anything the new information supersedes or contradicts. Do not drop specific, still-relevant details from the current profile just because they weren't repeated in the new information. Write it as concise statements in FIRST PERSON, as if the student is describing themself (e.g. "I'm interested in...", "I've been working on...", "My goal is..." — not third person, not addressed to the student, not a bulleted list, no markdown). Structure the output as short paragraphs separated by a blank line (double newline). General paragraphs (no prefix) should cover academic interests, extracurriculars, and goals — 1-3 such paragraphs is typical. If the student has described any larger, longer-term "marquee" projects they're personally driving (as opposed to one-off activities or classes), describe EACH one in its OWN separate paragraph prefixed with the literal text "Passion Project: " — one such paragraph per distinct project, never combining multiple projects into one paragraph. Separately, if the student has described any independent research projects (research, papers, studies they're conducting), describe EACH one in its OWN separate paragraph prefixed with the literal text "Research Project: ", same rule — one per project. A project that fits both categories should be listed under whichever one fits best, not both. Only include these prefixed paragraphs for projects actually described — don't fabricate any. Respond with ONLY the updated profile text — no preamble, no quotes around it.`;
-  const userContent = `CURRENT PROFILE:\n${existing || '(empty — nothing recorded yet)'}\n\nNEW INFORMATION TO ADD:\n${newText}\n\nRespond with the updated, merged profile text only.`;
-  const raw = await callClaude(system, userContent, false);
-  return raw.trim();
+async function synthesizeProfile(existing, newText, isTranscript){
+  const system = `You maintain a single, coherent running profile of a high school student's academic and extracurricular interests, built up over multiple sessions. You'll be given the student's CURRENT profile (may be empty) and NEW information they just added. Merge the new information in: add genuinely new details, and update or remove anything the new information supersedes or contradicts. Do not drop specific, still-relevant details from the current profile just because they weren't repeated in the new information. Write it as concise statements in FIRST PERSON, as if the student is describing themself (e.g. "I'm interested in...", "I've been working on...", "My goal is..." — not third person, not addressed to the student, not a bulleted list, no markdown). Structure the output as short paragraphs separated by a blank line (double newline). General paragraphs (no prefix) should cover academic interests, extracurriculars, and goals — 1-3 such paragraphs is typical. If the student has described any larger, longer-term "marquee" projects they're personally driving (as opposed to one-off activities or classes), describe EACH one in its OWN separate paragraph prefixed with the literal text "Passion Project: " — one such paragraph per distinct project, never combining multiple projects into one paragraph. Separately, if the student has described any independent research projects (research, papers, studies they're conducting), describe EACH one in its OWN separate paragraph prefixed with the literal text "Research Project: ", same rule — one per project. A project that fits both categories should be listed under whichever one fits best, not both. Only include these prefixed paragraphs for projects actually described — don't fabricate any. If the CURRENT PROFILE ends mid-sentence, or contains a paragraph that is obviously an incomplete fragment, that is damage from an earlier write that was cut off short — repair it rather than preserving it verbatim: finish the thought only if the rest of the profile makes what was meant unambiguous, and otherwise drop the incomplete fragment. Never invent details to fill such a gap. Respond with ONLY the updated profile text — no preamble, no quotes around it.${isTranscript ? ` The NEW INFORMATION is a raw transcript of a chat between this app's bot and the student, not prose written for you. Use only what the Student lines actually say; the Bot lines are prompts, not facts about the student, and small talk should be ignored. Never quote the transcript verbatim — restate what was learned in the student's first-person voice.` : ''}`;
+  const userContent = `CURRENT PROFILE:\n${existing || '(empty — nothing recorded yet)'}\n\nNEW INFORMATION TO ADD${isTranscript ? ' (raw chat transcript)' : ''}:\n${newText}\n\nRespond with the updated, merged profile text only.`;
+  // Output budget, not a content limit: the profile is rewritten whole every merge, so the
+  // answer grows with the profile and a fixed cap eventually cuts it mid-sentence. Unused
+  // budget is free (billing is on tokens actually produced), so ask generously and retry
+  // once at the server ceiling if the model still ran out. There is deliberately no word
+  // limit anywhere in the prompt above.
+  let res = await callClaudeDetailed(system, userContent, false, PROFILE_SYNTH_MAX_TOKENS);
+  if(res.truncated){
+    res = await callClaudeDetailed(system, userContent, false, PROFILE_SYNTH_MAX_TOKENS_RETRY);
+  }
+  // Still cut off after the retry: keep the last complete profile rather than saving a
+  // sentence fragment over it. The caller's catch appends the raw new text instead, which
+  // loses nothing the student wrote.
+  if(res.truncated) throw new Error('Profile synthesis was truncated by the model.');
+  return res.text.trim();
 }
-async function mergeIntoProfile(text){
-  if(!text || !text.trim()) return;
+// True from the moment new text is handed to synthesizeProfile until the rewritten profile
+// is on the page. Rendered as the "Synthesis into profile in progress" strip, so every merge
+// entry point shows one - the chat drawer had its optimistic tile, but a resume import or a
+// wizard finish previously sat completely silent for the several seconds the call takes.
+let profileSynthesisInProgress = false;
+
+function setProfileSynthesisInProgress(on){
+  profileSynthesisInProgress = on;
+  renderProfileSynthesisStatus();
+}
+
+// Toggled directly rather than rebuilt into #profileContent: that element is rewritten by
+// renderProfileFit at the end of the merge, which is exactly when the strip has to survive
+// long enough for the render to hide it, and it must also show on a first-ever merge when
+// the card has no content yet.
+function renderProfileSynthesisStatus(){
+  const el = document.getElementById('profileSynthesisStatus');
+  if(el) el.classList.toggle('hidden', !profileSynthesisInProgress);
+}
+
+// Pulls the student's own words out of a "Bot: ... / Student: ..." transcript.
+function transcriptStudentLines(transcript){
+  return (transcript || '').split("\n")
+    .filter(l => /^Student:/.test(l.trim()))
+    .map(l => l.replace(/^\s*Student:\s*/, '').trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
+// Does the stored profile carry damage from a write that was cut off short?
+//
+// Synthesis emits general paragraphs first, then "Passion Project: " ones, then
+// "Research Project: " ones, so a response that ran out of output budget always lost its
+// TAIL - which is precisely the projects. The budget is fixed now (see
+// PROFILE_SYNTH_MAX_TOKENS), but profiles written before that keep the fragment forever:
+// every later merge is handed the damaged text as CURRENT PROFILE and told not to drop
+// details from it, so it is faithfully copied forward. The card is read-only and the only
+// other control is Clear profile, which throws away everything - hence an explicit repair.
+function profileHasTruncatedTail(){
+  const text = (studentProfile.synthesized || '').trim();
+  if(!text) return false;
+  const paragraphs = text.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  const last = paragraphs[paragraphs.length - 1] || '';
+  // A complete profile ends on terminal punctuation. Anything else - a bare word, a comma,
+  // a word broken in half - is a sentence that never finished. Closing quotes and brackets
+  // are allowed to trail the punctuation.
+  if(/[.!?]["'’”)\]]?$/.test(last)) return false;
+  // One-line profiles that simply have no punctuation at all are sloppy, not truncated.
+  return last.split(/\s+/).length >= PROFILE_MIN_HIGHLIGHT_WORDS;
+}
+
+// Re-runs synthesis over the profile alone, with no new information, purely so the repair
+// clause in the system prompt can act on a dangling fragment. Costs one call and cannot add
+// anything the student did not already say - the prompt forbids inventing detail to fill
+// the gap, so a fragment too damaged to finish is removed rather than guessed at.
+async function repairProfile(btn){
+  if(!studentProfile.synthesized || profileSynthesisInProgress) return;
+  if(btn) btn.disabled = true;
   const before = studentProfile.synthesized;
+  setProfileSynthesisInProgress(true);
   try{
-    studentProfile.synthesized = await synthesizeProfile(studentProfile.synthesized, text.trim());
+    studentProfile.synthesized = await synthesizeProfile(before, REPAIR_ONLY_INPUT);
+    studentProfile.updatedAt = new Date().toISOString();
+    profileBasicsUnavailable = false;
+    flagNewProfileText(before, studentProfile.synthesized);
+    await saveProfile();
+    refreshProfileFilterValues();
+  }catch(e){
+    console.error('Profile repair failed:', e);
+    // Leave the profile exactly as it was: a failed repair must not be worse than the
+    // fragment it was trying to fix.
+    studentProfile.synthesized = before;
+  }finally{
+    setProfileSynthesisInProgress(false);
+    if(btn) btn.disabled = false;
+  }
+  renderProfile();
+  renderProfileFit();
+  renderSuggestEntryCard();
+  renderHomeProfileTeaser();
+}
+
+// The merge prompt always wants a NEW INFORMATION block; a repair genuinely has none, and
+// saying so plainly beats sending an empty section the model has to interpret.
+const REPAIR_ONLY_INPUT = '(nothing new — this pass is only to repair any incomplete text already in the profile above, leaving everything else exactly as it is)';
+
+async function mergeIntoProfile(text, opts){
+  if(!text || !text.trim()) return;
+  const isTranscript = !!(opts && opts.isTranscript);
+  const before = studentProfile.synthesized;
+  setProfileSynthesisInProgress(true);
+  try{
+    studentProfile.synthesized = await synthesizeProfile(studentProfile.synthesized, text.trim(), isTranscript);
   }catch(e){
     console.error('Profile synthesis failed, appending instead:', e);
-    studentProfile.synthesized = studentProfile.synthesized ? studentProfile.synthesized + ' ' + text.trim() : text.trim();
+    // Append the raw input so nothing the student wrote is lost. A transcript is stripped
+    // down to the Student lines first - appending it whole would put the bot's own
+    // questions into the student's first-person profile.
+    const fallback = isTranscript ? transcriptStudentLines(text) : text.trim();
+    if(fallback) studentProfile.synthesized = studentProfile.synthesized ? studentProfile.synthesized + ' ' + fallback : fallback;
   }
   studentProfile.updatedAt = new Date().toISOString();
   profileBasicsUnavailable = false;
@@ -1820,7 +1979,13 @@ async function mergeIntoProfile(text){
   // student's words would briefly appear twice, once raw and once merged).
   profilePendingText = null;
   flagNewProfileText(before, studentProfile.synthesized);
-  await saveProfile();
+  // The strip stays up across the save too - "in progress" means "not yet on the page and
+  // stored", and it is cleared in a finally so a failed save can't leave it spinning.
+  try{
+    await saveProfile();
+  }finally{
+    setProfileSynthesisInProgress(false);
+  }
   // The profile text just changed, so its derived search filter values may be stale.
   // Recompute them here rather than on the next Fresh Finds load — that's the whole
   // point of caching them (see getProfileFilterValues). Deliberately not awaited: the
@@ -1883,23 +2048,31 @@ const FALLBACK_STARTER_QUESTIONS = [
   "What was the last time you felt genuinely proud of yourself — what did you do?"
 ];
 
-// Gets the next 3 questions from the predetermined pool, rotating through different sets.
-// This ensures variety across users and sessions when profile is empty/insufficient.
-function getNextPredeterminedStarterQuestions(){
+// Gets the next `count` questions from the predetermined pool, rotating through different
+// sets so repeated calls (across users, sessions, or starters vs. the follow-up pool) don't
+// all land on the same handful of questions.
+function getNextPredeterminedQuestions(count){
   const pool = PREDETERMINED_STARTER_QUESTIONS;
-  const startIdx = (predeterminedStarterRotationIndex * 3) % pool.length;
-  predeterminedStarterRotationIndex = (predeterminedStarterRotationIndex + 1) % Math.ceil(pool.length / 3);
+  const startIdx = (predeterminedStarterRotationIndex * count) % pool.length;
+  predeterminedStarterRotationIndex = (predeterminedStarterRotationIndex + 1) % Math.max(1, Math.ceil(pool.length / count));
 
   const result = [];
-  for(let i = 0; i < 3; i++){
+  for(let i = 0; i < count; i++){
     result.push(pool[(startIdx + i) % pool.length]);
   }
   return result;
 }
+function getNextPredeterminedStarterQuestions(){
+  return getNextPredeterminedQuestions(3);
+}
 
-// Check if profile is empty or has very minimal content (< 50 words = too thin for AI personalization).
-function isProfileInsufficientForAI(){
-  const synthesized = studentProfile.synthesized || '';
+// Check if profile is empty or has very minimal content (< 50 words = too thin for AI
+// personalization). Takes the text to judge so a cache slot computing against a specific
+// profile version asks about THAT text — getProfileDerived explicitly tolerates the profile
+// being edited mid-flight, and reading the global here would judge the wrong one. Defaults
+// to the current profile for the callers that just mean "right now".
+function isProfileInsufficientForAI(text){
+  const synthesized = (text === undefined ? studentProfile.synthesized : text) || '';
   const wordCount = synthesized.trim().split(/\s+/).filter(w => w.length > 0).length;
   return wordCount < 50;
 }
@@ -1915,9 +2088,10 @@ function withTimeout(promise, ms, message){
 
 function initProfileChat(){
   if(!document.getElementById('profileChatMessages')) return;
-  // Land on the Profile page with no chat in progress? Toss out any stale starters from an
-  // earlier visit so we always regenerate fresh ones against the latest profile summary,
-  // rather than reusing questions generated before the student's profile last changed.
+  // Land on the Profile page with no chat in progress? Drop the trio shown last time so the
+  // next open draws a fresh window from the pool (see drawStarterWindow) rather than
+  // repeating the same three questions. This no longer implies an API call: the pool itself
+  // is cached against the profile, so re-drawing is free unless the profile actually moved.
   if(!profileChatHistory.length && !profileChatStartersLoading){
     profileChatStarters = null;
   }
@@ -2069,18 +2243,54 @@ async function profileChatStarterQuestionsFromAI(regenerate){
 
   // Profile is substantial enough for personalized AI questions.
   const breadthDirective = regenerate ? ` The student explicitly asked to regenerate these — swap in a fresh set. Prioritize BREADTH over depth: favor surfacing entirely new areas of their life the profile hasn't touched at all (academics, social life, jobs, family, random obsessions, sports, art, gaming, etc.) over drilling further into what's already well-covered. Where a question does build on something they've already mentioned, use it only as a springboard to go one layer deeper on that specific thing — but most of the three should open up completely uncovered territory rather than deepen existing ones.` : '';
-  const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY (may be empty). Come up with exactly THREE distinct, short, fun, wacky-but-meaningful icebreaker questions to kick off a chat session that probes for details the profile is missing or only has shallowly — think music, sports/athletics, hobbies, what they do purely for fun, leadership, part-time jobs, quirks of personality, or deeper specifics on things already mentioned.${breadthDirective} Keep each one playful and casual, like a clever friend riffing with them, not a form — but each must serve a real purpose in understanding this student for extracurricular/college-application matching. This is chat round ${studentProfile.chatRounds + 1} of them returning to this page — the higher that number, the more specific and creative the questions should get. Respond with ONLY a JSON array of exactly 3 short question strings, e.g. ["...", "...", "..."] — no markdown, no preamble, no numbering.`;
+  const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY (may be empty). Come up with exactly THREE distinct, short, fun, wacky-but-meaningful icebreaker questions to kick off a chat session that probes for details the profile is missing or only has shallowly — think music, sports/athletics, hobbies, what they do purely for fun, leadership, part-time jobs, quirks of personality, or deeper specifics on things already mentioned.${breadthDirective} Every question must be ONE short, plain sentence — never a run-on, never two questions joined with "and"/"or"/a semicolon. When a question draws on the profile, pull in at most 2-3 specific details from it at a time — don't try to connect four or more dots into one elaborate question. Keep each one playful and casual, like a clever friend riffing with them, not a form — but each must serve a real purpose in understanding this student for extracurricular/college-application matching. This is chat round ${studentProfile.chatRounds + 1} of them returning to this page — the higher that number, the more specific and creative the questions should get. Respond with ONLY a JSON array of exactly 3 short question strings, e.g. ["...", "...", "..."] — no markdown, no preamble, no numbering.`;
   const userContent = `CURRENT PROFILE SUMMARY:\n${studentProfile.synthesized || '(empty)'}\n\nRespond with a JSON array of exactly 3 starter questions only.`;
   const parsed = await withTimeout(callClaudeJSON(system, userContent, false), 20000, 'Timed out waiting for starter questions');
   if(!Array.isArray(parsed) || !parsed.length) throw new Error('Unexpected starter question format');
   return parsed.slice(0, 3).map(String);
 }
 
+// Builds the cached bank of 10 openers for the current profile (see the `starterPool` slot).
+// Same job as profileChatStarterQuestionsFromAI, just ten at a time so one call covers
+// several drawer opens instead of one.
+async function starterQuestionPoolFromAI(text){
+  if(isProfileInsufficientForAI(text)) return getNextPredeterminedQuestions(STARTER_POOL_SIZE);
+  const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY. Come up with exactly TEN distinct, short, fun, wacky-but-meaningful icebreaker questions, each capable of opening a chat session on its own, probing for details the profile is missing or only has shallowly — think music, sports/athletics, hobbies, what they do purely for fun, family or community involvement, leadership moments, part-time jobs, quirks of personality, or deeper specifics on things already mentioned. Every question must be ONE short, plain sentence — never a run-on, never two questions joined with "and"/"or"/a semicolon. When a question draws on the profile, pull in at most 2-3 specific details from it at a time — don't try to connect four or more dots into one elaborate question. Keep the tone playful and casual, like a clever friend riffing with them, not a form — but every question must serve a real purpose in understanding this student for extracurricular/college-application matching. These ten are shown a few at a time across several visits, so keep them varied and non-overlapping with each other. Respond with ONLY a JSON array of exactly 10 short question strings, e.g. ["...", ...] — no markdown, no preamble, no numbering.`;
+  const userContent = `CURRENT PROFILE SUMMARY:\n${text || '(empty)'}\n\nRespond with a JSON array of exactly ${STARTER_POOL_SIZE} questions only.`;
+  const parsed = await withTimeout(callClaudeJSON(system, userContent, false), 20000, 'Timed out waiting for starter questions');
+  if(!Array.isArray(parsed) || !parsed.length) throw new Error('Unexpected starter question format');
+  return parsed.slice(0, STARTER_POOL_SIZE).map(String);
+}
+
+const STARTER_POOL_SIZE = 10;
+const STARTERS_PER_OPEN = 3;
+// Which slice of the pool the next drawer open gets. In memory rather than persisted: a
+// reload starting back at the top of an unchanged pool costs nothing (no API call is
+// involved either way), and the point of rotating is only so that opening the drawer twice
+// in a row doesn't show the identical three questions.
+let starterWindowIndex = 0;
+
+// Takes the next `STARTERS_PER_OPEN` questions from the pool, wrapping around.
+function drawStarterWindow(pool){
+  if(!pool || !pool.length) return FALLBACK_STARTER_QUESTIONS.slice();
+  const start = (starterWindowIndex * STARTERS_PER_OPEN) % pool.length;
+  starterWindowIndex = (starterWindowIndex + 1) % Math.max(1, Math.ceil(pool.length / STARTERS_PER_OPEN));
+  const out = [];
+  for(let i = 0; i < Math.min(STARTERS_PER_OPEN, pool.length); i++){
+    out.push(pool[(start + i) % pool.length]);
+  }
+  return out;
+}
+
+// Serves the next three openers. Normally this costs nothing: the pool is already cached
+// against the current profile (and pre-warmed right after the last merge), so this only
+// waits on an API call the first time a brand-new profile reaches the drawer.
 async function loadProfileChatStarters(){
   profileChatStartersLoading = true;
   renderProfileChatMessages();
   try{
-    profileChatStarters = await profileChatStarterQuestionsFromAI();
+    const rec = await withTimeout(getProfileDerived('starterPool'), 20000, 'Timed out waiting for starter questions');
+    profileChatStarters = drawStarterWindow(rec && rec.questions);
   }catch(e){
     console.error('Profile chat starters failed, using fallback:', e);
     profileChatStarters = FALLBACK_STARTER_QUESTIONS.slice();
@@ -2118,11 +2328,22 @@ function pickProfileChatStarter(i){
   if(input) input.focus();
 }
 
-// Calls Claude for the bot's next question, given the profile-so-far, the transcript so
-// far, and how many prior chat rounds (visits) this student has already completed —
-// deeper rounds are prompted to dig further/get weirder instead of repeating ground.
+// Calls Claude for the bot's next question, given the profile so far, the transcript so far,
+// and how many prior chat rounds this student has completed.
+//
+// This one is deliberately NOT pooled the way the openers are. A follow-up's whole job is to
+// react to what the student just said, and a question generated ahead of time cannot: a
+// student who answers "I'm writing a paper on grapheme-to-phoneme error rates in Finno-Ugric
+// languages with two friends from a summer camp" has just handed over the richest detail in
+// the session, and a pre-generated question walks straight past it. That detail also does not
+// reach the profile until the drawer closes and synthesis runs, so it exists nowhere but this
+// transcript at the moment the question is asked.
+//
+// The transcript is sent WHOLE, bot lines included — not just the student's answers. Answers
+// are routinely meaningless without the question above them ("Yes." says nothing on its own),
+// and the bot lines are also what stop the model from re-asking something it already asked.
 async function profileChatNextQuestion(){
-  const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY (may be empty) and the CONVERSATION SO FAR in this session. Ask exactly ONE short, fun, wacky-but-meaningful question that helps fill in gaps — especially topics not yet covered, like music, sports/athletics, hobbies, what they do purely for fun, family or community involvement, leadership moments, part-time jobs, or quirks of personality — as well as digging deeper into things already mentioned (ask for specifics: what exactly did you build, what was your role, what surprised you, what would you change). This is chat round ${studentProfile.chatRounds + 1} of them returning to this page — the more rounds, the more specific and creative your questions should get; don't repeat ground already covered in earlier rounds or earlier in this conversation. Keep your tone playful and casual, like a clever friend riffing with them, not a form — but every question must serve a real purpose in understanding this student for extracurricular/college-application matching. Ask exactly one question, 1-2 sentences, no lists, no markdown, no preamble, no "Great!" acknowledgments of their last answer beyond at most a short playful reaction folded into the same sentence.`;
+  const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY (may be empty) and the CONVERSATION SO FAR in this session. Ask exactly ONE short, fun, wacky-but-meaningful question. If their last answer introduced something specific — a project, a role, a place, a result — follow up on THAT rather than changing the subject: ask what exactly they did, what their part in it was, what surprised them, or what they'd change. Only open a new topic when the last answer was thin or the thread is genuinely exhausted, and then favour ground the profile hasn't covered (music, sports/athletics, hobbies, family or community involvement, leadership moments, part-time jobs, quirks of personality). Your question must be ONE short, plain sentence — never a run-on, never two questions joined with "and"/"or"/a semicolon. Draw on at most 2-3 specific details at a time — don't try to connect four or more dots into one elaborate question. This is chat round ${studentProfile.chatRounds + 1} of them returning to this page — the more rounds, the more specific and creative your questions should get; don't repeat ground already covered earlier in this conversation. Keep your tone playful and casual, like a clever friend riffing with them, not a form — but every question must serve a real purpose in understanding this student for extracurricular/college-application matching. No lists, no markdown, no preamble, and no "Great!" acknowledgment beyond at most a few words of playful reaction folded into the same sentence.`;
   const transcript = profileChatHistory.map(m => `${m.role === 'bot' ? 'You' : 'Student'}: ${m.text}`).join('\n') || '(nothing yet)';
   const userContent = `CURRENT PROFILE SUMMARY:\n${studentProfile.synthesized || '(empty)'}\n\nCONVERSATION SO FAR:\n${transcript}\n\nRespond with your next single question only — no preamble, no quotes around it.`;
   const raw = await withTimeout(callClaude(system, userContent, false), 20000, 'Timed out waiting for the next question');
@@ -2157,14 +2378,16 @@ async function sendProfileChatMessage(){
   await sendProfileChatBotTurn();
 }
 
-// Distills the chat transcript into plain findings text, then folds it into the single
-// running profile via the same semantic merge used everywhere else (mergeIntoProfile).
-async function summarizeProfileChat(){
-  const system = `You help distill a casual chat conversation into new facts learned about a high school student, so they can be merged into their profile. Given the CONVERSATION, extract only the new, concrete details the student actually shared — interests, activities, projects, personality, hobbies, and so on. Ignore the chatbot's own questions and any small talk. Write it as a few short first-person-compatible factual notes (plain text, no markdown, no preamble, no bullet points) describing what was learned, ready to be merged into a first-person profile summary.`;
-  const transcript = profileChatHistory.map(m => `${m.role === 'bot' ? 'Bot' : 'Student'}: ${m.text}`).join('\n');
-  const userContent = `CONVERSATION:\n${transcript}\n\nRespond with the distilled findings only.`;
-  const raw = await callGemini(system, userContent, false);
-  return raw.trim();
+// The chat transcript, in the shape synthesizeProfile's transcript mode expects.
+//
+// This used to be a separate "distil the chat into findings" API call whose output was then
+// fed to synthesis - two round-trips in series, several seconds each, with the student
+// staring at a card that had not changed yet. Synthesis is already a merge-and-rewrite step
+// and can read the transcript directly, so the distil call was pure latency: dropping it
+// roughly halves the wait between closing the drawer and the updated profile appearing, and
+// costs one API call per session instead of two.
+function profileChatTranscript(){
+  return profileChatHistory.map(m => `${m.role === 'bot' ? 'Bot' : 'Student'}: ${m.text}`).join("\n");
 }
 
 // Called when the drawer closes, which is now the only way a chat session ends. The
@@ -2186,8 +2409,7 @@ async function finishProfileChatSession(){
   renderProfileFit();
   setStatus('', '#8a93a6');
   try{
-    const findings = await summarizeProfileChat();
-    await mergeIntoProfile(findings);
+    await mergeIntoProfile(profileChatTranscript(), { isTranscript: true });
     studentProfile.chatRounds += 1;
   }catch(e){
     console.error('Profile chat summarize/merge failed:', e);
@@ -2195,11 +2417,8 @@ async function finishProfileChatSession(){
     profilePendingText = null;
     renderProfileFit();
   }
-  profileChatHistory = [];
-  profileChatStarters = null;
-  profileChatStartersLoading = false;
+  resetProfileChatSession();
   await saveProfile();
-  renderProfileChatMessages();
 }
 
 // ============================================================
@@ -3954,7 +4173,9 @@ function trackerCardHTML(item, sourceLabel){
 
       <div class="flex flex-wrap justify-between items-center gap-3 pt-3 border-t-2 border-slate-100">
         ${statusPillHTML(progress)}
-        <a href="${item.applyUrl}" target="_blank" class="pop-btn bg-orange-500 text-slate-900 border-2 border-slate-900 font-extrabold text-xs px-5 py-2.5 rounded-full">${item.applyLabel}</a>
+        <div class="flex items-center gap-2 flex-wrap">
+          <a href="${item.applyUrl}" target="_blank" class="pop-btn bg-orange-500 text-slate-900 border-2 border-slate-900 font-extrabold text-xs px-5 py-2.5 rounded-full">${item.applyLabel}</a>
+        </div>
       </div>
     </div>
   `;
@@ -4370,17 +4591,45 @@ let profileHighlightTimer = null;
 // the new text exactly once — the 5s expiry re-render and every unrelated renderProfileFit
 // call must not yank the page around again.
 let profileScrollToHighlight = false;
+// Page-space Y of the first mark at the moment we scrolled to it, so a later render that
+// shifts the layout can be detected and corrected (see realignProfileHighlightScroll).
+let profileHighlightScrollTop = null;
 
 // What the student said in the session currently being folded in. Closing the drawer kicks
-// off two AI round-trips (distil the transcript, then re-synthesize the whole profile) that
-// take several seconds together, and a card that sits unchanged for that long reads as
+// off a synthesis round-trip that takes a couple of seconds (it was two serial round-trips
+// until the distil step was folded into synthesis - see profileChatTranscript), and a card
+// that sits unchanged even for that long reads as
 // "closing it threw my answers away". So their own words go up on the card immediately and
 // are replaced by the synthesized version when it lands — see mergeIntoProfile, which
 // clears this at the exact moment the merged text is rendered.
+// The "in progress" wording moved to the #profileSynthesisStatus strip above the card, which
+// every merge entry point shares; this tile only holds the student's own words now, so the
+// page isn't showing two spinners for one operation.
 let profilePendingText = null;
 
 function splitProfileSentences(text){
   return (text || '').split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+}
+
+// The "Passion Project: " / "Research Project: " markers renderProfileFit strips before it
+// prints a paragraph. Diffing has to strip them too: otherwise the highlight set holds
+// "Passion Project: I built X." while the page renders "I built X.", the lookup misses, and
+// genuinely new project paragraphs never light up.
+const PROFILE_PROJECT_PREFIX_RE = /^(passion|research) projects?:\s*/i;
+
+// Highlight lookups are keyed on this, not on the raw string, so the same sentence matches
+// whether it arrived via the whole profile text or via an already-split paragraph.
+function profileSentenceKey(text){
+  return (text || '').replace(PROFILE_PROJECT_PREFIX_RE, '').replace(/\s+/g, ' ').trim();
+}
+
+// Every sentence in a profile, with paragraph prefixes removed - the unit both the diff and
+// the renderer work in.
+function profileSentenceKeys(text){
+  return (text || '').split(/\n\s*\n/)
+    .flatMap(par => splitProfileSentences(par.replace(PROFILE_PROJECT_PREFIX_RE, '')))
+    .map(profileSentenceKey)
+    .filter(Boolean);
 }
 
 // How much word overlap makes a sentence a reworded version of one already in the profile
@@ -4392,8 +4641,34 @@ function splitProfileSentences(text){
 // sits between them rather than near either.
 const PROFILE_REWORD_RATIO = 0.6;
 
+// Jaccard alone is not enough, and that is what was lighting up untouched text. Synthesis
+// also RE-SPLITS settled prose - one long sentence comes back as two, or two come back
+// joined - and each half shares only about half its words with the original, scoring under
+// the Jaccard threshold despite saying nothing new. Containment catches that case: if
+// nearly every word of the candidate already appears in one old sentence, the candidate is
+// a fragment of existing content, not an addition.
+const PROFILE_CONTAINMENT_RATIO = 0.8;
+
+// Last line of defence, against a sentence rebuilt from words scattered across SEVERAL old
+// sentences (a merge that reorganises paragraphs does this). A candidate whose words are
+// almost all already somewhere in the old profile is a restatement.
+const PROFILE_MIN_NOVEL_WORD_RATIO = 0.25;
+
+// Below this, a "sentence" is a fragment ("I'm 16.") whose overlap scores are noise in
+// either direction, and highlighting it teaches the student nothing.
+const PROFILE_MIN_HIGHLIGHT_WORDS = 4;
+
+// How long the marks stay up. The CSS fade (profileNewFade) must stay in step with this.
+const PROFILE_HIGHLIGHT_MS = 5000;
+
 function sentenceWords(text){
   return new Set(text.toLowerCase().match(/[a-z0-9']+/g) || []);
+}
+
+function sharedWordCount(A, B){
+  let shared = 0;
+  A.forEach(w => { if(B.has(w)) shared++; });
+  return shared;
 }
 
 // Jaccard overlap, so a long sentence can't score high against a short one merely by
@@ -4401,37 +4676,60 @@ function sentenceWords(text){
 function sentenceSimilarity(a, b){
   const A = sentenceWords(a), B = sentenceWords(b);
   if(!A.size || !B.size) return 0;
-  let shared = 0;
-  A.forEach(w => { if(B.has(w)) shared++; });
+  const shared = sharedWordCount(A, B);
   return shared / (A.size + B.size - shared);
+}
+
+// Fraction of the SHORTER sentence's words that the other one also has. Unlike Jaccard this
+// stays high when one sentence is a piece of the other, which is the re-split case above.
+function sentenceContainment(a, b){
+  const A = sentenceWords(a), B = sentenceWords(b);
+  if(!A.size || !B.size) return 0;
+  return sharedWordCount(A, B) / Math.min(A.size, B.size);
 }
 
 // Diffs by sentence rather than by whole paragraph: a merge commonly appends a clause to
 // an existing paragraph, and highlighting the entire paragraph would drown the one new bit.
 function flagNewProfileText(before, after){
-  const old = splitProfileSentences(before);
+  const old = profileSentenceKeys(before);
   const oldExact = new Set(old);
-  const added = splitProfileSentences(after).filter(s =>
-    !oldExact.has(s) && !old.some(o => sentenceSimilarity(s, o) >= PROFILE_REWORD_RATIO)
-  );
+  const oldWords = sentenceWords(before);
+  const added = profileSentenceKeys(after).filter(s => {
+    if(oldExact.has(s)) return false;
+    const words = sentenceWords(s);
+    if(words.size < PROFILE_MIN_HIGHLIGHT_WORDS) return false;
+    if(old.some(o => sentenceSimilarity(s, o) >= PROFILE_REWORD_RATIO
+                  || sentenceContainment(s, o) >= PROFILE_CONTAINMENT_RATIO)) return false;
+    const novel = words.size - sharedWordCount(words, oldWords);
+    return (novel / words.size) >= PROFILE_MIN_NOVEL_WORD_RATIO;
+  });
   if(profileHighlightTimer) clearTimeout(profileHighlightTimer);
   if(!added.length){
     profileHighlightSet = null;
+    profileScrollToHighlight = false;
+    profileHighlightScrollTop = null;
     return;
   }
   profileHighlightSet = new Set(added);
   profileScrollToHighlight = true;
+  profileHighlightScrollTop = null;
   profileHighlightTimer = setTimeout(() => {
     profileHighlightSet = null;
     profileHighlightTimer = null;
+    // Nothing left to scroll to once the marks are gone - drop a scroll that never got a
+    // visible page to run on, rather than firing it whenever My Vibe is next opened.
+    profileScrollToHighlight = false;
+    profileHighlightScrollTop = null;
     renderProfileFit();
-  }, 5000);
+  }, PROFILE_HIGHLIGHT_MS);
 }
 
 function profileTextHTML(text){
   if(!profileHighlightSet || !profileHighlightSet.size) return escapeHtmlTracker(text);
   return splitProfileSentences(text).map(s =>
-    profileHighlightSet.has(s) ? `<mark class="profile-new">${escapeHtmlTracker(s)}</mark>` : escapeHtmlTracker(s)
+    profileHighlightSet.has(profileSentenceKey(s))
+      ? `<mark class="profile-new">${escapeHtmlTracker(s)}</mark>`
+      : escapeHtmlTracker(s)
   ).join(' ');
 }
 
@@ -4465,7 +4763,9 @@ function renderProfileBasics(){
   }).join('');
   if(!fresh && !profileBasicsUnavailable){
     getProfileDerived('basics')
-      .then(renderProfileBasics)
+      // The basics grid sits ABOVE the profile text, so filling it in pushes the content
+      // down. If a highlight scroll already happened, correct for the shift.
+      .then(() => { renderProfileBasics(); realignProfileHighlightScroll(); })
       .catch(err => {
         console.warn('Profile basics extraction failed:', err.message);
         profileBasicsUnavailable = true;
@@ -4515,8 +4815,17 @@ function renderProfileFit(){
   if(researchProjects.length) html += vibeField('Research projects', numbered(researchProjects));
   if(profilePendingText){
     html += `<div class="vibe-field vibe-pending">
-      <p class="vibe-label">Just shared — folding this in<span class="vibe-dots"></span></p>
+      <p class="vibe-label">Just shared</p>
       <p class="vibe-value vibe-body">${escapeHtmlTracker(profilePendingText)}</p>
+    </div>`;
+  }
+  // Offered only when the text actually looks damaged, so it is invisible for everyone whose
+  // profile is fine. Placed under the content because it refers to what is above it.
+  if(profileHasTruncatedTail()){
+    html += `<div class="vibe-field vibe-truncated">
+      <p class="vibe-label">This looks cut off</p>
+      <p class="vibe-value vibe-body">The end of your profile was trimmed by an earlier save. Tidying up finishes or removes the incomplete bit &mdash; it won&rsquo;t change anything else, and it won&rsquo;t make anything up.</p>
+      <button class="pop-btn mt-3" style="background:#fff; color:#1a2540; border-color:#1a2540; font-size:13px; padding:8px 16px; border-radius:999px;" onclick="repairProfile(this)">Tidy it up</button>
     </div>`;
   }
   contentWrap.innerHTML = html;
@@ -4525,27 +4834,82 @@ function renderProfileFit(){
   if(ctaBanner) ctaBanner.classList.toggle('hidden', !isSufficient);
   if(insufficientBanner) insufficientBanner.classList.toggle('hidden', isSufficient);
 
-  if(profileScrollToHighlight){
-    profileScrollToHighlight = false;
-    scrollToFirstProfileHighlight();
-  }
+  if(profileScrollToHighlight) scrollToFirstProfileHighlight();
 }
 
 // Brings the freshly-merged text into view once synthesis lands. The wait between closing
 // the drawer and the merged profile appearing is several seconds, which is long enough for
-// the student to have scrolled elsewhere on the page — landing them on the new sentence is
-// the point of highlighting it at all. Deliberately silent when My Vibe isn't the visible
-// page: showPage() scrolls to top on arrival, and a background merge yanking a page the
-// student is reading is worse than no scroll.
-function scrollToFirstProfileHighlight(){
+// the student to have scrolled elsewhere on the page - landing them on the new sentence is
+// the point of highlighting it at all.
+//
+// Three things used to make this miss:
+//  - It gave up silently when My Vibe was not the visible page, but it also cleared the
+//    pending flag on the way out, so arriving on the page a second later showed marks with
+//    no scroll. The flag now survives until either a scroll actually happens or the
+//    highlight expires, and renderProfileFit re-tries it on every render.
+//  - It ran synchronously right after `contentWrap.innerHTML = html`, but the basics grid
+//    ABOVE the content is filled in by an async extraction that lands a moment later and
+//    pushes everything down - the page scrolled to where the mark was, not where it ended
+//    up. It now re-aligns whenever a later render moves the mark while the highlight is
+//    still live (see renderProfileBasics).
+//  - Nothing checked that the app shell itself was on screen, so a merge finishing while
+//    the login or paywall screen was up counted as "visible".
+
+// Long enough for a smooth scroll to have visibly moved, short enough that the fallback
+// jump still happens well inside the highlight's lifetime.
+const PROFILE_SCROLL_SETTLE_MS = 400;
+
+function profileHighlightVisible(){
+  const shell = document.getElementById('appShell');
   const page = document.getElementById('page-profile');
-  if(!page || page.classList.contains('hidden')) return;
-  // Synchronous, not deferred to requestAnimationFrame: the mark is already in the DOM
-  // (innerHTML was assigned just above) so there is nothing to wait for, and rAF does not
-  // run at all in a backgrounded tab — the callback would sit queued until the student
-  // came back to the tab and then jump the page under them, seconds after the fact.
+  if(shell && shell.classList.contains('hidden')) return false;
+  return !!page && !page.classList.contains('hidden');
+}
+
+function scrollToFirstProfileHighlight(){
+  if(!profileHighlightVisible()) return;
   const mark = document.querySelector('#profileContent mark.profile-new');
-  if(mark) mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if(!mark) return;
+  profileScrollToHighlight = false;
+  profileHighlightScrollTop = mark.getBoundingClientRect().top + window.scrollY;
+  // Deferred by a timeout rather than requestAnimationFrame: rAF does not run at all in a
+  // backgrounded tab, so the callback would sit queued and then jump the page under the
+  // student seconds later, when they came back. A timeout still fires (throttled), and one
+  // task is enough for the freshly-assigned innerHTML to have been laid out.
+  setTimeout(() => {
+    const el = document.querySelector('#profileContent mark.profile-new');
+    if(!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // A smooth scroll is animated by the frame loop, which does not advance in a
+    // backgrounded tab - the call then returns having done absolutely nothing, silently,
+    // which is the main reason this never seemed to work. It can also be cancelled
+    // mid-flight by any other scroll. So check afterwards whether it actually landed and
+    // fall back to an instant jump, which always applies.
+    setTimeout(() => {
+      const still = document.querySelector('#profileContent mark.profile-new');
+      if(!still) return;
+      const box = still.getBoundingClientRect();
+      const visible = box.top >= 0 && box.bottom <= (window.innerHeight || document.documentElement.clientHeight);
+      if(!visible) still.scrollIntoView({ behavior: 'auto', block: 'center' });
+      profileHighlightScrollTop = still.getBoundingClientRect().top + window.scrollY;
+    }, PROFILE_SCROLL_SETTLE_MS);
+  }, 0);
+}
+
+// Called after a render that may have shifted the page (the basics grid resolving). Only
+// re-scrolls if the mark actually moved, so an unrelated re-render can't yank the page.
+function realignProfileHighlightScroll(){
+  if(profileHighlightScrollTop === null) return;
+  if(!profileHighlightSet || !profileHighlightSet.size){ profileHighlightScrollTop = null; return; }
+  if(!profileHighlightVisible()) return;
+  const mark = document.querySelector('#profileContent mark.profile-new');
+  if(!mark) return;
+  const top = mark.getBoundingClientRect().top + window.scrollY;
+  if(Math.abs(top - profileHighlightScrollTop) < 4) return;
+  profileHighlightScrollTop = top;
+  // Instant: this is a correction for content shifting under an already-completed scroll,
+  // so animating it would read as a second, unexplained jump.
+  mark.scrollIntoView({ behavior: 'auto', block: 'center' });
 }
 
 // Splits a synthesized profile into readable paragraphs, pulling out any
@@ -4691,6 +5055,12 @@ function renderTrackerPage(){
 
   renderCalendarSwimlanes();
   renderHomePage();
+
+  // Fire-and-forget: the cards are already on screen with their fallback button state,
+  // and refreshMailingListStatus() swaps in the real one per card as it resolves. Awaiting
+  // it here would hold the whole page render on a network call for a secondary control.
+  refreshMailingListStatus([...sortedItems, ...savedSortedItems].map(i => i.id));
+  loadMailingListSubscriptions();
 }
 
 // ---------- Export/sync tracker deadlines to Google Calendar ----------
@@ -5258,6 +5628,192 @@ function submitUserOpportunityToDatabase(extracted, url, bucket){
 }
 
 // ---------- To Do (persistent, scoped to the Tracker page) ----------
+// ---------- Mailing-list signup ----------
+// One tap per list, never a bulk path. The button has exactly three honest states, and
+// the middle one is the whole point of the design:
+//
+//   eligible          "Join mailing list"  — a person verified a recipe for this program
+//   not eligible      "Mailing list ↗"     — open the org's own page; we promise nothing
+//   already attempted "Signup sent"        — with the date and the address we used
+//
+// The success wording is "submitted", never "subscribed". Every provider we support uses
+// double opt-in and we sign the student up with their own address, so nothing in this app
+// can see whether they clicked the confirmation link. Telling them they are on a list we
+// cannot observe is exactly the silent failure this feature is measured against — don't
+// shorten these strings into a claim we can't back.
+
+// Escapes quotes as well as angle brackets, unlike escapeHtmlTracker(): most of the
+// values below land inside HTML attributes (href, data-*, title), where an unescaped
+// quote breaks out of the attribute.
+const mlEsc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+
+let mailingListStatus = {};        // { oppId: {eligible, provider, state, email, attempted_at} }
+let subscribeTarget = null;        // the opportunity the modal is currently about
+
+// Fetches button state for a screenful of cards in one request. Free and AI-free — it
+// reads two tables and returns labels.
+async function refreshMailingListStatus(ids){
+  const wanted = (ids || []).filter(Boolean);
+  if(!wanted.length || !currentUser) return;
+  try{
+    const qs = `?userid=${encodeURIComponent(currentUser.userid)}&ids=${encodeURIComponent(wanted.join(','))}`;
+    const res = await fetch(`/api/mailing-list/status${qs}`);
+    if(!res.ok) return;
+    const data = await res.json();
+    mailingListStatus = Object.assign({}, mailingListStatus, (data && data.items) || {});
+    // Re-render only the buttons, not the whole page: this resolves after the cards are
+    // already on screen, and a full re-render would fight with anything the user has
+    // opened in the meantime.
+    document.querySelectorAll('[data-mlbtn]').forEach(el => {
+      const id = el.getAttribute('data-mlbtn');
+      if(mailingListStatus[id]) el.outerHTML = mailingListButtonHTML(id, el.getAttribute('data-mlurl'));
+    });
+  }catch(e){ /* a missing button is a non-event; the handoff link still works */ }
+}
+
+function mailingListButtonHTML(oppId, url){
+  const s = mailingListStatus[oppId] || {};
+  const base = 'pop-btn border-2 border-slate-900 font-extrabold text-xs px-4 py-2.5 rounded-full';
+  const attrs = `data-mlbtn="${mlEsc(oppId)}" data-mlurl="${mlEsc(url || '')}"`;
+
+  if(s.state === 'submitted' || s.state === 'already_subscribed'){
+    const when = s.attempted_at ? new Date(s.attempted_at).toLocaleDateString(undefined, { month:'short', day:'numeric' }) : '';
+    const label = s.state === 'already_subscribed' ? 'Already on list' : `Signup sent${when ? ' · ' + when : ''}`;
+    return `<span ${attrs} class="${base} bg-emerald-100 text-emerald-900" title="Sent to ${mlEsc(s.email || '')}. Check your email for their confirmation link.">${label}</span>`;
+  }
+  if(s.eligible){
+    return `<button ${attrs} onclick="event.stopPropagation(); openSubscribeModal('${mlEsc(oppId)}')" class="${base} bg-white text-slate-900" style="cursor:pointer;">Join mailing list</button>`;
+  }
+  // No verified recipe. Deliberately a plain link, not a disabled button: the student can
+  // still sign up, we just aren't claiming we can do it for them.
+  if(url) return `<a ${attrs} href="${mlEsc(url)}" target="_blank" rel="noopener" class="text-xs font-bold text-indigo-600 hover:underline self-center">Mailing list &#8599;</a>`;
+  return `<span ${attrs}></span>`;
+}
+
+function openSubscribeModal(oppId){
+  const item = findTrackedItemById(oppId);
+  const org = (item && (item.org || item.name)) || 'this organization';
+  subscribeTarget = { id: oppId, org, url: (item && (item.url || item.applyUrl)) || '' };
+
+  const modal = document.getElementById('subscribeModal');
+  const intro = document.getElementById('subscribeIntro');
+  const consentLabel = document.getElementById('subscribeConsentLabel');
+  const emailInput = document.getElementById('subscribeEmail');
+  const consent = document.getElementById('subscribeConsent');
+  const status = document.getElementById('subscribeStatus');
+  if(!modal) return;
+
+  const provider = (mailingListStatus[oppId] || {}).provider;
+  intro.textContent = `We'll submit a signup to ${org}'s mailing list${provider ? ` (${provider})` : ''}. `
+    + `They'll usually email you a confirmation link — you're only on the list once you click it.`;
+  consentLabel.textContent = `Send my name and this email address to ${org}.`;
+  // Prefilled from the account, but editable — see the note in index.html.
+  emailInput.value = (currentUser && currentUser.email) || '';
+  consent.checked = false;
+  status.textContent = '';
+  status.className = 'text-xs mt-3 leading-relaxed min-h-[1em]';
+  modal.classList.remove('hidden');
+  emailInput.focus();
+}
+
+function closeSubscribeModal(){
+  const modal = document.getElementById('subscribeModal');
+  if(modal) modal.classList.add('hidden');
+  subscribeTarget = null;
+}
+
+async function submitSubscribe(){
+  if(!subscribeTarget) return;
+  const emailInput = document.getElementById('subscribeEmail');
+  const consent = document.getElementById('subscribeConsent');
+  const status = document.getElementById('subscribeStatus');
+  const btn = document.getElementById('subscribeSubmitBtn');
+  const spinner = btn.querySelector('.spin');
+  const label = document.getElementById('subscribeSubmitLabel');
+
+  const email = (emailInput.value || '').trim();
+  if(!email){ status.className = 'text-xs mt-3 text-rose-700 font-bold'; status.textContent = 'Enter an email address.'; return; }
+  if(!consent.checked){
+    status.className = 'text-xs mt-3 text-rose-700 font-bold';
+    status.textContent = 'Tick the box so we know it\'s OK to send your details.';
+    return;
+  }
+
+  btn.disabled = true; spinner.classList.remove('hidden'); label.textContent = 'Sending...';
+  try{
+    const res = await fetch(`/api/opportunities/${encodeURIComponent(subscribeTarget.id)}/subscribe`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userid: currentUser && currentUser.userid, email, consent: true }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok){
+      status.className = 'text-xs mt-3 text-rose-700 font-bold';
+      status.textContent = data.error || 'Could not submit the signup.';
+      return;
+    }
+    // Cache the new state so the card's button updates without a round-trip.
+    mailingListStatus[subscribeTarget.id] = Object.assign({}, mailingListStatus[subscribeTarget.id], {
+      state: data.state, email, attempted_at: new Date().toISOString(),
+    });
+    if(data.state === 'submitted' || data.state === 'already_subscribed'){
+      status.className = 'text-xs mt-3 text-emerald-800 font-bold';
+      status.textContent = data.message || '';
+      setTimeout(() => { closeSubscribeModal(); renderTrackerPage(); loadMailingListSubscriptions(); }, 2200);
+    }else{
+      // failed or handoff — say so plainly and point at their page rather than pretending.
+      status.className = 'text-xs mt-3 text-amber-800 font-bold';
+      status.innerHTML = mlEsc(data.message || 'That did not go through.')
+        + (data.url ? ` <a href="${mlEsc(data.url)}" target="_blank" rel="noopener" class="underline">Open their signup page &#8599;</a>` : '');
+    }
+  }catch(e){
+    status.className = 'text-xs mt-3 text-rose-700 font-bold';
+    status.textContent = 'Could not reach the server. Try again in a moment.';
+  }finally{
+    btn.disabled = false; spinner.classList.add('hidden'); label.textContent = 'Sign me up';
+  }
+}
+
+// The Quest Log's own record of what we sent. Read from the server rather than from
+// mailingListStatus so it survives a reload and a different device.
+async function loadMailingListSubscriptions(){
+  const section = document.getElementById('mailingListSection');
+  if(!section || !currentUser) return;
+  let rows = [];
+  try{
+    const res = await fetch(`/api/mailing-list/subscriptions?userid=${encodeURIComponent(currentUser.userid)}`);
+    if(res.ok){ rows = ((await res.json()) || {}).subscriptions || []; }
+  }catch(e){ /* leave the section hidden */ }
+
+  rows = rows.filter(r => r.state === 'submitted' || r.state === 'already_subscribed');
+  section.classList.toggle('hidden', !rows.length);
+  document.getElementById('mailingListCount').textContent = String(rows.length).padStart(2, '0');
+  document.getElementById('mailingListRows').innerHTML = rows.map(r => {
+    const when = r.attempted_at ? new Date(r.attempted_at).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' }) : '';
+    const note = r.state === 'already_subscribed'
+      ? 'You were already on this list.'
+      : 'Check your email for their confirmation link.';
+    return `<div class="card-soft p-4 flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <div class="font-bold text-sm text-slate-900">${r.url
+          ? `<a href="${mlEsc(r.url)}" target="_blank" rel="noopener" class="hover:underline">${mlEsc(r.name)}</a>`
+          : mlEsc(r.name)}</div>
+        <div class="text-xs text-slate-500 font-medium mt-0.5">${mlEsc(r.email)}${when ? ' · ' + when : ''} · ${note}</div>
+      </div>
+      ${r.url ? `<a href="${mlEsc(r.url)}" target="_blank" rel="noopener" class="text-xs font-bold text-indigo-600 hover:underline">Manage on their site &#8599;</a>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// Tracker items live in per-bucket arrays; the card only knows its id.
+function findTrackedItemById(oppId){
+  for(const bucket of ALL_BUCKETS){
+    const hit = (trackerData[bucket] || []).find(i => i.id === oppId);
+    if(hit) return hit;
+  }
+  return null;
+}
+
 function escapeHtmlTracker(str){
   const div = document.createElement('div');
   div.textContent = str;

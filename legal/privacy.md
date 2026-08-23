@@ -1,6 +1,6 @@
 # Wingman Privacy Policy
 
-**Effective Date:** August 21, 2026
+**Effective Date:** August 22, 2026
 
 This Privacy Policy explains how **Shama Bildikar**, the operator of Wingman ("Wingman," "we," "us," or "our"), collects, uses, processes, and protects information in connection with the Wingman beta.
 
@@ -137,6 +137,16 @@ We may also disclose information when reasonably necessary to:
 - protect Wingman or its users.
 
 If Wingman is ever sold, transferred, reorganized, or combined with another business, information may be transferred as part of that transaction, subject to applicable law.
+
+## 6A. Mailing-List Signup
+
+If you use Wingman's optional mailing-list signup feature, we send your first and last name and the email address you confirm at the time to the organization's mailing-list provider, so that they can add you to their list.
+
+This happens only for an opportunity you individually select and confirm. We do not send your details to any organization otherwise.
+
+We keep a record of each signup you make: which opportunity, which email address you used, when it was submitted, and what the organization's provider answered. You can see this record in your Quest Log. We keep it so you can find what was sent on your behalf, and so we can tell whether a signup went through.
+
+We cannot see whether you completed the organization's confirmation step, and we do not receive the organization's emails to you. Once your details reach the organization, their handling of that information is governed by their own privacy policy, not this one.
 
 ## 7. Analytics and Cookies
 

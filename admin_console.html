@@ -41,6 +41,13 @@
   --agent-reviews:  #0891B2;
   --agent-scraper:  #D97706;
   --agent-deadline: #DB2777;
+  --agent-mailinglist: #059669;
+  /* App traffic and uncarded scripts. Cooler and flatter than the agent hues on purpose:
+     they belong on the chart because they are real spend, but they are not agents. */
+  --agent-interactive_gemini: #3B6FB6;
+  --agent-interactive_claude: #6D5BB8;
+  --agent-deadline_ondemand:  #A05195;
+  --agent-other:              #8A8FA3;
 
   --radius: 10px;
   --radius-sm: 6px;
@@ -60,6 +67,9 @@
     --danger: #F87171; --danger-soft: #2E1515; --muted-soft: #26241F;
     --agent-metadata: #A78BFA; --agent-reviews: #22D3EE;
     --agent-scraper: #FBBF24; --agent-deadline: #F472B6;
+    --agent-mailinglist: #34D399;
+    --agent-interactive_gemini: #7BA6E0; --agent-interactive_claude: #A192E0;
+    --agent-deadline_ondemand: #C98BBE; --agent-other: #9CA3B4;
     --shadow: 0 1px 2px rgba(0,0,0,.4);
   }
 }
@@ -72,6 +82,9 @@
   --danger: #F87171; --danger-soft: #2E1515; --muted-soft: #26241F;
   --agent-metadata: #A78BFA; --agent-reviews: #22D3EE;
   --agent-scraper: #FBBF24; --agent-deadline: #F472B6;
+  --agent-mailinglist: #34D399;
+  --agent-interactive_gemini: #7BA6E0; --agent-interactive_claude: #A192E0;
+  --agent-deadline_ondemand: #C98BBE; --agent-other: #9CA3B4;
   --shadow: 0 1px 2px rgba(0,0,0,.4);
 }
 
@@ -322,11 +335,13 @@ tr.disabled-seed { opacity: .48; }
       <option value="90">Last 90 days</option>
     </select>
     <button class="btn" id="refreshBtn">Refresh</button>
+    <span class="sub" id="updatedAt" style="min-width:104px">never updated</span>
   </div>
 
   <div class="viewtabs" id="viewTabs">
     <button class="vtab active" data-view="agents">Agents</button>
     <button class="vtab" data-view="review">Review queue<span class="count" id="reviewTabCount"></span></button>
+    <button class="vtab" data-view="signups">Mailing lists<span class="count" id="signupTabCount"></span></button>
     <button class="vtab" data-view="users">Cost per user<span class="count" id="userTabCount"></span></button>
   </div>
 
@@ -437,6 +452,7 @@ tr.disabled-seed { opacity: .48; }
       <button class="btn btn-sm" id="addSeedBtn">+ Add angle</button>
     </div>
     <div class="card-body tight">
+      <div class="hint hidden" id="seedYieldNote" style="padding:10px 14px"></div>
       <div class="tbl-wrap">
         <table>
           <thead><tr>
@@ -530,6 +546,56 @@ tr.disabled-seed { opacity: .48; }
     </div>
   </div>
 
+  <div class="view hidden" id="view-signups">
+    <div class="view-lead">
+      Signup <strong>recipes</strong> the Mailing List Finder proposed &mdash; how to join one
+      program&rsquo;s mailing list, in a form the server can replay for a student. Nothing here is
+      executed until you mark it <strong>Verified</strong>: an unreviewed recipe is not a
+      slightly-worse verified one, it is a form that may belong to the whole university rather
+      than to this program. 73% of the catalog shares a domain with a different opportunity, so
+      read <strong>Evidence</strong> &mdash; the quote that decided attribution &mdash; not the
+      confidence score, which is the model grading its own work.
+      <br><br>
+      A verified recipe means we can <em>submit</em> a signup. Every provider here double
+      opt-ins and we subscribe the student&rsquo;s own address, so nobody &mdash; us included
+      &mdash; can see whether they clicked the confirmation link. The app says
+      &ldquo;submitted&rdquo;, never &ldquo;subscribed&rdquo;.
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Signup recipes</h2>
+        <div class="tabs" id="signupStatusTabs">
+          <button class="tab active" data-status="pending_review">Pending<span class="count" id="signupPendingCount"></span></button>
+          <button class="tab" data-status="verified">Verified<span class="count" id="signupVerifiedCount"></span></button>
+          <button class="tab" data-status="rejected">Rejected<span class="count" id="signupRejectedCount"></span></button>
+          <button class="tab" data-status="none">No list<span class="count" id="signupNoneCount"></span></button>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn btn-sm" id="signupSelectAll">Select all</button>
+        <button class="btn btn-sm" id="signupClear">Clear</button>
+        <button class="btn btn-danger" id="signupRejectBtn" disabled>Reject selected</button>
+        <button class="btn" id="signupVerifyBtn" disabled>Verify selected</button>
+      </div>
+      <div class="card-body tight">
+        <div class="hint hidden" id="signupSetup" style="padding:10px 14px">
+          The mailing-list tables are missing or out of date. Run
+          <span class="mono">mailing_list_schema.sql</span> in the Supabase SQL editor
+          (it is idempotent), then restart with <span class="mono">restart_server.ps1</span>.
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr>
+              <th style="width:34px"></th><th>Opportunity</th><th>Provider</th>
+              <th>Evidence</th><th class="num">Conf.</th><th>Found on</th><th></th>
+            </tr></thead>
+            <tbody id="signupBody"><tr><td colspan="7" class="empty">Loading&hellip;</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="view hidden" id="view-users">
     <div class="view-lead">
       What each account's own use of the product costs in AI, against the $9.99/month plan.
@@ -542,7 +608,7 @@ tr.disabled-seed { opacity: .48; }
     <div class="card-head">
       <h2>Cost per user</h2>
       <div class="spacer"></div>
-      <div class="hint">Sorted by cost &mdash; click a row for the per-provider, per-model and per-feature breakdown</div>
+      <div class="hint">Every account, spend or not &mdash; click a row with spend for its per-provider, per-model and per-feature breakdown</div>
       <select id="userCostSort">
         <option value="cost_usd">Sort by cost</option>
         <option value="calls">Sort by calls</option>
@@ -558,10 +624,11 @@ tr.disabled-seed { opacity: .48; }
             <th>User</th><th>Plan</th>
             <th class="num" title="Billed, attributable calls only — see the Active users tile.">Billed&nbsp;calls</th>
             <th class="num">Searches</th>
+            <th class="num" title="This user&rsquo;s most recent day with billed spend, and what that day cost. Deliberately the latest ACTIVE day rather than &lsquo;today&rsquo;: days are UTC, which rolls at 5pm Pacific, so a today figure reads $0.00 all evening.">Latest&nbsp;day</th>
             <th class="num">Cost</th><th class="num">Cost&nbsp;/&nbsp;call</th>
             <th class="num">% of $9.99</th><th>Last active</th>
           </tr></thead>
-          <tbody id="userCostBody"><tr><td colspan="8" class="empty">Loading&hellip;</td></tr></tbody>
+          <tbody id="userCostBody"><tr><td colspan="9" class="empty">Loading&hellip;</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -713,6 +780,10 @@ tr.disabled-seed { opacity: .48; }
         <div class="field"><label for="oppSubjectTags">Subject tags</label><input id="oppSubjectTags" type="text" placeholder="Biology, Research">
           <div class="help">Comma-separated.</div></div>
       </div>
+      <div class="field">
+        <label for="oppContactEmail">Contact email</label>
+        <input id="oppContactEmail" type="text" placeholder="programs@example.org">
+      </div>
       <div id="oppError" class="notice err hidden"></div>
     </div>
     <div class="modal-foot">
@@ -766,7 +837,10 @@ const S = {
   config: {}, status: {}, history: [], summary: null,
   seeds: [], seedMode: 'national', seedSort: 'added_per_dollar',
   userCosts: null, userCostSort: 'cost_usd', expandedUsers: new Set(), view: 'agents',
+  lastRefresh: null, seedYield: null,
   snapshots: [], pending: [], pendingSource: '', selectedPending: new Set(),
+  signups: [], signupStatus: 'pending_review', selectedSignups: new Set(),
+  signupCounts: {}, mailingListReady: true,
   pendingStatus: 'queue', moderationReady: true, editingOpp: null,
   duplicateTargets: {}, dupSubject: null, dupPick: null, dupTimer: null,
   range: 30, modalAgent: null, logCursor: 0, logTimer: null, pollTimer: null,
@@ -853,6 +927,7 @@ async function loadConfig() {
 }
 
 async function refreshDashboard() {
+  markRefreshing(true);
   try {
     const [status, summary, history, billed, userCosts, snapshots, pending] = await Promise.all([
       api('/api/agents/status'),
@@ -875,11 +950,40 @@ async function refreshDashboard() {
     notice('');
     renderKPIs(); renderBilled(); renderUserCosts(); renderChart(); renderCards(); renderHistory();
     renderSnapshots(); renderPending();
-    schedulePoll();
+    S.lastRefresh = Date.now();
   } catch (e) {
     notice('Could not reach the agent API: ' + e.message);
+  } finally {
+    // In the `finally`, not at the end of the `try`: a single failed poll — a restarted
+    // dev server answering 502 for a second — used to skip the reschedule entirely and
+    // kill the loop for the life of the page. The console then sat on a stale snapshot
+    // forever with no way back except a manual reload.
+    markRefreshing(false);
+    schedulePoll();
   }
 }
+
+/* Refresh has to look like it did something even when the numbers come back identical —
+   otherwise a working button is indistinguishable from a dead one, which is exactly how
+   this read. */
+function markRefreshing(busy) {
+  const btn = $('refreshBtn');
+  if (!btn) return;
+  btn.disabled = busy;
+  btn.textContent = busy ? 'Refreshing…' : 'Refresh';
+  if (!busy) renderUpdatedAt();
+}
+
+function renderUpdatedAt() {
+  const el = $('updatedAt');
+  if (!el) return;
+  if (!S.lastRefresh) { el.textContent = 'never updated'; return; }
+  const secs = Math.round((Date.now() - S.lastRefresh) / 1000);
+  el.textContent = secs < 5 ? 'updated just now'
+    : secs < 60 ? `updated ${secs}s ago`
+    : `updated ${Math.round(secs / 60)}m ago`;
+}
+setInterval(renderUpdatedAt, 5000);
 
 /* Poll fast only while something is actually running. The previous console
    polled every 3s forever, which is a lot of Supabase traffic for data that
@@ -980,18 +1084,25 @@ function renderSnapshots() {
     const stale = s.stale
       ? ` <span class="pill warn" title="This snapshot is ${s.age_days} days old — the rows it describes may have changed since.">${s.age_days}d old</span>` : '';
     const verb = s.kind === 'insert' ? 'insert' : 'update';
-    return `<tr>
+    // `pending` is read from the file and never compared against the database, so a
+    // committed snapshot reads exactly like a fresh one. Harmless for inserts (they
+    // dedupe on normalized URL) but not for the patch agents, where committing twice
+    // re-applies days-old field values over whatever has changed since.
+    const done = s.committed
+      ? ` <span class="pill ok" title="Committed ${esc(clock(s.committed_at))} — ${num(s.committed_applied || 0)} row(s) applied. Committing again would re-apply these values.">committed</span>` : '';
+    return `<tr${s.committed ? ' style="opacity:.7"' : ''}>
       <td style="white-space:nowrap">${esc(s.run_date || '—')}
         ${s.has_time ? `<div class="hint mono">${esc(clock(s.ran_at))}</div>` : ''}${stale}</td>
       <td><span style="display:inline-flex;align-items:center;gap:7px">
         <span style="width:7px;height:7px;border-radius:2px;background:${AGENT_COLOR(s.agent)}"></span>
-        ${esc(cfg ? cfg.name : s.label)}</span></td>
+        ${esc(cfg ? cfg.name : s.label)}</span>${done}</td>
       <td class="mono" style="font-size:12px">${esc(s.file)}</td>
       <td class="num mono">${num(s.entries)}</td>
       <td class="num mono">${s.pending ? num(s.pending) : '—'}</td>
-      <td><button class="btn btn-sm" ${s.pending ? '' : 'disabled'}
-            onclick="previewSnapshot('${esc(s.file)}')">Commit&hellip;</button>
-          <span class="hint" style="margin-left:6px">would ${verb}</span></td>
+      <td><button class="btn btn-sm ${s.committed ? '' : 'btn-primary'}" ${s.pending ? '' : 'disabled'}
+            onclick="previewSnapshot('${esc(s.file)}')">${s.committed ? 'Commit again&hellip;' : 'Commit&hellip;'}</button>
+          <span class="hint" style="margin-left:6px">${s.committed
+            ? `already applied ${esc((s.committed_at || '').slice(0, 10))}` : `would ${verb}`}</span></td>
     </tr>`;
   }).join('');
 }
@@ -1103,6 +1214,132 @@ function renderPending() {
   updateReviewButtons();
 }
 
+/* ---------- Mailing-list signup recipes ----------
+   The only place a recipe becomes executable. Everything on this tab is built around one
+   question a reviewer has to answer per row: does this form belong to THIS program, or to
+   the site hosting it? Evidence is therefore the widest column and confidence the
+   narrowest — the score is the model's opinion of its own work, which is the thing being
+   checked, not a shortcut past checking it. */
+
+function renderSignups() {
+  const rows = S.signups || [];
+  const c = S.signupCounts || {};
+  // The nav badge counts work still to do, matching the Review queue's convention.
+  // Total across every status, not just pending. All ten recipes currently sit at
+  // 'none' (checked, no form found) — a legitimate result that made the badge read empty
+  // and the tab look like nothing had ever run.
+  const signupTotal = Object.values(c).reduce((a, n) => a + (n || 0), 0);
+  $('signupTabCount').textContent = c.pending_review ? num(c.pending_review)
+                                 : (signupTotal ? num(signupTotal) : '');
+  $('signupPendingCount').textContent = c.pending_review ? num(c.pending_review) : '';
+  $('signupVerifiedCount').textContent = c.verified ? num(c.verified) : '';
+  $('signupRejectedCount').textContent = c.rejected ? num(c.rejected) : '';
+  $('signupNoneCount').textContent = c.none ? num(c.none) : '';
+  $('signupSetup').classList.toggle('hidden', S.mailingListReady !== false);
+  [...document.querySelectorAll('#signupStatusTabs .tab')].forEach(t =>
+    t.classList.toggle('active', t.dataset.status === S.signupStatus));
+
+  const body = $('signupBody');
+  if (!rows.length) {
+    const empty = S.mailingListReady === false
+      ? 'Run mailing_list_schema.sql, then run the Mailing List Finder.'
+      : S.signupStatus === 'pending_review'
+        ? 'No recipes waiting for review.'
+        : 'Nothing here.';
+    body.innerHTML = `<tr><td colspan="7" class="empty">${empty}</td></tr>`;
+    updateSignupButtons();
+    return;
+  }
+  body.innerHTML = rows.map(r => {
+    const on = S.selectedSignups.has(r.opportunity_id);
+    const opp = r.opportunity || {};
+    const noList = r.method === 'none';
+    const conf = r.confidence == null ? '—' : Number(r.confidence).toFixed(2);
+    // A low-confidence recipe is not automatically wrong, but it is where a reviewer's
+    // attention is worth most, so it is marked rather than sorted away.
+    const lowConf = !noList && Number(r.confidence || 0) < 0.6;
+    return `<tr class="${on ? 'sel-row' : ''}">
+      <td>${noList ? '' : `<input type="checkbox" ${on ? 'checked' : ''}
+        onchange="toggleSignup('${esc(r.opportunity_id)}', this.checked)">`}</td>
+      <td><div>${esc(opp.name || r.opportunity_id)}</div>
+          ${opp.org ? `<div class="hint" style="margin-top:3px">${esc(opp.org)}</div>` : ''}
+          ${r.status === 'verified' ? '<div style="margin-top:5px"><span class="pill ok">verified</span></div>' : ''}
+          ${r.status === 'rejected' ? '<div style="margin-top:5px"><span class="pill danger">rejected</span></div>' : ''}</td>
+      <td>${noList ? '<span class="hint">no list</span>' : esc(r.provider_name || r.method)}
+          ${lowConf ? ' <span class="pill warn">low confidence</span>' : ''}</td>
+      <td style="max-width:34ch">
+          ${r.scope_evidence ? `<div>&ldquo;${esc(String(r.scope_evidence).slice(0, 160))}&rdquo;</div>` : '<span class="hint">no quote given</span>'}
+          ${r.reason ? `<div class="hint" style="margin-top:3px">${esc(String(r.reason).slice(0, 120))}</div>` : ''}</td>
+      <td class="num">${conf}</td>
+      <td class="mono" style="font-size:11.5px;max-width:26ch;overflow:hidden;text-overflow:ellipsis">
+          ${r.source_url ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener">${esc(shortUrl(r.source_url))}</a>` : '—'}</td>
+      <td style="white-space:nowrap">
+        ${opp.url ? `<a href="${esc(opp.url)}" target="_blank" rel="noopener">Program ↗</a>` : ''}
+        ${r.status === 'verified' ? ` <button class="btn btn-sm" onclick="moderateSignups('pending_review', ['${esc(r.opportunity_id)}'])">Unverify</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+  updateSignupButtons();
+}
+
+function shortUrl(u) {
+  try { const p = new URL(u); return p.hostname.replace(/^www\./, '') + p.pathname; }
+  catch (_) { return u; }
+}
+
+function toggleSignup(id, on) {
+  if (on) S.selectedSignups.add(id); else S.selectedSignups.delete(id);
+  renderSignups();
+}
+
+function updateSignupButtons() {
+  const n = S.selectedSignups.size;
+  const ver = $('signupVerifyBtn'), rej = $('signupRejectBtn');
+  ver.disabled = !n || S.mailingListReady === false;
+  ver.textContent = n ? `Verify ${n} selected` : 'Verify selected';
+  rej.disabled = !n || S.mailingListReady === false;
+  rej.textContent = n ? `Reject ${n} selected` : 'Reject selected';
+}
+
+async function loadSignups() {
+  try {
+    const d = await api(`/api/agents/signups?status=${encodeURIComponent(S.signupStatus)}&limit=500`);
+    S.signups = (d && d.recipes) || [];
+    S.mailingListReady = !d || d.mailing_list_ready !== false;
+    // Counts come from a second, status-less read so the tab badges show totals rather
+    // than only what the current filter happens to contain.
+    const all = await api('/api/agents/signups?status=all&limit=2000').catch(() => null);
+    S.signupCounts = (all && all.counts) || {};
+  } catch (e) {
+    S.signups = [];
+    notice('Could not load signup recipes: ' + e.message);
+  }
+  renderSignups();
+}
+
+async function moderateSignups(status, ids) {
+  ids = ids || [...S.selectedSignups];
+  if (!ids.length) return;
+  const what = ids.length === 1 ? 'this recipe' : `these ${ids.length} recipes`;
+  const msg = status === 'verified'
+    ? `Verify ${what}?\n\nStudents will be able to submit a signup to this list with one tap. `
+      + `Check the evidence quote names the program, not just the institution.`
+    : status === 'rejected'
+      ? `Reject ${what}? They stay on record but are never executed.`
+      : `Move ${what} back to pending review?`;
+  if (!confirm(msg)) return;
+  try {
+    await api('/api/agents/signups/moderate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, status }),
+    });
+    S.selectedSignups.clear();
+    await loadSignups();
+  } catch (e) {
+    notice('Could not update recipes: ' + e.message);
+  }
+}
+
 function togglePending(id, on) {
   if (on) S.selectedPending.add(id); else S.selectedPending.delete(id);
   renderPending();
@@ -1163,7 +1400,7 @@ const OPP_FIELDS = {
   grade_min: 'oppGradeMin', grade_max: 'oppGradeMax',
   price: 'oppPrice', cost: 'oppCost', location: 'oppLocation', state: 'oppState',
   intl: 'oppIntl', season: 'oppSeason', category: 'oppCategory',
-  subject_tags: 'oppSubjectTags',
+  subject_tags: 'oppSubjectTags', contact_email: 'oppContactEmail',
 };
 
 /* ---------------------------------------------------------------------------
@@ -1359,10 +1596,14 @@ const VIEW_SUBTITLE = {
   agents: 'Background agents that maintain the Wingman opportunity catalog',
   users:  'What each user\u2019s own activity costs, against the plan they pay for',
   review: 'Scraped opportunities waiting on a human before students can see them',
+  signups: 'Mailing-list signup recipes waiting on a human before any student is subscribed',
 };
 
 function showView(view) {
   S.view = view;
+  // Loaded on demand rather than in refreshDashboard's Promise.all: this list changes
+  // only when an agent runs or a person clicks, so polling it every 20s is pure traffic.
+  if (view === 'signups') loadSignups();
   document.querySelectorAll('#viewTabs .vtab').forEach(
     t => t.classList.toggle('active', t.dataset.view === view));
   document.querySelectorAll('.view').forEach(
@@ -1376,7 +1617,7 @@ function renderUserCosts() {
   const summaryEl = $('userCostSummary'), bodyEl = $('userCostBody');
   if (!d) {
     summaryEl.innerHTML = '<div class="empty">Could not load per-user costs.</div>';
-    bodyEl.innerHTML = '<tr><td colspan="8" class="empty">Unavailable.</td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="9" class="empty">Unavailable.</td></tr>';
     return;
   }
   if (!d.table_ready) {
@@ -1387,7 +1628,7 @@ function renderUserCosts() {
       Supabase SQL editor, then restart the server. Until then every interactive call is still
       costed in the totals above — it just isn't attributed to anyone.
     </div>`;
-    bodyEl.innerHTML = '<tr><td colspan="8" class="empty">Waiting on the user_costs table.</td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="9" class="empty">Waiting on the user_costs table.</td></tr>';
     $('userCostTableWrap').classList.add('hidden');
     return;
   }
@@ -1396,17 +1637,28 @@ function renderUserCosts() {
   const t = d.totals, price = d.price_per_month_usd;
   // Blank rather than "$0.0000" before any spend is attributed — a zero badge reads as
   // a broken tab, not as an empty one.
-  $('userTabCount').textContent = t.attributed_cost_usd ? money(t.attributed_cost_usd) : '';
+  $('userTabCount').textContent = t.attributed_cost_usd ? money(t.attributed_cost_usd)
+                               : (t.accounts_total ? num(t.accounts_total) : '');
   const overPlan = t.users_over_plan;
   const tiles = [
     ['Attributed to users', money(t.attributed_cost_usd),
-      `<div class="delta flat">${pct(t.attribution_rate)} of ${money(t.interactive_total_usd)} app spend</div>`],
-    ['Unattributed', money(t.unattributed_cost_usd),
-      `<div class="delta flat">calls with no signed-in user</div>`],
-    ['Active users', num(t.active_users),
-      `<div class="delta flat" title="${CALLS_TOOLTIP}">${num(t.calls)} billed calls · ${num(t.web_searches)} searches</div>`],
-    ['Avg cost / user', money(t.avg_cost_per_user),
-      `<div class="delta flat">worst ${money(t.max_cost_per_user)} · plan ${money(price)}</div>`],
+      `<div class="delta flat">${pct(t.attribution_rate)} of ${money(t.attributable_total_usd)} attributable spend</div>`],
+    // Split, because these are two unrelated things. Reported as one number, spend from
+    // before attribution existed swamps genuine signed-out traffic and pins the rate at a
+    // figure that cannot improve until the old rows age out of the window.
+    ['Signed-out spend', money(t.signed_out_cost_usd || 0),
+      t.pre_attribution_cost_usd
+        ? `<div class="delta flat" title="Billed before per-user attribution existed, so it could never have been attributed to anyone. It ages out of this window on its own.">+ ${money(t.pre_attribution_cost_usd)} predates attribution</div>`
+        : `<div class="delta flat">calls with no signed-in user</div>`],
+    // Latest day WITH SPEND, never "today": the rows are bucketed on the UTC day, which
+    // rolls at 5pm Pacific, so a "today" figure reads $0.00 all evening on a day that
+    // cost real money — indistinguishable from the pipeline having stopped.
+    ['Latest activity', money(t.latest_day_cost_usd || 0),
+      `<div class="delta flat">${t.latest_day ? `${num(t.latest_day_calls)} calls · ${num(t.latest_day_users)} user(s) · ${esc(t.latest_day)}` : 'no attributed spend yet'}${t.last_activity_at ? ` · last call ${ago(t.last_activity_at)}` : ''}</div>`],
+    ['Accounts', num(t.accounts_total || 0),
+      `<div class="delta ${t.accounts_no_spend ? 'flat' : 'flat'}" title="Accounts that have never made a billed AI call. A trial that costs nothing has not activated — the single most important thing this table can tell you.">${num(t.accounts_with_spend || 0)} active · ${num(t.accounts_no_spend || 0)} never used AI</div>`],
+    ['Avg cost / active user', money(t.avg_cost_per_user),
+      `<div class="delta flat" title="${CALLS_TOOLTIP}">${num(t.calls)} billed calls · worst ${money(t.max_cost_per_user)}</div>`],
     ['Over plan price', `${overPlan}<span style="font-size:15px;color:var(--text-3)">/${t.active_users}</span>`,
       `<div class="delta ${overPlan ? 'down' : 'flat'}">cost more than ${money(price)} of AI</div>`],
   ];
@@ -1432,17 +1684,61 @@ function renderUserCosts() {
       ${tiles.map(([l, v, sub]) => `<div class="kpi" style="box-shadow:none">
         <div class="label">${l}</div><div class="value">${v}</div>${sub}</div>`).join('')}
     </div>
+    <div class="hint" style="margin-bottom:8px">Attributed spend per day</div>
+    ${dailySpend(d)}
     ${providerBlock(d)}
     <div class="hint" style="margin-bottom:8px">Where the attributed money went, by feature</div>
     ${bar}
     <div class="notice info" style="margin-top:16px;line-height:1.6">
       This is the <strong>same money</strong> as the app half of estimated spend on the Agents tab,
-      split by who triggered it — never additional spend. ${money(t.unattributed_cost_usd)} could not be attributed
-      because those calls carried no signed-in user. Cached deadline checks are not charged to anyone:
-      they make no API call, so only the user who paid to populate the cache is billed for it.
+      split by who triggered it — never additional spend.
+      ${t.pre_attribution_cost_usd
+        ? `${money(t.pre_attribution_cost_usd)} of this window predates per-user attribution
+           (first recorded ${esc((d.attribution_started_at || '').slice(0, 10))}) and could never have been
+           attributed to anyone; ${money(t.signed_out_cost_usd)} came from calls with no signed-in user.`
+        : `${money(t.signed_out_cost_usd)} could not be attributed because those calls carried no signed-in user.`}
+      Cached deadline checks are not charged to anyone: they make no API call, so only the user
+      who paid to populate the cache is billed for it.
     </div>`;
 
   renderUserCostRows();
+}
+
+/* Per-day attributed spend. The endpoint has always returned this series and nothing
+   ever drew it — which left the tab with no way to answer "is this still recording?"
+   except by staring at a 30-day total and trying to remember what it said last time. */
+function dailySpend(d) {
+  const series = d.series || [];
+  if (!series.some(x => x.cost_usd > 0)) {
+    return '<div class="empty" style="padding:14px 0 18px">No attributed spend in this window yet.</div>';
+  }
+  const W = 1000, H = 120, padL = 46, padR = 8, padB = 20, padT = 8;
+  const innerW = W - padL - padR, innerH = H - padB - padT;
+  const max = Math.max(0.0001, ...series.map(x => x.cost_usd));
+  const bw = Math.max(2, (innerW / series.length) - 2);
+  let svg = '';
+  for (let i = 0; i <= 2; i++) {
+    const y = padT + innerH - (innerH * i / 2);
+    svg += `<line class="grid-line" x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}"/>`
+         + `<text class="axis-label" x="${padL - 6}" y="${y + 3}" text-anchor="end">${money(max * i / 2)}</text>`;
+  }
+  const last = series.length - 1;
+  series.forEach((x, i) => {
+    const px = padL + (innerW * i / series.length) + 1;
+    if (x.cost_usd > 0) {
+      const h = (x.cost_usd / max) * innerH;
+      // The most recent bar with spend is the one being asked about — mark it.
+      const isLast = !series.slice(i + 1).some(y => y.cost_usd > 0);
+      svg += `<rect x="${px.toFixed(1)}" y="${(padT + innerH - h).toFixed(1)}" width="${bw.toFixed(1)}"
+              height="${h.toFixed(1)}" rx="1" fill="var(--accent)" opacity="${isLast ? 1 : .55}">`
+           + `<title>${x.date} · ${money(x.cost_usd)} · ${num(x.calls)} calls · ${num(x.users)} user(s)</title></rect>`;
+    }
+    const step = Math.ceil(series.length / 8);
+    if (i % step === 0 || i === last) {
+      svg += `<text class="axis-label" x="${(px + bw / 2).toFixed(1)}" y="${H - 5}" text-anchor="middle">${x.date.slice(5)}</text>`;
+    }
+  });
+  return `<div style="margin-bottom:18px"><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${svg}</svg></div>`;
 }
 
 function renderUserCostRows() {
@@ -1455,7 +1751,7 @@ function renderUserCostRows() {
     return (b[key] || 0) - (a[key] || 0);
   });
   if (!rows.length) {
-    bodyEl.innerHTML = '<tr><td colspan="8" class="empty">No attributed usage in this window.</td></tr>';
+    bodyEl.innerHTML = '<tr><td colspan="9" class="empty">No attributed usage in this window.</td></tr>';
     return;
   }
   const price = d.price_per_month_usd;
@@ -1466,15 +1762,26 @@ function renderUserCostRows() {
                          : esc(u.userid);
     const orphan = u.known_account ? ''
       : ' <span class="pill warn" title="Spend is attributed to this userid but no matching row exists in the users table.">no account</span>';
-    const main = `<tr class="clickable" onclick="toggleUserCost('${esc(u.userid).replace(/'/g, "\\'")}')">
-      <td>${label}${orphan}</td>
+    // An account with no billed call at all. Not an empty row — a signup that never
+    // activated, which is exactly what a trial-to-paid product needs to be able to see.
+    const idle = u.has_spend ? ''
+      : ' <span class="pill" title="This account has never made a billed AI call.">never used AI</span>';
+    const click = u.has_spend
+      ? ` class="clickable" onclick="toggleUserCost('${esc(u.userid).replace(/'/g, "\\'")}')"`
+      : ' style="opacity:.62"';
+    const main = `<tr${click}>
+      <td>${label}${orphan}${idle}</td>
       <td>${planPill(u.subscription_status)}</td>
-      <td class="num mono">${num(u.calls)}</td>
+      <td class="num mono">${u.calls ? num(u.calls) : '—'}</td>
       <td class="num mono">${u.web_searches ? num(u.web_searches) : '—'}</td>
-      <td class="num mono" ${over ? 'style="color:var(--danger);font-weight:600"' : ''}>${money(u.cost_usd)}</td>
-      <td class="num mono">${money(u.cost_per_call)}</td>
-      <td class="num mono" ${over ? 'style="color:var(--danger)"' : ''}>${pct(u.pct_of_plan)}</td>
-      <td style="white-space:nowrap;color:var(--text-2)">${ago(u.last_at)}</td>
+      <td class="num mono" title="${u.recent_day ? `${num(u.recent_day_calls || 0)} billed call(s) on ${esc(u.recent_day)}` : 'never'}">${u.recent_day_cost_usd
+          ? `${money(u.recent_day_cost_usd)}<br><span style="font-size:11px;color:var(--text-3)">${esc(u.recent_day)}</span>`
+          : '—'}</td>
+      <td class="num mono" ${over ? 'style="color:var(--danger);font-weight:600"' : ''}>${u.has_spend ? money(u.cost_usd) : '—'}</td>
+      <td class="num mono">${u.calls ? money(u.cost_per_call) : '—'}</td>
+      <td class="num mono" ${over ? 'style="color:var(--danger)"' : ''}>${u.has_spend ? pct(u.pct_of_plan) : '—'}</td>
+      <td style="white-space:nowrap;color:var(--text-2)">${u.last_at ? ago(u.last_at)
+          : (u.created_at ? `joined ${ago(u.created_at)}` : '—')}</td>
     </tr>`;
     if (!open) return main;
 
@@ -1505,7 +1812,7 @@ function renderUserCostRows() {
       ? `<div class="notice" style="margin-top:12px">This account has used ${money(u.cost_usd)} of AI
          against a ${money(price)} plan — inference alone is ${pct(u.pct_of_plan)} of the price,
          before Stripe fees or anything else.</div>` : '';
-    return main + `<tr class="detail-row"><td colspan="8">
+    return main + `<tr class="detail-row"><td colspan="9">
       <div class="detail-grid">${details.map(([k, v]) =>
         `<div class="d"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
       ${warn}</td></tr>`;
@@ -1598,7 +1905,24 @@ function toggleUserCost(userid) {
    external runtime dependency in the whole console. */
 function renderChart() {
   const series = S.summary.series || [];
-  const keys = Object.keys(S.config);
+  // Every key the series actually contains, not just the five with cards. Iterating
+  // S.config dropped the interactive rollups, on-demand deadline checks and any agent run
+  // from a script with no card — $4.84 of a $14.24 KPI printed ten pixels above the bars.
+  const meta = S.summary.series_keys || [];
+  const keys = meta.length ? meta.map(m => m.key) : Object.keys(S.config);
+  const labelFor = k => (meta.find(m => m.key === k) || {}).label
+                     || (S.config[k] && S.config[k].name) || k;
+  // Carded agents and the named app bands each have their own CSS var. Anything else is a
+  // script with no card — give it a stable colour derived from its name so two of them
+  // don't render as the same grey.
+  const KNOWN_BAND = new Set([...Object.keys(S.config),
+    'interactive_gemini', 'interactive_claude', 'deadline_ondemand']);
+  const colorFor = k => {
+    if (KNOWN_BAND.has(k)) return AGENT_COLOR(k);
+    let h = 0;
+    for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) >>> 0;
+    return FEATURE_COLORS[h % FEATURE_COLORS.length];
+  };
   const W = 1000, H = 200, padL = 46, padR = 8, padB = 22, padT = 10;
   const innerW = W - padL - padR, innerH = H - padB - padT;
 
@@ -1620,8 +1944,8 @@ function renderChart() {
       if (!cost) return;
       const h = (cost / max) * innerH;
       y -= h;
-      svg += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${AGENT_COLOR(k)}" rx="1">`
-           + `<title>${d.date} · ${S.config[k].name}: ${money(cost)}</title></rect>`;
+      svg += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${colorFor(k)}" rx="1">`
+           + `<title>${d.date} · ${esc(labelFor(k))}: ${money(cost)}</title></rect>`;
     });
     const step = Math.ceil(series.length / 8);
     if (i % step === 0) {
@@ -1632,13 +1956,28 @@ function renderChart() {
   chart.setAttribute('viewBox', `0 0 ${W} ${H}`);
   chart.innerHTML = svg;
 
-  $('chartLegend').innerHTML = keys.map(k => {
-    const t = S.summary.by_agent[k] || {};
-    return `<div class="item"><span class="swatch" style="background:${AGENT_COLOR(k)}"></span>`
-         + `${esc(S.config[k].name)} <span class="mono" style="color:var(--text-3)">${money(t.cost_usd)}</span></div>`;
-  }).join('');
+  // Legend totals come from the series itself so they always add up to the bars — and,
+  // now that every key is drawn, to the KPI above them.
+  const totalByKey = {};
+  series.forEach(d => keys.forEach(k => {
+    totalByKey[k] = (totalByKey[k] || 0) + ((d.agents[k] || {}).cost_usd || 0);
+  }));
+  $('chartLegend').innerHTML = keys
+    .filter(k => totalByKey[k] > 0)
+    .sort((a, b) => totalByKey[b] - totalByKey[a])
+    .map(k => `<div class="item"><span class="swatch" style="background:${colorFor(k)}"></span>`
+            + `${esc(labelFor(k))} <span class="mono" style="color:var(--text-3)">${money(totalByKey[k])}</span></div>`)
+    .join('');
   const nonZero = series.filter(d => dayTotal(d) > 0).length;
-  $('chartHint').textContent = `${nonZero} active day${nonZero === 1 ? '' : 's'} in the last ${S.range}`;
+  const charted = keys.reduce((a, k) => a + (totalByKey[k] || 0), 0);
+  const kpi = (S.summary.current || {}).cost_usd || 0;
+  // If these ever diverge again, say so on the card rather than letting two adjacent
+  // numbers disagree in silence.
+  const gap = Math.abs(kpi - charted) > 0.005
+    ? ` · ${money(Math.abs(kpi - charted))} not shown`
+    : ' · matches estimated spend';
+  $('chartHint').textContent =
+    `${nonZero} active day${nonZero === 1 ? '' : 's'} in the last ${S.range} · ${money(charted)} charted${gap}`;
 }
 
 function sparkline(values) {
@@ -1805,6 +2144,7 @@ async function loadSeeds() {
   try {
     const d = await api('/api/seeds');
     S.seeds = d.seeds || [];
+    S.seedYield = d.yield || null;
     renderSeeds();
   } catch (e) {
     $('seedBody').innerHTML = `<tr><td colspan="10" class="empty">
@@ -1825,6 +2165,19 @@ function renderSeeds() {
   if (!rows.length) {
     $('seedBody').innerHTML = `<tr><td colspan="10" class="empty">No ${S.seedMode} angles yet.</td></tr>`;
     return;
+  }
+  // A grid of zeros reads as a broken feature, and it usually isn't: dry runs add nothing
+  // so they credit nothing, and the hardcoded fallback angles have no id to credit. Say
+  // which it is rather than leaving the operator to guess.
+  const y = S.seedYield;
+  const note = $('seedYieldNote');
+  if (note) {
+    if (y && !y.ever_credited && y.reason) {
+      note.textContent = y.reason;
+      note.classList.remove('hidden');
+    } else {
+      note.classList.add('hidden');
+    }
   }
   $('seedBody').innerHTML = rows.map(s => `<tr class="${s.is_enabled ? '' : 'disabled-seed'}">
     <td><label class="switch"><input type="checkbox" ${s.is_enabled ? 'checked' : ''}
@@ -2068,15 +2421,23 @@ async function doPreview() {
       body: JSON.stringify({ agent: S.modalAgent, config: collectConfig() }),
     });
     const cost = (d.est_cost_usd === null || d.est_cost_usd === undefined) ? null : d.est_cost_usd;
+    // Range, not just a mean. This agent's own clean history can span three orders of
+    // magnitude per item depending on how much web search a run triggers, and a lone
+    // average reads as a precision the number does not have.
+    const spread = (d.est_cost_low_usd != null && d.est_cost_high_usd != null
+                    && d.est_cost_high_usd - d.est_cost_low_usd > 0.005)
+      ? ` <span style="color:var(--text-3)">(range ${money(d.est_cost_low_usd)}–${money(d.est_cost_high_usd)})</span>` : '';
     const costText = d.based_on_runs
-      ? `<span class="big">${money(cost)}</span> estimated <span style="color:var(--text-3)">(from ${d.based_on_runs} prior run${d.based_on_runs === 1 ? '' : 's'})</span>`
-      : `<span style="color:var(--text-3)">no cost history for this agent yet — cost unknown</span>`;
+      ? `<span class="big">${money(cost)}</span> estimated${spread} <span style="color:var(--text-3)">(from ${d.based_on_runs} successful run${d.based_on_runs === 1 ? '' : 's'})</span>`
+      : `<span style="color:var(--text-3)">no successful run to estimate from — cost unknown</span>`;
     const timeText = d.est_seconds ? ` · <span class="big">${duration(d.est_seconds)}</span> estimated` : '';
     est.className = 'estimate ' + (cost && cost > 1 ? 'spend' : 'free');
     est.innerHTML = `<div><span class="big">${num(d.count)}</span> ${esc(d.unit)} in scope · ${costText}${timeText}</div>`
       + (d.sample && d.sample.length
         ? `<div style="margin-top:8px;font-size:12px;color:var(--text-2)">e.g. ${d.sample.slice(0, 4).map(esc).join(' · ')}${d.count > 4 ? ' …' : ''}</div>` : '')
-      + `<div style="margin-top:8px;font-size:11.5px;color:var(--text-3)">Preview only — no API calls were made and nothing was written.</div>`;
+      + (d.provisional
+        ? `<div class="notice warn" style="margin-top:8px;font-size:12px">Provisional — based on ${d.based_on_runs ? `only ${d.based_on_runs} successful run` : 'no successful run'}${d.based_on_runs === 1 ? '' : 's'}. Treat this as an order of magnitude, not a quote.</div>` : '')
+      + `<div style="margin-top:8px;font-size:11.5px;color:var(--text-3)">Preview only — no API calls were made and nothing was written. Estimates use successful runs only: a failed run counted its rows but errored out of most of them before paying, and a snapshot commit costs nothing by construction.</div>`;
     $('argvLine').textContent = '$ python ' + (d.argv || []).filter(a => a !== '-u' && a !== '--preview').join(' ');
     $('argvLine').classList.remove('hidden');
   } catch (e) {
@@ -2195,6 +2556,18 @@ $('seedSave').onclick = saveSeed;
 $('seedDelete').onclick = deleteSeed;
 document.querySelectorAll('#viewTabs .vtab').forEach(t => t.onclick = () => showView(t.dataset.view));
 
+document.querySelectorAll('#signupStatusTabs .tab').forEach(t => t.onclick = () => {
+  S.signupStatus = t.dataset.status; S.selectedSignups.clear(); loadSignups();
+});
+$('signupSelectAll').onclick = () => {
+  (S.signups || []).filter(r => r.method !== 'none')
+    .forEach(r => S.selectedSignups.add(r.opportunity_id));
+  renderSignups();
+};
+$('signupClear').onclick = () => { S.selectedSignups.clear(); renderSignups(); };
+$('signupVerifyBtn').onclick = () => moderateSignups('verified');
+$('signupRejectBtn').onclick = () => moderateSignups('rejected');
+
 document.querySelectorAll('#seedTabs .tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('#seedTabs .tab').forEach(x => x.classList.remove('active'));
   t.classList.add('active'); S.seedMode = t.dataset.mode; renderSeeds();
@@ -2217,6 +2590,9 @@ document.addEventListener('keydown', e => {
   try { await loadConfig(); } catch (e) { notice('Could not load agent config: ' + e.message); }
   await refreshDashboard();
   await loadSeeds();
+  // Once at startup so the nav badge shows how many recipes are waiting, even if nobody
+  // opens the tab. Refreshed on demand from showView() after that.
+  await loadSignups();
 })();
 </script>
 </body>

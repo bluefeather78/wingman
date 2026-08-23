@@ -3274,8 +3274,12 @@ function resetResultFilters(){
   resultVisibleCount = 10;
 }
 
-// Score all opportunities against a profile tag in a single Gemini call
-// Returns { id, rank, reasoning } for matched opportunities (poor matches omitted by AI)
+// Score all opportunities against a profile tag in a single Gemini call.
+// Returns { id, rank, reasoning } for matched opportunities (poor matches omitted by AI),
+// or null if the call failed. Null and [] are deliberately different answers: [] means the
+// model looked and rated nothing relevant (a real result, safe to cache), null means we
+// never got an answer — scoreOpportunitiesForTag() must not cache that, and the caller
+// leaves the list unfiltered rather than showing an empty page a retry would fill.
 async function batchScoreOpportunitiesWithAI(enrichedTag, opportunities){
   if(!enrichedTag || !opportunities.length) return [];
 
@@ -3305,12 +3309,69 @@ Return ONLY valid JSON, no markdown, no preamble.`;
 
   try {
     const response = await callGemini(system, userContent, false);
-    const results = extractJSON(response) || [];
+    const results = extractJSON(response);
+    // Only an array is an answer. extractJSON hands back whatever JSON it finds, and a
+    // model that returns an object (mock mode's `{}` for an unrecognised prompt, or a
+    // `{"results": [...]}` wrapper) used to sail through here as a truthy value and then
+    // read as "nothing matched" — emptying the results list, and, once cached, keeping it
+    // empty. That is indistinguishable from a broken filter, so treat it as a failure.
+    if(!Array.isArray(results)){
+      console.error('Batch scoring returned a non-array response:', results);
+      return null;
+    }
     return results;
   } catch(e) {
     console.error('Batch scoring failed:', e);
-    return []; // Return empty on error — filterResultList will fall back to keyword matching
+    return null; // Distinct from [] — see the note above this function.
   }
+}
+
+// ---------- Tag scoring cache ----------
+// renderResults() re-runs on every interaction that redraws the list: ticking a result
+// card's checkbox (toggleSelect), saving one to the Quest Log, toggling any facet or the
+// untracked filter, Show more, and returning to stage 2. With a profile tag selected each
+// of those used to re-pay for the same scoring call with the same inputs — a student who
+// picked a tag and then saved five matches paid for six identical calls.
+//
+// The key is the tag plus the ids being scored, so a different question still costs a
+// call — and the ids are what actually went into the prompt, so a cached answer can only
+// ever be served back to the exact question it answered. Promises are cached, not just
+// results, so two renders racing each other share one call instead of making two.
+const TAG_SCORE_CACHE_MAX = 20;
+const tagScoreCache = new Map();
+
+function tagScoreCacheKey(enrichedTag, opportunities){
+  // Ids are SORTED: renderResults re-sorts the list on every render (tracked items first,
+  // then selected ones), so ticking a result's checkbox reorders it. An order-sensitive
+  // key would miss on exactly the interactions this cache exists to stop paying for.
+  return JSON.stringify([enrichedTag.tag, opportunities.map(o => o.id).sort()]);
+}
+
+// Resolves to an { id -> {reasoning, rank} } map. Rejects if the call failed, leaving
+// nothing cached so the next render retries.
+function scoreOpportunitiesForTag(enrichedTag, opportunities){
+  const key = tagScoreCacheKey(enrichedTag, opportunities);
+  const hit = tagScoreCache.get(key);
+  if(hit){
+    tagScoreCache.delete(key); // re-insert to keep it newest for the LRU trim below
+    tagScoreCache.set(key, hit);
+    return hit;
+  }
+  const promise = (async () => {
+    const results = await batchScoreOpportunitiesWithAI(enrichedTag, opportunities);
+    if(results === null) throw new Error('Tag scoring call failed');
+    const scores = {};
+    (Array.isArray(results) ? results : []).forEach(r => {
+      if(r && r.id) scores[r.id] = { reasoning: r.reasoning, rank: r.rank };
+    });
+    return scores;
+  })();
+  promise.catch(() => { if(tagScoreCache.get(key) === promise) tagScoreCache.delete(key); });
+  tagScoreCache.set(key, promise);
+  while(tagScoreCache.size > TAG_SCORE_CACHE_MAX){
+    tagScoreCache.delete(tagScoreCache.keys().next().value);
+  }
+  return promise;
 }
 
 function opportunityMatchesProfileTag(opp, tag){
@@ -3353,25 +3414,36 @@ async function filterResultList(list){
     );
 
     if(selectedEnrichedTag){
-      // Call Gemini to score all opportunities at once
-      const aiResults = await batchScoreOpportunitiesWithAI(selectedEnrichedTag, filtered.map(r => r.opp));
+      // NOTE the `.map(r => r.opp)`: `filtered` holds result wrappers ({opp, reason,
+      // tier}), and both the prompt and the cache key read `.id`/`.name`/`.summary` off
+      // what they are handed. Passing the wrappers straight through sent the model 59
+      // rows of `ID: undefined | Name: undefined`, so it had nothing to match and the
+      // tag returned no results — with the empty answer then cached per tag.
+      let aiScores = null;
+      try{
+        aiScores = await scoreOpportunitiesForTag(selectedEnrichedTag, filtered.map(r => r.opp));
+      }catch(err){
+        console.error('Tag scoring unavailable:', err.message);
+      }
 
-      // Create a map of ID -> reasoning for quick lookup
-      const aiScores = {};
-      aiResults.forEach(result => {
-        aiScores[result.id] = { reasoning: result.reasoning, rank: result.rank };
-      });
-
-      // Filter to only opportunities returned by AI (AI is saying "omit poor matches")
-      // and attach reasoning
-      filtered = filtered
-        .filter(r => aiScores[r.opp.id]) // Only keep opps that AI rated
-        .map(r => {
-          r.aiReasoning = aiScores[r.opp.id].reasoning;
-          r.aiRank = aiScores[r.opp.id].rank;
-          return r;
-        })
-        .sort((a, b) => a.aiRank - b.aiRank); // Sort by AI rank order
+      if(aiScores){
+        // Keep only opportunities the AI rated (it omits poor matches) and attach reasoning
+        filtered = filtered
+          .filter(r => aiScores[r.opp.id])
+          .map(r => {
+            r.aiReasoning = aiScores[r.opp.id].reasoning;
+            r.aiRank = aiScores[r.opp.id].rank;
+            return r;
+          })
+          .sort((a, b) => a.aiRank - b.aiRank); // Sort by AI rank order
+      }else{
+        // No answer from the model — fall back to the local keyword matcher rather than
+        // showing the list untouched (the tag looks broken) or empty (looks like nothing
+        // matched). It filters worse and carries no reasoning, but the tag still does
+        // visibly what the student asked it to do, for free. Nothing is cached on this
+        // path, so the next render retries the real call.
+        filtered = filtered.filter(r => opportunityMatchesProfileTag(r.opp, selectedEnrichedTag.tag));
+      }
     }
   }
 
@@ -3521,8 +3593,9 @@ async function renderResults(){
   const hasProfile = !!studentProfile.synthesized;
   renderResultFilterBar(sorted, cachedTags || [], !cachedTags && hasProfile);
 
-  // Only actually awaits when a profile tag is selected (that's a deliberate,
-  // student-triggered scoring call); otherwise this resolves without a round trip.
+  // Only makes a round trip when a profile tag is selected AND that tag hasn't been
+  // scored against this result set yet (see scoreOpportunitiesForTag) — with no tag
+  // selected, or on any re-render after the first, this resolves without one.
   const filtered = await filterResultList(sorted);
   const visible = filtered.slice(0, resultVisibleCount);
   document.getElementById('resultGrid').innerHTML = visible.length

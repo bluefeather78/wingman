@@ -42,12 +42,11 @@
   --agent-scraper:  #D97706;
   --agent-deadline: #DB2777;
   --agent-mailinglist: #059669;
-  /* App traffic and uncarded scripts. Cooler and flatter than the agent hues on purpose:
-     they belong on the chart because they are real spend, but they are not agents. */
-  --agent-interactive_gemini: #3B6FB6;
-  --agent-interactive_claude: #6D5BB8;
-  --agent-deadline_ondemand:  #A05195;
-  --agent-other:              #8A8FA3;
+  /* Not agents: spend the users caused, and scripts with no card. Cooler and flatter
+     than the agent hues on purpose — they belong on the chart because they are real
+     money, but nobody starts them from here. */
+  --agent-end_user: #3B6FB6;
+  --agent-other:    #8A8FA3;
 
   --radius: 10px;
   --radius-sm: 6px;
@@ -68,8 +67,7 @@
     --agent-metadata: #A78BFA; --agent-reviews: #22D3EE;
     --agent-scraper: #FBBF24; --agent-deadline: #F472B6;
     --agent-mailinglist: #34D399;
-    --agent-interactive_gemini: #7BA6E0; --agent-interactive_claude: #A192E0;
-    --agent-deadline_ondemand: #C98BBE; --agent-other: #9CA3B4;
+    --agent-end_user: #7BA6E0; --agent-other: #9CA3B4;
     --shadow: 0 1px 2px rgba(0,0,0,.4);
   }
 }
@@ -83,8 +81,7 @@
   --agent-metadata: #A78BFA; --agent-reviews: #22D3EE;
   --agent-scraper: #FBBF24; --agent-deadline: #F472B6;
   --agent-mailinglist: #34D399;
-  --agent-interactive_gemini: #7BA6E0; --agent-interactive_claude: #A192E0;
-  --agent-deadline_ondemand: #C98BBE; --agent-other: #9CA3B4;
+  --agent-end_user: #7BA6E0; --agent-other: #9CA3B4;
   --shadow: 0 1px 2px rgba(0,0,0,.4);
 }
 
@@ -178,6 +175,33 @@ select:focus, input:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .dot.idle { background: var(--text-3); }
 @keyframes pulse { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.35; transform:scale(.8);} }
 
+/* Divides the always-visible frame from the paged cuts beneath it. Two rules with the
+   section name straddling them: heavier than the hairlines used between rows, so the eye
+   reads a change of subject rather than another row. */
+.panel-break {
+  position: relative;
+  margin: 4px 0 0;
+  padding: 0 14px;
+  border-top: 1px solid var(--border-strong);
+}
+.panel-break::after {
+  content: '';
+  display: block;
+  border-top: 1px solid var(--border);
+  margin-top: 3px;
+}
+.panel-break span {
+  position: absolute;
+  top: -8px; left: 14px;
+  background: var(--surface);
+  padding: 0 8px 0 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
 .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;
   padding: 2px 8px; border-radius: 99px; background: var(--muted-soft); color: var(--text-2);
   font-family: var(--font-head); white-space: nowrap; }
@@ -258,6 +282,8 @@ tbody tr.clickable:hover { background: var(--surface-2); }
 .tab { padding: 5px 12px; border-radius: var(--radius-sm); border: 1px solid transparent;
   background: transparent; color: var(--text-2); font-weight: 500; font-size: 13px; }
 .tab.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.tab .count { font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  color: var(--text-3); margin-left: 6px; }
 tr.sel-row > td { background: var(--accent-soft); }
 .dup-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px;
   max-height: 260px; overflow-y: auto; }
@@ -362,6 +388,7 @@ tr.disabled-seed { opacity: .48; }
     <div class="card-body">
       <div class="chart-wrap"><svg class="chart" id="costChart" preserveAspectRatio="none"></svg></div>
       <div class="legend" id="chartLegend"></div>
+      <div class="hint" id="chartNotes" style="margin-top:12px;line-height:1.55"></div>
     </div>
   </div>
 
@@ -608,8 +635,8 @@ tr.disabled-seed { opacity: .48; }
     <div class="card-head">
       <h2>Cost per user</h2>
       <div class="spacer"></div>
-      <div class="hint">Every account, spend or not &mdash; click a row with spend for its per-provider, per-model and per-feature breakdown</div>
-      <select id="userCostSort">
+      <div class="hint" id="userPanelHint"></div>
+      <select id="userCostSort" class="hidden">
         <option value="cost_usd">Sort by cost</option>
         <option value="calls">Sort by calls</option>
         <option value="cost_per_call">Sort by cost / call</option>
@@ -617,7 +644,25 @@ tr.disabled-seed { opacity: .48; }
       </select>
     </div>
     <div class="card-body" id="userCostSummary"><div class="empty">Loading&hellip;</div></div>
-    <div class="card-body tight" id="userCostTableWrap">
+
+    <!-- Everything above is the whole-account picture; everything below is one cut through
+         it. Four cuts of the same money, so they page rather than stack: reading them as
+         one column meant scrolling past two tables to reach the one you wanted. The double
+         rule marks that shift — a single hairline reads as another row of the same thing. -->
+    <div class="panel-break"><span>Break it down</span></div>
+    <div class="card-body tight" id="userCostPanels">
+      <div class="tabs" id="userCostTabs" style="padding:0 14px 12px">
+        <button class="tab active" data-panel="provider">By provider</button>
+        <button class="tab" data-panel="models">By model</button>
+        <button class="tab" data-panel="features">By feature</button>
+        <button class="tab" data-panel="users">Users<span class="count" id="userPanelCount"></span></button>
+      </div>
+      <div id="panel-provider" style="padding:0 14px 16px"></div>
+      <div id="panel-models"></div>
+      <div id="panel-features"></div>
+    </div>
+
+    <div class="card-body tight hidden" id="userCostTableWrap">
       <div class="tbl-wrap">
         <table>
           <thead><tr>
@@ -837,7 +882,7 @@ const S = {
   config: {}, status: {}, history: [], summary: null,
   seeds: [], seedMode: 'national', seedSort: 'added_per_dollar',
   userCosts: null, userCostSort: 'cost_usd', expandedUsers: new Set(), view: 'agents',
-  lastRefresh: null, seedYield: null,
+  lastRefresh: null, seedYield: null, userPanel: 'provider',
   snapshots: [], pending: [], pendingSource: '', selectedPending: new Set(),
   signups: [], signupStatus: 'pending_review', selectedSignups: new Set(),
   signupCounts: {}, mailingListReady: true,
@@ -1574,10 +1619,19 @@ const FEATURE_COLORS = ['#E8833A','#4C8DF6','#3FB27F','#B565D8','#E4B429','#E05C
                         '#38A8B8','#8A8FA3','#C4795A','#6D74C9','#5FA855','#A8A0B8'];
 const featureColor = i => FEATURE_COLORS[i % FEATURE_COLORS.length];
 
+// A blank model id is a row written before user_costs gained its `model` column, not a
+// model literally named "". Must match what get_user_costs() substitutes server-side, or
+// the same rows read as two different things depending on which table you are looking at.
+const UNTRACKED_MODEL = '(before model tracking)';
+
 // Providers get FIXED colours, not positional ones like features: this palette has to
 // mean the same thing every render, or a provider that overtakes the other one swaps
 // colours mid-session and the bar silently reads backwards.
-const PROVIDER_COLORS = { anthropic: '#D97757', google: '#4C8DF6', unknown: '#8A8FA3' };
+// Fixed per provider, never positional — see the note above. `untracked` is the bucket
+// for rows written before user_costs had a model column: deliberately a flat neutral, so
+// an absence never reads as a third vendor sitting alongside Anthropic and Google.
+const PROVIDER_COLORS = { anthropic: '#D97757', google: '#4C8DF6',
+                          untracked: '#8A8FA3', unknown: '#8A8FA3' };
 const providerColor = k => PROVIDER_COLORS[k] || PROVIDER_COLORS.unknown;
 
 function planPill(status) {
@@ -1630,9 +1684,12 @@ function renderUserCosts() {
     </div>`;
     bodyEl.innerHTML = '<tr><td colspan="9" class="empty">Waiting on the user_costs table.</td></tr>';
     $('userCostTableWrap').classList.add('hidden');
+    $('userCostPanels').classList.add('hidden');
+    $('userCostSort').classList.add('hidden');
+    $('userPanelHint').textContent = '';
     return;
   }
-  $('userCostTableWrap').classList.remove('hidden');
+  $('userCostPanels').classList.remove('hidden');
 
   const t = d.totals, price = d.price_per_month_usd;
   // Blank rather than "$0.0000" before any spend is attributed — a zero badge reads as
@@ -1663,22 +1720,6 @@ function renderUserCosts() {
       `<div class="delta ${overPlan ? 'down' : 'flat'}">cost more than ${money(price)} of AI</div>`],
   ];
 
-  const feats = d.features || [];
-  const featTotal = feats.reduce((a, f) => a + f.cost_usd, 0);
-  const bar = featTotal > 0 ? `
-    <div style="margin-top:4px">
-      <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;border:1px solid var(--border)">
-        ${feats.map((f, i) => `<div title="${esc(f.label)}: ${money(f.cost_usd)} over ${num(f.calls)} calls"
-             style="width:${(f.cost_usd / featTotal * 100).toFixed(2)}%;background:${featureColor(i)}"></div>`).join('')}
-      </div>
-      <div class="legend" style="margin-top:10px">
-        ${feats.map((f, i) => `<span class="item">
-           <span class="swatch" style="background:${featureColor(i)}"></span>
-           ${esc(f.label)} <span class="mono" style="color:var(--text-3)">${money(f.cost_usd)}</span>
-         </span>`).join('')}
-      </div>
-    </div>` : '<div class="empty">No attributed spend in this window yet.</div>';
-
   summaryEl.innerHTML = `
     <div class="kpis" style="margin-bottom:16px">
       ${tiles.map(([l, v, sub]) => `<div class="kpi" style="box-shadow:none">
@@ -1686,9 +1727,6 @@ function renderUserCosts() {
     </div>
     <div class="hint" style="margin-bottom:8px">Attributed spend per day</div>
     ${dailySpend(d)}
-    ${providerBlock(d)}
-    <div class="hint" style="margin-bottom:8px">Where the attributed money went, by feature</div>
-    ${bar}
     <div class="notice info" style="margin-top:16px;line-height:1.6">
       This is the <strong>same money</strong> as the app half of estimated spend on the Agents tab,
       split by who triggered it — never additional spend.
@@ -1701,7 +1739,33 @@ function renderUserCosts() {
       who paid to populate the cache is billed for it.
     </div>`;
 
+  $('panel-provider').innerHTML = providerBlock(d);
+  $('panel-models').innerHTML = modelPanel(d);
+  $('panel-features').innerHTML = featurePanel(d);
+  $('userPanelCount').textContent = t.accounts_total ? num(t.accounts_total) : '';
   renderUserCostRows();
+  showUserPanel(S.userPanel);
+}
+
+/* Three cuts of one number: by model, by feature, by account. Paged rather than stacked —
+   the provider split above stays visible for all three because it is the frame they sit
+   in, not a fourth cut of the same money. */
+function showUserPanel(name) {
+  S.userPanel = name;
+  [...document.querySelectorAll('#userCostTabs .tab')]
+    .forEach(t => t.classList.toggle('active', t.dataset.panel === name));
+  $('panel-provider').classList.toggle('hidden', name !== 'provider');
+  $('panel-models').classList.toggle('hidden', name !== 'models');
+  $('panel-features').classList.toggle('hidden', name !== 'features');
+  $('userCostTableWrap').classList.toggle('hidden', name !== 'users');
+  // The sort control only means anything against the account table.
+  $('userCostSort').classList.toggle('hidden', name !== 'users');
+  $('userPanelHint').textContent = {
+    provider: 'Who is actually billing for this spend, Google vs Anthropic',
+    models: 'Every model billed in this window, with the features each one served',
+    features: 'Every AI feature, what it cost, which model answers it, and what triggers it',
+    users: 'Every account, spend or not — click a row with spend for its own breakdown',
+  }[name] || '';
 }
 
 /* Per-day attributed spend. The endpoint has always returned this series and nothing
@@ -1796,7 +1860,7 @@ function renderUserCostRows() {
     // Model id verbatim — this is the string that has to match an invoice line, so it is
     // deliberately not prettified into a marketing name.
     const usedModels = (u.models || []).map(m =>
-      [`${PROVIDER_LABEL(m.provider)} · ${m.model || '(untracked model)'}`,
+      [`${PROVIDER_LABEL(m.provider)} · ${m.model || UNTRACKED_MODEL}`,
        `${money(m.cost_usd)} · ${num(m.calls)} calls`]);
     const details = [
       ['Email', u.email || '—'],
@@ -1824,10 +1888,11 @@ function renderUserCostRows() {
    and the two only coincide while every surface stays on one provider. This block reads
    off the model id that was actually sent, so it stays right when they diverge. */
 function providerBlock(d) {
-  const provs = d.providers || [], models = d.models || [];
-  if (!provs.length) return '';
+  const provs = d.providers || [];
   const total = provs.reduce((a, p) => a + p.cost_usd, 0);
-  if (total <= 0) return '';
+  if (!provs.length || total <= 0) {
+    return '<div class="empty" style="padding:18px 0">No attributed spend to break out yet.</div>';
+  }
 
   const stale = d.model_ready === false ? `
     <div class="notice" style="margin:0 0 12px;line-height:1.6">
@@ -1850,9 +1915,26 @@ function providerBlock(d) {
        </span>`).join('')}
     </div>`;
 
-  const rows = models.map(m => `<tr>
-      <td><span class="swatch" style="background:${providerColor(m.provider)};margin-right:8px"></span>${esc(m.provider_label)}</td>
-      <td class="mono">${esc(m.model)}</td>
+  return `${stale}${split}`;
+}
+
+/* Panel 1 — the same model table, now paged rather than stacked. */
+function modelPanel(d) {
+  const models = d.models || [], provs = d.providers || [];
+  const total = provs.reduce((a, p) => a + p.cost_usd, 0);
+  if (!models.length || total <= 0) {
+    return '<div class="empty" style="padding:18px 14px">No attributed spend to break out yet.</div>';
+  }
+  // No per-feature detail row under each model: that cut is the By feature tab now, and
+  // repeating it here doubled the height of every row to restate what the next tab says
+  // properly, with the model column attached.
+  const rows = models.map(m => `<tr${m.untracked ? ' style="color:var(--text-2)"' : ''}>
+      <td><span class="swatch" style="background:${providerColor(m.provider)};margin-right:8px"></span>${
+        m.untracked
+          ? `<span style="color:var(--text-3)" title="Covers ${esc((m.providers || []).join(' and '))}">${esc((m.providers || []).join(' + ')) || '—'}</span>`
+          : esc(m.provider_label)}</td>
+      <td class="mono">${esc(m.model)}${m.untracked
+          ? ` <span class="pill" title="${esc(m.note || '')}">no model recorded</span>` : ''}</td>
       <td class="num mono">${num(m.users)}</td>
       <td class="num mono" title="${CALLS_TOOLTIP}">${num(m.calls)}</td>
       <td class="num mono">${num(m.input_tokens)}</td>
@@ -1861,30 +1943,92 @@ function providerBlock(d) {
       <td class="num mono">${money(m.cost_per_call)}</td>
       <td class="num mono">${money(m.cost_usd)}</td>
       <td class="num mono">${pct(m.cost_usd / total)}</td>
-    </tr>
-    <tr class="detail-row"><td colspan="10" style="padding-top:0">
-      <span class="hint">${(m.features || []).map(f =>
-        `${esc(f.label)} <span class="mono">${money(f.cost_usd)}</span>`).join(' &nbsp;·&nbsp; ') || 'no feature detail'}</span>
-    </td></tr>`).join('');
-
-  return `${stale}
-    <div class="hint" style="margin-bottom:8px">Who is billing for it, by provider</div>
-    ${split}
-    <div class="hint" style="margin:16px 0 8px">…and by model</div>
-    <div class="tbl-wrap" style="margin-bottom:20px">
-      <table>
-        <thead><tr>
-          <th>Provider</th><th>Model</th>
-          <th class="num">Users</th>
-          <th class="num" title="Billed, attributable calls only.">Billed&nbsp;calls</th>
-          <th class="num">In&nbsp;tokens</th><th class="num">Out&nbsp;tokens</th>
-          <th class="num">Searches</th><th class="num">Cost&nbsp;/&nbsp;call</th>
-          <th class="num">Cost</th><th class="num">Share</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`;
+    </tr>`).join('');
+  const untracked = models.find(m => m.untracked);
+  const footnote = untracked ? `
+    <div class="hint" style="padding:12px 14px 0;line-height:1.55">
+      <strong>Other</strong> &mdash; ${esc(untracked.note)}
+    </div>` : '';
+  return `<div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>Provider</th><th>Model</th>
+        <th class="num">Users</th>
+        <th class="num" title="Billed, attributable calls only.">Billed&nbsp;calls</th>
+        <th class="num">In&nbsp;tokens</th><th class="num">Out&nbsp;tokens</th>
+        <th class="num">Searches</th><th class="num">Cost&nbsp;/&nbsp;call</th>
+        <th class="num">Cost</th><th class="num">Share</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>` + footnote;
 }
+
+/* Panel 2 — by feature, carrying the model that served each one. Which feature costs the
+   most and which model it runs on are the same decision (move it to a cheaper model, or
+   call it less often), so they belong in one row rather than two tables. */
+function featurePanel(d) {
+  const feats = d.features || [];
+  const total = feats.reduce((a, f) => a + f.cost_usd, 0);
+  if (total <= 0) {
+    return '<div class="empty" style="padding:18px 14px">No attributed spend to break out yet.</div>';
+  }
+  const bar = `
+    <div style="padding:0 14px 16px">
+      <div style="display:flex;height:14px;border-radius:4px;overflow:hidden;border:1px solid var(--border)">
+        ${feats.map((f, i) => `<div title="${esc(f.label)}: ${money(f.cost_usd)} over ${num(f.calls)} calls"
+             style="width:${(f.cost_usd / total * 100).toFixed(2)}%;background:${featureColor(i)}"></div>`).join('')}
+      </div>
+    </div>`;
+  const featUntracked = feats.flatMap(f => f.models || []).find(m => m.untracked);
+  const featNote = featUntracked ? `
+    <div class="hint" style="padding:12px 14px 0;line-height:1.55">
+      <strong>Other</strong> — ${esc(featUntracked.note)}
+    </div>` : '';
+  const rows = feats.map((f, i) => `<tr>
+      <td><span class="swatch" style="background:${featureColor(i)};margin-right:8px"></span>${esc(f.label)}<br>
+        <span class="hint" style="font-weight:400">${esc(FEATURE_TRIGGER[f.key] || '—')}</span></td>
+      <td>${(f.models || []).map(m => `<span class="mono" style="font-size:12px${m.untracked ? ';color:var(--text-3)' : ''}"
+             title="${m.untracked ? esc(m.note || '') : esc(PROVIDER_LABEL(m.provider))} · ${money(m.cost_usd)} over ${num(m.calls)} calls">
+             <span class="swatch" style="background:${providerColor(m.provider)};margin-right:5px"></span>${esc(m.model)}</span>`)
+           .join('<br>') || '<span class="hint">—</span>'}</td>
+      <td class="num mono">${num(f.users)}</td>
+      <td class="num mono" title="${CALLS_TOOLTIP}">${num(f.calls)}</td>
+      <td class="num mono">${money(f.cost_per_call)}</td>
+      <td class="num mono">${money(f.cost_usd)}</td>
+      <td class="num mono">${pct(f.cost_usd / total)}</td>
+    </tr>`).join('');
+  return bar + `<div class="tbl-wrap"><table>
+      <thead><tr>
+        <th>Feature</th><th>Model(s) it runs on</th>
+        <th class="num">Users</th>
+        <th class="num" title="Billed, attributable calls only.">Billed&nbsp;calls</th>
+        <th class="num">Cost&nbsp;/&nbsp;call</th>
+        <th class="num">Cost</th><th class="num">Share</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>` + featNote;
+}
+
+// What a student actually did to trigger each feature — mirrors FEATURE_LABELS in
+// server.py, keyed the same way. Purely descriptive copy for the console; add a line here
+// alongside any new entry in server.py's FEATURE_LABELS/_FEATURE_SIGNATURES, or the feature
+// shows with no description rather than a wrong one.
+const FEATURE_TRIGGER = {
+  profile_chat:      'Answering a follow-up question in the profile-chat drawer',
+  chat_starters:     'Opening the profile-chat drawer (generates its opening questions)',
+  chat_findings:     'Closing the profile-chat drawer after a conversation',
+  profile_synthesis: 'Closing the profile-chat drawer with new answers, rewriting the profile',
+  profile_readiness: 'Checking whether a profile has enough detail to run a search',
+  infer_subjects:    'Inferring subject/interest tags from a profile or free-text answer',
+  ranking:            'Running the Finder — ranking opportunities against a profile',
+  tracker_extract:   'Pasting text into the Tracker to auto-fill an entry',
+  venue_search:      'Live web search fallback for Conference/Journal venues',
+  tag_intent:        'Matching a profile’s interest tags to an opportunity’s tags',
+  tag_suggestions:   'Suggesting interest tags to add to a profile',
+  resume_import:     'Uploading a resume or pasting a LinkedIn profile to prefill answers',
+  profile_basics:    'Pulling a few specific facts out of a profile answer',
+  deadline_check:    'Checking one opportunity’s deadline on request',
+  other:              'A system prompt that didn’t match a known feature signature',
+};
 
 const PROVIDER_LABEL = k => ((S.userCosts && S.userCosts.providers) || [])
   .reduce((acc, p) => p.key === k ? p.label : acc, k);
@@ -1915,14 +2059,8 @@ function renderChart() {
   // Carded agents and the named app bands each have their own CSS var. Anything else is a
   // script with no card — give it a stable colour derived from its name so two of them
   // don't render as the same grey.
-  const KNOWN_BAND = new Set([...Object.keys(S.config),
-    'interactive_gemini', 'interactive_claude', 'deadline_ondemand']);
-  const colorFor = k => {
-    if (KNOWN_BAND.has(k)) return AGENT_COLOR(k);
-    let h = 0;
-    for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) >>> 0;
-    return FEATURE_COLORS[h % FEATURE_COLORS.length];
-  };
+  const colorFor = k => AGENT_COLOR(k);
+  const noteFor = k => (meta.find(m => m.key === k) || {}).note || '';
   const W = 1000, H = 200, padL = 46, padR = 8, padB = 22, padT = 10;
   const innerW = W - padL - padR, innerH = H - padB - padT;
 
@@ -1944,8 +2082,13 @@ function renderChart() {
       if (!cost) return;
       const h = (cost / max) * innerH;
       y -= h;
+      // A collapsed band still names its components here, so grouping hides nothing.
+      const parts = (d.agents[k] || {}).parts || {};
+      const detail = Object.keys(parts).length > 1
+        ? String.fromCharCode(10) + Object.entries(parts).sort((a, b) => b[1] - a[1])
+            .map(([n, v]) => `   ${n}: ${money(v)}`).join(String.fromCharCode(10)) : '';
       svg += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${colorFor(k)}" rx="1">`
-           + `<title>${d.date} · ${esc(labelFor(k))}: ${money(cost)}</title></rect>`;
+           + `<title>${d.date} · ${esc(labelFor(k))}: ${money(cost)}${esc(detail)}</title></rect>`;
     });
     const step = Math.ceil(series.length / 8);
     if (i % step === 0) {
@@ -1962,11 +2105,20 @@ function renderChart() {
   series.forEach(d => keys.forEach(k => {
     totalByKey[k] = (totalByKey[k] || 0) + ((d.agents[k] || {}).cost_usd || 0);
   }));
-  $('chartLegend').innerHTML = keys
-    .filter(k => totalByKey[k] > 0)
-    .sort((a, b) => totalByKey[b] - totalByKey[a])
-    .map(k => `<div class="item"><span class="swatch" style="background:${colorFor(k)}"></span>`
+  const shown = keys.filter(k => totalByKey[k] > 0).sort((a, b) => totalByKey[b] - totalByKey[a]);
+  $('chartLegend').innerHTML = shown
+    .map(k => `<div class="item" ${noteFor(k) ? `title="${esc(noteFor(k))}"` : ''}>`
+            + `<span class="swatch" style="background:${colorFor(k)}"></span>`
             + `${esc(labelFor(k))} <span class="mono" style="color:var(--text-3)">${money(totalByKey[k])}</span></div>`)
+    .join('');
+
+  // The two non-agent bands need saying out loud, not just on hover: they are the only
+  // things on this chart nobody starts from this console.
+  $('chartNotes').innerHTML = shown
+    .filter(k => noteFor(k))
+    .map(k => `<div style="display:flex;gap:9px;margin-top:8px">
+        <span class="swatch" style="background:${colorFor(k)};margin-top:5px;flex:0 0 auto"></span>
+        <span><strong>${esc(labelFor(k))}</strong> — ${esc(noteFor(k))}</span></div>`)
     .join('');
   const nonZero = series.filter(d => dayTotal(d) > 0).length;
   const charted = keys.reduce((a, k) => a + (totalByKey[k] || 0), 0);
@@ -2520,6 +2672,8 @@ $('timeRange').onchange = e => { S.range = Number(e.target.value); refreshDashbo
 $('logAgentFilter').onchange = renderHistory;
 $('logStatusFilter').onchange = renderHistory;
 $('userCostSort').onchange = e => { S.userCostSort = e.target.value; renderUserCostRows(); };
+document.querySelectorAll('#userCostTabs .tab')
+  .forEach(t => t.onclick = () => showUserPanel(t.dataset.panel));
 $('activateBtn').onclick = activateSelected;
 $('dupClose').onclick = () => { $('dupModal').classList.remove('open'); S.dupSubject = null; };
 $('dupSave').onclick = saveDuplicate;

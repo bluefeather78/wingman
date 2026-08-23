@@ -1808,6 +1808,75 @@ USER_COSTS_SETUP_SQL = "user_costs_schema.sql"
 PLAN_PRICE_USD = 9.99  # mirrors subscription_common.PLAN_PRICE_CENTS
 
 
+# One label, one bucket, for every row whose `model` is the empty string. Those rows are
+# not a model named "" — they were written in the ~5-hour window on 2026-08-21 between
+# per-user attribution going live (18:59:39, the first user_costs row ever) and
+# user_costs_schema.sql being re-run to add the `model` column (before 2026-08-22 00:16:41,
+# the first row that carries one). 13 rows, $0.19, one window, never to grow again.
+#
+# Only the model id is unknown in them: cost, calls, tokens, user, surface and feature are
+# all correct and fully counted, and the provider still resolves through the surface
+# fallback in provider_for_model(), which is why the provider split stays complete while
+# the model table does not. They are deliberately NOT backfilled from the model pins in
+# this file even though the answer is inferable: this column means "what was actually
+# billed", and the Sonnet/Haiku drift documented above is exactly what happens when a
+# plausible guess gets written into it. Unknown is the honest value.
+#
+# They collapse into one "Other" row rather than sitting among the real models, because a
+# blank model id is not a peer of `gemini-3.5-flash-lite` — it is an absence, and ranking
+# an absence by cost alongside real models invites reading it as a third model. It sorts
+# last regardless of cost, and ages out of the 30-day window on its own around 20 Sep 2026.
+UNTRACKED_MODEL_KEY = "untracked"
+UNTRACKED_MODEL_LABEL = "Other"
+UNTRACKED_MODEL_NOTE = (
+    "Spend recorded before user_costs had a `model` column (21 Aug 2026, a single "
+    "~5-hour window). Cost, calls, tokens, user and feature are exact for these rows; "
+    "only the model id is unknown, and it is not backfilled because this column means "
+    "what was actually billed. Ages out of the window on its own.")
+
+
+def _group_untracked_models(model_list):
+    """Fold every blank-model entry in the by-model list into one 'Other' row, sorted last."""
+    named = [m for m in model_list if (m.get("model") or "") not in ("", "(before model tracking)")]
+    blank = [m for m in model_list if m not in named]
+    if not blank:
+        return named
+    merged = {
+        "key": UNTRACKED_MODEL_KEY, "provider": UNTRACKED_MODEL_KEY,
+        "provider_label": UNTRACKED_MODEL_LABEL, "model": UNTRACKED_MODEL_LABEL,
+        "untracked": True, "note": UNTRACKED_MODEL_NOTE,
+        # Which providers are actually inside the bucket, for the row's tooltip — the
+        # information the merge would otherwise throw away.
+        "providers": sorted({PROVIDER_LABELS.get(m.get("provider"), m.get("provider"))
+                             for m in blank}),
+        "cost_usd": round(sum(m["cost_usd"] for m in blank), 6),
+        "calls": sum(m["calls"] for m in blank),
+        "input_tokens": sum(m.get("input_tokens") or 0 for m in blank),
+        "output_tokens": sum(m.get("output_tokens") or 0 for m in blank),
+        "web_searches": sum(m.get("web_searches") or 0 for m in blank),
+        "users": max((m.get("users") or 0) for m in blank),
+    }
+    merged["cost_per_call"] = (round(merged["cost_usd"] / merged["calls"], 6)
+                               if merged["calls"] else 0.0)
+    return named + [merged]
+
+
+def _group_untracked_feature_models(entries):
+    """Same fold, for the model list hanging off one feature."""
+    entries = list(entries)
+    named = sorted((m for m in entries if (m.get("model") or "")),
+                   key=lambda m: m["cost_usd"], reverse=True)
+    blank = [m for m in entries if not (m.get("model") or "")]
+    if not blank:
+        return named
+    return named + [{
+        "provider": UNTRACKED_MODEL_KEY, "model": UNTRACKED_MODEL_LABEL,
+        "untracked": True, "note": UNTRACKED_MODEL_NOTE,
+        "cost_usd": round(sum(m["cost_usd"] for m in blank), 6),
+        "calls": sum(m["calls"] for m in blank),
+    }]
+
+
 _attribution_start_cache = {"at": None, "checked": None}
 
 
@@ -1953,10 +2022,18 @@ def get_user_costs(days=30, limit=200):
                 u[field] = v
 
         f = features.setdefault(feat, {"key": feat, "label": FEATURE_LABELS.get(feat, feat),
-                                       "cost_usd": 0.0, "calls": 0, "users": set()})
+                                       "cost_usd": 0.0, "calls": 0, "users": set(),
+                                       # Which model(s) served this feature. The console's
+                                       # by-feature view needs the inverse of the by-model
+                                       # view's feature split, and only this loop sees both.
+                                       "models": {}})
         f["cost_usd"] += cost
         f["calls"] += int(r.get("calls") or 0)
         f["users"].add(uid)
+        fm = f["models"].setdefault(mkey, {"provider": provider, "model": model,
+                                           "cost_usd": 0.0, "calls": 0})
+        fm["cost_usd"] = round(fm["cost_usd"] + cost, 6)
+        fm["calls"] += int(r.get("calls") or 0)
 
         day = r.get("day")
         if day:
@@ -2091,7 +2168,10 @@ def get_user_costs(days=30, limit=200):
 
     feature_list = sorted(
         ({"key": f["key"], "label": f["label"], "cost_usd": round(f["cost_usd"], 6),
-          "calls": f["calls"], "users": len(f["users"])} for f in features.values()),
+          "calls": f["calls"], "users": len(f["users"]),
+          "cost_per_call": round(f["cost_usd"] / f["calls"], 6) if f["calls"] else 0.0,
+          "models": _group_untracked_feature_models(f["models"].values()),
+          } for f in features.values()),
         key=lambda f: f["cost_usd"], reverse=True)
 
     def _shape(entry, **extra):
@@ -2113,6 +2193,7 @@ def get_user_costs(days=30, limit=200):
              for k, v in m["features"].items()),
             key=lambda f: f["cost_usd"], reverse=True)) for m in models.values()),
         key=lambda m: m["cost_usd"], reverse=True)
+    model_list = _group_untracked_models(model_list)
 
     # The most recent day with any spend at all, which is what the console leads with.
     # per_day only ever holds days that had activity, so max() IS "latest active day".
@@ -3132,26 +3213,44 @@ def get_agents_summary(days=30):
         out["error_rate"] = round(out["failed_runs"] / out["runs"], 3) if out["runs"] else 0
         return out
 
-    # Per-day cost series, per agent — the stacked chart's input. Days with no runs are
+    # Per-day cost series, per band — the stacked chart's input. Days with no runs are
     # emitted as zeros so the x-axis stays evenly spaced instead of collapsing gaps.
+    #
+    # Bands, not raw agent literals. The five console agents each keep their own band
+    # because each is a thing an operator deliberately runs; everything else collapses
+    # into two, because splitting them was answering a question nobody asked of this
+    # chart. `parts` keeps the components for the tooltip, so collapsing a band hides
+    # nothing — it just stops the legend reading like an implementation detail.
     per_day = {}
+
+    def _add(day, key, cost, part_label=None, runs=0, rows=0):
+        bucket = per_day.setdefault(day, {})
+        entry = bucket.setdefault(key, {"cost_usd": 0.0, "runs": 0, "rows": 0, "parts": {}})
+        entry["cost_usd"] = round(entry["cost_usd"] + cost, 4)
+        entry["runs"] += runs
+        entry["rows"] += rows
+        if part_label:
+            entry["parts"][part_label] = round(entry["parts"].get(part_label, 0.0) + cost, 4)
+
     for r in current:
         started = _parse_iso(r.get("started_at"))
         day = started.date().isoformat()
         key = _agent_key_for(r.get("agent"))
-        bucket = per_day.setdefault(day, {})
-        entry = bucket.setdefault(key, {"cost_usd": 0.0, "runs": 0, "rows": 0})
-        entry["cost_usd"] = round(entry["cost_usd"] + float(r.get("cost_usd") or 0), 4)
-        entry["runs"] += 1
-        entry["rows"] += (r.get("items_updated") or 0) + (r.get("items_added") or 0)
+        cost = float(r.get("cost_usd") or 0)
+        rows = (r.get("items_updated") or 0) + (r.get("items_added") or 0)
+        if key in AGENT_CONFIGS_SCHEMA:
+            _add(day, key, cost, runs=1, rows=rows)
+        elif key in INTERACTIVE_AGENTS:
+            _add(day, "end_user", cost, INTERACTIVE_AGENTS[key], runs=1, rows=rows)
+        else:
+            # A run from a script with no console card — backfills and one-off passes.
+            _add(day, "other", cost, key.replace("_", " "), runs=1, rows=rows)
 
     # On-demand deadline checks, folded in under their own key. Without this the chart
     # could not sum to the KPI no matter what the console drew, because this spend is not
     # in agent_runs at all.
     for day, cost in fetch_deadline_check_cost_by_day(cutoff, now).items():
-        bucket = per_day.setdefault(day, {})
-        entry = bucket.setdefault("deadline_ondemand", {"cost_usd": 0.0, "runs": 0, "rows": 0})
-        entry["cost_usd"] = round(entry["cost_usd"] + cost, 4)
+        _add(day, "end_user", cost, "App — deadline checks")
 
     # Anchored on today and inclusive of it — see the same loop in get_user_costs(). A
     # forward count from the cutoff ends at yesterday, so today's runs never got a bar.
@@ -3171,13 +3270,20 @@ def get_agents_summary(days=30):
         if key in AGENT_CONFIGS_SCHEMA:
             series_keys.append({"key": key, "label": AGENT_CONFIGS_SCHEMA[key]["name"],
                                 "group": "agent"})
-        elif key in INTERACTIVE_AGENTS:
-            series_keys.append({"key": key, "label": INTERACTIVE_AGENTS[key], "group": "app"})
-        elif key == "deadline_ondemand":
-            series_keys.append({"key": key, "label": "App — deadline checks", "group": "app"})
+        elif key == "end_user":
+            series_keys.append({
+                "key": key, "label": "End User Initiated", "group": "app",
+                "note": "Spend your users caused, not runs anyone started here: every AI "
+                        "feature in the app plus on-demand deadline checks. Broken out by "
+                        "who triggered it on the Cost per user tab — the same money, never "
+                        "additional spend."})
         else:
-            # A real run from a script with no console card. Named, not hidden.
-            series_keys.append({"key": key, "label": key.replace("_", " "), "group": "other"})
+            series_keys.append({
+                "key": key, "label": "Other", "group": "other",
+                "note": "Standalone scripts with no card here — one-off backfills and "
+                        "full-catalog passes run from the command line. Their spend counts "
+                        "toward the totals; they are not scheduled and cannot be started "
+                        "from this console."})
 
     by_agent = {}
     for key in AGENT_CONFIGS_SCHEMA:

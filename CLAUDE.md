@@ -209,6 +209,36 @@ once and writes both, so the two can't drift.
   Provider colours in the console are **fixed per provider**, unlike the positional feature
   palette — otherwise a provider overtaking the other swaps colours mid-session and the bar
   reads backwards.
+- The tab's body is **one always-visible frame plus three paged cuts of the same money**.
+  The frame is the KPI tiles, the per-day attributed-spend chart and the provider split —
+  provider is the frame, not a fourth cut. Under it a `.tab` strip (`showUserPanel()`)
+  pages between **By model**, **By feature** (each feature carrying the model(s) that
+  serve it, since "what costs most" and "what model is it on" are one decision) and
+  **Users**. They page rather than stack because reading them as one column meant
+  scrolling past two tables to reach the one you wanted. The sort `<select>` is hidden
+  unless the Users panel is showing — it means nothing against the other two.
+- Rows with a blank `user_costs.model` collapse into a single **"Other"** bucket, in the
+  by-model list and inside every feature's model list alike (`_group_untracked_models()` /
+  `_group_untracked_feature_models()`, keyed `UNTRACKED_MODEL_KEY`). They are all from one
+  ~5-hour window on 2026-08-21, between attribution going live (18:59:39, the first
+  `user_costs` row) and `user_costs_schema.sql` being re-run to add the column (before
+  00:16:41 on 08-22, the first row carrying one): 13 rows, $0.19, a set that can never
+  grow. Only the **model id** is unknown in them — cost, calls, tokens, user, surface and
+  feature are exact and fully counted, and the provider still resolves through
+  `provider_for_model()`'s surface fallback, which is why the provider split stays complete
+  while the model table does not.
+  - **Do not backfill them** from the model pins in `server.py`, even though the answer is
+    inferable. This column means *what was actually billed*, and the Sonnet/Haiku drift
+    above is what happens when a plausible guess is written into it. Unknown is honest.
+  - They collapse rather than sit among the real models because a blank id is not a peer
+    of `gemini-3.5-flash-lite` — it is an absence, and ranking an absence by cost next to
+    real models invites reading it as a third model. The bucket sorts **last regardless of
+    cost**, carries a flat neutral colour (never a provider hue), and keeps the providers
+    it covers in `providers` for the row tooltip. A footnote under both tables carries
+    `UNTRACKED_MODEL_NOTE`. It ages out of a 30-day window on its own around 2026-09-20.
+- The **By model** table deliberately has no per-model feature detail row: that cut is the
+  By feature panel, which states it properly with the model attached. Repeating it under
+  every model doubled each row's height to say the same thing worse.
 - The console has **three top-level views** (`.viewtabs` / `showView()` in
   [admin_console.html](admin_console.html)): *Agents* (everything about the four background
   agents, including the dry-run snapshot list), *Review queue* (pending activations), and
@@ -504,11 +534,27 @@ accuracy design:
 
 **The console's spend chart draws every key in the series, not the five with cards.**
 `get_agents_summary()` returns `series_keys` (each labelled and grouped `agent`/`app`/
-`other`) and folds on-demand deadline spend under a `deadline_ondemand` key via
-`fetch_deadline_check_cost_by_day()`. Iterating the card list instead dropped the
-interactive rollups, the deadline checks (which are in `deadline_check_log`, not
-`agent_runs`, so they were never in the series at all) and any agent run from a script
-with no card — $4.84 of a $14.24 KPI printed ten pixels above the bars. The chart hint now
+`other`) and folds on-demand deadline spend in via `fetch_deadline_check_cost_by_day()`.
+Iterating the card list instead dropped the interactive rollups, the deadline checks (which
+are in `deadline_check_log`, not `agent_runs`, so they were never in the series at all) and
+any agent run from a script with no card — $4.84 of a $14.24 KPI printed ten pixels above
+the bars.
+
+The series is banded, not one key per `agent_runs.agent` literal. Each of the five console
+agents keeps its own band because each is something an operator deliberately runs.
+Everything else collapses into two, because splitting them answered a question nobody asks
+of this chart:
+- **`end_user` — "End User Initiated"**: both `interactive_*` rollups plus on-demand
+  deadline checks. Spend the users caused, which nobody starts from this console. The
+  per-user decomposition of exactly this money is the Cost per user tab.
+- **`other` — "Other"**: standalone scripts with no card — `backfill_subject_tags.py` (a
+  completed one-off) and `find_contact_emails.py` (a full-catalog pass; an ordinary
+  `refresh_opportunities.py` run already resolves `contact_email` per row, so this is only
+  for an initial backfill or a `--force` re-check).
+
+Each band carries a `note` the console prints under the legend, and each per-day entry
+carries `parts` so a collapsed band still names its components in the bar tooltip —
+grouping hides nothing, it just stops the legend reading like an implementation detail. The chart hint now
 states the charted total and flags any gap rather than letting two adjacent figures
 disagree in silence. Note `fetch_deadline_check_cost(start, end)` **accepted and ignored
 `end`** until 2026-08-22, which made the summary's previous-period deadline cost include

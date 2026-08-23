@@ -1,22 +1,13 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import {
-  ActivityIndicator,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Platform, StyleSheet, Switch, View } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
 import { beginGoogleSignIn } from '@/auth/googleSignIn';
+import { Field, PopButton, PopCard, Screen, Txt } from '@/ui/components';
+import { colors, space } from '@/ui/theme';
 
-// Login / Register screen (password path, per the Phase 2 contract). The client SHA-256s the
-// password before sending. Google sign-in is a separate redirect/deep-link flow — see the
-// note below — and is not wired here yet.
+// Login / Register (password path, Phase 2 contract). The client SHA-256s the password
+// before sending. Google sign-in kicks off the redirect flow.
 export default function Login() {
   const router = useRouter();
   const { login, register } = useAuth();
@@ -24,10 +15,8 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Shared
   const [userid, setUserid] = useState('');
   const [password, setPassword] = useState('');
-  // Register-only
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
@@ -36,13 +25,13 @@ export default function Login() {
   const [parentalConsent, setParentalConsent] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
+  const isRegister = mode === 'register';
+
   async function submit() {
     setError(null);
     setBusy(true);
     try {
-      if (mode === 'login') {
-        await login(userid.trim().toLowerCase(), password);
-      } else {
+      if (isRegister) {
         await register({
           firstName: firstName.trim(),
           lastName: lastName.trim(),
@@ -54,6 +43,8 @@ export default function Login() {
           parentalConsent,
           acceptedTerms,
         });
+      } else {
+        await login(userid.trim().toLowerCase(), password);
       }
       router.replace('/(app)');
     } catch (e) {
@@ -66,7 +57,6 @@ export default function Login() {
   async function google() {
     setError(null);
     try {
-      // Web redirects away here; native returns a handoff token to resume on /google-auth.
       const handoff = await beginGoogleSignIn();
       if (Platform.OS !== 'web' && handoff) {
         router.replace({ pathname: '/google-auth', params: { google_token: handoff } });
@@ -76,96 +66,97 @@ export default function Login() {
     }
   }
 
-  const isRegister = mode === 'register';
-
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-      <Text style={styles.title}>Highschool Wingman</Text>
-      <Text style={styles.subtitle}>{isRegister ? 'Create your account' : 'Welcome back'}</Text>
-
-      {isRegister && (
-        <>
-          <Field label="First name" value={firstName} onChangeText={setFirstName} />
-          <Field label="Last name" value={lastName} onChangeText={setLastName} />
-          <Field
-            label="Email"
-            value={email}
-            onChangeText={setEmail}
-            autoCapitalize="none"
-            keyboardType="email-address"
-          />
-          <Field label="Location" value={location} onChangeText={setLocation} />
-        </>
-      )}
-
-      <Field label="User ID" value={userid} onChangeText={setUserid} autoCapitalize="none" />
-      <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry />
-
-      {isRegister && (
-        <View style={styles.consent}>
-          <Check label="I am 18 or older" value={isAdult} onValueChange={setIsAdult} />
-          <Check
-            label="If under 18, I have parent/guardian permission (Terms §2)"
-            value={parentalConsent}
-            onValueChange={setParentalConsent}
-          />
-          <Check
-            label="I accept the Terms and Privacy Policy"
-            value={acceptedTerms}
-            onValueChange={setAcceptedTerms}
-          />
+    <Screen>
+      {/* Hero wordmark — the loud, characteristic thing first. */}
+      <View style={styles.hero}>
+        <View style={styles.wordmarkRow}>
+          <Txt variant="hero" style={styles.wordmark}>
+            Highschool
+          </Txt>
+          <View style={styles.wingBadge}>
+            <Txt variant="hero" style={styles.wingText}>
+              Wingman
+            </Txt>
+          </View>
         </View>
-      )}
-
-      {error && <Text style={styles.error}>{error}</Text>}
-
-      <Pressable
-        style={[styles.button, busy && styles.buttonDisabled]}
-        onPress={submit}
-        disabled={busy}
-      >
-        {busy ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>{isRegister ? 'Create account' : 'Log in'}</Text>
-        )}
-      </Pressable>
-
-      <Pressable
-        onPress={() => {
-          setError(null);
-          setMode(isRegister ? 'login' : 'register');
-        }}
-      >
-        <Text style={styles.switch}>
-          {isRegister ? 'Have an account? Log in' : "New here? Create an account"}
-        </Text>
-      </Pressable>
-
-      <View style={styles.divider}>
-        <Text style={styles.dividerText}>or</Text>
+        <Txt variant="body" style={styles.tagline}>
+          Find and track the programs, internships, and competitions worth your time.
+        </Txt>
       </View>
 
-      <Pressable style={styles.googleBtn} onPress={google} disabled={busy}>
-        <Text style={styles.googleText}>Continue with Google</Text>
-      </Pressable>
-    </ScrollView>
+      <PopCard style={styles.formCard}>
+        <Txt variant="h2">{isRegister ? 'Create your account' : 'Welcome back'}</Txt>
+
+        {isRegister && (
+          <>
+            <View style={styles.twoCol}>
+              <Field label="First name" value={firstName} onChangeText={setFirstName} style={styles.flex1} />
+              <Field label="Last name" value={lastName} onChangeText={setLastName} style={styles.flex1} />
+            </View>
+            <Field
+              label="Email"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+            <Field label="Location" value={location} onChangeText={setLocation} placeholder="e.g. Seattle, WA" />
+          </>
+        )}
+
+        <Field label="User ID" value={userid} onChangeText={setUserid} autoCapitalize="none" />
+        <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry />
+
+        {isRegister && (
+          <View style={styles.consent}>
+            <ConsentRow label="I'm 18 or older" value={isAdult} onValueChange={setIsAdult} />
+            <ConsentRow
+              label="If under 18, I have a parent/guardian's permission (Terms §2)"
+              value={parentalConsent}
+              onValueChange={setParentalConsent}
+            />
+            <ConsentRow
+              label="I accept the Terms and Privacy Policy"
+              value={acceptedTerms}
+              onValueChange={setAcceptedTerms}
+            />
+          </View>
+        )}
+
+        {!!error && <Txt style={styles.error}>{error}</Txt>}
+
+        <PopButton
+          label={isRegister ? 'Create account' : 'Log in'}
+          onPress={submit}
+          loading={busy}
+          full
+          style={styles.mt}
+        />
+
+        <View style={styles.dividerRow}>
+          <View style={styles.rule} />
+          <Txt variant="small">or</Txt>
+          <View style={styles.rule} />
+        </View>
+
+        <PopButton label="Continue with Google" variant="secondary" onPress={google} disabled={busy} full />
+
+        <PopButton
+          label={isRegister ? 'Have an account? Log in' : 'New here? Create an account'}
+          variant="ghost"
+          onPress={() => {
+            setError(null);
+            setMode(isRegister ? 'login' : 'register');
+          }}
+          full
+        />
+      </PopCard>
+    </Screen>
   );
 }
 
-function Field({
-  label,
-  ...props
-}: { label: string } & React.ComponentProps<typeof TextInput>) {
-  return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
-      <TextInput style={styles.input} autoCorrect={false} {...props} />
-    </View>
-  );
-}
-
-function Check({
+function ConsentRow({
   label,
   value,
   onValueChange,
@@ -175,30 +166,43 @@ function Check({
   onValueChange: (v: boolean) => void;
 }) {
   return (
-    <View style={styles.checkRow}>
-      <Switch value={value} onValueChange={onValueChange} />
-      <Text style={styles.checkLabel}>{label}</Text>
+    <View style={styles.consentRow}>
+      <Switch
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={{ true: colors.purple, false: colors.hairline }}
+        thumbColor={colors.white}
+      />
+      <Txt variant="small" style={styles.consentLabel}>
+        {label}
+      </Txt>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 24, gap: 12, maxWidth: 460, width: '100%', alignSelf: 'center', flexGrow: 1, justifyContent: 'center' },
-  title: { fontSize: 26, fontWeight: '800', textAlign: 'center' },
-  subtitle: { fontSize: 15, color: '#666', textAlign: 'center', marginBottom: 8 },
-  field: { gap: 4 },
-  label: { fontSize: 13, color: '#444', fontWeight: '600' },
-  input: { borderWidth: 1, borderColor: '#cbd2e0', borderRadius: 10, padding: 12, fontSize: 16 },
-  consent: { gap: 10, marginTop: 4 },
-  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  checkLabel: { flex: 1, fontSize: 13, color: '#444' },
-  error: { color: '#b91c1c', fontSize: 14 },
-  button: { backgroundColor: '#2563eb', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
-  buttonDisabled: { opacity: 0.6 },
-  buttonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  switch: { color: '#2563eb', textAlign: 'center', marginTop: 12 },
-  divider: { alignItems: 'center', marginVertical: 6 },
-  dividerText: { color: '#9aa3b2', fontSize: 12 },
-  googleBtn: { borderWidth: 1, borderColor: '#cbd2e0', borderRadius: 10, padding: 12, alignItems: 'center' },
-  googleText: { color: '#1a2540', fontWeight: '600', fontSize: 15 },
+  hero: { gap: space.sm, marginTop: space.lg, marginBottom: space.sm },
+  wordmarkRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  wordmark: { color: colors.navy },
+  wingBadge: {
+    backgroundColor: colors.lime,
+    borderWidth: 3,
+    borderColor: colors.navy,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 2,
+    transform: [{ rotate: '-2deg' }],
+  },
+  wingText: { color: colors.ink },
+  tagline: { maxWidth: 460 },
+  formCard: { gap: space.md },
+  twoCol: { flexDirection: 'row', gap: space.md },
+  flex1: { flex: 1 },
+  consent: { gap: space.sm, marginTop: space.xs },
+  consentRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  consentLabel: { flex: 1 },
+  error: { color: colors.red, fontFamily: 'PlusJakartaSans_700Bold' },
+  mt: { marginTop: space.xs },
+  dividerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginVertical: 2 },
+  rule: { flex: 1, height: 2, backgroundColor: colors.hairline, borderRadius: 2 },
 });

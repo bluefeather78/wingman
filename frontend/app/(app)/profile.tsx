@@ -1,14 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
 import {
@@ -23,11 +15,9 @@ import {
   profileChatTranscript,
   type ChatMessage,
 } from '@/lib/profileChat';
+import { PopButton, PopCard, Screen, Txt } from '@/ui/components';
+import { colors, radius, space } from '@/ui/theme';
 
-// Profile — the profile card plus an inline profile-chat flow. Behavior preserved from
-// script.js / CLAUDE.md: openers are the cached-style batch, follow-ups are one live call
-// per turn (never pooled), and the transcript sent to the follow-up includes the bot lines.
-// Synthesis (the expensive call) runs once, on finishing the chat.
 const callClaude = httpClient.callClaude.bind(httpClient);
 const callClaudeDetailed = httpClient.callClaudeDetailed.bind(httpClient);
 const PROFILE_KEY = 'student-profile';
@@ -41,12 +31,10 @@ interface StoredProfile {
 export default function Profile() {
   const router = useRouter();
   const { user, logout } = useAuth();
-
   const [profile, setProfile] = useState<StoredProfile>({ synthesized: '', updatedAt: null, chatRounds: 0 });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
 
-  // Chat state
   const [starters, setStarters] = useState<string[] | null>(null);
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
@@ -76,8 +64,7 @@ export default function Profile() {
     setHistory([]);
     setStarters(null);
     try {
-      const qs = await profileChatStarterQuestionsFromAI(callClaude, profile.synthesized, profile.chatRounds, false);
-      setStarters(qs);
+      setStarters(await profileChatStarterQuestionsFromAI(callClaude, profile.synthesized, profile.chatRounds, false));
     } catch {
       setStarters(["What's something you're weirdly good at that has nothing to do with school?"]);
     }
@@ -106,7 +93,6 @@ export default function Profile() {
   }
 
   async function finishChat() {
-    // Only pay for synthesis if the student actually answered something.
     const answered = history.some((m) => m.role === 'user');
     if (!answered) {
       setChatOpen(false);
@@ -120,13 +106,8 @@ export default function Profile() {
       const merged = await synthesizeProfile(callClaudeDetailed, profile.synthesized, transcript, true);
       await persist({ synthesized: merged, updatedAt: new Date().toISOString(), chatRounds: profile.chatRounds + 1 });
     } catch {
-      // Fallback: append the student's own lines so nothing they wrote is lost.
       const fallback = transcriptStudentLines(transcript);
-      const merged = fallback
-        ? profile.synthesized
-          ? `${profile.synthesized} ${fallback}`
-          : fallback
-        : profile.synthesized;
+      const merged = fallback ? (profile.synthesized ? `${profile.synthesized} ${fallback}` : fallback) : profile.synthesized;
       await persist({ synthesized: merged, updatedAt: new Date().toISOString(), chatRounds: profile.chatRounds + 1 });
     } finally {
       setBusy(null);
@@ -142,7 +123,7 @@ export default function Profile() {
       const repaired = await repairProfileText(callClaudeDetailed, profile.synthesized);
       await persist({ ...profile, synthesized: repaired, updatedAt: new Date().toISOString() });
     } catch {
-      /* leave profile as-is on failure */
+      /* keep as-is */
     } finally {
       setBusy(null);
     }
@@ -155,130 +136,131 @@ export default function Profile() {
 
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator />
-      </View>
+      <Screen scroll={false}>
+        <View style={styles.center}>
+          <ActivityIndicator color={colors.navy} />
+        </View>
+      </Screen>
     );
   }
 
   const truncated = profileHasTruncatedTail(profile.synthesized);
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.h1}>Your profile</Text>
-      {user && (
-        <Text style={styles.dim}>
-          {user.firstName ? `${user.firstName} ` : ''}({user.userid})
-        </Text>
-      )}
-
-      <View style={styles.card}>
-        {profile.synthesized ? (
-          <Text style={styles.profileText}>{profile.synthesized}</Text>
-        ) : (
-          <Text style={styles.dim}>No profile yet — chat below to build one.</Text>
+    <Screen>
+      <View style={styles.head}>
+        <Txt variant="label">YOUR PROFILE</Txt>
+        <Txt variant="hero">My Vibe</Txt>
+        {!!user && (
+          <Txt variant="small">
+            {user.firstName ? `${user.firstName} ${user.lastName ?? ''} · ` : ''}
+            {user.userid}
+          </Txt>
         )}
       </View>
 
+      <PopCard color={profile.synthesized ? colors.white : colors.page} style={{ gap: space.sm }}>
+        {profile.synthesized ? (
+          <Txt variant="body" style={styles.profileText}>
+            {profile.synthesized}
+          </Txt>
+        ) : (
+          <Txt variant="body">
+            Nothing here yet. Have a quick chat below and Wingman will write your profile for you.
+          </Txt>
+        )}
+      </PopCard>
+
       {truncated && (
-        <Pressable style={styles.secondaryBtn} onPress={tidyUp} disabled={!!busy}>
-          <Text style={styles.secondaryText}>{busy === 'tidying' ? 'Tidying…' : 'Tidy it up'}</Text>
-        </Pressable>
+        <PopButton
+          label={busy === 'tidying' ? 'Tidying…' : 'Tidy it up'}
+          variant="secondary"
+          onPress={tidyUp}
+          loading={busy === 'tidying'}
+        />
       )}
 
       {!chatOpen && (
-        <Pressable style={styles.button} onPress={openChat}>
-          <Text style={styles.buttonText}>
-            {profile.synthesized ? 'Chat to add more' : 'Chat to build your profile'}
-          </Text>
-        </Pressable>
+        <PopButton
+          label={profile.synthesized ? 'Chat to add more' : 'Chat to build your profile'}
+          variant="purple"
+          onPress={openChat}
+        />
       )}
 
       {chatOpen && (
-        <View style={styles.chat}>
-          {!starters && history.length === 0 && <ActivityIndicator />}
+        <PopCard style={{ gap: space.md }}>
+          {!starters && history.length === 0 && <ActivityIndicator color={colors.navy} />}
 
           {starters && (
-            <View style={styles.starters}>
-              <Text style={styles.dim}>Pick a question to start:</Text>
+            <View style={{ gap: space.sm }}>
+              <Txt variant="label">PICK A QUESTION TO START</Txt>
               {starters.map((q, i) => (
-                <Pressable key={i} style={styles.starterBtn} onPress={() => pickStarter(q)}>
-                  <Text style={styles.starterText}>{q}</Text>
+                <Pressable key={i} style={styles.starter} onPress={() => pickStarter(q)}>
+                  <Txt variant="bodyStrong">{q}</Txt>
                 </Pressable>
               ))}
             </View>
           )}
 
           {history.map((m, i) => (
-            <View
-              key={i}
-              style={[styles.bubble, m.role === 'bot' ? styles.bubbleBot : styles.bubbleUser]}
-            >
-              <Text style={m.role === 'bot' ? styles.bubbleBotText : styles.bubbleUserText}>
+            <View key={i} style={[styles.bubble, m.role === 'bot' ? styles.bot : styles.userB]}>
+              <Txt variant="body" style={{ color: m.role === 'bot' ? colors.ink : colors.white }}>
                 {m.text}
-              </Text>
+              </Txt>
             </View>
           ))}
 
-          {busy === 'thinking' && <ActivityIndicator />}
+          {busy === 'thinking' && <ActivityIndicator color={colors.navy} />}
 
           {history.length > 0 && (
             <View style={styles.composer}>
               <TextInput
                 style={styles.chatInput}
                 placeholder="Type your answer…"
+                placeholderTextColor={colors.muted}
                 value={draft}
                 onChangeText={setDraft}
                 multiline
-                onSubmitEditing={send}
               />
-              <Pressable style={styles.sendBtn} onPress={send} disabled={!!busy || !draft.trim()}>
-                <Text style={styles.sendText}>Send</Text>
-              </Pressable>
+              <PopButton label="Send" onPress={send} disabled={!!busy || !draft.trim()} />
             </View>
           )}
 
-          <Pressable style={styles.finishBtn} onPress={finishChat} disabled={busy === 'saving'}>
-            <Text style={styles.finishText}>
-              {busy === 'saving' ? 'Saving…' : 'Finish & save to profile'}
-            </Text>
-          </Pressable>
-        </View>
+          <PopButton
+            label={busy === 'saving' ? 'Saving…' : 'Finish & save'}
+            variant="primary"
+            onPress={finishChat}
+            loading={busy === 'saving'}
+            full
+          />
+        </PopCard>
       )}
 
-      <Pressable style={styles.logout} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Log out</Text>
-      </Pressable>
-    </ScrollView>
+      <PopButton label="Log out" variant="ghost" onPress={handleLogout} />
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, gap: 12, maxWidth: 720, width: '100%', alignSelf: 'center' },
-  centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  h1: { fontSize: 22, fontWeight: '700' },
-  dim: { color: '#889', fontSize: 13 },
-  card: { borderWidth: 1, borderColor: '#e2e6ef', borderRadius: 12, padding: 14, backgroundColor: '#fafbff' },
-  profileText: { fontSize: 15, lineHeight: 22, color: '#1a2540' },
-  button: { backgroundColor: '#2563eb', borderRadius: 10, padding: 14, alignItems: 'center' },
-  buttonText: { color: '#fff', fontWeight: '700', fontSize: 15 },
-  secondaryBtn: { borderWidth: 1, borderColor: '#b45309', borderRadius: 10, padding: 10, alignItems: 'center' },
-  secondaryText: { color: '#b45309', fontWeight: '600' },
-  chat: { gap: 10, borderWidth: 1, borderColor: '#e2e6ef', borderRadius: 12, padding: 14 },
-  starters: { gap: 8 },
-  starterBtn: { borderWidth: 1, borderColor: '#cbd2e0', borderRadius: 10, padding: 10 },
-  starterText: { color: '#1a2540', fontSize: 14 },
-  bubble: { borderRadius: 12, padding: 10, maxWidth: '90%' },
-  bubbleBot: { backgroundColor: '#eef0fb', alignSelf: 'flex-start' },
-  bubbleUser: { backgroundColor: '#2563eb', alignSelf: 'flex-end' },
-  bubbleBotText: { color: '#1a2540', fontSize: 14 },
-  bubbleUserText: { color: '#fff', fontSize: 14 },
-  composer: { flexDirection: 'row', gap: 8, alignItems: 'flex-end' },
-  chatInput: { flex: 1, borderWidth: 1, borderColor: '#cbd2e0', borderRadius: 10, padding: 10, fontSize: 14, maxHeight: 120 },
-  sendBtn: { backgroundColor: '#2563eb', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 14 },
-  sendText: { color: '#fff', fontWeight: '600' },
-  finishBtn: { borderWidth: 1, borderColor: '#16a34a', borderRadius: 10, padding: 10, alignItems: 'center' },
-  finishText: { color: '#166534', fontWeight: '700' },
-  logout: { marginTop: 8, alignSelf: 'flex-start', borderWidth: 1, borderColor: '#cbd2e0', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 16 },
-  logoutText: { color: '#b91c1c', fontWeight: '600' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  head: { gap: space.xs, marginBottom: space.xs },
+  profileText: { color: colors.ink, fontSize: 15, lineHeight: 24 },
+  starter: { borderWidth: 2, borderColor: colors.navy, borderRadius: radius.md, padding: space.md, backgroundColor: colors.white },
+  bubble: { borderRadius: radius.md, padding: space.md, maxWidth: '92%' },
+  bot: { backgroundColor: colors.page, alignSelf: 'flex-start', borderWidth: 2, borderColor: colors.hairline },
+  userB: { backgroundColor: colors.purple, alignSelf: 'flex-end' },
+  composer: { gap: space.sm },
+  chatInput: {
+    borderWidth: 2,
+    borderColor: colors.navy,
+    borderRadius: radius.md,
+    padding: space.md,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    fontSize: 15,
+    color: colors.ink,
+    backgroundColor: colors.white,
+    minHeight: 56,
+    textAlignVertical: 'top',
+  },
 });

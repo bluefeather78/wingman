@@ -13,8 +13,11 @@ import type {
 } from './types';
 
 // Base URL for the FastAPI backend. On web dev it can be same-origin ('' -> /api/...);
-// native builds need an absolute URL (EXPO_PUBLIC_API_BASE, e.g. the Render service URL).
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE ?? '';
+// native + the Render static site need an absolute URL (EXPO_PUBLIC_API_BASE). Render's
+// `fromService` supplies a bare hostname, so prepend https:// when no scheme is present,
+// and drop any trailing slash so `${API_BASE}${path}` never double-slashes.
+const RAW_API_BASE = (process.env.EXPO_PUBLIC_API_BASE ?? '').trim().replace(/\/$/, '');
+const API_BASE = RAW_API_BASE && !/^https?:\/\//i.test(RAW_API_BASE) ? `https://${RAW_API_BASE}` : RAW_API_BASE;
 
 // --- In-memory session state (persisted via tokenStore) ---------------------
 let _access: string | null = null;

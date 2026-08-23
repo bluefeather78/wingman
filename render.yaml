@@ -33,3 +33,31 @@ services:
       # Render dashboard; if it is unset the auth layer fails closed. Never commit its value.
       - key: JWT_SECRET
         sync: false
+      # Phase 3 (PLAN_3_rn.md): where Google sign-in may hand the one-time token back to the
+      # Expo app. Set this in the dashboard to the static site's origin once it's live
+      # (e.g. https://wingman-web.onrender.com). Until set, the allowlist default covers only
+      # local dev, so Google sign-in from the deployed web app won't complete.
+      - key: GOOGLE_APP_REDIRECTS
+        sync: false
+
+  # ---------------- Static Site: the Expo (React Native Web) frontend ----------------
+  # Phase 3: same monorepo, second Render service. Builds the Expo web export and serves the
+  # static bundle. Native (iOS/Android) ships via EAS, never Render. The API base is wired
+  # from the web service above; the client prepends https:// to the bare host it returns.
+  - type: web
+    name: wingman-web
+    runtime: static
+    buildCommand: cd frontend && npm ci && npx expo export -p web
+    staticPublishPath: frontend/dist
+    # expo-router hydrates and resolves the route client-side, so serve index.html for any
+    # path (deep links included) and let the app render the right screen.
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: EXPO_PUBLIC_API_BASE
+        fromService:
+          type: web
+          name: wingman
+          property: host

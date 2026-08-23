@@ -1,52 +1,117 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { AuthExpiredError } from '@/api/ApiClient';
+import { useCallback, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { StyleSheet, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
+import { loadTrackerItems, type TrackerItem } from '@/api/trackerStore';
 import { useAuth } from '@/auth/AuthContext';
+import { ALL_BUCKETS, PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
+import { countProfileWords } from '@/lib/profile';
+import { PopButton, PopCard, Screen, Txt } from '@/ui/components';
+import { colors, space } from '@/ui/theme';
 
-// Home / Dashboard. Also performs one authed data round-trip on mount (save -> load) as a
-// live check that the Bearer token reaches gated routes, and demonstrates the shared 401
-// handling: an AuthExpiredError (refresh failed) drops the session and bounces to login.
+interface StoredProfile {
+  synthesized?: string;
+}
+
+// Home / Dashboard — where a student lands. Shows how far along they are (profile + tracker)
+// and the two actions that move them forward.
 export default function Home() {
   const router = useRouter();
-  const { logout } = useAuth();
-  const [status, setStatus] = useState('Checking your saved data…');
+  const { user } = useAuth();
+  const [items, setItems] = useState<TrackerItem[]>([]);
+  const [profileWords, setProfileWords] = useState<number | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const marker = { seen: true };
-        await httpClient.saveData('rn-smoke', marker);
-        const loaded = await httpClient.loadData<{ seen?: boolean }>('rn-smoke');
-        if (alive) setStatus(loaded?.seen ? 'Authed data round-trip OK.' : 'Loaded, no marker.');
-      } catch (e) {
-        if (e instanceof AuthExpiredError) {
-          await logout();
-          router.replace('/login');
-          return;
-        }
-        if (alive) setStatus(`Data error: ${(e as Error).message}`);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [logout, router]);
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      Promise.all([
+        loadTrackerItems().catch(() => [] as TrackerItem[]),
+        httpClient.loadData<StoredProfile>('student-profile').catch(() => null),
+      ]).then(([tracked, profile]) => {
+        if (!alive) return;
+        setItems(tracked);
+        setProfileWords(countProfileWords(profile?.synthesized));
+      });
+      return () => {
+        alive = false;
+      };
+    }, []),
+  );
+
+  const profileReady = (profileWords ?? 0) >= PROFILE_SUFFICIENT_LENGTH;
+  const bucketsUsed = ALL_BUCKETS.filter((b) => items.some((i) => i.bucket === b)).length;
+  const greeting = user?.firstName ? `Hey ${user.firstName} 👋` : 'Hey there 👋';
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.h1}>Dashboard</Text>
-      <Text style={styles.body}>Progress and todo counts land here.</Text>
-      <Text style={styles.status}>{status}</Text>
-    </View>
+    <Screen>
+      <View style={styles.head}>
+        <Txt variant="label">YOUR DASHBOARD</Txt>
+        <Txt variant="hero">{greeting}</Txt>
+        <Txt variant="body">Here's where things stand. Keep the momentum going.</Txt>
+      </View>
+
+      <View style={styles.statRow}>
+        <PopCard color={colors.lime} style={styles.stat}>
+          <Txt variant="hero" style={styles.statNum}>
+            {items.length}
+          </Txt>
+          <Txt variant="bodyStrong">tracked</Txt>
+        </PopCard>
+        <PopCard color={colors.purple} style={styles.stat}>
+          <Txt variant="hero" style={[styles.statNum, styles.onDark]}>
+            {bucketsUsed}
+          </Txt>
+          <Txt variant="bodyStrong" style={styles.onDark}>
+            of {ALL_BUCKETS.length} categories
+          </Txt>
+        </PopCard>
+      </View>
+
+      <PopCard style={styles.profileCard} color={profileReady ? colors.greenSoft : colors.white}>
+        <Txt variant="label">{profileReady ? 'PROFILE READY' : 'PROFILE'}</Txt>
+        <Txt variant="h2">
+          {profileWords === null
+            ? 'Loading…'
+            : profileReady
+              ? 'Your profile is looking good'
+              : 'Tell us about yourself'}
+        </Txt>
+        <Txt variant="body">
+          {profileReady
+            ? 'Better matches come from a richer profile — keep it fresh as things change.'
+            : 'A few sentences about your interests and projects unlocks personalized matches.'}
+        </Txt>
+        <PopButton
+          label={profileReady ? 'Update profile' : 'Build your profile'}
+          variant={profileReady ? 'secondary' : 'purple'}
+          onPress={() => router.push('/(app)/profile')}
+        />
+      </PopCard>
+
+      <PopCard style={styles.ctaCard} color={colors.orange}>
+        <Txt variant="label" style={styles.onDark}>
+          FIND SOMETHING NEW
+        </Txt>
+        <Txt variant="h2" style={styles.onDark}>
+          Discover opportunities
+        </Txt>
+        <Txt variant="body" style={styles.onDarkSoft}>
+          Search 1,200+ programs, internships, competitions, and more — ranked for you.
+        </Txt>
+        <PopButton label="Open the Finder" variant="secondary" onPress={() => router.push('/(app)/finder')} />
+      </PopCard>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 24, gap: 8 },
-  h1: { fontSize: 22, fontWeight: '700' },
-  body: { color: '#555' },
-  status: { color: '#2563eb', marginTop: 8 },
+  head: { gap: space.xs, marginBottom: space.xs },
+  statRow: { flexDirection: 'row', gap: space.lg },
+  stat: { flex: 1, gap: 2, alignItems: 'flex-start' },
+  statNum: { fontSize: 40, lineHeight: 44 },
+  onDark: { color: colors.white },
+  onDarkSoft: { color: '#FFF4EC' },
+  profileCard: { gap: space.sm },
+  ctaCard: { gap: space.sm },
 });

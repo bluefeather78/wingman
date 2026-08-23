@@ -241,8 +241,29 @@ Done, all auth-independent, `tsc --noEmit` clean and `expo export -p web` produc
   the request Host). The `app_redirect` is NOT a Google redirect_uri, so it needs no console
   entry. On Render, set `GOOGLE_APP_REDIRECTS` to the static-site origin.
 
+**Full UX rebuild + Render deploy config (2026-08-23).**
+- **Design system** `src/ui/` faithfully ports the original app's "BENTO & POP" identity —
+  cream canvas, navy ink/borders, hard offset "pop" shadows, accents (lime/orange/purple),
+  Space Grotesk (display) + Plus Jakarta Sans (body) via `@expo-google-fonts`. `theme.ts`
+  (tokens + `popShadow`/`softShadow`) and `components.tsx` (`Screen`, `Txt`, `PopCard`,
+  `PopButton`, `Chip`, `Badge`, `Field`). **Font import gotcha:** import each weight from its
+  subpath (`@expo-google-fonts/plus-jakarta-sans/400Regular`), NOT the package barrel — the
+  barrel bundles all 14 weights and fails to resolve.
+- **Screens rebuilt** on the system: styled auth (`login.tsx` hero + form + Google),
+  Dashboard (greeting, stat tiles, profile/CTA cards), Finder (kind grid → describe →
+  ranked results, staged), Tracker (List + **Calendar** month view fed by saved deadline
+  dates), Profile (card + chat + tidy-up), google-auth completion, and an icon tab bar.
+  `trackerStore` now persists deadline dates onto items for the calendar.
+- **Render (monorepo, two services):** `render.yaml` adds a `runtime: static` site
+  (`wingman-web`) that runs `expo export -p web` and serves `frontend/dist` with an
+  index.html rewrite; `EXPO_PUBLIC_API_BASE` is wired from the API service host (client
+  prepends https:// to the bare host). Set `GOOGLE_APP_REDIRECTS` on the API to the static
+  origin once live. Native still ships via EAS.
+- Verified: production `expo export` builds all routes clean; login/dashboard/finder render
+  in-browser with the new styling; tsc clean throughout.
+
 Not started: a native target run (EAS/simulator), OpenAPI-generated client, and retiring the
-old frontend after full parity.
+old frontend (backend still serves it at the root) after full parity.
 
 **Note for the merge:** Phase 2 is editing `script.js` in place, so its line numbers move —
 port by grepping function names, not line numbers. The salvaged logic above is not what

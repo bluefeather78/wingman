@@ -1,21 +1,12 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { ActivityIndicator, StyleSheet, Switch, View } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
+import { Field, PopButton, PopCard, Screen, Txt } from '@/ui/components';
+import { colors, space } from '@/ui/theme';
 
-// Resumes the Google redirect flow. Reads the one-time `google_token` (web: from the URL the
-// backend redirected to; native: passed as a route param by the login screen), resolves it,
-// and either enters the app (existing/linked account) or collects consent + location for a
-// new account before finishing.
+// Resumes the Google redirect flow: reads the one-time google_token, resolves it, then either
+// enters the app (existing/linked account) or collects consent + location for a new account.
 export default function GoogleAuth() {
   const router = useRouter();
   const { googleSession, googleFinish } = useAuth();
@@ -24,18 +15,15 @@ export default function GoogleAuth() {
 
   const [phase, setPhase] = useState<'resolving' | 'pending' | 'error'>('resolving');
   const [error, setError] = useState<string | null>(null);
-  const [pendingInfo, setPendingInfo] = useState<{ firstName?: string; lastName?: string; email?: string }>({});
+  const [info, setInfo] = useState<{ firstName?: string; lastName?: string; email?: string }>({});
   const [busy, setBusy] = useState(false);
 
-  // Consent form (new account)
   const [location, setLocation] = useState('');
   const [isAdult, setIsAdult] = useState(false);
   const [parentalConsent, setParentalConsent] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
-  // The handoff token is single-use — resolve it exactly once even under StrictMode.
   const resolved = useRef(false);
-
   useEffect(() => {
     if (resolved.current) return;
     resolved.current = true;
@@ -50,7 +38,7 @@ export default function GoogleAuth() {
         if (result.status === 'session') {
           router.replace('/(app)');
         } else {
-          setPendingInfo(result);
+          setInfo(result);
           setPhase('pending');
         }
       } catch (e) {
@@ -75,91 +63,75 @@ export default function GoogleAuth() {
 
   if (phase === 'resolving') {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator />
-        <Text style={styles.dim}>Signing you in…</Text>
-      </View>
+      <Screen scroll={false}>
+        <View style={styles.center}>
+          <ActivityIndicator color={colors.navy} />
+          <Txt variant="body">Signing you in…</Txt>
+        </View>
+      </Screen>
     );
   }
 
   if (phase === 'error') {
     return (
-      <View style={styles.center}>
-        <Text style={styles.error}>{error}</Text>
-        <Pressable style={styles.link} onPress={() => router.replace('/login')}>
-          <Text style={styles.linkText}>Back to sign in</Text>
-        </Pressable>
-      </View>
+      <Screen scroll={false}>
+        <View style={styles.center}>
+          <PopCard color={colors.white} style={{ gap: space.md }}>
+            <Txt variant="h2">Sign-in didn't finish</Txt>
+            <Txt variant="body">{error}</Txt>
+            <PopButton label="Back to sign in" onPress={() => router.replace('/login')} />
+          </PopCard>
+        </View>
+      </Screen>
     );
   }
 
-  // pending: finish creating the account
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-      <Text style={styles.title}>Almost there</Text>
-      <Text style={styles.subtitle}>
-        Finish setting up{pendingInfo.firstName ? `, ${pendingInfo.firstName}` : ''}
-        {pendingInfo.email ? ` (${pendingInfo.email})` : ''}
-      </Text>
+    <Screen>
+      <View style={styles.head}>
+        <Txt variant="label">GOOGLE SIGN-IN</Txt>
+        <Txt variant="hero">Almost there</Txt>
+        <Txt variant="body">
+          Finish setting up{info.firstName ? `, ${info.firstName}` : ''}
+          {info.email ? ` (${info.email})` : ''}.
+        </Txt>
+      </View>
 
-      <Text style={styles.label}>Location</Text>
-      <TextInput style={styles.input} value={location} onChangeText={setLocation} autoCorrect={false} />
-
-      <View style={styles.consent}>
-        <Row label="I am 18 or older" value={isAdult} onValueChange={setIsAdult} />
-        <Row
-          label="If under 18, I have parent/guardian permission (Terms §2)"
+      <PopCard style={{ gap: space.md }}>
+        <Field label="Location" value={location} onChangeText={setLocation} placeholder="e.g. Seattle, WA" />
+        <ConsentRow label="I'm 18 or older" value={isAdult} onValueChange={setIsAdult} />
+        <ConsentRow
+          label="If under 18, I have a parent/guardian's permission (Terms §2)"
           value={parentalConsent}
           onValueChange={setParentalConsent}
         />
-        <Row
+        <ConsentRow
           label="I accept the Terms and Privacy Policy"
           value={acceptedTerms}
           onValueChange={setAcceptedTerms}
         />
-      </View>
-
-      {error && <Text style={styles.error}>{error}</Text>}
-
-      <Pressable style={[styles.button, busy && styles.buttonDisabled]} onPress={finish} disabled={busy}>
-        {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Create account</Text>}
-      </Pressable>
-    </ScrollView>
+        {!!error && <Txt style={styles.error}>{error}</Txt>}
+        <PopButton label="Create account" onPress={finish} loading={busy} full />
+      </PopCard>
+    </Screen>
   );
 }
 
-function Row({
-  label,
-  value,
-  onValueChange,
-}: {
-  label: string;
-  value: boolean;
-  onValueChange: (v: boolean) => void;
-}) {
+function ConsentRow({ label, value, onValueChange }: { label: string; value: boolean; onValueChange: (v: boolean) => void }) {
   return (
     <View style={styles.row}>
-      <Switch value={value} onValueChange={onValueChange} />
-      <Text style={styles.rowLabel}>{label}</Text>
+      <Switch value={value} onValueChange={onValueChange} trackColor={{ true: colors.purple, false: colors.hairline }} thumbColor={colors.white} />
+      <Txt variant="small" style={styles.rowLabel}>
+        {label}
+      </Txt>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 24 },
-  container: { padding: 24, gap: 12, maxWidth: 460, width: '100%', alignSelf: 'center', flexGrow: 1, justifyContent: 'center' },
-  title: { fontSize: 24, fontWeight: '800', textAlign: 'center' },
-  subtitle: { fontSize: 14, color: '#666', textAlign: 'center', marginBottom: 8 },
-  label: { fontSize: 13, color: '#444', fontWeight: '600' },
-  input: { borderWidth: 1, borderColor: '#cbd2e0', borderRadius: 10, padding: 12, fontSize: 16 },
-  consent: { gap: 10, marginTop: 4 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  rowLabel: { flex: 1, fontSize: 13, color: '#444' },
-  dim: { color: '#889', fontSize: 13 },
-  error: { color: '#b91c1c', fontSize: 14, textAlign: 'center' },
-  button: { backgroundColor: '#2563eb', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
-  buttonDisabled: { opacity: 0.6 },
-  buttonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  link: { marginTop: 8 },
-  linkText: { color: '#2563eb' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.md, padding: space.xl },
+  head: { gap: space.xs, marginBottom: space.xs },
+  row: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  rowLabel: { flex: 1 },
+  error: { color: colors.red, fontFamily: 'PlusJakartaSans_700Bold' },
 });

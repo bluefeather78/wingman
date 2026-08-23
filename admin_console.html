@@ -42,6 +42,7 @@
   --agent-scraper:  #D97706;
   --agent-deadline: #DB2777;
   --agent-mailinglist: #059669;
+  --agent-links:    #4F46E5;
   /* Not agents: spend the users caused, and scripts with no card. Cooler and flatter
      than the agent hues on purpose — they belong on the chart because they are real
      money, but nobody starts them from here. */
@@ -66,7 +67,7 @@
     --danger: #F87171; --danger-soft: #2E1515; --muted-soft: #26241F;
     --agent-metadata: #A78BFA; --agent-reviews: #22D3EE;
     --agent-scraper: #FBBF24; --agent-deadline: #F472B6;
-    --agent-mailinglist: #34D399;
+    --agent-mailinglist: #34D399; --agent-links: #818CF8;
     --agent-end_user: #7BA6E0; --agent-other: #9CA3B4;
     --shadow: 0 1px 2px rgba(0,0,0,.4);
   }
@@ -80,7 +81,7 @@
   --danger: #F87171; --danger-soft: #2E1515; --muted-soft: #26241F;
   --agent-metadata: #A78BFA; --agent-reviews: #22D3EE;
   --agent-scraper: #FBBF24; --agent-deadline: #F472B6;
-  --agent-mailinglist: #34D399;
+  --agent-mailinglist: #34D399; --agent-links: #818CF8;
   --agent-end_user: #7BA6E0; --agent-other: #9CA3B4;
   --shadow: 0 1px 2px rgba(0,0,0,.4);
 }
@@ -2955,6 +2956,45 @@ const SCOPE_FIELDS = {
       <label for="cfgSampleSize">Sample size</label>
       <input type="number" id="cfgSampleSize" value="25" min="1" max="2000">
     </div>`,
+  links: () => `
+    <div class="field">
+      <label for="cfgScope">Scope</label>
+      <select id="cfgScope" onchange="onScopeChange()">
+        <option value="all" selected>All active rows due for a check</option>
+        <option value="sample">Random sample</option>
+        <option value="flagged">Retry rows already flagged as dead links</option>
+      </select>
+      <div class="help">Plain HTTP, no API calls &mdash; this agent is free, including a full pass over the
+        whole catalog. Rows checked in the last 7 days are skipped.
+        <strong>Retry rows already flagged</strong> revisits only the rows a previous run deactivated,
+        tries to find each one&rsquo;s real URL, and puts back the ones whose replacement can be proven
+        &mdash; the only thing in this console that re-activates a row automatically.</div>
+    </div>
+    <div class="field" id="sampleWrap">
+      <label for="cfgSampleSize">Sample size</label>
+      <input type="number" id="cfgSampleSize" value="100" min="1" max="2000">
+    </div>
+    <div class="check">
+      <input type="checkbox" id="cfgForce">
+      <label for="cfgForce">Force recheck<div class="help">Ignores the 7-day staleness filter and rechecks every active row. Costs nothing.</div></label>
+    </div>
+    <div class="check">
+      <input type="checkbox" id="cfgFlagOnly">
+      <label for="cfgFlagOnly">Flag only, don&rsquo;t deactivate<div class="help">Records link health and writes review flags, but leaves every row active.
+        Use it for a first look at a catalog that has never been checked, so the scale is visible before anything moves.</div></label>
+    </div>
+    <div class="check">
+      <input type="checkbox" id="cfgNoRepair">
+      <label for="cfgNoRepair">Skip the repair attempt<div class="help">By default a dead row is not condemned until the checker has looked for its real URL
+        on the same site and proven the replacement by its page title. Programs get reorganised far more often than they are cancelled,
+        so leave this unticked unless you specifically want the raw link verdict.</div></label>
+    </div>
+    <div class="notice" style="margin-top:4px;font-size:12px">
+      Only a <strong>404</strong>, a <strong>410</strong>, a malformed URL or a hostname that no longer resolves deactivates a row.
+      A 403, a TLS failure or a timeout is flagged and left active &mdash; those sites are refusing this checker,
+      not reporting a missing page. Deactivated rows land in the <strong>Review queue</strong> with a flag saying why;
+      nothing here ever re-activates anything.
+    </div>`,
 };
 
 function onScopeChange() {
@@ -2979,7 +3019,9 @@ function openRun(key) {
   $('modalScope').innerHTML = (SCOPE_FIELDS[key] || (() => ''))();
   $('cfgMinDelay').value = cfg.defaults.min_delay;
   $('cfgTimeout').value = cfg.defaults.timeout;
-  $('minDelayHelp').textContent = cfg.uses_gemini_search
+  $('minDelayHelp').textContent = cfg.free
+    ? 'Not used — this agent makes no API calls, so there is no rate limit to respect. The timeout is the per-URL HTTP read timeout.'
+    : cfg.uses_gemini_search
     ? '5 s is the floor that fixed past HTTP 429s from Google Search. Lower it only for short samples.'
     : '5 s between calls. This agent has its own quota and does not contend with the search-enabled agents.';
   $('estimate').className = 'estimate';
@@ -3027,7 +3069,8 @@ function collectConfig() {
     // Only send the sample size when the scope actually uses it — the previous
     // console posted it always, since the field is merely hidden with CSS.
     if (c.scope === 'sample') c.sampleSize = val('cfgSampleSize');
-    if (key === 'reviews') c.force = checked('cfgForce');
+    if (key === 'reviews' || key === 'links') c.force = checked('cfgForce');
+    if (key === 'links') { c.flagOnly = checked('cfgFlagOnly'); c.noRepair = checked('cfgNoRepair'); }
     if (key === 'metadata' && val('cfgExcludeSource')) c.excludeSource = val('cfgExcludeSource').trim();
   }
   c.minDelay = val('cfgMinDelay');
@@ -3051,7 +3094,12 @@ async function doPreview() {
     const spread = (d.est_cost_low_usd != null && d.est_cost_high_usd != null
                     && d.est_cost_high_usd - d.est_cost_low_usd > 0.005)
       ? ` <span style="color:var(--text-3)">(range ${money(d.est_cost_low_usd)}–${money(d.est_cost_high_usd)})</span>` : '';
-    const costText = d.based_on_runs
+    // `free` is a property of the agent's design, not an absence of history — so it does
+    // NOT read as "no successful run to estimate from", which is the same sentence used
+    // for an agent whose cost is genuinely unknown.
+    const costText = d.free
+      ? `<span class="big">$0.00</span> <span style="color:var(--text-3)">— no API calls, this agent is free</span>`
+      : d.based_on_runs
       ? `<span class="big">${money(cost)}</span> estimated${spread} <span style="color:var(--text-3)">(from ${d.based_on_runs} successful run${d.based_on_runs === 1 ? '' : 's'})</span>`
       : `<span style="color:var(--text-3)">no successful run to estimate from — cost unknown</span>`;
     const timeText = d.est_seconds ? ` · <span class="big">${duration(d.est_seconds)}</span> estimated` : '';
@@ -3074,10 +3122,24 @@ async function doPreview() {
 async function doRun(dryRun) {
   const cfg = S.config[S.modalAgent];
   const label = dryRun ? 'DRY RUN' : 'LIVE RUN';
-  const warn = dryRun
-    ? `A dry run still calls the ${cfg.api} API at full cost — it only skips writing to the database.`
-    : `This writes to the database and spends real money on the ${cfg.api} API.`;
-  if (!confirm(`${label}: ${cfg.name}\n\n${warn}\n\nRun Preview first if you haven't checked the scope and estimated cost.\n\nContinue?`)) return;
+  // A free agent gets its own wording. Telling an operator that a run "spends real money"
+  // when it provably cannot is how a confirm dialog becomes something people click past —
+  // and the one warning this agent DOES need (it takes rows away from students) is
+  // unrelated to cost, so it has to be said in its own words.
+  let warn;
+  if (cfg.free) {
+    warn = dryRun
+      ? 'This agent makes no API calls, so a dry run costs nothing and changes nothing — it only reports what it would do.'
+      : 'This agent costs nothing to run. What it DOES do is set is_active = false on rows whose URL is confirmed gone, which removes them from what students see until someone re-activates them from the Review queue.';
+  } else {
+    warn = dryRun
+      ? `A dry run still calls the ${cfg.api} API at full cost — it only skips writing to the database.`
+      : `This writes to the database and spends real money on the ${cfg.api} API.`;
+  }
+  const advice = cfg.free
+    ? 'Run Preview first to see how many rows are in scope.'
+    : "Run Preview first if you haven't checked the scope and estimated cost.";
+  if (!confirm(`${label}: ${cfg.name}\n\n${warn}\n\n${advice}\n\nContinue?`)) return;
 
   const config = collectConfig();
   config.dryRun = dryRun;

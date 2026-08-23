@@ -11,6 +11,28 @@ site, discontinued-program detection, multi-deadline handling, opens-date estima
 "never invent a date" rule) — trimmed to just the catalog-relevant fields (drops the
 Tracker-only action_items/requirements/apply_url fields).
 
+TWO PHASES (2026-08-23), and the split is the accuracy design. check_one() makes a PROSE
+call with tools on, then a second, tool-free call that turns those notes into the schema.
+The reason is measured on the Gemini side and this agent showed the same shape: demanding a
+JSON answer collapses the search rate (A/B: prose 4/4 searched, JSON 0/4; this agent's own
+history is 59 searches across 1218 row-checks on the old single JSON call). What it
+fabricates when it does not look are DATES, which the app renders as authoritative, so this
+is where a silent call does the most visible damage. See gemini_common.py's SEVENTH finding.
+
+A still-silent call (after one retry) now WRITES NOTHING — in the batch loop and in
+server.py's interactive endpoint alike. That is not merely cautious: check_one() returns an
+empty info in that case, so writing it would blank the row's real status and
+important_dates AND stamp last_checked_at, destroying good data and then hiding the damage
+behind the 7-day TTL. The interactive path falls back to the cached value and deliberately
+does not stamp, so the next request re-rolls the search decision.
+
+MEASURED COST: $0.0676 for a row that searched once, against a historical median of $0.0790
+for the interactive checks that really did search (36 of them in deadline_check_log). The
+two-phase version is CHEAPER per verified check, because MAX_SEARCHES caps web_search at 1
+where it used to allow 3. The old sub-cent figures in agent_runs (id=14, id=16 at
+~$0.0010/row) are the price of not looking, not a cheaper way of looking. A full --all pass
+now projects to roughly $84 — read the note below before running one.
+
 NOTE (2026-08-18): this script's --all/batch mode is no longer the primary way deadline data
 stays current — a full-catalog pass previously tripped Gemini's googleSearch grounding quota
 partway through (see the plan doc's "on-demand deadline checking" update for the full
@@ -94,6 +116,13 @@ CLAUDE_MAX_TOKENS = 1200
 # likely cause of the grounding-quota exhaustion recorded in this file's docstring, and an
 # untimed urlopen() could hang a batch indefinitely on one bad row.
 BATCH_MIN_DELAY_SECS = 5
+
+# Web searches phase 1 may make. Anthropic ENFORCES this server-side (max_uses), so
+# unlike Gemini it is a hard ceiling, and it is the only per-call fee in this agent
+# ($0.01/search). Set to 1 deliberately. web_fetch is NOT capped alongside it: it is
+# free and it is the tool that actually reaches the FAQ/key-dates subpages the dates
+# live on.
+MAX_SEARCHES = 1
 _min_delay_secs = 0.0
 _default_timeout_secs = 120
 _last_call_time = 0.0
@@ -124,7 +153,32 @@ def _enforce_rate_limit():
     _last_call_time = time.time()
 
 
-def call_claude(system, user_content, api_key, use_web_search=False):
+def extract_source_urls(response_data):
+    """Every URL Claude's server tools ACTUALLY retrieved, in order, deduped.
+
+    Claude's answer for grounding metadata. `web_search_tool_result` blocks carry the real
+    result URLs and `web_fetch_tool_result` blocks the fetched one — and unlike Gemini's
+    `groundingChunks`, these are the destination URLs already, with no redirect hop to
+    resolve. They exist for the same reason: a URL the model TYPES is unreliable, and this
+    is the only place the retrieved one lives. Phase 2 is handed this list so it grounds its
+    answer on pages that were really read.
+    """
+    urls = []
+    for block in response_data.get("content") or []:
+        btype = block.get("type")
+        if btype == "web_search_tool_result":
+            for item in block.get("content") or []:
+                if isinstance(item, dict) and item.get("url"):
+                    urls.append(item["url"])
+        elif btype == "web_fetch_tool_result":
+            inner = block.get("content")
+            if isinstance(inner, dict) and inner.get("url"):
+                urls.append(inner["url"])
+    return list(dict.fromkeys(urls))
+
+
+def call_claude(system, user_content, api_key, use_web_search=False, max_searches=None,
+                return_sources=False):
     """Call Claude Haiku with web search AND web fetch enforced for deadline extraction.
     web_search finds candidate pages (e.g. an org's FAQ/key-dates subpage); web_fetch then
     retrieves the FULL text of a specific known URL (the given opportunity URL, or a URL
@@ -143,10 +197,17 @@ def call_claude(system, user_content, api_key, use_web_search=False):
     }
     if use_web_search:
         body["tools"] = [
-            {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
-            # max_content_tokens bounds how much of any one fetched page counts against
-            # CLAUDE_MAX_TOKENS's shared input budget; a handful of subpage fetches per
-            # check is normal (main URL + org FAQ/dates page), max_uses caps runaway cases.
+            # Anthropic ENFORCES max_uses server-side, unlike Gemini's max_searches, which
+            # is only a number folded into the prompt. So this is a real cost ceiling: it is
+            # the only per-call fee here ($0.01/search), and it is what MAX_SEARCHES tunes.
+            {"type": "web_search_20250305", "name": "web_search",
+             "max_uses": max_searches if max_searches is not None else 3},
+            # web_fetch stays generous and is NOT reduced alongside it: it carries no
+            # per-call charge (token cost only), and it is the tool that actually gets the
+            # dates. Deadlines live on FAQ/key-dates subpages that a search snippet never
+            # shows, so the estimation logic in the prompt depends on fetching them.
+            # max_content_tokens bounds how much of any one page counts against
+            # CLAUDE_MAX_TOKENS's shared input budget.
             {"type": "web_fetch_20250910", "name": "web_fetch", "max_uses": 5, "max_content_tokens": 4000},
         ]
 
@@ -181,6 +242,10 @@ def call_claude(system, user_content, api_key, use_web_search=False):
         "server_tool_use": response_data.get("usage", {}).get("server_tool_use") or {},
     }
 
+    # Third element only on request, so the existing 2-tuple call sites are untouched —
+    # same convention as gemini_common's return_grounding.
+    if return_sources:
+        return text, usage, extract_source_urls(response_data)
     return text, usage
 
 
@@ -260,41 +325,124 @@ mentioned only in prose in important_date_note. If you have enough basis to writ
 you have enough basis to add the matching structured entry.
 - Only omit a date category if you found no information for it AND no prior-cycle basis to estimate it.
 
-SELF-CHECK before responding:
-- Every date in "important_dates" must be on or after {today}. If any is in the past, roll it forward to \
-its next real occurrence (was_estimated=true) or drop it — never submit a past date.
-- Every specific date/estimate mentioned in important_date_note must have a matching structured entry in \
-important_dates, and vice versa — the two must agree.
-- Prefer including a reasonably-estimated date over omitting it. Only leave a category out if step (d) \
-above genuinely applies.
+SELF-CHECK before you finish:
+- Every date you report must be on or after {today}. If one is in the past, roll it forward to \
+its next real occurrence (and say it is estimated) or drop it — never report a past date.
+- Prefer reporting a reasonably-estimated date over omitting it. Only leave a category out if \
+step (e) above genuinely applies.
 
-Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, matching \
-exactly this schema: {{"status": "running, not_running, or unknown", "important_dates": [{{"label": \
-"short specific label", "date_iso": "YYYY-MM-DD", "type": "opens, deadline, event_start, event_end, or \
-other"}}], "was_estimated": true or false, "important_date_note": "one short sentence: status/estimate \
-basis/caveat, or null"}}. Keep the response well within a 1000-token budget: up to 8 important_dates \
-entries, ordered chronologically. If you must shorten, drop the least specific/least useful entry first \
-(e.g. a duplicate "other" note) — never drop opens/deadline/event dates before that."""
+Write this up in plain prose. State the status and why, list every date you found or estimated \
+with its label and whether it is confirmed or estimated, and name the pages you actually \
+fetched. No JSON, no schema, no markdown fences — just write it. Stay well within a \
+1000-token response."""
 
 
-def check_one(opp, api_key):
+# PHASE 2. Notes plus the real fetched URLs in, strict JSON out, no tools. The schema and the
+# agreement rules live here rather than in phase 1 because a strict output format is free on a
+# call that does not need to search — and ruinous on one that does.
+EXTRACT_SYSTEM = """You turn a researcher's written notes about one extracurricular \
+opportunity's application cycle into a strict JSON record. You are NOT researching — \
+everything you need is in the notes, and you must not add a date, a status or a caveat that \
+is not in them.
+
+Today's date is {today}.
+
+RULES, in order:
+- Every date the notes reason about must become a structured entry in "important_dates" — \
+never leave a date mentioned only in prose in "important_date_note". If the notes give enough \
+basis to write a date into the note, that date gets its own structured entry.
+- Every specific date in "important_date_note" must have a matching entry in \
+"important_dates", and vice versa — the two must agree.
+- Every date must be on or after {today}. Drop any that is not; do not silently roll it \
+forward, because the notes are what justify a roll-forward and you are not researching.
+- "was_estimated" is true if ANY reported date came from a prior cycle or a vague pattern \
+rather than an explicitly posted current-cycle date.
+- If the notes say the program is permanently discontinued, status is "not_running" and you \
+report no future dates. If they say the current cycle is closed but the program recurs, \
+status is "running" with the forward-dated entries the notes describe.
+- If the notes found nothing at all, status is "unknown" with an empty important_dates. That \
+is a valid outcome; never invent one to fill the schema.
+
+Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, \
+matching exactly this schema: {{"status": "running, not_running, or unknown", \
+"important_dates": [{{"label": "short specific label", "date_iso": "YYYY-MM-DD", "type": \
+"opens, deadline, event_start, event_end, or other"}}], "was_estimated": true or false, \
+"important_date_note": "one short sentence: status/estimate basis/caveat, or null"}}. Keep the \
+response well within a 1000-token budget: up to 8 important_dates entries, ordered \
+chronologically. If you must shorten, drop the least specific/least useful entry first (e.g. a \
+duplicate "other" note) — never drop opens/deadline/event dates before that."""
+
+
+def build_extract_system():
+    return EXTRACT_SYSTEM.format(today=today_label())
+
+
+def research_deadlines(opp, api_key, retry_on_silent=True):
+    """PHASE 1 — prose out, tools on. (notes, cost, searches, sources, attempts).
+
+    Retries once on a zero-search answer. Re-rolling, not re-prompting: the search decision
+    is non-deterministic and cannot be forced. Cost is banked per attempt so an exception on
+    the retry cannot discard what the first call already spent.
+    """
     system = build_system(opp)
     user_content = (f"Opportunity: {opp['name']} ({opp.get('org') or 'unknown org'})\n"
-                     f"URL: {opp['url']}\nKnown info: {opp.get('summary') or ''}\n\n"
-                     f"Fetch this URL directly, then search and fetch subpages of the org's site (FAQ, "
-                     f"how to apply, key dates) if needed, and extract current status/important dates "
-                     f"per the schema. Look carefully for every relevant date — registration open/close, "
-                     f"event dates, notifications — not just a single deadline.")
-    # Using Claude Haiku (claude-haiku-4-5-20251001) with web search + web fetch enforced in prompt.
-    # max_tokens set to 1200 to allow web search/fetch results without token starvation.
-    text, usage = call_claude(system, user_content, api_key, use_web_search=True)
-    info = extract_json(text)
-    searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
+                    f"URL: {opp['url']}\nKnown info: {opp.get('summary') or ''}\n\n"
+                    f"Fetch this URL directly, then search and fetch subpages of the org's "
+                    f"site (FAQ, how to apply, key dates) if needed, and report the current "
+                    f"status and every relevant date — registration open/close, event dates, "
+                    f"notifications — not just a single deadline.")
+    cost = 0.0
+    notes, usage, sources = "", {}, []
+    attempts = 2 if retry_on_silent else 1
+    for attempt in range(1, attempts + 1):
+        notes, usage, sources = call_claude(system, user_content, api_key,
+                                            use_web_search=True, max_searches=MAX_SEARCHES,
+                                            return_sources=True)
+        cost += estimate_cost(usage)
+        searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
+        if searches or attempt == attempts:
+            return notes, cost, searches, sources, attempt
+        print("  [SILENT] no search invoked — retrying once", flush=True)
+    return notes, cost, 0, sources, attempts
 
-    # Note: searches may be 0 if Claude answers from training data (silent skip).
-    # This is tracked via the "source" flag in server.py ("fresh, real search" vs "fresh, silent search")
-    # so users can see whether the result was live-verified or not.
-    return info, estimate_cost(usage), searches
+
+def extract_deadlines(opp, notes, sources, api_key):
+    """PHASE 2 — notes plus the pages actually fetched in, strict JSON out. No tools."""
+    source_block = "\n".join(f"- {u}" for u in sources) or "(none retrieved)"
+    user_content = (f"Opportunity: {opp['name']} ({opp.get('org') or 'unknown org'})\n"
+                    f"PAGES ACTUALLY FETCHED:\n{source_block}\n\n"
+                    f"RESEARCHER'S NOTES:\n{notes}\n\nReturn the JSON object now.")
+    text, usage = call_claude(build_extract_system(), user_content, api_key,
+                              use_web_search=False)
+    return extract_json(text) or {}, estimate_cost(usage)
+
+
+def check_one(opp, api_key, retry_on_silent=True):
+    """Both phases. (info, cost, searches, attempts).
+
+    TWO CALLS, and the split is the accuracy design — see check_reviews.py and
+    gemini_common.py's SEVENTH finding. Demanding JSON collapses the search rate; measured
+    on Gemini at 4/4 vs 0/4, and this agent's own history shows the same shape (59 searches
+    across 1218 row-checks on the old single-call JSON prompt). Phase 1 asks for prose so
+    the tools actually get used; phase 2 turns those notes into the schema with no tools at
+    all, which is where a strict format costs nothing.
+
+    What it fabricates when it does not look are DATES, which the app renders as
+    authoritative — so this is the agent where a silent call does the most visible damage.
+
+    `retry_on_silent` defaults to True for the interactive path too. That costs a user one
+    extra round-trip on top of the second phase, and it is the right trade because
+    server.py caches the answer for 7 days: one silent result is served to every student who
+    opens that opportunity for a week.
+
+    Phase 2 is SKIPPED when phase 1 stayed silent — notes written without looking are not
+    worth converting, and the caller can see `searches == 0` and label the result.
+    """
+    notes, cost, searches, sources, attempts = research_deadlines(opp, api_key, retry_on_silent)
+    if not searches:
+        return {}, cost, 0, attempts
+    info, extract_cost = extract_deadlines(opp, notes, sources, api_key)
+    return info, cost + extract_cost, searches, attempts
 
 
 def main():
@@ -359,20 +507,32 @@ def main():
     errors = 0
     total_searches = 0
     silent_search_count = 0
+    retried = 0
     dry_run_results = []
 
     for i, opp in enumerate(items):
         print(f"[{i + 1}/{len(items)}] {opp['name'][:60]}...", end=" ")
         try:
-            info, cost, searches = check_one(opp, anthropic_key)
+            info, cost, searches, attempts = check_one(opp, anthropic_key)
             total_cost += cost
             total_searches += searches
+            retried += attempts - 1
             # Silent skip-search: use_web_search=True but Claude answered from training data
             # instead of invoking web_search. A 0-search result means status/important_dates
-            # were NOT verified live this run, even though last_checked_at still gets stamped
-            # with "now" below.
+            # were NOT verified live this run. check_one() re-rolls the search decision once
+            # before giving up; this counts what survives the retry, and such a row is now
+            # SKIPPED rather than written.
+            #
+            # Skipping matters more here than it looks. check_one() returns an empty info on
+            # a silent call, so writing it would blank the row's real status and
+            # important_dates AND stamp last_checked_at — destroying good data and then
+            # hiding the damage behind the staleness filter. Leaving the row untouched keeps
+            # what is there and leaves it due, so the next pass re-rolls.
             if searches == 0:
                 silent_search_count += 1
+                print(f"[SILENT after retry] nothing written; row keeps its existing dates "
+                      f"and stays due, ${cost:.4f}")
+                continue
             status = info.get("status") if info.get("status") in VALID_STATUS else "unknown"
             important_dates = info.get("important_dates") or []
             if not isinstance(important_dates, list):
@@ -418,7 +578,8 @@ def main():
         # this script goes through gemini_common, so batch runs were entirely unthrottled.
 
     print(f"\n[SUMMARY] checked: {len(items)}, updated: {updated}, errors: {errors}, "
-          f"silent (no-search) checks: {silent_search_count}/{len(items)}, cost: ${total_cost:.4f}")
+          f"silent (no-search) checks after retry: {silent_search_count}/{len(items)}, "
+          f"silent-search retries: {retried}, cost: ${total_cost:.4f}")
     if mode == "sample" and items:
         per_item = total_cost / len(items)
         projected = per_item * len(all_active)

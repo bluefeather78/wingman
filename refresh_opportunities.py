@@ -8,11 +8,32 @@ tracking.
 Fields NEVER touched by this agent (reserved for other agents):
   - status, important_dates, was_estimated, important_date_note, dates_last_checked_at (deadline agent)
   - review_status, review_summary, review_sources, last_reviewed_at (review agent)
+  - url, link_status, link_status_code, link_checked_at, link_dead_since (check_links.py)
   - is_active, source (system fields)
 
 Fields this agent CAN update:
-  - name, org, summary, url, type, price, state, location, intl, season, category,
+  - name, org, summary, type, price, state, location, intl, season, category,
     eligibility, grade_min, grade_max, cost, subject_tags, contact_email
+
+*** WHY `url` IS NOT IN THAT LIST, ADDED 2026-08-23 ***
+It used to be. This agent calls Gemini with use_web_search=False — deliberately, for cost —
+and then wrote whatever `url` came back straight onto a live, student-facing catalog row.
+That is the EXACT mechanism behind the scraper's measured 26% dead-link rate: with no search,
+the model writes URLs from memory, and they come back with the right host and a path off by
+one segment (`juilliard.edu/music/pre-college` for the real
+`.../music/preparatory-division/juilliard-pre-college`). Every one of those 30 dead URLs was
+a constructed deep path. See SCRAPER_PLAN.md and url_validate.py.
+
+The scraper's fix — take the URL from `groundingChunks[].web.uri`, i.e. a page the search
+actually retrieved — is not available here, because there is no search to ground against.
+So this agent does not write the field at all. `check_links.py` owns link health: it verifies
+every URL over plain HTTP for free and deactivates the ones that are provably gone. A URL
+that needs REPLACING is a human edit in the admin console's Edit modal, on a row the link
+checker has already put in front of someone.
+
+The damage this avoids is asymmetric and that is the whole argument: a stale-but-working URL
+costs a student nothing, and a confidently-rewritten wrong one sends them to a 404 with no
+signal that anything happened. Do not put `url` back without a grounded source for it.
 
 Run roughly 1x/month on all active opportunities. Uses gemini-3.5-flash-lite (no web search —
 training data only) for cost efficiency and to avoid quota contention with deadline/review agents.
@@ -60,28 +81,36 @@ VALID_SEASON = {'Summer', 'Year-Long', 'Spring', 'Fall', 'Winter'}
 
 def build_system(opp):
     today = datetime.date.today().isoformat()
-    return f"""You research current metadata for an extracurricular opportunity (program, \
+    # This prompt used to open with "YOU MUST use web_search and web_fetch to verify CURRENT
+    # information" and list four SEARCH STEPS — while check_one() calls the API with
+    # use_web_search=False. The model had no search tool and was being told to search with
+    # it, which is an instruction it can only satisfy by answering from memory in the voice
+    # of something it looked up. The prompt now says what is actually true, so "I do not
+    # know this" stays an available answer.
+    return f"""You recall what you know about an extracurricular opportunity (program, \
 internship, competition, or research position) listed in a high school opportunity catalog. \
 Today's date is {today}.
 
-YOU MUST use web_search and web_fetch to verify CURRENT information — do not rely on training \
-data alone. Search thoroughly for the program's official website, latest announcements, and any \
-recent program updates.
+YOU HAVE NO WEB ACCESS on this request. Answer only from what you already know about this \
+program. You are not expected to know it — most entries in this catalog are small or local, \
+and returning almost every field as null is a normal, correct outcome, not a failure. Never \
+present a guess as a recalled fact.
 
-GOAL: extract current, accurate metadata about the opportunity — not deadline/status tracking \
-(that's handled separately), but core program info that students need to decide if it's relevant.
+GOAL: core program metadata students use to judge relevance — eligibility, pricing, format, \
+location, subject area. NOT deadlines or program status (a separate agent with live search \
+handles those) and NOT the URL (see below).
 
-SEARCH STEPS:
-1. Fetch the program's main URL directly to see current information.
-2. Search for recent announcements, 2025-2026 program details, and any changes.
-3. Look for eligibility info, pricing/cost details, format (in-person/remote), and location.
-4. Search for program type/category context (is it truly a {list(VALID_TYPES)[0]}? etc.).
+RELIABILITY RULE, and it is the one that matters: return a field ONLY if you specifically \
+recall it for THIS program by name. If you are pattern-matching from similar programs at the \
+same institution, or from what a program of this kind usually looks like, return null. A null \
+leaves a curated value in place; a plausible invention silently overwrites one.
 
-EXTRACTION: return a JSON object with ONLY the fields you found current information for.
-Omit fields you couldn't verify or where current info is unavailable.
+DO NOT return a URL. You will be given the program's URL for identification only — it is \
+maintained by a separate checker that actually fetches pages, and a remembered URL is close \
+enough to look right and wrong often enough to send a student to a missing page.
 
 Schema: {{"name": "string or null", "org": "string or null", "summary": "one paragraph \
-or null", "url": "string or null", "type": "one of {', '.join(sorted(VALID_TYPES))} or null", \
+or null", "type": "one of {', '.join(sorted(VALID_TYPES))} or null", \
 "price": "Free or Paid or null", "location": "In-Person, Remote, or In-Person and Remote or null", \
 "intl": "International Students or Domestic Students or null", "season": "Summer, Year-Long, \
 Spring, Fall, or Winter or null", "eligibility": "concise description or null", \
@@ -91,17 +120,22 @@ Spring, Fall, or Winter or null", "eligibility": "concise description or null", 
 program if you find one (e.g. admissions or info@), else null — never guess or construct one"}}.
 
 Return ONLY the raw JSON object, no markdown, no preamble. Keep response under 800 tokens. \
-Do NOT include deadline/status fields — those are handled separately. For fields you cannot \
-verify, use null rather than guessing."""
+For fields you cannot specifically recall, use null rather than guessing."""
 
 
 def check_one(opp, api_key):
     system = build_system(opp)
     user_content = (f"Opportunity: {opp['name']} ({opp.get('org') or 'unknown org'})\n"
-                    f"URL: {opp['url']}\nCurrent summary: {opp.get('summary') or 'none'}\n\n"
-                    f"Extract current opportunity metadata per the schema (no web search needed — use your training data).")
-    # use_web_search=False: metadata extraction doesn't need live verification, avoids quota contention
-    # with deadline/review agents. Training data is sufficient for name/org/eligibility/pricing extraction.
+                    f"URL (for identification only — do not return a URL): {opp['url']}\n"
+                    f"Current summary: {opp.get('summary') or 'none'}\n\n"
+                    f"Return what you specifically recall about THIS program, per the schema. "
+                    f"Null is the right answer for anything you do not.")
+    # use_web_search=False: deliberate, for cost and to avoid quota contention with the
+    # deadline/review agents. What that costs in accuracy is bounded by clean_update_dict()
+    # dropping `url` and by the prompt no longer claiming a search tool exists — see the
+    # module docstring. Do not read "training data is sufficient" into this: it is
+    # sufficient for the fields that survive validation, and null for the rest is the
+    # designed outcome.
     text, usage = call_gemini(system, user_content, api_key, use_web_search=False, max_tokens=1200,
                               model="gemini-3.5-flash-lite")
     info = extract_json(text)
@@ -113,8 +147,11 @@ def clean_update_dict(info):
     """Extract and validate fields from the API response, dropping nulls and invalid values."""
     update = {}
 
-    # String fields
-    for field in ["name", "org", "summary", "url", "eligibility", "cost"]:
+    # String fields. `url` is deliberately NOT among them — see the module docstring. The
+    # model still sees a url in its input (for identification) and may still echo one back;
+    # dropping it here is what makes that harmless, and is the half that has to hold even
+    # if the prompt is later reworded.
+    for field in ["name", "org", "summary", "eligibility", "cost"]:
         val = info.get(field)
         if isinstance(val, str) and val.strip():
             update[field] = val.strip()

@@ -47,12 +47,13 @@ fetched at runtime anymore. `migrate_to_supabase.py` was the one-off script that
 table (from this file plus a sibling `opportunity finder/` project's seed data); not part of
 the regular dev loop.
 
-## The five background agents and the admin console
+## The six background agents and the admin console
 
-Five offline Python scripts maintain the catalog. All five cost real money per run (Gemini or
-Anthropic, most with web search). **Never run one without fresh explicit approval in chat** —
-this rule exists because of an unplanned ~$30 spend, and building UI for a run is not
-authorization to trigger it.
+Six offline Python scripts maintain the catalog. **Five of the six cost real money per run**
+(Gemini or Anthropic, most with web search). **Never run one of those five without fresh
+explicit approval in chat** — this rule exists because of an unplanned ~$30 spend, and
+building UI for a run is not authorization to trigger it. `check_links.py` is the exception
+and is genuinely free; see its own section below for the one thing it *does* need care about.
 
 | Console key | Script | `agent_runs.agent` | Job | Web search |
 |---|---|---|---|---|
@@ -61,6 +62,7 @@ authorization to trigger it.
 | `scraper` | `scrape_opportunities.py` | `scraper` | Find NEW opportunities (only agent that INSERTs) | Gemini |
 | `deadline` | `check_deadlines.py` | `deadline_checker` | Deadlines + running/not-running status | Claude |
 | `mailinglist` | `find_mailing_lists.py` | `mailing_list_finder` | Find each program's mailing-list signup form, store a replayable recipe | no |
+| `links` | `check_links.py` | `link_checker` | Verify every catalog URL; repair what moved, deactivate what is gone | no — **free, plain HTTP** |
 
 Watch out for two things that have caused real bugs here:
 - The **scraper's `items_processed` counts SEEDS, not rows** — never sum it with the other
@@ -69,6 +71,100 @@ Watch out for two things that have caused real bugs here:
   card labelled "Refresh Agent" actually executed `check_reviews.py`; the keys in the table
   above are the corrected mapping. Don't rename the `db_agent` literals — the scripts write
   them and there is existing history under each.
+
+**A model-typed URL is not trustworthy anywhere in this repo.** This is the scraper rewrite's
+central finding generalised, and as of 2026-08-23 it is enforced in three more places:
+
+- `refresh_opportunities.py` **no longer writes `url` at all.** It calls Gemini with
+  `use_web_search=False` and used to write whatever `url` came back onto a live catalog row —
+  the exact mechanism behind the scraper's 26% dead-link rate, except overwriting curated
+  data rather than creating new. The scraper's fix (take the URL from `groundingChunks`) is
+  unavailable without search, so the field is simply not written; `check_links.py` owns link
+  health and a replacement URL is a human edit in the console. Its prompt also used to open
+  with *"YOU MUST use web_search and web_fetch"* while search was off, which left the model
+  no way to comply except to answer from memory in the voice of a lookup. It now says it has
+  no web access and that null is the expected answer.
+- `check_reviews.py` **takes `review_sources` from the search, not from memory**: phase 2 is
+  handed the URLs resolved from phase 1's grounding chunks and told to copy them, and
+  `clean_sources()` marks each kept source `retrieved: true/false` and drops any unretrieved
+  one an HTTP check finds dead. Measured 2026-08-23: **199 of the 1469 source URLs already in
+  the catalog (13.5%) were dead**, and these are shown to students as the evidence behind a
+  legitimacy verdict. The grounding half matters more than the HTTP half — **61% of those
+  URLs sit on hosts (Reddit 654, College Confidential 158) that never answer a checker at
+  all**, so `retrieved: true` is the only real proof obtainable for them.
+- Both search-enabled agents are now **two-phase and retry once on a silent search**, and
+  both **write nothing if still silent** — see the next section.
+
+**Asking for JSON is what stops an agent searching — all three search agents are now
+two-phase.** This is the scraper's design generalised, and it turned out to have a second,
+bigger justification than the one it was built on. Measured 2026-08-23 in a controlled A/B
+(one row, identical research instructions, arms alternated, only the closing paragraph
+differing): **prose 4/4 calls searched, JSON 0/4**, 34 grounding chunks against 0. It matches
+the history — `check_reviews.py` had made **22 searches across 3089 row-checks** and
+`check_deadlines.py` **59 across 1218**, both on single JSON calls, against the scraper's
+prose phase 1 at 5.3 searches/seed.
+
+    Phase 1 (research)  prose out, tools on   -> keeps grounding / retrieved source URLs
+    Phase 2 (extract)   notes + REAL urls in  -> strict JSON out, no tools
+
+State the claim carefully — a previous session over-claimed it and had to retract. It is a
+large shift in **probability**, not a gate: run id=33 (JSON) fired 6 searches and run id=48
+(prose) fired none. `gemini_common.py`'s SEVENTH finding carries both counterexamples. The
+THIRD finding still stands: there is no way to *force* a search, only to stop discouraging
+one. Do not collapse any of the three back into a single call.
+
+- **`MAX_SEARCHES = 1`** in both new two-phase agents. On Gemini this is a soft budget folded
+  into the prompt; on Anthropic it is `max_uses`, enforced server-side. It is the dominant
+  cost lever, because the fee is per search, not per token.
+- **Claude's `extract_source_urls()` is its `groundingChunks`.** `web_search_tool_result` /
+  `web_fetch_tool_result` blocks carry the URLs actually retrieved — already resolved, with
+  no redirect hop. Phase 2 gets them for the same reason the scraper's does: so the model
+  copies a URL that was really fetched instead of recalling one that merely looks right.
+- **`web_fetch` is deliberately NOT capped alongside `web_search`** in `check_deadlines.py`.
+  It carries no per-call fee and it is the tool that actually reaches the FAQ/key-dates
+  subpages the dates live on; the prompt's whole estimation logic depends on it.
+
+**Silent search: detect and re-roll, never prompt harder.** Both providers still decide per
+call whether to search. The mitigation is to re-send the *identical* prompt once — a silent
+call pays no per-search fee — and it is in all three agents.
+
+- In `check_reviews.py` a **still-silent call writes nothing and does not stamp
+  `last_reviewed_at`**. That column is the staleness filter, so the old behaviour did double
+  damage: a memory-derived `insufficient_data` (textually identical to a real search finding
+  nothing — the file's own comment said so) *and* a 30-day suppression of any re-check that
+  would have corrected it. Skipping leaves the row due, and the next pass re-rolls.
+- In `check_deadlines.py` the retry is on **by default including the interactive path**
+  (`retry_on_silent=True`). That costs a user one extra round-trip, and it is worth it
+  because `server.py` caches a deadline answer for 7 days: one silent, invented set of dates
+  is served to every student who opens that opportunity for a week. `check_one()` returns a
+  4-tuple `(info, cost, searches, attempts)` — **both** call sites (this script's `main()`
+  and `server.py`'s on-demand endpoint) unpack it.
+- **A still-silent deadline check writes nothing, in both paths, and that is now load-bearing
+  rather than merely cautious.** `check_one()` returns an *empty* info when the search never
+  fired, so writing it would blank the row's real `status`/`important_dates` **and** stamp
+  `last_checked_at` — destroying good data and then hiding the damage behind the 7-day TTL.
+  The interactive endpoint falls back to `cached_deadline_payload(opp, "unverified-fallback")`
+  and deliberately does **not** stamp, so the next request re-rolls the search decision
+  instead of being served the hole.
+- Cost is banked **per attempt** in both, so an exception on the retry cannot discard what
+  the first call already spent. Same fix the scraper's two phases needed.
+- **Phase 2 is skipped when phase 1 stayed silent** in both agents. Notes written without
+  looking are not worth converting, nothing gets written either way, and skipping keeps a
+  fully silent row at roughly the old per-row price.
+
+**What the two-phase change costs, measured rather than guessed** (2026-08-23, one row each):
+
+| | before (single JSON call) | after (two-phase, MAX_SEARCHES=1) |
+|---|---|---|
+| `check_reviews.py` | $0.0014/row, **~0 searches** | **$0.0166/row** → ~$20 per 1226-row pass, ~$4 per staleness tranche |
+| `check_deadlines.py` | $0.0010/row when silent | **$0.0676/row** → ~$84 for a full `--all` pass |
+
+Read the deadline row carefully before reacting to $84: the interactive checks that *really
+searched* have always cost a **median $0.0790** (36 of them in `deadline_check_log`), so the
+two-phase version is **cheaper per verified check** than what the on-demand endpoint was
+already paying — `MAX_SEARCHES` capped `web_search` at 1 where it allowed 3. The old
+sub-cent `agent_runs` figures (id=14, id=16) are the price of *not looking*, not a cheaper
+way of looking, and comparing against them is how this decision gets made wrongly.
 
 `find_mailing_lists.py` is the odd one out on cost, and deliberately so: it fetches each
 row's page with `urllib` and finds provider embeds by **regex**, and only calls the model
@@ -274,7 +370,27 @@ rollup. Two obvious substitutes are both wrong, and both were checked:
   `migrate_users_to_supabase.py` with **no trigger**, and `update_user_data()` never
   writes it — it equals `created_at` on practically every row. A "last active" metric
   built on it looks plausible and is fiction. (Contrast `opportunities.updated_at`, which
-  *is* stamped explicitly by `server.py`. Same column name, opposite meaning.)
+  moves on every write — see below. Same column name, opposite meaning, and **neither**
+  means what you would guess.)
+- **`opportunities.updated_at` is stamped by an ON-UPDATE TRIGGER, not by the code.**
+  Verified 2026-08-23 by PATCHing a column back to its own value and watching the timestamp
+  move. An earlier version of this file said it was "stamped explicitly by `server.py`" —
+  the explicit writes exist, but they are not what makes it move, so **every** agent write
+  moves it and no reader can attribute a change to a particular agent. The scripts that set
+  it by hand are harmless but redundant.
+  - This became a real bug the moment `check_links.py` landed: a link-health pass writes
+    `link_status`/`link_checked_at` to every active row, so `check_refresh_progress.py` —
+    which counts `updated_at > cutoff` — reported **"1236/1236 opportunities updated"** with
+    the metadata refresher having touched none of them. It now excludes rows whose
+    `link_checked_at` also falls in the window and reports its count as a floor.
+  - `check_links.py`'s `build_update()` still withholds `updated_at` for a telemetry-only
+    write. That is currently a no-op against the trigger, and it is kept deliberately: it
+    states the intent, and it is what makes the behaviour correct if the trigger is ever
+    dropped. Do not "simplify" it away on the grounds that it changes nothing today.
+  - **Do not add a new reader of `opportunities.updated_at` that means "the opportunity's
+    content changed."** It cannot mean that. If an agent needs to know when it last touched
+    a row, it needs its own column — the way `last_reviewed_at`, `dates_last_checked_at`
+    and `link_checked_at` already do.
 - **`user_costs` only sees billed AI calls.** A student who opens the app daily and works
   their tracker costs $0 and reads as inactive; in mock mode the signal vanishes entirely.
 
@@ -445,6 +561,118 @@ counts without writing, and without it applies them.
     order by filename, i.e. alphabetically by agent rather than newest-first.
   - A snapshot still does not correspond to a particular `agent_runs` row — nothing links
     them — but two same-day runs no longer collapse into one file.
+
+## Link health — `check_links.py`
+
+Fixing the scraper's fabricated URLs fixed only NEW rows. The catalog they join had never
+been checked. Measured over all 1374 active rows on 2026-08-23: **1029 live, 137 dead
+(10.0%), 208 unverified.** One row in ten sent a student to a page that is not there, and
+they were real programs with rotted links (`smysp.stanford.edu`,
+`jkcf.org/our-programs/young-artist-award/`, `training.nih.gov/.../aip_hs/`), not junk.
+
+**Only evidence of absence deactivates a row.** This is the whole design, and the numbers
+force it:
+
+- **deactivate** — 404, 410, a malformed URL, or a hostname that does not resolve.
+- **flag only, row stays live** — 403, 429, TLS failures, timeouts, connection resets.
+
+403 alone is ~9% of this catalog (112 rows) and TLS failures another 41. Those sites are
+refusing *our* client — a student's browser carries a different root store and loads them
+fine — so reading "the connection failed" as "the page is gone" would have pulled ~150
+working opportunities out of the catalog on the first run. `url_validate._is_dns_failure()`
+is what separates a genuine NXDOMAIN (8 rows, all retired university subdomains) from the
+41 TLS/timeout failures wearing the same `URLError` class; **do not collapse them**.
+
+- **Two passes, always.** Anything that looks dead is re-checked before a write. Free, and
+  it is the only thing between a CDN hiccup and a deactivated row. Measured: 135 of 137 were
+  unchanged on the second pass and 2 rows moved *into* dead, so it corrects both ways.
+- **Repair before condemning** — [url_repair.py](url_repair.py), free, on by default
+  (`--no-repair` opts out). Programs get reorganised far more often than they are cancelled:
+  of the 30 dead rows in the 08-23 audit, 9 were re-found on the same site and 9 of 9 came
+  back live. See the next section — the accuracy bar there is the whole feature.
+- A deactivated row goes to `is_active = false` + `moderation_status = 'pending_review'`
+  with a `quality_flags` entry naming the code. **`reviewed_by`/`reviewed_at` are left
+  alone** — most of these were approved by a person once, and the queue saying "approved
+  08-23, link has died since" is a different situation from a row nobody has ever seen.
+- **It never rejects.** A rotted link is not a verdict on the program.
+
+## URL repair — `url_repair.py`, and the one place `is_active = true` is written by code
+
+**Proposing a replacement URL is cheap and worthless on its own; accepting one is the
+feature.** Measured over the 148 rows the first pass deactivated, taking the best-scoring
+link on the parent page "repaired" **72 (49%)** — and a large share pointed at a *different
+program at the same institution*: `ll.mit.edu/outreach/summer-high-school-internships` →
+`middle-school-stem-program`, NIH's `aip_hs` → `pb/sip` (AIP ≠ SIP),
+`medschool.vanderbilt.edu/imsd/...` → `/md/`. **A wrong repair is worse than no repair**: it
+is a live link, so every other check passes it, and it silently sends a student somewhere the
+row does not promise.
+
+So nothing is accepted on similarity. **Three independent tests must all pass**, and each one
+exists because of a specific measured failure:
+
+1. **Title proof.** Fetch the candidate; every distinctive word of the program's name must
+   appear in its `<title>`. A similarity ratio was tried and rejected: at ≥ 0.72 it accepted
+   "Bay Area Entrepreneurship" → "BootCamp Entrepreneurship" (0.76), "Summer Research
+   Immersion" → "First-year Research Immersion", "VEX Robotics Competition" → "RECF Robotics
+   Competition", and a UC Berkeley course → the same provider's Yale one. The shared word is
+   always the *category* and the differing word the *identity* — backwards for a ratio.
+2. **The name must be its own.** Distinctive words are the name's **minus the org's**, so a
+   match on the institution cannot stand in for a match on the program. Without it,
+   "University of Notre Dame" verified against every page on `nd.edu`, "Jackson Laboratory
+   Summer Student Program" against "Careers at The Jackson Laboratory", "Doodle for Google"
+   against "Google Doodles". Fewer than two words left → unverifiable, leave it alone.
+3. **No lost identity word.** If the OLD url used a word to identify this program and the new
+   url and its title both lack it, we landed on a sibling. This is what catches a row whose
+   **name and org are swapped in the catalog** (`name='University of Notre Dame'`,
+   `org='Global Scholars Program'`, old slug `global-scholars` → `summer-scholars`), which
+   passes tests 1 and 2 and is still wrong.
+
+End to end on the same 148: **72 → 34 → 18 → 13 accepted**, and the 13 are right. Losing 59
+proposals to keep the 13 honest is the intended trade — the unrepaired rows are not lost,
+they keep their dead-link flag plus, where a candidate was found, an explicit
+`possible replacement found but NOT verified` suggestion (47 rows got one), which is strictly
+more than a reviewer had before.
+
+**`--repair-flagged` is the only code path in this repo that sets `is_active = true`,** and
+that is not the "never auto-activate" rule being bent. That rule protects rows **no person
+has ever vetted** — a scraper's guess. These rows were in the live catalog because a person
+put them there; a machine removed them over a link, and the same machine has now proven the
+link. Restoring puts back what the automated check took out. It is bounded to rows carrying
+**this agent's own `dead link (` flag**, so it can never touch a row a person rejected or one
+that was never active, and each restored row keeps a flag naming its **old URL** so the edit
+is auditable and hand-reversible. A row whose original URL simply comes back to life on its
+own is still *not* restored — that is a person's call in the console.
+
+Ran 2026-08-23 (`agent_runs` id=55): 148 flagged rows, **13 restored**, catalog 1226 → 1239
+active, queue 268 → 255, 47 rows gained a suggestion. $0.00.
+- **Two url_validate checks were tried here and rejected on measured noise**, and the
+  reasoning is worth not re-deriving: `is_bare_domain()` fires on 16% of live rows and they
+  are *correct* (`jshs.org`, `precollege.wisc.edu` — dedicated program sites whose homepage
+  IS the program page), and `domain_matches_org()` on 9%, roughly one in seven of them real
+  (the rest are university domain abbreviations no rule derives — `umd.edu`, `tamu.edu`,
+  `gatech.edu`). Both earn their place in `scrape_opportunities.py`, where a fresh candidate
+  has the opposite base rate. What replaced them is `FLAG_SOFT_404` — a deep link that
+  redirects to a bare homepage, i.e. the program page deleted behind a 200. It fires on 10
+  rows (1.0%) at about one-in-two precision. Ten rows at one-in-two beats eighty-eight at
+  one-in-seven.
+- **[link_health_schema.sql](link_health_schema.sql)** — **RUN 2026-08-23.** All four
+  columns (`link_status`, `link_status_code`, `link_checked_at`, `link_dead_since`) are live
+  and every active row is now recorded. It keeps the same ALTER block for the same reason as
+  `mailing_list_schema.sql`. Until it ran the agent still worked and still deactivated — it drops those columns from its writes and loses only
+  the 7-day staleness filter, so every run re-checks everything. That is free, so it
+  degrades to *slower*, not *broken*. `link_dead_since` is not derivable from
+  `link_checked_at` (which is stamped every pass): without it, a link broken in March and
+  one broken this morning look identical.
+- **Known gap:** a flag on a row that stays ACTIVE is written to `quality_flags` but has
+  nowhere to show, because the console's Review queue lists `is_active = false` rows only.
+  The run report in `agent_logs/link_check_<stamp>.json` is the only place to read those;
+  the run summary says so rather than leaving it a mystery.
+- `AGENT_CONFIGS_SCHEMA["links"]["free"] = True` is read by `estimate_agent_cost()` and by
+  the console. A free agent's `$0.00` is a fact about its design, not a "no history yet"
+  fallback, and the two must not render alike — nor may its confirm dialog say the run
+  "spends real money", which is how a warning becomes something people click past. Its real
+  warning is unrelated to cost and is stated in its own words: this run takes rows away from
+  students.
 
 **Activating scraped opportunities** — `GET /api/agents/pending` lists `is_active = false`
 rows and `POST /api/agents/pending/activate` (`{ids, active}`) flips them, backing the

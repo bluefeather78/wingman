@@ -1,0 +1,16 @@
+:root{
+--shadow-soft:0 2px 18px rgba(15,23,42,0.06);
+--shadow-pop-card:4px 4px 0px var(--border-strong);
+--shadow-pop-card-hover:6px 6px 0px var(--border-strong);
+--shadow-pop-btn:3px 3px 0px var(--border-strong);
+--shadow-pop-btn-hover:4px 4px 0px var(--border-strong);
+--shadow-pop-btn-active:1px 1px 0px var(--border-strong);
+--shadow-pop-ink:3px 3px 0px var(--border-ink);
+--ease-pop:cubic-bezier(0.34,1.56,0.64,1); /* @kind other */
+}
+.pop-card{border:3px solid var(--border-strong);border-radius:var(--radius-lg);box-shadow:var(--shadow-pop-card);transition:all .2s var(--ease-pop);background:var(--surface-card)}
+.pop-card:hover{transform:translate(-2px,-2px);box-shadow:var(--shadow-pop-card-hover)}
+.pop-btn{border:2px solid var(--border-strong);box-shadow:var(--shadow-pop-btn);cursor:pointer;transition:all .15s ease;font-weight:700;font-family:var(--font-body)}
+.pop-btn:hover{transform:translate(-1px,-1px);box-shadow:var(--shadow-pop-btn-hover)}
+.pop-btn:active{transform:translate(2px,2px);box-shadow:var(--shadow-pop-btn-active)}
+.card-soft{border-radius:var(--radius-xl);border:none;box-shadow:var(--shadow-soft);background:var(--surface-card)}

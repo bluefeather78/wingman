@@ -9,7 +9,401 @@ it's kept current. This folder **is** a git repo (`origin` =
 
 ---
 
-# CURRENT THREAD: Scraper rewrite — grounding-based URLs (2026-08-23)
+# CURRENT THREAD: Catalog link health + transferring the scraper's lessons (2026-08-23)
+
+## Goal
+Two things the user asked for:
+1. Take what the scraper rewrite learned and apply it to the **other agents'** accuracy.
+2. **Check every existing opportunity's URL**, flag the broken ones for review, and
+   **deactivate them until a person re-activates them.**
+
+3. Then, on top of (2): **attempt to find the right URL before flagging**, run that over the
+   already-flagged rows, and **restore the ones that pass**.
+
+4. Then: an A/B to settle WHY the other agents never search, and **make check_reviews and
+   check_deadlines two-phase** like the scraper, at `MAX_SEARCHES = 1`.
+
+**Status: all four done, verified against the live database. Live runs: 148 rows deactivated
+for dead links, 13 repaired and RESTORED to active (catalog 1374 -> 1239), plus a $0.11 A/B
+and one verification row through each rebuilt agent. Nothing is committed.**
+
+## The measurement that drove everything (free — HTTP only, no API calls)
+All 1374 active rows, checked live:
+
+| | rows | |
+|---|---|---|
+| live | 1029 | |
+| **dead** | **137 (10.0%)** | 135 x 404, 2 x 410 |
+| unverified | 208 | 112 x 403, 41 TLS, timeouts, resets, 8 DNS |
+
+One catalog row in ten sent a student to a page that is not there — and they are **real
+programs with rotted links**, not junk: `smysp.stanford.edu`,
+`jkcf.org/our-programs/young-artist-award/`, `training.nih.gov/.../aip_hs/`. That is why
+the answer is "deactivate and queue for review", never "delete".
+
+A second measurement, on `review_sources` (the citations `check_reviews.py` shows students
+as evidence for a legitimacy verdict): **199 of 1469 URLs (13.5%) are dead.**
+
+## Part 1 — `check_links.py` (new agent, the sixth) — DONE AND RUN
+
+**It is FREE.** Plain HTTP, no model, no key beyond Supabase. The only agent that can be
+run without cost approval, and the only one whose `--dry-run` genuinely costs nothing.
+
+**The rule, and it is the whole design: only EVIDENCE OF ABSENCE deactivates.**
+
+    deactivate   404, 410, malformed URL, hostname does not resolve (NXDOMAIN)
+    flag only    403, 429, TLS failure, timeout, connection reset  -> row stays LIVE
+
+403 is ~9% of this catalog and TLS failures another 41 rows. Those sites refuse *our*
+client; a student's browser has a different root store and loads them fine. Treating
+"connection failed" as "page is gone" would have deactivated ~150 working rows on the first
+run. `url_validate._is_dns_failure()` is what tells a real NXDOMAIN (8 rows, all retired
+university subdomains — `smysp.stanford.edu`, `bri.ucla.edu`,
+`globalyouthprogram.wharton.upenn.edu`) apart from the 41 TLS/timeout failures that arrive
+wearing the same `URLError` class. **Do not collapse them.**
+
+**Two passes, always.** Anything that looks dead is re-checked before a write. Free, and the
+only thing between a CDN hiccup and a deactivated row. Measured on the 137: **135 unchanged,
+and 2 rows moved INTO dead** — it corrects in both directions.
+
+### The live run
+`agent_runs` id=53, `mode=all`, 1374 rows in 126s, **$0.00**.
+
+- **148 deactivated** (137 x 404, 8 x NXDOMAIN, 3 x 410) — `is_active=false`,
+  `moderation_status='pending_review'`, each carrying a `dead link (<code>)` flag.
+- 207 flagged and left active. 355 rows written, 0 errors.
+- Catalog went **1374 -> 1226 active**. Review queue went **120 -> 268**.
+- Verified in the console: all 148 appear in the queue with their flags rendered.
+- Full report: `agent_logs/link_check_20260823-030348.json` (every row, its code, its
+  action). Written on live runs too, not just dry runs — the console's log ring buffer is
+  500 lines and a full pass prints ~1400, so the deactivations scroll out of reach.
+
+**To undo any of it:** the console's Review queue, Activate button. Nothing was deleted and
+nothing was rejected — a rotted link is not a verdict on the program.
+`reviewed_by`/`reviewed_at` were deliberately **left alone**, so the queue can say
+"a person approved this on 08-23 and the link has died since", which is a different
+situation from a row nobody has ever looked at.
+
+### Two checks tried here and REJECTED on measured noise — do not re-add
+Both live in `url_validate` and both earn their place in `scrape_opportunities.py`, where a
+fresh candidate has the opposite base rate. Against the **curated** catalog:
+
+- `is_bare_domain()` — fires on **161 of 1029 live rows (16%), and they are correct**.
+  `jshs.org`, `congressionalaward.org`, `precollege.wisc.edu` are dedicated program sites
+  whose homepage IS the program page.
+- `domain_matches_org()` — fires on **88 (9%), about one in seven of them real**. The rest
+  are university domain abbreviations no rule derives: `umd.edu`, `udel.edu`, `unc.edu`,
+  `tamu.edu`, `gatech.edu`, `ucsd.edu`.
+
+What replaced them is **`FLAG_SOFT_404`**: a deep link that redirects to a bare homepage,
+i.e. the program page deleted behind a 200. Fires on **10 rows (1.0%) at ~50% precision**
+(`feinberg.northwestern.edu/diversity/programs/health-professions...` and
+`louisville.edu/medicine/cancer-research/.../summer` are genuine losses; `web.mit.edu/wtp/`
+-> `wtp.mit.edu/` is a benign move). Ten rows at one-in-two beats eighty-eight at
+one-in-seven.
+
+### `domain_matches_org()` did get one real fix
+Two-letter initialisms were missing, which was the **largest single group of false
+"unrelated" flags**: `uh.edu` (University of Houston), `bu.edu` (Boston University),
+`wm.edu` (College of William & Mary) all read as third-party sites. `_initial_forms()` now
+builds both the every-capitalised-word shape ("bu") and the generic-words-dropped shape
+("wm") — neither alone covers both — and buckets by length: 3+ chars stay
+substring-matchable, **exactly 2 must equal a whole domain label**. At two characters a
+substring rule fires on `edinburgh`, `columbus`, `bulldogs`. Fire rate 11% -> 9% with every
+known scraper case still passing.
+
+## Part 1b — URL repair, and 13 rows restored to active — DONE AND RUN
+
+Asked for after the first pass landed: **try to find the right URL before flagging**, run it
+over the rows already flagged, and **put back the ones that pass**.
+
+### Proposing is cheap; accepting is the whole feature
+Taking the best-scoring link on the dead URL's parent page "repairs" **72 of 148 (49%)** —
+and a large share point at a **different program at the same institution**:
+
+    ll.mit.edu/outreach/summer-high-school-internships  ->  middle-school-stem-program
+    training.nih.gov/research-training/hs/aip_hs/       ->  .../pb/sip/     (AIP != SIP)
+    medschool.vanderbilt.edu/imsd/high-school-summer... ->  /md/
+
+A wrong repair is **worse than no repair**: it is a live link, so every other check passes
+it, and it silently sends a student somewhere the row does not promise. So [url_repair.py](url_repair.py)
+accepts nothing on similarity. **Three independent tests, each forced by a measured failure:**
+
+1. **Title proof** — fetch the candidate, require every distinctive word of the program name
+   in its `<title>`. A similarity ratio was tried and REJECTED: at >= 0.72 it accepted "Bay
+   Area Entrepreneurship" -> "BootCamp Entrepreneurship" (0.76), "Summer Research Immersion"
+   -> "First-year Research Immersion", "VEX Robotics Competition" -> "RECF Robotics
+   Competition", and a **UC Berkeley** course -> the same provider's **Yale** one. The shared
+   word is always the CATEGORY, the differing word the IDENTITY — backwards for a ratio.
+2. **The name must be its own** — distinctive words are the name's **minus the org's**, so a
+   match on the institution cannot stand in for a match on the program. Without it,
+   "University of Notre Dame" verified against every page on nd.edu, "Jackson Laboratory
+   Summer Student Program" against "Careers at The Jackson Laboratory", "Doodle for Google"
+   against "Google Doodles".
+3. **No lost identity word** — if the OLD url used a word to identify the program and the new
+   url and its title both lack it, we landed on a sibling. This is what catches a row whose
+   **name and org are swapped in the catalog** (`name='University of Notre Dame'`,
+   `org='Global Scholars Program'`, `global-scholars` -> `summer-scholars`), which passes
+   tests 1 and 2 and is still wrong.
+
+**72 -> 34 -> 18 -> 13 accepted**, and the 13 are right. Losing 59 proposals to keep 13
+honest is the intended trade.
+
+### The live run — `agent_runs` id=55, `mode=flagged`, 148 rows, 110s, $0.00
+
+**13 rows went back to active.** Catalog **1226 -> 1239**, review queue **268 -> 255**.
+
+| | |
+|---|---|
+| Honors Summer Math Camp | `.../camps/Summer-Math-Camps-Information/hsmc.html` -> `.../mathworks-camps/hsmc.html` |
+| Physical Therapy Summer Academy | `.../academies/pt` -> `.../academies/physical-therapy` |
+| Jack Kent Cooke Young Artist Award | `/our-programs/...` -> `/our-grants/young-artist-award/` |
+| Discovery to Cure Program | `obgyn/discovery/education/internships/` -> `obgyn/education/discovery-to-cure/` |
+| Young Scholars Program | `jindal.utdallas.edu/external-relations/.../high-school/` -> `/ysp/` |
+| Upward Bound · Sejong Korea Scholars · Pathways to Science Summer Scholars · Summer Youth Science Fellowship · ACS Project SEED · Cyber Patriot · NSLI-Y · Stanford SASI | same shape |
+
+Verified in the database: 13 rows carry the repair flag, all 13 active, each flag naming the
+**old URL**. A further **47 rows gained a `possible replacement found but NOT verified`
+suggestion** — candidates that failed the tests, kept so a reviewer opens the queue with a
+lead rather than a bare "dead link". That was a bonus, not the ask.
+
+### is_active = true from code — why this is not the rule being bent
+`--repair-flagged` is the ONLY code path in this repo that sets `is_active = true`. The
+standing rule protects rows **no person has ever vetted** — a scraper's guess. These rows
+were in the live catalog because a person put them there; a machine removed them over a
+link, and the same machine has now proven the link. Restoring puts back what the automated
+check took out. Bounded accordingly:
+
+- Only rows carrying **this agent's own `dead link (` flag** — never a row a person rejected,
+  never one that was never active.
+- Each restored row keeps a flag naming its old URL, so the edit is auditable and reversible
+  by hand.
+- A row whose ORIGINAL url simply comes back to life on its own is still **not** restored —
+  that stays a person's call in the console.
+
+### Also in this pass
+- **Repair runs on the normal path too**, before anything is condemned (`--no-repair` opts
+  out). A future full run repairs what moved instead of deactivating it.
+- `build_update` no longer re-asserts `is_active=False`/`moderation_status` on rows that are
+  already inactive — in `--repair-flagged` that was 134 no-op writes bumping `updated_at`,
+  which makes rows look freshly touched everywhere else in the console.
+- Summary wording is **scope-aware**: in `--repair-flagged` every row is already inactive, so
+  "deactivated: 134" and "flagged (left active)" would both have been false statements about
+  what the run did. It says "stayed deactivated" there.
+- Console: a third Scope option (*Retry rows already flagged as dead links*) and a
+  *Skip the repair attempt* checkbox; argv round-trip verified in the browser.
+
+## Part 2 — the scraper's lessons, applied to the other agents — DONE
+
+**A model-typed URL is not trustworthy anywhere.** Three enforcement points added:
+
+1. **`refresh_opportunities.py` no longer writes `url` at all.** This was the live hazard.
+   It calls Gemini with `use_web_search=False` and wrote whatever `url` came back onto a
+   **live, student-facing catalog row** — the exact mechanism behind the scraper's 26%
+   dead-link rate, except overwriting curated data instead of creating new. The scraper's
+   fix (take the URL from `groundingChunks`) is unavailable without search, so the field is
+   simply not written; `check_links.py` owns link health and a replacement is a human edit.
+   Its prompt also opened with *"YOU MUST use web_search and web_fetch"* while search was
+   **off** — an instruction the model could only satisfy by answering from memory in the
+   voice of a lookup. Rewritten to say it has no web access and that null is expected.
+   *(Only one run exists in this agent's history and it was a dry run, so no damage has
+   been done yet — which is exactly why now was the time.)*
+2. **`check_reviews.py` verifies `review_sources` for free** (`clean_sources()`): kept if
+   the search actually retrieved the URL (resolved from `groundingChunks`), or if an HTTP
+   check finds it live; dropped otherwise, with what was dropped preserved in the dry-run
+   snapshot so the loss is visible. 403/timeout is **kept** — a site blocking the checker is
+   not evidence of a fabricated citation.
+3. **Silent-search retry in both search-enabled agents.** Re-send the *identical* prompt
+   once; do not prompt harder (`gemini_common.py`'s THIRD finding is correct). A silent call
+   pays no per-search fee, so the retry is cheap.
+   - `check_reviews.py`: **a still-silent call now writes NOTHING and does not stamp
+     `last_reviewed_at`.** The old behaviour did double damage — a memory-derived
+     `insufficient_data`, textually identical to a real search finding nothing (the file's
+     own comment said so), *plus* a 30-day suppression of the re-check that would have
+     corrected it. Skipping leaves the row due and the next pass re-rolls.
+   - `check_deadlines.py`: retry is on **by default including the interactive path**. That
+     costs a user one extra round-trip and is worth it because `server.py` caches a deadline
+     answer for **7 days** — one silent, invented set of dates is served to every student who
+     opens that opportunity for a week. `check_one()` now returns a **4-tuple**
+     `(info, cost, searches, attempts)`; both call sites were updated.
+   - **Cost is banked per attempt** in both, so an exception on the retry cannot discard what
+     the first call already spent. Same fix the scraper's two phases needed.
+
+**`find_mailing_lists.py` was deliberately left alone.** Its URLs come from regex over pages
+it actually fetched, never from a model, so it has no fabrication surface.
+
+## Console integration (verified in the browser)
+Sixth card, `links`. Preview through the console resolves 1374 rows / **$0.00** / 1.4m and
+builds correct argv; every checkbox (`--force`, `--flag-only`, `--sample`) round-trips.
+
+`AGENT_CONFIGS_SCHEMA["links"]["free"] = True` is read by `estimate_agent_cost()` and the
+console. Two things that had to change because of it, both about not training an operator to
+ignore warnings:
+- A free agent's `$0.00` must not render as *"no successful run to estimate from"*. It is a
+  fact about the design, not missing history, and `provisional` is false.
+- Its confirm dialog must not say the run *"spends real money on the None — plain HTTP API"*.
+  Its real warning is unrelated to cost and is now said in its own words: this run sets
+  `is_active = false` on rows, removing them from what students see.
+
+## Migration still pending
+**[link_health_schema.sql](link_health_schema.sql) has NOT been run** — it is a one-time
+manual step in the Supabase SQL editor (`link_status`, `link_status_code`,
+`link_checked_at`, `link_dead_since`). The live run above **worked without it**: the agent
+detected the missing columns, warned once, dropped them from its writes, and still
+deactivated all 148. What is lost until it runs is the 7-day staleness filter, so every run
+re-checks the whole catalog — free, so this degrades to *slower*, not *broken*.
+
+## Known gap (stated, not fixed)
+A flag on a row that stays **active** is written to `quality_flags` but has nowhere to show:
+the console's Review queue lists `is_active = false` rows only. So the 207 flagged-but-live
+rows are readable only in `agent_logs/link_check_<stamp>.json`. The run summary says this
+explicitly rather than leaving it a mystery. A "Link health" console card would close it.
+
+## Verification done
+- `scratchpad/test_matcher.py` rebuilt (the previous session's copy was in a scratchpad that
+  is gone): **30/30**, covering every case named in this handoff plus the new two-letter
+  ones and the over-match guards. Exits non-zero on regression. Also prints live-catalog
+  fire rates.
+- Retry logic for **both** agents unit-tested offline with a stubbed API — silent-then-search
+  (2 calls), always-silent (2 calls, no write), no-retry flag (1 call), search-first
+  (1 call, must not retry). No money spent.
+- `classify()` / `merge_flags()` / `build_update()` exercised on every branch, including
+  `link_dead_since` being preserved across repeat-dead passes and cleared when a URL
+  recovers, and `merge_flags` keeping another agent's flags while replacing its own.
+- `--preview` clean on `check_links`, `check_reviews`, `check_deadlines`,
+  `refresh_opportunities`. Confirmed `refresh_opportunities.clean_update_dict()` drops a
+  `url` key even when the model returns one.
+- Console re-checked after a server restart: six cards, no console errors, run history shows
+  the live pass at $0.0000.
+
+## Part 2b — the A/B, and both search agents made two-phase — DONE (one row each, live)
+
+### The A/B: asking for JSON is what stopped these agents searching
+One row (`ec17455`, TASS/Telluride), identical research instructions, identical model and
+token budget, arms **alternated** so drift could not confound them. Only the closing
+paragraph differed — "respond with ONLY a raw JSON object" vs "write up what you find in
+plain prose":
+
+| arm | searched | searches | grounding chunks | cost |
+|---|---|---|---|---|
+| **prose** | **4/4** | 7 | 34 | $0.1053 |
+| **JSON** | **0/4** | 0 | 0 | $0.0054 |
+
+Total $0.1107, inside the $0.25 cap. It matches the history exactly: `check_reviews` had
+made **22 searches across 3089 row-checks** and `check_deadlines` **59 across 1218**, both on
+single JSON calls, against the scraper's prose phase 1 at 5.3 searches/seed.
+
+**STATE THE CLAIM CAREFULLY** — a previous session over-claimed this and had to retract, and
+I checked whether this contradicts that retraction. It does not. The seed-51 pair the
+retraction rested on (`agent_runs` id=32 and id=33) are **both from 08-21, before the
+rewrite**, so both were the old JSON prompt — and id=33 fired 6 searches. Post-rewrite id=48
+was a *prose* call that fired none. So:
+
+    CORRECT   "a JSON-shaped answer format collapses the PROBABILITY of a search"
+    WRONG     "a JSON-only prompt suppresses search" (deterministic — id=33 refutes it)
+
+Written up as the **SEVENTH finding in `gemini_common.py`** with both counterexamples named,
+so this does not get flip-flopped a third time. The THIRD finding stands unchanged: there is
+still no way to *force* a search, only to stop discouraging one.
+
+### What was built
+Both agents now mirror the scraper:
+
+    Phase 1 (research)  prose out, tools on   -> keeps grounding / retrieved source URLs
+    Phase 2 (extract)   notes + REAL urls in  -> strict JSON out, no tools
+
+- `check_reviews.py` — `build_research_system()` / `EXTRACT_SYSTEM`, `research_reviews()` /
+  `extract_review()`. Phase 2 gets the URLs resolved from phase 1's `groundingChunks` and is
+  told to copy them verbatim.
+- `check_deadlines.py` — same shape, plus **`extract_source_urls()`, which is Claude's
+  answer to `groundingChunks`**: `web_search_tool_result` / `web_fetch_tool_result` blocks
+  carry the URLs actually retrieved, already resolved, no redirect hop needed.
+- **`MAX_SEARCHES = 1`** in both, per the user's call. Soft budget on Gemini (prompt-folded);
+  a real server-enforced ceiling on Anthropic (`max_uses`).
+- **`web_fetch` is deliberately NOT capped alongside `web_search`** in `check_deadlines`. It
+  has no per-call fee and it is the tool that reaches the FAQ/key-dates subpages the dates
+  actually live on — the prompt's whole estimation logic depends on it.
+- **Phase 2 is skipped when phase 1 stayed silent** in both. Notes written without looking
+  are not worth converting, nothing is written either way, and skipping keeps a fully silent
+  row near the old per-row price.
+
+### A bug I introduced and then fixed — worth knowing about
+Making `check_one()` return an **empty** info on a silent call turned the existing
+write-through in `server.py`'s interactive deadline endpoint into a **data-destroying** path:
+it would have PATCHed empty `status`/`important_dates` over good values **and** stamped
+`last_checked_at`, so the row would lose its dates and be unable to recover them for the
+7-day TTL. Both paths now skip the write; the interactive one returns
+`cached_deadline_payload(opp, "unverified-fallback")` and deliberately does **not** stamp, so
+the next request re-rolls the search decision.
+
+### Verified live, one row each
+- `check_reviews --sample 1 --dry-run` → searched first try, **$0.0166**, and both citations
+  came back **`retrieved=True`** — i.e. pages the search really returned, which is what the
+  old single-call design could never establish.
+- `check_deadlines --sample 1 --dry-run` → searched first try, **$0.0676**.
+- Retry/skip logic for both unit-tested offline against a stubbed API: prose-then-JSON call
+  order, `max_searches` propagation, silent-retry, phase-2-skip-on-silent, and the no-retry
+  flag.
+
+### Cost, measured rather than guessed
+
+| | before (single JSON call) | after (two-phase, MAX_SEARCHES=1) |
+|---|---|---|
+| `check_reviews.py` | $0.0014/row, **~0 searches** | **$0.0166/row** → ~$20 per 1226-row pass, ~$4 per staleness tranche |
+| `check_deadlines.py` | $0.0010/row when silent | **$0.0676/row** → ~$84 for a full `--all` pass |
+
+**Do not react to the $84 without the next sentence.** Interactive deadline checks that
+*really searched* have always cost a **median $0.0790** (36 of them in `deadline_check_log`),
+so the two-phase version is **cheaper per verified check** than what the on-demand endpoint
+was already paying — the search cap went 3 → 1. The old sub-cent `agent_runs` figures (id=14,
+id=16) are the price of **not looking**, not a cheaper way of looking; comparing against them
+is how this decision gets made wrongly.
+
+`check_deadlines --all` is still not the primary mechanism (on-demand per-row checking
+replaced it in 08-18) — but if anyone does run a full pass, it is ~$84 now, not ~$1.27.
+
+## Next steps
+1. ~~Run `link_health_schema.sql`~~ — **DONE 2026-08-23.** All four columns live; backfill
+   pass `agent_runs` id=58 recorded all 1239 active rows (1042 live, 198 unverified, 0 dead —
+   the earlier cleanup holds). The 7-day staleness filter works and correctly skipped the 13
+   just-repaired rows.
+   - **Discovered doing it: `opportunities.updated_at` is stamped by an ON-UPDATE TRIGGER**,
+     not by the code, contrary to what CLAUDE.md used to say. So a link pass moves it on
+     every active row. That broke `check_refresh_progress.py`, which read "1236/1236
+     opportunities updated" with the refresher having touched none; it now excludes
+     link-only writes and reports a floor. Never add a reader of that column meaning "the
+     opportunity's content changed" — it cannot mean that.
+2. **Work the review queue — it is now 255 rows**, 135 of them dead links. Each carries the
+   HTTP code, and **47 carry a `possible replacement found but NOT verified` suggestion** —
+   start there, since a candidate is already named and only needs a human to confirm or
+   reject it. For many of the rest the fix is still a URL edit rather than a rejection.
+3. Consider a **Link health card** in the console for the 207 flagged-but-active rows.
+4. Nothing is committed, and the working tree still carries **three** threads' work — this
+   one, the scraper rewrite, and the pre-existing user-metrics feature. Stage by hunk.
+   This thread's files: `check_links.py` (new), `url_repair.py` (new),
+   `link_health_schema.sql` (new),
+   `url_validate.py`, `refresh_opportunities.py`, `check_reviews.py`, `check_deadlines.py`,
+   `gemini_common.py` (SEVENTH finding),
+   `server.py` (AGENT_CONFIGS_SCHEMA + build_agent_args + estimate_agent_cost + the
+   deadline endpoint's 4-tuple and its unverified-fallback), `admin_console.html` (scope
+   fields, colour var, free-agent copy), `CLAUDE.md`, `HANDOFF.md`.
+5. Not done, deliberately: per-item diagnostic JSON logs for `check_reviews`/
+   `check_deadlines` (the scraper writes one per seed; these would help the same way).
+7. **Neither rebuilt agent has had a real batch run** — one verification row each, both
+   dry-run. `check_reviews` has 47 rows due (~$0.78); `check_deadlines --all` is ~$84 and
+   is NOT the primary mechanism, so leave it to the on-demand endpoint unless a backfill is
+   actually wanted. Both need fresh approval.
+8. `refresh_opportunities.py` was NOT made two-phase and should not be: it runs with
+   `use_web_search=False` deliberately, so there is no search for the format to suppress.
+   `find_mailing_lists.py` likewise — regex first, one attribution call, no search.
+6. Possible next step on repair: the 47 suggestions could get a one-click **Accept this
+   URL** button in the review queue, which is the cheapest way to convert the proposals the
+   three tests deliberately refuse to auto-accept. Do NOT instead loosen the tests — the
+   72 -> 13 funnel in Part 1b is what each one is buying.
+
+---
+
+# PRIOR THREAD: Scraper rewrite — grounding-based URLs (2026-08-23)
 
 ## Goal
 Make `scrape_opportunities.py` accurate and efficient. It was producing rows with

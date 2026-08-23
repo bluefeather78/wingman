@@ -2,6 +2,20 @@
 """Check which opportunities were updated by the refresh agent.
 
 Lists opportunities recently updated, grouped by update time, with counts.
+
+WHAT `updated_at` ACTUALLY MEANS HERE, because this tool depends on it entirely:
+`opportunities` has an **on-update TRIGGER** that stamps `updated_at` on every write —
+verified 2026-08-23 by PATCHing a column back to its own value and watching the timestamp
+move. It is NOT, as CLAUDE.md used to say, only stamped explicitly by server.py. So ANY
+agent touching a row moves it, and this tool cannot tell one agent's writes from another's.
+
+That went from theoretical to real when `check_links.py` landed: a link-health pass writes
+`link_status`/`link_checked_at` to every active row, so the first run after it reported
+"1236/1236 opportunities updated" with the refresh agent having touched none of them.
+
+Rows whose `link_checked_at` also falls inside the window are therefore excluded below.
+That is a heuristic, not a proof — a row genuinely refreshed AND link-checked in the same
+window is dropped with them — so the count it prints is a FLOOR, and it says so.
 """
 import os
 import sys
@@ -21,12 +35,26 @@ cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
 
 print(f"[OK] Fetching opportunities updated in last {hours_ago} hours...")
 updated = supabase_get(supabase_url, "opportunities", {
-    "select": "id,name,org,updated_at,source",
+    "select": "id,name,org,updated_at,source,link_checked_at",
     "is_active": "eq.true",
     "source": "neq.scraper-national-20260820",
     "updated_at": f"gt.{cutoff}",
     "order": "updated_at.desc"
 }, service_key)
+
+# Drop rows whose only recent write was a link-health pass — see the module docstring.
+# Done client-side rather than as a PostgREST filter so a database without the link_*
+# columns (link_health_schema.sql not run) still works: the key is simply absent and
+# nothing is excluded, which is exactly the old behaviour.
+link_touched = [o for o in updated
+                if o.get("link_checked_at") and o["link_checked_at"] > cutoff]
+if link_touched:
+    ids = {o["id"] for o in link_touched}
+    updated = [o for o in updated if o["id"] not in ids]
+    print(f"[NOTE] Excluded {len(ids)} row(s) whose only recent write looks like a "
+          f"check_links.py pass. `updated_at` is trigger-stamped on EVERY write, so this "
+          f"count is a floor — a row both refreshed and link-checked in this window is "
+          f"excluded too.")
 
 all_active = supabase_get(supabase_url, "opportunities", {
     "select": "id",

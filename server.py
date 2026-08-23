@@ -1524,6 +1524,26 @@ AGENT_CONFIGS_SCHEMA = {
         "api": "Claude Haiku (no web search); most rows resolve locally for free",
         "defaults": {"min_delay": 5, "timeout": 120},
     },
+    "links": {
+        "name": "Link Checker",
+        "description": "Find catalog rows whose URL is broken; deactivate the ones that are gone",
+        "script": "check_links.py",
+        "db_agent": "link_checker",
+        "unit": "rows",
+        # The only agent that DEACTIVATES rows. It never activates and never rejects — a
+        # dead link puts a row in the review queue, it is not a verdict on the program.
+        "writes": "deactivates",
+        "uses_gemini_search": False,
+        "api": "None — plain HTTP. This agent is free.",
+        # `free` is read by estimate_agent_cost(): $0.00 here is a fact about the design,
+        # not a "no history yet" fallback, and the console must not present the two the
+        # same way. Every other agent's estimate is a floor; this one's is exact.
+        "free": True,
+        # No API to rate-limit, so no inter-call delay. The timeout is the per-URL HTTP
+        # read timeout; 20s is generous for a page fetch and keeps a full 1374-row pass
+        # near a minute at the default worker count.
+        "defaults": {"min_delay": 0, "timeout": 20},
+    },
 }
 
 # ---------- Editable timing overrides ----------
@@ -4391,6 +4411,34 @@ def build_agent_args(agent_name, config, preview=False):
         if config.get("force"):
             args.append("--force")
 
+    elif agent_name == "links":
+        # check_links.py: [--all | --sample N | --ids A,B | --repair-flagged] [--force]
+        # [--flag-only] [--no-repair] [--dry-run] [--workers N]
+        scope = config.get("scope")
+        if config.get("ids"):
+            args += ["--ids", str(config["ids"])]
+        elif scope == "flagged":
+            # Its own scope, not a filter on top of one: --repair-flagged reads INACTIVE
+            # rows, so it cannot be combined with --all/--sample, and --force (a staleness
+            # escape hatch) means nothing against a set selected by flag rather than age.
+            args.append("--repair-flagged")
+        elif scope == "sample":
+            args += ["--sample", str(_int_or_none(config.get("sampleSize")) or 100)]
+        else:
+            args.append("--all")
+        if config.get("force") and scope != "flagged":
+            args.append("--force")
+        if config.get("noRepair"):
+            args.append("--no-repair")
+        # Off by default. Deactivating is this agent's whole point, and a flag that must be
+        # remembered to make it act is a flag that gets forgotten — the operator opts OUT
+        # of acting, having read the preview, rather than opting in.
+        if config.get("flagOnly"):
+            args.append("--flag-only")
+        workers = _int_or_none(config.get("workers"))
+        if workers:
+            args += ["--workers", str(workers)]
+
     # Timing applies to every agent identically.
     min_delay = config.get("minDelay")
     if min_delay not in (None, ""):
@@ -4476,6 +4524,21 @@ def estimate_agent_cost(agent_name, count, min_delay=None):
     it below cannot speed the run past how long the API itself takes to answer.
     """
     cfg = AGENT_CONFIGS_SCHEMA.get(agent_name, {})
+
+    # A free agent's $0.00 is a property of its design, not an absence of history, and the
+    # two must not render the same way. Without this the link checker would show "no
+    # history to estimate from" on its first run and then — once it HAS history, all of it
+    # at cost_usd = 0 — a $0.00 estimate carrying `provisional: true`, which reads as "we
+    # are not sure it is free". It is free: it makes no API calls at all.
+    if cfg.get("free"):
+        secs_each = 0.06  # measured: ~1374 rows in ~60s at the default worker count
+        return {
+            "est_cost_usd": 0.0, "est_cost_per_item": 0.0,
+            "est_cost_low_usd": 0.0, "est_cost_high_usd": 0.0,
+            "est_seconds": round(secs_each * count) or None,
+            "based_on_runs": 0, "provisional": False, "free": True,
+        }
+
     db_agent = cfg.get("db_agent")
     rows = [r for r in recent_runs()
             if r.get("agent") == db_agent and r.get("finished_at")
@@ -6399,7 +6462,35 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
             return
 
         try:
-            info, _cost, searches = check_deadline_one(opp, ANTHROPIC_API_KEY)
+            # retry_on_silent (check_deadlines.check_one's default) costs this request one
+            # extra round-trip when Claude answers without searching. Worth it here of all
+            # places: the answer is cached for 7 days, so a single silent — i.e. invented —
+            # set of dates would be served to every student who opens this opportunity for a
+            # week. _cost already covers both attempts.
+            info, _cost, searches, _attempts = check_deadline_one(opp, ANTHROPIC_API_KEY)
+
+            # A still-silent check writes NOTHING and is served from cache instead.
+            #
+            # check_one() retries once and then, if the search never fired, returns an empty
+            # info rather than notes written without looking. Patching that would be actively
+            # destructive here in a way it is not in the batch script: it would blank a row's
+            # real status and important_dates AND stamp last_checked_at, which suppresses any
+            # re-check for the 7-day TTL. The row would lose good data and be unable to
+            # recover it for a week. Falling back to what is already stored is strictly
+            # better, and leaving last_checked_at alone means the next request re-rolls the
+            # search decision instead of being served the hole.
+            if searches == 0:
+                print(f"[WARN] Deadline check for {opp_id} invoked no web search even after a "
+                      f"retry; keeping the cached value and NOT stamping last_checked_at, so "
+                      f"the next request tries again.")
+                payload = cached_deadline_payload(opp, "unverified-fallback")
+                log_deadline_check(opp_id, "unverified-fallback", opp.get("status"), 0, _cost,
+                                   opp.get("was_estimated"), "Silent after retry; not written")
+                record_user_cost_async(self._qs(query, "userid"), "deadline_check",
+                                       "deadline_check", cost=_cost, searches=0,
+                                       model=DEADLINE_CHECK_MODEL)
+                self._relay(200, json.dumps(payload).encode())
+                return
 
             status = info.get("status") if info.get("status") in DEADLINE_VALID_STATUS else "unknown"
             important_dates = info.get("important_dates") or []
@@ -6407,13 +6498,8 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
                 important_dates = []
             important_dates = [d for d in important_dates if isinstance(d, dict) and d.get("date_iso")]
 
-            # Distinguish between real searches and silent skips
-            if searches == 0:
-                source_flag = "fresh, silent search"
-                print(f"[WARN] Deadline check for {opp_id} had zero web searches (silent skip); returning fresh data marked as unverified.")
-            else:
-                source_flag = "fresh, real search"
-                print(f"[INFO] Deadline check for {opp_id}: {searches} web search(es) performed.")
+            source_flag = "fresh, real search"
+            print(f"[INFO] Deadline check for {opp_id}: {searches} web search(es) performed.")
 
             patch = {
                 "status": status,

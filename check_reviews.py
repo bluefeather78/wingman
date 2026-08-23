@@ -15,6 +15,41 @@ invent a review verdict from thin evidence. Most hyperlocal/niche opportunities 
 have any real independent review presence at all — review_status="insufficient_data" is
 a valid, expected, common outcome, not a failure.
 
+THREE THINGS PROTECT THAT RULE, all added 2026-08-23 from the scraper rewrite's findings:
+
+1. TWO PHASES, BECAUSE ASKING FOR JSON IS WHY THIS AGENT NEVER SEARCHED. Until now it made
+   one call that demanded a JSON object, and over its whole history that produced 22
+   searches across 3089 row-checks — 0.007 per row. A controlled A/B (same row, same
+   instructions, arms alternated, only the closing paragraph differing) came out prose 4/4
+   searched against JSON 0/4. So phase 1 asks for PROSE and searches; phase 2 turns those
+   notes into the schema with no search at all, which is where a strict format is free.
+   See gemini_common.py's SEVENTH finding — including the limit on what it proves, because
+   an earlier session over-claimed this and had to retract. Do not collapse the two calls.
+
+2. A SILENT CALL WRITES NOTHING. The search decision is still non-deterministic and still
+   cannot be forced (gemini_common.py's THIRD finding is correct; do not try again).
+   research_reviews() re-sends the identical prompt once — cheap, because a silent call
+   pays no per-search fee — and if the retry is silent too the row is SKIPPED. No verdict,
+   and crucially no last_reviewed_at stamp, so it stays due instead of being hidden from
+   the staleness filter for 30 days behind a verdict nothing was consulted for. Phase 2 is
+   skipped as well, so a silent row costs about what the old design cost for everything.
+
+3. review_sources URLS COME FROM THE SEARCH, NOT FROM MEMORY. They are shown to students as
+   the evidence behind the verdict, and a model-typed URL is not trustworthy: measured
+   2026-08-23, 199 of the 1469 source URLs already in the catalog (13.5%) were dead. Phase 2
+   is handed the URLs resolved from phase 1's groundingChunks and told to copy them, and
+   clean_sources() then marks each kept source `retrieved: true/false` and drops any
+   unretrieved one an HTTP check finds dead. 403/timeout is kept — that is a site blocking
+   the checker, not a fabricated citation, and it matters here because 61% of the catalog's
+   existing source URLs sit on hosts (Reddit, College Confidential) that never answer a
+   checker at all. `retrieved: true` is the only real proof for those, which is exactly what
+   phase 1's grounding now supplies.
+
+MEASURED COST, 2026-08-23: $0.0166 for a row that searched once — roughly $20 for a full
+1226-row pass, or ~$4 per tranche across the five the 30-day staleness window creates. The
+old single-call design cost $1.66 a pass and verified essentially nothing. MAX_SEARCHES is
+the lever if that needs to move.
+
 SETUP:
     .env needs SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY.
     Run this SQL once in the Supabase SQL editor before first use:
@@ -45,6 +80,7 @@ import urllib.parse
 
 from agent_common import add_agent_args, apply_timing, emit_preview, snapshot_stamp
 from gemini_common import call_gemini, extract_json, estimate_cost
+import url_validate
 from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
 
 VALID_STATUS = {"positive", "mixed", "negative", "insufficient_data"}
@@ -57,7 +93,38 @@ VALID_STATUS = {"positive", "mixed", "negative", "insufficient_data"}
 STALE_AFTER_DAYS = 30
 
 
-def build_system(opp):
+# How many searches phase 1 is asked to make. A SOFT budget on Gemini — it is folded into
+# the prompt, not enforced server-side, so the model can exceed it (unlike Claude's
+# max_uses). Set to 1 deliberately: at $0.014 per search this is the single biggest lever
+# on what a full pass costs, and one good search is what separates a verified verdict from
+# an invented one. See the SEVENTH finding in gemini_common.py.
+MAX_SEARCHES = 1
+
+
+def build_research_system(opp):
+    """PHASE 1 — prose out, search on. The output format here is load-bearing, not cosmetic.
+
+    This prompt used to end by demanding a JSON object, and that is measurably why this
+    agent never searched: 22 searches across 3089 row-checks in its whole history. A
+    controlled A/B on 2026-08-23 (same row, same instructions, arms alternated, only the
+    closing paragraph differing) came out prose 4/4 searched vs JSON 0/4, with 34 grounding
+    chunks against 0. See gemini_common.py's SEVENTH finding for the numbers and for the
+    limit on what it proves.
+
+    So: ask for prose here and let extract_review() turn it into JSON in a second,
+    search-free call. Do NOT "simplify" this back into one call that asks for JSON.
+    """
+    return build_research_body(opp) + """
+
+Write up what you find in plain prose. Say what independent commentary actually exists, \
+paraphrase the substantive parts, name the sources you genuinely consulted, and finish with \
+your overall read: positive, mixed, negative, or insufficient data. No JSON, no schema, no \
+markdown fences — just write it. Stay well within a 500-token response."""
+
+
+def build_research_body(opp):
+    """The research instructions both phases share. Kept separate so the two prompts cannot
+    drift apart on WHAT counts as evidence while differing only on output shape."""
     return f"""You research the real-world reputation of an extracurricular opportunity (program, \
 internship, competition, or research position) for high school students, for a catalog used by \
 students and families deciding whether it's worth their time and money.
@@ -76,29 +143,144 @@ This matters a lot: most opportunities — especially small or local ones — wi
 review presence at all. That is a completely normal, expected result. Use "insufficient_data" whenever \
 you don't find real independent evidence either way — never invent or infer a sentiment just to give a \
 verdict. Only use "positive", "mixed", or "negative" when you found actual independent commentary to \
-support it.
+support it."""
 
-Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, matching \
-exactly this schema: {{"review_status": "positive, mixed, negative, or insufficient_data", \
-"review_summary": "one short sentence: the basis for this verdict, or why data was insufficient", \
-"review_sources": [{{"url": "...", "note": "under 15 words on what this source said"}}]}}. At most 3 \
-review_sources entries — pick the most substantive ones. Stay well within a 500-token response."""
+
+EXTRACT_SYSTEM = """You turn a researcher's written notes about one extracurricular \
+opportunity's reputation into a strict JSON record. You are NOT researching — everything you \
+need is in the notes, and you must not add anything that is not in them.
+
+You are also given the list of pages the researcher's search actually retrieved. When you cite \
+a source, COPY a URL from that list verbatim. Do not write a URL from memory and do not repair, \
+shorten or guess at one: a URL that was not retrieved is a fabricated citation, and this field \
+is shown to students as the evidence behind the verdict.
+
+If the notes describe no real independent commentary, the answer is "insufficient_data" — that \
+is a normal, common, correct outcome, not a failure. Never upgrade it to a sentiment the notes \
+do not support.
+
+Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, \
+matching exactly this schema: {"review_status": "positive, mixed, negative, or \
+insufficient_data", "review_summary": "one short sentence: the basis for this verdict, or why \
+data was insufficient", "review_sources": [{"url": "...", "note": "under 15 words on what this \
+source said"}]}. At most 3 review_sources entries — pick the most substantive ones. Stay well \
+within a 500-token response."""
+
+
+def clean_sources(sources, grounding):
+    """Validate the model's review_sources against what the search actually retrieved.
+
+    Two problems, both measured elsewhere in this repo and both landing in a field that is
+    shown to STUDENTS as evidence for a legitimacy verdict:
+
+    1. A model-typed URL is unreliable. In the 2026-08-20 scrape batch 30 of 116 (26%) were
+       hard 404s, every one a constructed deep path. There is no reason to expect a citation
+       URL to be typed more carefully than a program URL.
+    2. `groundingChunks[].web.uri` holds the URL the search really returned. It is the only
+       place the real URL exists — the answer text does not carry it back. Resolving it is
+       one free HTTP hop.
+
+    So a source URL is kept if it is among the retrieved pages (verified by construction),
+    or if it is not but a plain HTTP check finds it live. One that is neither is dropped,
+    with its note preserved in `sources_dropped` on the caller's side so the loss is
+    visible rather than silent. Both checks are free — no API call, no key.
+    """
+    out, dropped = [], []
+    if not sources:
+        return out, dropped
+    resolved = {r["url"] for r in url_validate.resolve_grounding_chunks(grounding or {})
+                if r.get("url")}
+    unknown = [s for s in sources if s.get("url") not in resolved]
+    health = url_validate.check_urls([s["url"] for s in unknown]) if unknown else {}
+    for s in sources:
+        url = s.get("url")
+        if url in resolved:
+            out.append({**s, "retrieved": True})
+            continue
+        status = (health.get(url) or {}).get("status")
+        if status == url_validate.DEAD:
+            dropped.append({**s, "reason": (health.get(url) or {}).get("code")})
+        else:
+            # Live, or unverifiable (403/timeout) — kept, because a site blocking this
+            # checker is not evidence the citation is fake, and dropping on 403 would bin
+            # ~9% of perfectly real sources.
+            out.append({**s, "retrieved": False})
+    return out, dropped
+
+
+def research_reviews(opp, api_key):
+    """PHASE 1 — prose out, search on. (notes, cost, searches, grounding, attempts).
+
+    Retries once on a zero-search response. Retrying rather than re-prompting is the only
+    mitigation that works: the search decision is non-deterministic and cannot be forced
+    (gemini_common.py's THIRD finding). A silent call is also the cheap one — it pays no
+    per-search fee — so the retry costs a fraction of a real check.
+
+    Cost is banked per attempt, not after the loop: an exception on the retry would
+    otherwise discard money the first call already spent.
+    """
+    system = build_research_system(opp)
+    user_content = (f"Opportunity: {opp['name']} ({opp.get('org') or 'unknown org'})\n"
+                    f"URL: {opp['url']}\nKnown info: {opp.get('summary') or ''}\n\n"
+                    f"Search for independent reviews and reputation evidence, then report "
+                    f"what you found.")
+    cost = 0.0
+    notes, usage, extra = "", {}, {}
+    for attempt in (1, 2):
+        # max_tokens 1200 and thinking_level "low" (call_gemini's default) are load-bearing:
+        # at 700, gemini-3.6-flash's thinking tokens alone consumed ~673 and starved the
+        # visible output. See gemini_common.py's FOURTH finding.
+        notes, usage, extra = call_gemini(system, user_content, api_key, use_web_search=True,
+                                          max_tokens=1200, max_searches=MAX_SEARCHES,
+                                          return_grounding=True)
+        cost += estimate_cost(usage)
+        tool_use = usage.get("server_tool_use") or {}
+        searches = tool_use.get("web_search_requests", 0)
+        for q in tool_use.get("web_search_queries") or []:
+            print(f"[search: {q}]", end=" ")
+        if searches:
+            return notes, cost, searches, extra.get("grounding") or {}, attempt
+        if attempt == 1:
+            print("[SILENT] no search invoked — retrying once", end=" ")
+    return notes, cost, 0, extra.get("grounding") or {}, 2
+
+
+def extract_review(notes, retrieved_urls, api_key):
+    """PHASE 2 — notes plus the REAL retrieved URLs in, strict JSON out. No search.
+
+    Supplying the resolved URLs is the same trick the scraper's phase 2 uses: the model
+    copies a URL that was actually fetched instead of recalling one that merely looks right.
+    A JSON-only call needs no search, so demanding a strict format is free HERE — the cost
+    of that format is paid in phase 1, which is exactly why phase 1 does not use it.
+    """
+    source_block = "\n".join(f"- {u}" for u in retrieved_urls) or "(none retrieved)"
+    user_content = (f"PAGES THE SEARCH ACTUALLY RETRIEVED (copy these verbatim when citing):\n"
+                    f"{source_block}\n\nRESEARCHER'S NOTES:\n{notes}\n\n"
+                    f"Return the JSON object now.")
+    text, usage = call_gemini(EXTRACT_SYSTEM, user_content, api_key, use_web_search=False,
+                              max_tokens=1200)
+    return extract_json(text) or {}, estimate_cost(usage)
 
 
 def check_one(opp, api_key):
-    system = build_system(opp)
-    user_content = (f"Opportunity: {opp['name']} ({opp.get('org') or 'unknown org'})\n"
-                     f"URL: {opp['url']}\nKnown info: {opp.get('summary') or ''}\n\n"
-                     f"Search for independent reviews/reputation evidence and extract per the schema.")
-    # max_tokens raised from 700 -> 1200 and thinking_level defaults to "low" in
-    # call_gemini() as of 2026-08-18: at 700, gemini-3.6-flash's thinking tokens alone
-    # (~673 of 700 without thinking_level control) starved the visible JSON output,
-    # silently truncating review_summary/review_sources. See gemini_common.py's
-    # "FOURTH finding" docstring for the full root-cause writeup.
-    text, usage = call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=1200)
-    info = extract_json(text)
-    searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
-    return info, estimate_cost(usage), searches
+    """Both phases. (info, cost, searches, grounding, attempts).
+
+    Split because asking for JSON collapses the search rate — measured 4/4 vs 0/4 in a
+    controlled A/B, against a historical 22 searches per 3089 row-checks on the old
+    single-call JSON prompt. gemini_common.py's SEVENTH finding carries the numbers and the
+    limit on what they prove. Do not collapse these back into one call.
+
+    Phase 2 is SKIPPED when phase 1 stayed silent: there is nothing worth extracting from
+    notes written without looking, main() will not write the row either way, so a second
+    call would buy nothing. That also keeps a fully silent row near the old per-row price.
+    """
+    notes, cost, searches, grounding, attempts = research_reviews(opp, api_key)
+    if not searches:
+        return {}, cost, 0, grounding, attempts
+    retrieved = [r["url"] for r in url_validate.resolve_grounding_chunks(grounding)
+                 if r.get("url")]
+    info, extract_cost = extract_review(notes, retrieved, api_key)
+    return info, cost + extract_cost, searches, grounding, attempts
 
 
 def main():
@@ -175,26 +357,42 @@ def main():
     errors = 0
     total_searches = 0
     silent_search_count = 0
+    retried = 0
+    sources_dropped = 0
     dry_run_results = []
 
     for i, opp in enumerate(items):
         print(f"[{i + 1}/{len(items)}] {opp['name'][:60]}...", end=" ")
         try:
-            info, cost, searches = check_one(opp, gemini_key)
+            info, cost, searches, grounding, attempts = check_one(opp, gemini_key)
             total_cost += cost
             total_searches += searches
-            # Silent skip-search (see gemini_common.py's docstring): particularly misleading
-            # here, since "insufficient_data" from a 0-search call looks identical to
-            # "insufficient_data" from a thorough real search that found nothing — the
-            # verdict text can't distinguish "we looked and found nothing" from "we didn't
-            # actually look."
+            retried += attempts - 1
+
+            # Still silent after the retry. The call is paid for either way, but what it
+            # produced is not a review verdict — nothing independent was consulted, and this
+            # agent's own rule is that it "must never invent a review verdict from thin
+            # evidence". Writing it anyway would be worse than dropping it twice over: the
+            # verdict is indistinguishable from a real one, AND stamping last_reviewed_at
+            # alongside it would hide the row from the staleness filter for 30 days, so the
+            # fabrication would outlive the run that made it. Skipping leaves the row due,
+            # and the next pass re-rolls the search decision.
             if searches == 0:
                 silent_search_count += 1
+                print("[SILENT after retry] no verdict written; row stays due for a "
+                      f"re-check, ${cost:.4f}")
+                continue
+
             status = info.get("review_status") if info.get("review_status") in VALID_STATUS else "insufficient_data"
             sources = info.get("review_sources") or []
             if not isinstance(sources, list):
                 sources = []
             sources = [s for s in sources if isinstance(s, dict) and s.get("url")][:3]
+            # Free: grounding resolution plus an HTTP check. 199 of 1469 review_source URLs
+            # in the live catalog (13.5%) were dead when measured on 2026-08-23 — these are
+            # shown to students as the evidence behind a legitimacy verdict.
+            sources, dropped = clean_sources(sources, grounding)
+            sources_dropped += len(dropped)
             changed = status != opp.get("review_status")
             if changed:
                 updated += 1
@@ -207,7 +405,9 @@ def main():
                     "review_status": status,
                     "review_summary": info.get("review_summary"),
                     "review_sources": sources,
+                    "sources_dropped": dropped,
                     "web_searches": searches,
+                    "attempts": attempts,
                     "cost_usd": round(cost, 4),
                 })
             else:
@@ -219,8 +419,9 @@ def main():
                     "last_reviewed_at": now_iso,
                     "updated_at": now_iso,
                 }, service_key)
-            silent = " [SILENT: no search invoked]" if searches == 0 else ""
-            print(f"{status}, {searches} search(es){silent}, ${cost:.4f}" + (" [changed]" if changed else ""))
+            drop_note = f", {len(dropped)} dead source(s) dropped" if dropped else ""
+            print(f"{status}, {searches} search(es){drop_note}, ${cost:.4f}"
+                  + (" [changed]" if changed else ""))
         except urllib.error.HTTPError as e:
             errors += 1
             print(f"[ERROR] HTTP {e.code}")
@@ -232,7 +433,10 @@ def main():
         # so explicit throttle here is no longer needed.
 
     print(f"\n[SUMMARY] checked: {len(items)}, changed: {updated}, errors: {errors}, "
-          f"silent (no-search) checks: {silent_search_count}/{len(items)}, cost: ${total_cost:.4f}")
+          f"cost: ${total_cost:.4f}")
+    print(f"[SUMMARY] silent-search retries: {retried}, still silent after retry (no verdict "
+          f"written, row stays due): {silent_search_count}/{len(items)}, "
+          f"dead source URLs dropped: {sources_dropped}")
     if mode == "sample" and items:
         per_item = total_cost / len(items)
         projected = per_item * len(candidates)

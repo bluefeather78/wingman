@@ -105,6 +105,41 @@ deep path). The grounding chunk is the only place the real URL exists. Measured 
 catalog's own dead `training.nih.gov/research-training/sip/` vs the real
 `training.nih.gov/research-training/pb/sip/`. Pass `return_grounding=True` to get it, and see
 url_validate.py for resolving and validating. Do not "simplify" that away.
+
+SEVENTH finding (2026-08-23) — ASKING FOR JSON COLLAPSES THE SEARCH RATE. Measured, not
+inferred, and it is the reason the scraper's two-phase split works.
+
+Controlled A/B, one opportunity (`ec17455`, TASS/Telluride), identical research
+instructions, identical user turn, identical max_tokens/model/thinking level, arms
+ALTERNATED so drift cannot confound them. The only difference was the closing paragraph —
+"respond with ONLY a raw JSON object matching this schema" versus "write up what you find
+in plain prose":
+
+    prose   4/4 calls searched    7 searches   34 grounding chunks   $0.1053
+    json    0/4 calls searched    0 searches    0 grounding chunks   $0.0054
+
+That is consistent with everything else on record. `check_reviews.py`, whose prompt demands
+JSON, has made **22 searches across 3089 row-checks (0.007/item)** in its entire history,
+and 5 further probe calls across 2 rows were silent 5/5. The scraper's prose phase 1, after
+the rewrite, ran 213 searches across 40 seeds (5.3/item) with 0 silent.
+
+READ THE LIMIT CAREFULLY, because a previous session over-claimed here and had to retract.
+This is a large shift in PROBABILITY, not a deterministic gate, and both exceptions are on
+record: run id=33 (2026-08-21, pre-rewrite, JSON prompt) fired 6 searches, and run id=48
+(2026-08-23, post-rewrite, prose prompt) fired none. So:
+
+    CORRECT   "a JSON-shaped answer format collapses the probability of a search"
+    WRONG     "a JSON-only prompt suppresses search" (deterministic — id=33 refutes it)
+
+The THIRD finding stands unchanged: there is still no reliable way to FORCE a search. What
+changed is that there is now a measured way to stop discouraging one — ask for prose, and
+extract the JSON in a second, search-free call. That is exactly the scraper's two-phase
+design, and its justification is no longer only "a JSON answer cannot carry grounding back".
+
+COST CONSEQUENCE, which is why this is not simply switched on everywhere: a searching prose
+call measured $0.0263 against $0.00135 for a silent JSON one — roughly 20x, dominated by the
+$0.014/search fee, not tokens. Making an agent actually search is a real spending decision,
+not a free correctness fix.
 """
 import atexit
 import json

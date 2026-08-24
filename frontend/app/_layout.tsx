@@ -9,6 +9,7 @@ import { SpaceGrotesk_500Medium } from '@expo-google-fonts/space-grotesk/500Medi
 import { SpaceGrotesk_700Bold } from '@expo-google-fonts/space-grotesk/700Bold';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
+import Head from 'expo-router/head';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -37,6 +38,10 @@ export default function RootLayout() {
 
   return (
     <AuthProvider>
+      <Head>
+        {/* The browser tab identity, matching the old app's <title>Wingman</title> + favicon. */}
+        <title>Wingman</title>
+      </Head>
       <SafeAreaProvider>
         <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.cream } }}>
           <Stack.Screen name="index" />

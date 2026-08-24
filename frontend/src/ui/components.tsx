@@ -167,7 +167,9 @@ export function PopButton({
   const [pressed, setPressed] = useState(false);
   const off = disabled || loading;
   const ghost = variant === 'ghost';
-  const border = BORDER[variant];
+  // The live app's rule: pill CTAs set `border: none` inline, but square (rounded-xl)
+  // orange buttons keep .pop-btn's 2px navy border. Measured via computed-style diff.
+  const border = BORDER[variant] ?? (square && (variant === 'primary' || variant === 'primaryDeep') ? colors.navy : null);
   return (
     <Pressable
       onPress={onPress}
@@ -371,8 +373,9 @@ const styles = StyleSheet.create({
   btnSquare: { borderRadius: radius.md },
   btnFull: { alignSelf: 'stretch' },
   btnOff: { opacity: 0.65 },
-  btnText: { fontFamily: fonts.bodyXBold, fontSize: 15 },
-  btnTextSmall: { fontSize: 13 },
+  // .pop-btn is font-weight 700, text-base (16/24). Small buttons are text-sm (14/20).
+  btnText: { fontFamily: fonts.bodyBold, fontSize: 16, lineHeight: 24 },
+  btnTextSmall: { fontSize: 14, lineHeight: 20 },
 
   miniBadge: { borderRadius: radius.pill, paddingVertical: 4, paddingHorizontal: 12, alignSelf: 'flex-start' },
   miniBadgeText: { fontFamily: fonts.bodyXBold, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' },

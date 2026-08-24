@@ -46,7 +46,7 @@ export default function Landing() {
             view. For parents, it's peace of mind. For students, it's someone who's got their back.
           </Text>
           <View style={styles.ctaRow}>
-            <PopButton label="Get started free" onPress={() => router.push('/login')} style={styles.ctaMain} />
+            <PopButton label="Get started free" onPress={() => router.push('/login')} style={styles.ctaMain} textStyle={styles.ctaMainText} />
             <Pressable style={[styles.ctaSecondary, popShadow(3, colors.slate900)]} onPress={() => {}}>
               <Text style={styles.ctaSecondaryText}>See how it works</Text>
             </Pressable>
@@ -137,7 +137,7 @@ export default function Landing() {
           <LinearGradient colors={[colors.bannerFrom, colors.bannerTo]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.darkCta}>
             <Text style={styles.darkCtaTitle}>Your story is ready to work for you.</Text>
             <Text style={styles.darkCtaSub}>Tell us what you love. We'll find what fits.</Text>
-            <PopButton label="Get started free" variant="primaryDeep" onPress={() => router.push('/login')} style={styles.darkCtaBtn} />
+            <PopButton label="Get started free" variant="primaryDeep" onPress={() => router.push('/login')} style={styles.darkCtaBtn} textStyle={styles.ctaMainText} />
           </LinearGradient>
         </View>
 
@@ -226,6 +226,7 @@ const styles = StyleSheet.create({
   heroBody: { fontFamily: fonts.bodyMed, fontSize: 18, lineHeight: 29, color: colors.slate500, textAlign: 'center', maxWidth: 576, marginBottom: 32 },
   ctaRow: { flexDirection: 'row', gap: 16, flexWrap: 'wrap', justifyContent: 'center' },
   ctaMain: { paddingHorizontal: 32, paddingVertical: 16 },
+  ctaMainText: { fontFamily: fonts.bodyXBold, fontSize: 15, lineHeight: 22 },
   ctaSecondary: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, paddingHorizontal: 32, paddingVertical: 16 },
   ctaSecondaryText: { fontFamily: fonts.bodyXBold, fontSize: 15, color: colors.slate900 },
   trialNote: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500, marginTop: 16 },

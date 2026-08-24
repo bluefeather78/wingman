@@ -19,6 +19,12 @@ import type {
 const RAW_API_BASE = (process.env.EXPO_PUBLIC_API_BASE ?? '').trim().replace(/\/$/, '');
 const API_BASE = RAW_API_BASE && !/^https?:\/\//i.test(RAW_API_BASE) ? `https://${RAW_API_BASE}` : RAW_API_BASE;
 
+// Absolute URL on the backend host — for static pages the backend serves (terms.html,
+// privacy.html, about.html), which the account drawer links to.
+export function backendUrl(path: string): string {
+  return `${API_BASE}${path}`;
+}
+
 // --- In-memory session state (persisted via tokenStore) ---------------------
 let _access: string | null = null;
 let _refresh: string | null = null;
@@ -227,6 +233,13 @@ export const httpClient: ApiClient = {
     await request<{ ok: boolean }>('/api/data/save', {
       method: 'POST',
       body: JSON.stringify({ key, value }),
+    });
+  },
+
+  async saveLocation(location: string): Promise<void> {
+    await request<{ ok: boolean }>('/api/account/location', {
+      method: 'POST',
+      body: JSON.stringify({ location }),
     });
   },
 

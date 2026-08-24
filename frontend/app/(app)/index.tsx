@@ -1,10 +1,11 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import {
   loadTrackerData,
   loadTrackerSaved,
+  saveTrackerData,
   type SavedState,
   type TrackerData,
 } from '@/api/trackerStore';
@@ -13,6 +14,7 @@ import {
   allTodoUnitCounts,
   computeProgressStatus,
   computeStats,
+  getBeyondDeadlineItems,
   getUpcomingDeadlineItems,
   shortDate,
 } from '@/lib/status';
@@ -44,6 +46,24 @@ export default function Home() {
   const [data, setData] = useState<TrackerData | null>(null);
   const [saved, setSaved] = useState<SavedState>({});
   const [profile, setProfile] = useState<string>('');
+  const [tasksOpen, setTasksOpen] = useState(false);
+
+  // Cycle an action item's status (not_started → in_progress → completed → …), persisting
+  // to the shared tracker data — ported from cycleActionItemState().
+  const NEXT_STATE: Record<string, OppStatus> = { not_started: 'in_progress', in_progress: 'completed', completed: 'not_started' };
+  async function cycleActionItem(itemId: string, actionId: string) {
+    if (!data) return;
+    const next: TrackerData = { ...data };
+    for (const bucket of Object.keys(next) as (keyof TrackerData)[]) {
+      next[bucket] = next[bucket].map((it) =>
+        it.id === itemId
+          ? { ...it, actionItems: (it.actionItems ?? []).map((ai) => (ai.id === actionId ? { ...ai, state: NEXT_STATE[ai.state] ?? 'not_started' } : ai)) }
+          : it,
+      );
+    }
+    setData(next);
+    await saveTrackerData(next);
+  }
 
   useFocusEffect(
     useCallback(() => {
@@ -142,7 +162,7 @@ export default function Home() {
               square
               textStyle={styles.freshFindsText}
               onPress={() => router.push('/(app)/finder')}
-              style={styles.selfStart}
+              style={[styles.selfStart, styles.freshFindsBtn]}
             />
           </>
         ) : (
@@ -184,10 +204,70 @@ export default function Home() {
                 </View>
               );
             })}
+            <View style={styles.seeAllWrap}>
+              <PopButton
+                label="See all tasks"
+                variant="secondary"
+                small
+                square
+                textStyle={styles.freshFindsText}
+                style={styles.freshFindsBtn}
+                onPress={() => setTasksOpen(true)}
+              />
+            </View>
           </View>
         )}
         <Txt variant="small" style={styles.andBeyond}>and beyond →</Txt>
       </SoftCard>
+
+      {/* "All Your Tasks" modal — ported from the live app's #todoModal. */}
+      <Modal visible={tasksOpen} transparent animationType="fade" onRequestClose={() => setTasksOpen(false)}>
+        <Pressable style={styles.modalScrim} onPress={() => setTasksOpen(false)}>
+          <Pressable style={styles.modalPanel} onPress={(e) => e.stopPropagation()}>
+            <ScrollView contentContainerStyle={styles.modalScroll} showsVerticalScrollIndicator={false}>
+              <View style={styles.modalHead}>
+                <View style={styles.flex1}>
+                  <Txt variant="h2" style={styles.cardTitle}>All Your Tasks</Txt>
+                  <Text style={styles.modalSub}>Upcoming and beyond - manage everything in one place</Text>
+                </View>
+                <Pressable onPress={() => setTasksOpen(false)} hitSlop={10}>
+                  <Text style={styles.modalClose}>✕</Text>
+                </Pressable>
+              </View>
+              {(data ? [...upcoming, ...getBeyondDeadlineItems(data, saved)] : []).map(({ item, nextDate, nextLabel }) => (
+                <View key={item.id} style={styles.taskCard}>
+                  <View style={styles.taskCardHead}>
+                    <View style={styles.flex1}>
+                      <Text style={styles.taskCardName} numberOfLines={1}>{item.name}</Text>
+                      {!!item.meta && <Text style={styles.taskCardMeta} numberOfLines={1}>{item.meta}</Text>}
+                    </View>
+                    <StatusPill status={computeProgressStatus(item)} />
+                  </View>
+                  <Text style={styles.taskCardDate}>
+                    {shortDate(nextDate)} · {nextLabel}{item.wasEstimated ? ' (est.)' : ''}
+                  </Text>
+                  {(item.actionItems ?? []).length ? (
+                    <View style={styles.taskRows}>
+                      {(item.actionItems ?? []).map((ai) => (
+                        <View key={ai.id} style={styles.taskRow}>
+                          <Text style={[styles.taskText, ai.state === 'completed' && styles.taskDone]}>{ai.text}</Text>
+                          <StatusPill
+                            status={(ai.state as OppStatus) in ACTION_ITEM_STATUS_LABEL ? (ai.state as OppStatus) : 'not_started'}
+                            kind="task"
+                            onPress={() => cycleActionItem(item.id, ai.id)}
+                          />
+                        </View>
+                      ))}
+                    </View>
+                  ) : (
+                    <Text style={styles.taskNone}>No sub-tasks generated for this one.</Text>
+                  )}
+                </View>
+              ))}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </Screen>
   );
 }
@@ -197,8 +277,8 @@ const styles = StyleSheet.create({
   bannerLeft: { flexDirection: 'row', alignItems: 'center', gap: space.md, flex: 1, flexWrap: 'wrap' },
   greeting: { color: colors.navy },
   dueBadge: { backgroundColor: colors.navy, borderRadius: radius.lg, paddingHorizontal: 16, paddingVertical: 8, alignItems: 'center' },
-  dueNum: { fontFamily: fonts.display, fontSize: 18, lineHeight: 20, color: colors.white },
-  dueLabel: { fontFamily: fonts.bodyBold, fontSize: 9, color: colors.orange, letterSpacing: 1, marginTop: 2 },
+  dueNum: { fontFamily: fonts.display, fontSize: 18, lineHeight: 18, color: colors.white },
+  dueLabel: { fontFamily: fonts.bodyBold, fontSize: 9, lineHeight: 13, color: colors.orange, letterSpacing: 0.45, marginTop: 2, textTransform: 'uppercase' },
 
   emptyProfile: {
     borderRadius: radius.xl,
@@ -214,14 +294,17 @@ const styles = StyleSheet.create({
   flex1: { flex: 1, minWidth: 200 },
 
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.sm, flexWrap: 'wrap' },
-  cardTitle: { color: colors.navy },
+  // Card h2s inherit the body's text-slate-900, NOT the navy from styles.css — the
+  // body tag's Tailwind class wins. Measured via computed-style diff.
+  cardTitle: { color: colors.slate900 },
   teaserText: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 21, color: colors.inkSoft },
 
   trackedPill: { backgroundColor: colors.navy, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6 },
-  trackedText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.white },
+  trackedText: { fontFamily: fonts.bodyBold, fontSize: 12, lineHeight: 16, color: colors.white },
   legend: { flexDirection: 'row', gap: space.lg, flexWrap: 'wrap' },
   selfStart: { alignSelf: 'flex-start' },
-  freshFindsText: { fontSize: 12, color: colors.navy },
+  freshFindsText: { fontSize: 12, lineHeight: 16, color: colors.navy },
+  freshFindsBtn: { paddingVertical: 8 },
   emptyState: { color: '#9AA9B8', fontStyle: 'italic', fontSize: 13 },
 
   pillRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
@@ -229,4 +312,22 @@ const styles = StyleSheet.create({
   todoName: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.navy },
   todoMeta: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.inkSoft },
   andBeyond: { textAlign: 'center', color: colors.muted, paddingTop: 8, fontFamily: fonts.bodyBold, fontSize: 13 },
+  seeAllWrap: { paddingTop: 8, alignItems: 'flex-start' },
+
+  modalScrim: { flex: 1, backgroundColor: 'rgba(15,23,42,0.55)', alignItems: 'center', paddingTop: 40, paddingHorizontal: 16 },
+  modalPanel: { backgroundColor: colors.white, borderRadius: radius.xl, width: '100%', maxWidth: 640, maxHeight: '88%' },
+  modalScroll: { padding: 32, gap: 12 },
+  modalHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 4 },
+  modalSub: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: colors.slate400, marginTop: 2 },
+  modalClose: { fontFamily: fonts.bodyBold, fontSize: 18, color: colors.slate500 },
+  taskCard: { backgroundColor: colors.slate50, borderWidth: 2, borderColor: colors.slate200, borderRadius: radius.lg, padding: 16, gap: 4 },
+  taskCardHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  taskCardName: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 20, color: colors.slate900 },
+  taskCardMeta: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: colors.slate500 },
+  taskCardDate: { fontFamily: fonts.bodyBold, fontSize: 12, lineHeight: 16, color: colors.indigo600, marginBottom: 4 },
+  taskRows: { borderTopWidth: 1, borderTopColor: colors.slate200, paddingTop: 8, gap: 6 },
+  taskRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  taskText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: '#334155', flex: 1 },
+  taskDone: { textDecorationLine: 'line-through', color: colors.slate400 },
+  taskNone: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate400, fontStyle: 'italic' },
 });

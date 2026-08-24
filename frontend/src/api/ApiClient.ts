@@ -57,6 +57,8 @@ export interface ApiClient {
   // --- Gated user data (Bearer token; identity from token, body userid ignored) ---
   loadData<T = unknown>(key: string): Promise<T | null>;
   saveData(key: string, value: unknown): Promise<void>;
+  // Update the account's location (POST /api/account/location, hard-gated).
+  saveLocation(location: string): Promise<void>;
 }
 
 // Thrown when a request needs auth but the session is gone/unrecoverable (refresh failed).

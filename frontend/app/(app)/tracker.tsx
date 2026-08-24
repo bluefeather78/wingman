@@ -417,7 +417,7 @@ const styles = StyleSheet.create({
   viewTabs: { flexDirection: 'row', backgroundColor: colors.lavender, borderRadius: radius.pill, padding: 3, gap: 2 },
   viewTab: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 14, borderRadius: radius.pill },
   viewTabActive: { backgroundColor: colors.navy },
-  viewTabText: { fontFamily: fonts.bodyXBold, fontSize: 13, color: '#5B6785' },
+  viewTabText: { fontFamily: fonts.bodyXBold, fontSize: 13, lineHeight: 20, color: '#5B6785' },
   viewTabTextActive: { color: colors.white },
 
   emptyState: { color: '#94A3B8', fontStyle: 'italic', fontSize: 13, fontFamily: fonts.bodyMed },

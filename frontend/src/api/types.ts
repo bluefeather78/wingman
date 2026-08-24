@@ -27,6 +27,14 @@ export interface AiResult {
   truncated: boolean;
 }
 
+// The subscription block from subscription_state() — carried on every login payload.
+export interface SubscriptionState {
+  status?: string; // trial | beta | active | canceled | past_due | ...
+  days_left?: number;
+  has_access?: boolean;
+  [key: string]: unknown;
+}
+
 // The login/register/refresh response payload (Phase 2 contract: `login_response`).
 export interface SessionUser {
   userid: string;
@@ -34,7 +42,7 @@ export interface SessionUser {
   lastName?: string;
   email?: string;
   location?: string;
-  subscription?: unknown;
+  subscription?: SubscriptionState;
 }
 
 export interface LoginResponse extends SessionUser {

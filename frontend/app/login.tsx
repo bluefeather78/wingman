@@ -141,7 +141,7 @@ export default function Login() {
 
             {!!error && <Text style={styles.error}>{error}</Text>}
 
-            <PopButton label={isRegister ? 'Create Account' : 'Sign In'} onPress={submit} loading={busy} full />
+            <PopButton label={isRegister ? 'Create Account' : 'Sign In'} onPress={submit} loading={busy} full textStyle={styles.submitText} />
 
             <Text style={styles.switchText}>
               {isRegister ? 'Already have an account? ' : "Don't have an account? "}
@@ -219,6 +219,7 @@ const styles = StyleSheet.create({
   trialNote: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500, textAlign: 'center' },
   bold: { fontFamily: fonts.bodyBold },
 
+  submitText: { fontFamily: fonts.bodyXBold },
   error: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.rose600 },
   switchText: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500, textAlign: 'center' },
   switchLink: { fontFamily: fonts.bodyBold, color: colors.indigo600 },

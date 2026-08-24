@@ -269,6 +269,85 @@ old frontend (backend still serves it at the root) after full parity.
 port by grepping function names, not line numbers. The salvaged logic above is not what
 auth touches, so its content was stable.
 
+## Session handoff — pixel-parity pass IN PROGRESS (2026-08-23)
+
+Everything below is committed on `main` (last commit `e5c506a`). The RN app in `frontend/`
+now reproduces the live web app's design ("BENTO & POP") and is wired to the same backend
+data. A side-by-side parity pass against `:8000` got the **authed screens** matching; the
+**landing page and a wide-screen width bug are the main things still off**.
+
+### How to run + verify
+- Backend (serves old app at `:8000` AND the API the RN app calls):
+  `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`
+- RN web (Metro): from `frontend/`,
+  `EXPO_PUBLIC_API_BASE=http://127.0.0.1:8000 npx expo start --web --port 8081`
+  (add `--clear` after installing deps; new npm deps need a Metro restart, plain edits
+  hot-reload). Then compare `localhost:8081` (RN) vs `localhost:8000` (real).
+- Test account: **userid `shamabildikar`** (real account with a populated profile + 5 tracked
+  items — the password is the user's, not stored here). Its data is what to compare against.
+- `cd frontend && npx tsc --noEmit` must stay clean.
+
+### Data sharing (the key integration — DONE)
+The RN app reads/writes the **same backend data keys and shapes** as the web app, so both
+frontends share state (required for cutover):
+- **Profile**: key `student-profile` → `{synthesized, updatedAt, chatRounds}`.
+- **Tracker**: key `hs-tracker-data` → a JSON **string** of a 6-bucket object
+  (`{summerPrograms, internships, researchCompetitions, pureCompetitions, conferences,
+  journals}`), each item carrying `id/name/type/status/reviewStatus/meta/importantDates[]/
+  wasEstimated/applyUrl/actionItems/...` (see `src/api/trackerStore.ts` and the shape at
+  `script.js` ~line 5552). Verified: Shama's 5 items appear in the RN app.
+
+### Design system (`frontend/src/ui/`)
+- `theme.ts` — tokens matched to `styles.css` + screenshots: cream `#FBF8F3`, navy `#1D4E89`,
+  ORANGE primary `#F79256`, lavender inputs `#EEF0FB`, teal `#00B2CA`, `popShadow`/`softShadow`.
+  Fonts Space Grotesk + Plus Jakarta Sans (import **per-weight subpath**, not the barrel).
+- `components.tsx` — `Screen`, `Txt`, `SoftCard` (content), `PopCard` (bordered), `PopButton`
+  (orange primary, pop shadow), `Chip`, `Badge`, `Field` (lavender), `ProgressBar`.
+- `NavBar.tsx` — branded top nav; `(app)/_layout.tsx` uses it + `<Slot>`. **Branded tab names
+  are load-bearing: Home Base / My Vibe / Fresh Finds / Quest Log** (not Home/Profile/…).
+
+### Screens — parity status (verified in-browser at 1280px)
+- **Login** (`app/login.tsx`): MATCHES (centered card, BETA badge, notice, Google, form).
+- **Home Base** (`app/(app)/index.tsx`): MATCHES — story card when profile exists, "What
+  You're Chasing" legend (Happening Now / Future Event) + Look for Fresh Finds, 3 status
+  pills + "and beyond".
+- **Fresh Finds** (`app/(app)/finder.tsx`): MATCHES core — auto-suggest on entry ("Finding
+  your matches…"), rich result cards (category + ⚡STRONG FIT + ✓WELL REVIEWED badges, WHY IT
+  FITS, meta pills), "Deepen your story" banner, "In Quest Log" state. Also has kind grid,
+  branching quiz, filtered form (grade/state/cost/format).
+- **Quest Log** (`app/(app)/tracker.tsx`): MATCHES — per-bucket horizontal month-timeline
+  calendar with type-coloured event cards; rich list cards (predicted-dates banner,
+  two-column date table, FUTURE EVENT pill + Apply).
+- **My Vibe** (`app/(app)/profile.tsx`): MATCHES — "story is ready" banner, basics tiles
+  (grade/state/gender via `extractProfileBasics`), INTERESTS & EXPERIENCE prose, chat.
+
+### KNOWN GAPS — pick up here next session
+1. **Wide-screen width bug (highest priority).** On a wide monitor (~2000px) the top nav +
+   content stretch nearly edge-to-edge, while `:8000` centers everything in a **~1140px
+   column**. Fix: give the app `NavBar` bar and `Screen`'s inner container a shared centered
+   `maxWidth` (~1140, `alignSelf:'center'`), and the landing the same. `Screen` inner is
+   currently `maxWidth: 820`; NavBar bar uses `marginHorizontal` (stretches). This is likely
+   why the user felt "nothing changed" when comparing the landing on a wide screen.
+2. **Landing** (`app/landing.tsx`) not brought to parity: title should be **one line, larger**;
+   audience cards need **navy borders** (real ones are bordered, mine are plain SoftCards);
+   center at ~1140. The "See how it works" film is **deliberately left as caption cards** —
+   the user is generating an embedded video themselves; don't rebuild the film.
+3. **Fresh Finds** still missing: the **filter row** (Your Profile / Only untracked / Type /
+   Cost / Season / Format) and the floating **multi-select "Add to my tracker"** bar
+   (RN adds per-card today).
+4. **Quest Log list** missing: the ⭐ save icon and the **"Show details"** expander per card.
+
+### Other live notes
+- Deadline endpoint `GET /api/opportunities/<id>/deadline` returns **502** server-side
+  (backend/ops issue) — the RN client degrades gracefully.
+- Google sign-in is wired (web redirect / native WebBrowser + `/google-auth`); the real
+  round-trip needs the backend host's callback URL registered in Google console, and
+  `GOOGLE_APP_REDIRECTS` set on the Render API service to the static-site origin. NOTE: the
+  live web app's login shows Google as "COMING SOON"; the RN build makes it functional.
+- Deploy: `render.yaml` defines the API web service + `wingman-web` static site
+  (`expo export -p web` → `frontend/dist`). Native ships via EAS, not Render.
+- Paywall + subscription screens remain **deferred** by the plan (assume access).
+
 ## Salvage vs. discard (the modularization)
 
 `script.js` is ~6k lines but **well over half is DOM glue that does not exist in a component

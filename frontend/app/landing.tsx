@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Logo, PopButton, PopCard, SoftCard } from '@/ui/components';
+import { PersonIcon } from '@/ui/icons';
 import { colors, fonts, LANDING_MAX_WIDTH, navShadow, popShadow, radius, space } from '@/ui/theme';
 
 // The signed-out marketing page — ported section-for-section from index.html #page-landing:
@@ -27,7 +28,7 @@ export default function Landing() {
               </View>
             </View>
             <Pressable style={styles.signIn} onPress={() => router.push('/login')}>
-              <Ionicons name="person-outline" size={16} color={colors.white} />
+              <PersonIcon size={16} color={colors.white} />
               <Text style={styles.signInText}>Sign In</Text>
             </Pressable>
           </View>

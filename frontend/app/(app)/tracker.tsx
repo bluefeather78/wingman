@@ -1,4 +1,3 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -36,6 +35,7 @@ function sortEntries(entries: { item: TrackerItem; bucket: Bucket }[]) {
   });
 }
 import { IconBtn, MiniBadge, PopButton, Screen, SoftCard, StatusPill, Txt } from '@/ui/components';
+import { CalendarIcon, CalendarSyncIcon, ListIcon, RefreshIcon, StarIcon, XIcon } from '@/ui/icons';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
 // Quest Log — ported from the live app's #page-tracker: header controls (refresh status,
@@ -96,12 +96,12 @@ export default function Tracker() {
         <View style={styles.topLeft}>
           <Text style={styles.lastChecked}>Last checked: never</Text>
           <IconBtn>
-            <Ionicons name="refresh" size={14} color={colors.indigo600} />
+            <RefreshIcon size={14} color={colors.indigo600} />
           </IconBtn>
         </View>
         <View style={styles.topRight}>
           <IconBtn>
-            <Ionicons name="calendar-outline" size={16} color={colors.navy} />
+            <CalendarSyncIcon size={16} color={colors.navy} />
           </IconBtn>
           <PopButton label="Add Opportunity" onPress={() => router.push('/(app)/finder')} />
         </View>
@@ -118,11 +118,11 @@ export default function Tracker() {
         <View style={styles.viewTabs}>
           {(['calendar', 'list'] as const).map((v) => (
             <Pressable key={v} onPress={() => setView(v)} style={[styles.viewTab, view === v && styles.viewTabActive]}>
-              <Ionicons
-                name={v === 'calendar' ? 'calendar-outline' : 'list-outline'}
-                size={16}
-                color={view === v ? colors.white : '#5B6785'}
-              />
+              {v === 'calendar' ? (
+                <CalendarIcon size={16} color={view === v ? colors.white : '#5B6785'} />
+              ) : (
+                <ListIcon size={16} color={view === v ? colors.white : '#5B6785'} />
+              )}
               <Text style={[styles.viewTabText, view === v && styles.viewTabTextActive]}>
                 {v === 'calendar' ? 'Calendar' : 'List'}
               </Text>
@@ -342,10 +342,10 @@ function ListCard({
         </View>
         <View style={styles.iconRow}>
           <IconBtn onPress={() => onToggleSaved(item.id)}>
-            <Ionicons name={isSaved ? 'star' : 'star-outline'} size={15} color={isSaved ? colors.orange : colors.navy} />
+            <StarIcon size={15} color={isSaved ? colors.orange : colors.navy} filled={isSaved} />
           </IconBtn>
           <IconBtn onPress={() => onRemove(item.id)}>
-            <Ionicons name="close" size={15} color={colors.slate400} />
+            <XIcon size={14} color={colors.slate400} />
           </IconBtn>
         </View>
       </View>

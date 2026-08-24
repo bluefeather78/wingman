@@ -1,6 +1,9 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -304,42 +307,111 @@ export function IconBtn({ children, onPress, size = 30 }: { children: ReactNode;
   );
 }
 
-// ---------- Wingman logo (the favicon bar-chart glyph, drawn with Views) ----------
-// Three orange bars rising left→right with a yellow accent dot on the tallest bar.
+// ---------- Wingman logo (favicon.svg, drawn with Views) ----------
+// FOUR orange bars rising left→right, plus a glowing yellow dot above the tallest bar
+// (a 35%-opacity halo behind a solid dot). Geometry copied from favicon.svg's 100-unit
+// viewBox: bars at x 24/38/52/66, width 10, heights 14/22/30/40 (bottom edge y=76),
+// dot at (71,32) r 6.5 with halo r 13. Colors are the file's own #F97316 / #FACC15.
 export function Logo({ size = 32 }: { size?: number }) {
-  const u = size / 24; // favicon viewBox is 24x24
+  const u = size / 100;
   const bar = (x: number, y: number, h: number) => (
     <View
+      key={x}
       style={{
         position: 'absolute',
         left: x * u,
         top: y * u,
-        width: 4 * u,
+        width: 10 * u,
         height: h * u,
-        borderRadius: u,
-        backgroundColor: colors.orange,
+        borderRadius: 2 * u,
+        backgroundColor: '#F97316',
+      }}
+    />
+  );
+  const circle = (r: number, opacity: number) => (
+    <View
+      style={{
+        position: 'absolute',
+        left: (71 - r) * u,
+        top: (32 - r) * u,
+        width: 2 * r * u,
+        height: 2 * r * u,
+        borderRadius: r * u,
+        backgroundColor: '#FACC15',
+        opacity,
       }}
     />
   );
   return (
     <View style={{ width: size, height: size }}>
-      {bar(2, 14, 8)}
-      {bar(9, 9, 13)}
-      {bar(16, 4, 18)}
-      <View
-        style={{
-          position: 'absolute',
-          left: 15.5 * u,
-          top: 0.5 * u,
-          width: 5 * u,
-          height: 5 * u,
-          borderRadius: 2.5 * u,
-          backgroundColor: colors.yellow300,
-          borderWidth: Math.max(1, u),
-          borderColor: colors.navy,
-        }}
-      />
+      {circle(13, 0.35)}
+      {bar(24, 62, 14)}
+      {bar(38, 54, 22)}
+      {bar(52, 46, 30)}
+      {bar(66, 36, 40)}
+      {circle(6.5, 1)}
     </View>
+  );
+}
+
+// ---------- Right-hand slide-in drawer ----------
+// The live app's drawers (#profilePanel, .story-drawer) slide in from the right —
+// translate-x-full → 0 over ~300ms with a fading scrim. RN's Modal only fades or slides
+// from the bottom, so this animates the panel itself.
+export function RightDrawer({
+  open,
+  onClose,
+  width = 320,
+  duration = 300,
+  panelStyle,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  width?: number;
+  duration?: number;
+  panelStyle?: StyleProp<ViewStyle>;
+  children: ReactNode;
+}) {
+  const [mounted, setMounted] = useState(open);
+  const slide = useRef(new Animated.Value(open ? 0 : 1)).current; // 0 = shown, 1 = off-screen
+
+  const animateTo = useCallback(
+    (to: number, done?: () => void) => {
+      Animated.timing(slide, {
+        toValue: to,
+        duration,
+        easing: to === 0 ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+        useNativeDriver: false,
+      }).start(done);
+    },
+    [slide, duration],
+  );
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      slide.setValue(1);
+      requestAnimationFrame(() => animateTo(0));
+    } else if (mounted) {
+      animateTo(1, () => setMounted(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  if (!mounted) return null;
+  const translateX = slide.interpolate({ inputRange: [0, 1], outputRange: [0, width] });
+  const scrimOpacity = slide.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
+
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+      <Animated.View style={[styles.drawerScrim, { opacity: scrimOpacity }]}>
+        <Pressable style={styles.drawerScrimPress} onPress={onClose} />
+      </Animated.View>
+      <Animated.View style={[styles.drawerPanel, { width }, { transform: [{ translateX }] }, panelStyle]}>
+        {children}
+      </Animated.View>
+    </Modal>
   );
 }
 
@@ -427,6 +499,10 @@ const styles = StyleSheet.create({
   legendText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.navy },
 
   iconBtn: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.navy, alignItems: 'center', justifyContent: 'center' },
+
+  drawerScrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15,23,42,0.4)' },
+  drawerScrimPress: { flex: 1 },
+  drawerPanel: { position: 'absolute', top: 0, bottom: 0, right: 0, backgroundColor: colors.white, maxWidth: '100%' },
 
   vibeField: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.lavender, borderRadius: radius.lg, paddingVertical: 14, paddingHorizontal: 16 },
   vibeLabel: { fontFamily: fonts.bodyXBold, fontSize: 10, color: colors.muted, letterSpacing: 0.3, textTransform: 'uppercase', marginBottom: 6 },

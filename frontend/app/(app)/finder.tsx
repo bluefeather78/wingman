@@ -10,6 +10,7 @@ import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import { ACTIVE_KINDS, KIND_CONFIG } from '@/lib/kinds';
 import { countProfileWords } from '@/lib/profile';
 import { parseGradeFromText } from '@/lib/grade';
+import { extractJSON } from '@/lib/extractJSON';
 import { inferSubjects, preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
 import { findBucketForKind } from '@/lib/tracker';
 import { MiniBadge, PopButton, Screen, SoftCard, Txt } from '@/ui/components';
@@ -58,6 +59,66 @@ const FILTER_FIELDS = [
 ] as const;
 type FilterKey = (typeof FILTER_FIELDS)[number]['key'];
 
+// The "Your Profile" facet's enriched tags, cached on the shared student-profile record
+// by the old app (PROFILE_DERIVED_SLOTS.filterTags) — read for free, never regenerated here.
+interface EnrichedTag {
+  tag: string;
+  intent?: string;
+  nextSteps?: string[];
+}
+interface TagScore {
+  reasoning?: string;
+  rank: number;
+}
+
+// batchScoreOpportunitiesWithAI, ported: one Gemini call scoring the visible results
+// against the selected tag; returns null on failure (distinct from "nothing matched").
+async function scoreOpportunitiesForTag(tag: EnrichedTag, opps: Opportunity[]): Promise<Record<string, TagScore> | null> {
+  const oppsList = opps
+    .map((o) => `ID: ${o.id} | Name: ${o.name} | Type: ${o.type} | Summary: ${o.summary || '(no description)'}`)
+    .join('\n');
+  const system = `You are helping a student find opportunities that match their interests and goals. Write directly to them in second person (using "you").`;
+  const userContent = `STUDENT'S PROFILE TAG: "${tag.tag}"
+INTENT: ${tag.intent || '(no intent specified)'}
+NEXT STEPS: ${(tag.nextSteps || []).join(', ') || '(no specific steps)'}
+
+OPPORTUNITIES TO RANK:
+${oppsList}
+
+Rank these opportunities by relevance to this student's profile. Return JSON array with only genuinely relevant opportunities:
+[
+  { "id": "opp_id", "rank": 1, "reasoning": "Brief 1-sentence message directly to the student using 'you' language" },
+  ...
+]
+
+For each reasoning, write directly to the student as if you're the app speaking to them. Omit opportunities that don't align with the profile. Include only good/strong matches.
+Return ONLY valid JSON, no markdown, no preamble.`;
+  try {
+    const raw = await callGemini(system, userContent, false);
+    const results = extractJSON(raw);
+    if (!Array.isArray(results)) return null;
+    const scores: Record<string, TagScore> = {};
+    results.forEach((r: { id?: string; rank?: number; reasoning?: string }) => {
+      if (r && r.id) scores[r.id] = { reasoning: r.reasoning, rank: r.rank ?? 999 };
+    });
+    return scores;
+  } catch {
+    return null;
+  }
+}
+
+// Local keyword fallback when the scoring call fails (opportunityMatchesProfileTag, ported).
+function tagKeywordMatch(opp: Opportunity, tag: string): boolean {
+  const oppText = `${opp.name} ${opp.org ?? ''} ${opp.summary ?? ''}`.toLowerCase();
+  const tagLower = tag.toLowerCase();
+  if (oppText.includes(tagLower)) return true;
+  const stop = new Set(['and', 'the', 'for', 'with', 'from', 'that', 'this', 'are', 'was', 'using', 'app', 'project', 'students', 'investigating', 'current']);
+  const words = tagLower.split(/\s+/).filter((w) => w.length > 2 && !stop.has(w));
+  if (!words.length) return false;
+  const hits = words.filter((w) => oppText.includes(w));
+  return hits.length >= Math.min(2, Math.max(1, Math.ceil(words.length / 2)));
+}
+
 export default function Finder() {
   const router = useRouter();
   const [opps, setOpps] = useState<Opportunity[] | null>(null);
@@ -84,17 +145,64 @@ export default function Finder() {
   const [visibleCount, setVisibleCount] = useState(10);
   const [untrackedOnly, setUntrackedOnly] = useState(false);
   const [filters, setFilters] = useState<Record<FilterKey, Set<string>>>({ type: new Set(), price: new Set(), season: new Set(), location: new Set() });
-  const [openFacet, setOpenFacet] = useState<FilterKey | null>(null);
+  const [openFacet, setOpenFacet] = useState<FilterKey | 'profile' | null>(null);
+  const [profileTags, setProfileTags] = useState<EnrichedTag[]>([]);
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [tagScores, setTagScores] = useState<Record<string, TagScore> | null>(null);
+  const [tagScoring, setTagScoring] = useState(false);
+  const tagScoreCache = useRef(new Map<string, Record<string, TagScore>>());
 
   useEffect(() => {
     let alive = true;
     httpClient.getOpportunities().then((r) => alive && setOpps(r)).catch((e) => alive && setOppsError((e as Error).message));
-    httpClient.loadData<{ synthesized?: string }>('student-profile').then((p) => alive && setProfileText(p?.synthesized ?? '')).catch(() => {});
+    httpClient
+      .loadData<{ synthesized?: string; filterTags?: { enrichedTags?: EnrichedTag[] } }>('student-profile')
+      .then((p) => {
+        if (!alive) return;
+        setProfileText(p?.synthesized ?? '');
+        const tags = p?.filterTags?.enrichedTags;
+        if (Array.isArray(tags)) setProfileTags(tags.filter((t) => t && typeof t.tag === 'string'));
+      })
+      .catch(() => {});
     loadTrackerData().then((d) => alive && setTrackedIds(new Set(flattenItems(d).map((i) => i.id)))).catch(() => {});
     return () => {
       alive = false;
     };
   }, []);
+
+  // Score the current result set against the selected profile tag (cached per tag+ids,
+  // like the old tagScoreCache — toggling filters or saving cards never re-pays the call).
+  useEffect(() => {
+    if (!selectedTag || !results.length) {
+      setTagScores(null);
+      return;
+    }
+    const tag = profileTags.find((t) => t.tag === selectedTag);
+    if (!tag) return;
+    const key = selectedTag + '::' + results.map((r) => r.opp.id).join(',');
+    const hit = tagScoreCache.current.get(key);
+    if (hit) {
+      setTagScores(hit);
+      return;
+    }
+    let alive = true;
+    setTagScoring(true);
+    scoreOpportunitiesForTag(tag, results.map((r) => r.opp))
+      .then((scores) => {
+        if (!alive) return;
+        if (scores) {
+          tagScoreCache.current.set(key, scores);
+          setTagScores(scores);
+        } else {
+          setTagScores(null); // fall back to the keyword matcher below
+        }
+      })
+      .finally(() => alive && setTagScoring(false));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTag, results]);
 
   const profileReady = countProfileWords(profileText) >= PROFILE_SUFFICIENT_LENGTH;
 
@@ -246,16 +354,29 @@ export default function Finder() {
     });
   }, [results, trackedIds, selected]);
 
+  // filterResultList, ported: field facets → profile-tag filter (AI scores when they
+  // resolved, keyword fallback otherwise) → untracked filter.
   const filteredResults = useMemo(() => {
-    return sortedResults.filter((r) => {
-      if (untrackedOnly && trackedIds.has(r.opp.id)) return false;
+    let filtered = sortedResults.filter((r) => {
       for (const f of FILTER_FIELDS) {
         const set = filters[f.key];
         if (set.size && !set.has((r.opp[f.key] as string) ?? '')) return false;
       }
       return true;
     });
-  }, [sortedResults, untrackedOnly, filters, trackedIds]);
+    if (selectedTag) {
+      if (tagScores) {
+        filtered = filtered
+          .filter((r) => tagScores[r.opp.id])
+          .map((r) => ({ ...r, aiReasoning: tagScores[r.opp.id].reasoning, aiRank: tagScores[r.opp.id].rank }))
+          .sort((a, b) => (a.aiRank ?? 999) - (b.aiRank ?? 999));
+      } else if (!tagScoring) {
+        filtered = filtered.filter((r) => tagKeywordMatch(r.opp, selectedTag));
+      }
+    }
+    if (untrackedOnly) filtered = filtered.filter((r) => !trackedIds.has(r.opp.id));
+    return filtered as (Result & { aiReasoning?: string; aiRank?: number })[];
+  }, [sortedResults, untrackedOnly, filters, trackedIds, selectedTag, tagScores, tagScoring]);
   const visibleResults = filteredResults.slice(0, visibleCount);
 
   // ---------- Home stage ----------
@@ -433,6 +554,25 @@ export default function Finder() {
       {/* Filter row */}
       <View style={styles.filterBar}>
         <Text style={styles.filterLabel}>FILTER:</Text>
+        {profileTags.length > 0 && (
+          <View>
+            <Pressable style={[styles.filterToggle, popShadow(2, colors.slate900)]} onPress={() => setOpenFacet(openFacet === 'profile' ? null : 'profile')}>
+              <Text style={styles.filterToggleText}>▾ Your Profile{selectedTag ? ' (1)' : ''}</Text>
+            </Pressable>
+            {openFacet === 'profile' && (
+              <View style={[styles.facetPanel, styles.facetPanelWide]}>
+                <Pressable style={styles.facetRow} onPress={() => { setSelectedTag(null); setVisibleCount(10); setOpenFacet(null); }}>
+                  <Text style={styles.facetRowText}>{selectedTag ? '○' : '●'} None</Text>
+                </Pressable>
+                {profileTags.map((t) => (
+                  <Pressable key={t.tag} style={styles.facetRow} onPress={() => { setSelectedTag(t.tag); setVisibleCount(10); setOpenFacet(null); }}>
+                    <Text style={styles.facetRowText}>{selectedTag === t.tag ? '●' : '○'} {t.tag}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
         <Pressable style={[styles.filterToggle, untrackedOnly && styles.filterToggleOn]} onPress={() => setUntrackedOnly(!untrackedOnly)}>
           <Text style={styles.filterToggleText}>{untrackedOnly ? '☑' : '☐'} Only untracked</Text>
         </Pressable>
@@ -459,9 +599,10 @@ export default function Finder() {
         })}
       </View>
       {!!note && <Text style={styles.note}>{note}</Text>}
+      {tagScoring && <Text style={styles.note}>Scoring matches against your profile…</Text>}
 
       {/* Result cards */}
-      {visibleResults.map(({ opp, reason, tier }) => {
+      {visibleResults.map(({ opp, reason, tier, aiReasoning, aiRank }) => {
         const isSelected = selected.has(opp.id);
         const isTracked = trackedIds.has(opp.id);
         const cat = suggestMode ? (KIND_CONFIG[kindForOpp(opp)]?.name ?? 'Opportunity') : KIND_CONFIG[kind].name;
@@ -500,7 +641,15 @@ export default function Finder() {
               <Text style={styles.resultName}>{opp.name}</Text>
             </Pressable>
 
-            {!!reason && (
+            {aiReasoning ? (
+              <View style={styles.whyRow}>
+                <View style={[styles.whyBar, styles.whyBarIndigo]} />
+                <View style={styles.flex1}>
+                  <Text style={styles.whyLabel}>PROFILE MATCH{aiRank ? ` • RANK #${aiRank}` : ''}</Text>
+                  <Text style={styles.whyText}>{aiReasoning}</Text>
+                </View>
+              </View>
+            ) : reason ? (
               <View style={styles.whyRow}>
                 <View style={styles.whyBar} />
                 <View style={styles.flex1}>
@@ -508,7 +657,7 @@ export default function Finder() {
                   <Text style={styles.whyText}>{reason}</Text>
                 </View>
               </View>
-            )}
+            ) : null}
 
             {metaPills.length > 0 && (
               <View style={styles.metaRow}>
@@ -654,8 +803,9 @@ const styles = StyleSheet.create({
   filterToggleOn: { backgroundColor: colors.lavender },
   filterToggleText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate900 },
   facetPanel: { position: 'absolute', top: '100%', left: 0, marginTop: 8, width: 224, backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.lg, padding: 12, zIndex: 50, gap: 2 },
+  facetPanelWide: { width: 320 },
   facetRow: { paddingVertical: 4 },
-  facetRowText: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate900 },
+  facetRowText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: colors.slate900 },
 
   resultCard: { backgroundColor: colors.white, borderWidth: 4, borderColor: colors.slate900, borderRadius: radius.xxl, padding: 24, gap: 16 },
   resultCardSelected: { borderColor: '#A3E635', backgroundColor: '#F7FEE7' },
@@ -668,7 +818,10 @@ const styles = StyleSheet.create({
   saveBtnText: { fontFamily: fonts.bodyXBold, fontSize: 12, color: colors.slate900 },
   resultName: { fontFamily: fonts.display, fontSize: 30, lineHeight: 36, color: colors.slate900 },
   whyRow: { flexDirection: 'row', gap: 12 },
-  whyBar: { width: 4, borderRadius: 2, backgroundColor: '#818CF8' },
+  // reason (keyword/rank fit) gets the yellow bar; AI profile-tag reasoning gets indigo
+  // (resultCardHTML: bg-yellow-400 vs bg-indigo-400).
+  whyBar: { width: 4, borderRadius: 2, backgroundColor: '#FACC15' },
+  whyBarIndigo: { backgroundColor: '#818CF8' },
   whyLabel: { fontFamily: fonts.bodyBold, fontSize: 10, color: colors.slate400, letterSpacing: 0.8, marginBottom: 4 },
   whyText: { fontFamily: fonts.display, fontSize: 20, lineHeight: 26, color: colors.slate900 },
   metaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

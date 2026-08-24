@@ -66,6 +66,7 @@ export const fonts = {
   displayMed: 'SpaceGrotesk_500Medium',
   body: 'PlusJakartaSans_400Regular',
   bodyMed: 'PlusJakartaSans_500Medium',
+  bodySemi: 'PlusJakartaSans_600SemiBold',
   bodyBold: 'PlusJakartaSans_700Bold',
   bodyXBold: 'PlusJakartaSans_800ExtraBold',
 } as const;

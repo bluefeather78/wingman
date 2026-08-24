@@ -1,24 +1,26 @@
 import { Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { backendUrl, httpClient } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
-import { Logo } from './components';
+import { Logo, RightDrawer } from './components';
+import { CalendarIcon, HomeIcon, PersonIcon, SearchIcon } from './icons';
 import { APP_MAX_WIDTH, colors, fonts, navShadow, popShadow, radius, space } from './theme';
 
 // The live app's floating pill navigation: sticky, centered in the max-w-4xl column with
 // 16px top inset, navy pill with a soft blue glow. Wordmark + BETA, four tabs (orange when
-// active, #B7D3E8 otherwise), and the teal 👤 badge opening the account drawer — a full
-// port of #profilePanel (account + location, subscription, beta notice, legal, contact,
-// about). Logging out lands on the LANDING page, same as the old app's showLandingPage().
-type IconName = React.ComponentProps<typeof Ionicons>['name'];
-const TABS: { label: string; path: string; icon: IconName }[] = [
-  { label: 'Home Base', path: '/(app)', icon: 'home-outline' },
-  { label: 'My Vibe', path: '/(app)/profile', icon: 'person-outline' },
-  { label: 'Fresh Finds', path: '/(app)/finder', icon: 'search-outline' },
-  { label: 'Quest Log', path: '/(app)/tracker', icon: 'calendar-outline' },
+// active, #B7D3E8 otherwise) with the app's own inline SVG icons, and the teal 👤 badge
+// opening the account drawer — a full port of #profilePanel (account + location,
+// subscription, beta notice, legal, contact, about), sliding in from the right.
+// Logging out lands on the LANDING page, same as the old app's showLandingPage().
+type TabIcon = (props: { size?: number; color: string }) => React.JSX.Element;
+const TABS: { label: string; path: string; Icon: TabIcon }[] = [
+  { label: 'Home Base', path: '/(app)', Icon: HomeIcon },
+  { label: 'My Vibe', path: '/(app)/profile', Icon: PersonIcon },
+  { label: 'Fresh Finds', path: '/(app)/finder', Icon: SearchIcon },
+  { label: 'Quest Log', path: '/(app)/tracker', Icon: CalendarIcon },
 ];
 
 function isActive(pathname: string, tabPath: string): boolean {
@@ -90,7 +92,7 @@ export function NavBar() {
                   onPress={() => router.push(t.path as never)}
                   style={[styles.tab, active && styles.tabActive]}
                 >
-                  <Ionicons name={t.icon} size={18} color={active ? colors.white : '#B7D3E8'} />
+                  <t.Icon size={18} color={active ? colors.white : '#B7D3E8'} />
                   <Text style={[styles.tabText, active && styles.tabTextActive]}>{t.label}</Text>
                 </Pressable>
               );
@@ -103,10 +105,8 @@ export function NavBar() {
         </View>
       </View>
 
-      {/* Account drawer — #profilePanel ported section-for-section. */}
-      <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={() => setDrawerOpen(false)}>
-        <Pressable style={styles.scrim} onPress={() => setDrawerOpen(false)}>
-          <Pressable style={styles.drawer} onPress={(e) => e.stopPropagation()}>
+      {/* Account drawer — #profilePanel ported section-for-section, slid in from the right. */}
+      <RightDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} width={320} duration={300} panelStyle={styles.drawer}>
             <ScrollView contentContainerStyle={styles.drawerScroll} showsVerticalScrollIndicator={false}>
               <View style={styles.drawerHead}>
                 <View style={styles.drawerHeadLeft}>
@@ -193,9 +193,7 @@ export function NavBar() {
                 </View>
               </View>
             </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      </RightDrawer>
     </SafeAreaView>
   );
 }
@@ -239,15 +237,7 @@ const styles = StyleSheet.create({
   avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.teal, alignItems: 'center', justifyContent: 'center' },
   avatarEmoji: { fontSize: 16, color: colors.white },
 
-  scrim: { flex: 1, backgroundColor: 'rgba(15,23,42,0.4)', flexDirection: 'row', justifyContent: 'flex-end' },
-  drawer: {
-    width: 320,
-    maxWidth: '90%',
-    backgroundColor: colors.white,
-    borderLeftWidth: 4,
-    borderLeftColor: colors.slate900,
-    height: '100%',
-  },
+  drawer: { borderLeftWidth: 4, borderLeftColor: colors.slate900 },
   drawerScroll: { padding: 24, gap: 16 },
   drawerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 2, borderBottomColor: colors.slate900, paddingBottom: 16 },
   drawerHeadLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },

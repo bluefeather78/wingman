@@ -1,13 +1,13 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import { countProfileWords, profileHasTruncatedTail, repairProfileText, synthesizeProfile, transcriptStudentLines } from '@/lib/profile';
 import { extractProfileBasics } from '@/lib/ranking';
 import { profileChatNextQuestion, profileChatStarterQuestionsFromAI, profileChatTranscript, type ChatMessage } from '@/lib/profileChat';
-import { PopButton, Screen, SoftCard, Txt, VibeField } from '@/ui/components';
+import { PopButton, RightDrawer, Screen, SoftCard, Txt, VibeField } from '@/ui/components';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
 const callClaude = httpClient.callClaude.bind(httpClient);
@@ -250,10 +250,9 @@ export default function Profile() {
         </View>
       </SoftCard>
 
-      {/* "Deepen your story" drawer */}
-      <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={closeDrawer}>
-        <Pressable style={styles.scrim} onPress={closeDrawer}>
-          <Pressable style={styles.drawer} onPress={(e) => e.stopPropagation()}>
+      {/* "Deepen your story" drawer — slides in from the right like .story-drawer */}
+      <RightDrawer open={drawerOpen} onClose={closeDrawer} width={440} duration={250} panelStyle={styles.drawer}>
+        <>
             <View style={styles.drawerHead}>
               <View style={styles.flex1}>
                 <Text style={styles.drawerTitle}>Deepen your story</Text>
@@ -290,9 +289,8 @@ export default function Profile() {
                 <Text style={styles.sendText}>Send</Text>
               </Pressable>
             </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+        </>
+      </RightDrawer>
     </Screen>
   );
 }
@@ -326,11 +324,12 @@ const styles = StyleSheet.create({
   vibeValue: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 22, color: colors.ink },
   vibeEmpty: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: '#B8BFCD', fontStyle: 'italic' },
 
-  prose: { fontFamily: fonts.bodyMed, fontSize: 16, lineHeight: 28.8, color: colors.ink },
+  // profileContent renders as .vibe-value.vibe-body: 16px / 1.8 line-height, weight 600.
+  prose: { fontFamily: fonts.bodySemi, fontSize: 16, lineHeight: 28.8, color: colors.ink },
   list: { gap: 6, paddingLeft: 2 },
   listRow: { flexDirection: 'row', gap: 6 },
-  listNum: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 21, color: colors.ink },
-  listText: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 21, color: colors.ink, flex: 1, fontWeight: '600' as const },
+  listNum: { fontFamily: fonts.bodySemi, fontSize: 14, lineHeight: 21, color: colors.ink },
+  listText: { fontFamily: fonts.bodySemi, fontSize: 14, lineHeight: 21, color: colors.ink, flex: 1 },
 
   truncatedBox: { borderWidth: 2, borderColor: '#E6D5F5', backgroundColor: '#FBF7FF', borderRadius: radius.lg, padding: 16, gap: 8 },
   truncatedLabel: { fontFamily: fonts.bodyXBold, fontSize: 10, color: '#7C5CAD', letterSpacing: 0.3 },
@@ -341,8 +340,7 @@ const styles = StyleSheet.create({
   footLink: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.muted, textDecorationLine: 'underline' },
   clearLink: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.red },
 
-  scrim: { flex: 1, backgroundColor: 'rgba(15,23,42,0.4)', flexDirection: 'row', justifyContent: 'flex-end' },
-  drawer: { width: 440, maxWidth: '100%', backgroundColor: colors.white, borderLeftWidth: 4, borderLeftColor: colors.ink, height: '100%' },
+  drawer: { borderLeftWidth: 4, borderLeftColor: colors.ink },
   drawerHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, borderBottomWidth: 2, borderBottomColor: colors.lavender },
   drawerTitle: { fontFamily: fonts.display, fontSize: 18, color: colors.ink },
   drawerSub: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.muted, marginTop: 4 },
@@ -353,7 +351,7 @@ const styles = StyleSheet.create({
   bubble: { borderWidth: 2, borderColor: colors.slate900, paddingVertical: 10, paddingHorizontal: 14, maxWidth: '85%' },
   bubbleBot: { backgroundColor: colors.white, alignSelf: 'flex-start', borderTopLeftRadius: 14, borderTopRightRadius: 14, borderBottomRightRadius: 14, borderBottomLeftRadius: 2 },
   bubbleUser: { backgroundColor: '#E0E7FF', alignSelf: 'flex-end', borderTopLeftRadius: 14, borderTopRightRadius: 14, borderBottomRightRadius: 2, borderBottomLeftRadius: 14 },
-  bubbleText: { fontFamily: fonts.bodyMed, fontSize: 13, lineHeight: 18, color: colors.slate900, fontWeight: '600' as const },
+  bubbleText: { fontFamily: fonts.bodySemi, fontSize: 13, lineHeight: 18, color: colors.slate900 },
   drawerFoot: { padding: 20, paddingTop: 14, borderTopWidth: 2, borderTopColor: colors.lavender, flexDirection: 'row', gap: 8 },
   chatInput: { flex: 1, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, paddingVertical: 12, paddingHorizontal: 12, fontFamily: fonts.bodyMed, fontSize: 13, color: colors.slate900, backgroundColor: colors.white },
   sendBtn: { backgroundColor: colors.orange, borderWidth: 2, borderColor: colors.ink, borderRadius: radius.md, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center' },

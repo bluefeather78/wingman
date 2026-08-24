@@ -795,10 +795,13 @@ function ListCard({
 }
 
 const styles = StyleSheet.create({
-  topRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.lg, flexWrap: 'wrap' },
+  // zIndex here (and on topRight) is what keeps the Add Opportunity dropdown above the
+  // cards below it: the panel is absolute inside intakeWrap, but without a z-index on its
+  // ancestors the whole header row still paints under later siblings in the Screen.
+  topRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.lg, flexWrap: 'wrap', zIndex: 50 },
   topLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   lastChecked: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate400 },
-  topRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  topRight: { flexDirection: 'row', alignItems: 'center', gap: 10, zIndex: 50 },
   syncLabel: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.navy },
   syncLabelDone: { color: colors.statusNowFg },
   syncLabelError: { color: colors.red },

@@ -327,7 +327,16 @@ you have enough basis to add the matching structured entry.
 
 SELF-CHECK before you finish:
 - Every date you report must be on or after {today}. If one is in the past, roll it forward to \
-its next real occurrence (and say it is estimated) or drop it — never report a past date.
+its next real occurrence and say it is estimated. Drop it ONLY if the program is discontinued or \
+the event was genuinely a one-off — never report a past date, and never let a past date be the \
+reason you report no date at all.
+- If every date you found belongs to a cycle that has already ended, and nothing says the program \
+is discontinued, you MUST write the rolled-forward estimates out explicitly, date by date \
+("Application deadline: estimated 2027-04-19, from 2026-04-20 rolled forward one year"). \
+"The next cycle is not posted yet" is a true statement and an unacceptable final answer on its \
+own: the student needs to know roughly WHEN to come back, and last cycle's timing is the best \
+evidence anyone has for that. This holds even if you have run out of search budget — the \
+roll-forward needs no further searching, only the dates you already have.
 - Prefer reporting a reasonably-estimated date over omitting it. Only leave a category out if \
 step (e) above genuinely applies.
 
@@ -353,15 +362,25 @@ never leave a date mentioned only in prose in "important_date_note". If the note
 basis to write a date into the note, that date gets its own structured entry.
 - Every specific date in "important_date_note" must have a matching entry in \
 "important_dates", and vice versa — the two must agree.
-- Every date must be on or after {today}. Drop any that is not; do not silently roll it \
-forward, because the notes are what justify a roll-forward and you are not researching.
+- Every date must be on or after {today}, and a past date is never reported as-is. If the \
+notes give the dates of a cycle that has already ended and do NOT say the program is \
+discontinued, project each one onto its next annual occurrence — same month and day, plus the \
+smallest whole number of years that lands on or after {today} — set "was_estimated": true, and \
+say in the note that they are estimated from the last cycle. That is arithmetic on what the \
+notes already establish, not research, and it is required: an empty "important_dates" for a \
+program that visibly ran last year tells the student nothing about when to come back. Drop a \
+past date only when the notes say the program is discontinued, or describe a genuine one-off \
+event with no sign of recurrence.
 - "was_estimated" is true if ANY reported date came from a prior cycle or a vague pattern \
 rather than an explicitly posted current-cycle date.
 - If the notes say the program is permanently discontinued, status is "not_running" and you \
 report no future dates. If they say the current cycle is closed but the program recurs, \
-status is "running" with the forward-dated entries the notes describe.
-- If the notes found nothing at all, status is "unknown" with an empty important_dates. That \
-is a valid outcome; never invent one to fill the schema.
+status is "running" with forward-dated entries — the ones the notes give if they give them, \
+otherwise the projection described above.
+- If the notes found nothing at all — no current dates AND no past-cycle dates to project \
+from — status is "unknown" with an empty important_dates. That is a valid outcome; never invent \
+one to fill the schema. It does NOT apply when the notes carry a past cycle's real dates: those \
+get projected, per the rule above.
 
 Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, \
 matching exactly this schema: {{"status": "running, not_running, or unknown", \

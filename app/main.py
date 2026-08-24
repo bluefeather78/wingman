@@ -84,18 +84,62 @@ if os.environ.get("WINGMAN_ENABLE_OPS"):
     print("[ops] Admin console ENABLED at /admin and /api/agents/* (localhost only)")
 
 
-# ---------------- Static pages (repo root) ----------------
+# ---------------- Static pages (repo root) + optional web-app bundle ----------------
 # The old vanilla-JS SPA was retired at tag `workingwithauth` (Phase 3 cutover): the web
-# frontend is now the Expo app in frontend/ (Metro in dev, Render Static Site in prod).
-# This route survives ONLY to serve the static pages the app still links to on this host
-# — terms.html / privacy.html / about.html plus the styles.css + favicon.svg they use —
-# with the same deny-list so the service can't hand out source, secrets, or logs.
+# frontend is now the Expo app in frontend/. The repo-root route survives ONLY to serve
+# the static pages the app still links to on this host — terms.html / privacy.html /
+# about.html plus the styles.css + favicon.svg they use — with the same deny-list so the
+# service can't hand out source, secrets, or logs.
+#
+# SERVE_WEB_DIST=1 (set on Render, never locally) additionally serves the exported Expo
+# web bundle from frontend/dist at the root, so the custom domain keeps serving the app
+# from the same origin as the API. It is deliberately opt-in: a stale local dist/ served
+# silently at :8000 would shadow the Metro dev server and confuse every local repro.
 _DENY_EXT = {".py", ".pyc", ".pyo", ".log", ".sql", ".ps1", ".md", ".txt", ".sh"}
 _DENY_NAMES = {".env", "agent_settings.json"}
 
-# Where the web app now lives. When set (e.g. the Render Static Site origin), a browser
-# hitting this service's root is redirected there; otherwise a plain JSON status answers.
+# Where the web app lives when this service does NOT serve it itself. When set (e.g. a
+# separate Static Site origin), a browser hitting the root is redirected there; otherwise
+# a plain JSON status answers. Ignored when SERVE_WEB_DIST is on.
 WEB_APP_URL = os.environ.get("WEB_APP_URL", "").strip()
+
+SERVE_WEB_DIST = bool(os.environ.get("SERVE_WEB_DIST"))
+WEB_DIST_ROOT = os.path.join(REPO_ROOT, "frontend", "dist")
+
+
+def _resolve_dist(rel: str):
+    """Map a request path to a file in frontend/dist (expo export -p web output).
+
+    Matches the exact file, or the route's exported HTML (expo-router writes
+    tracker.html, finder.html, ...). Returns None otherwise — the SPA index.html
+    fallback is applied by serve_static AFTER the repo-root pages get their chance,
+    so terms/privacy/about are never shadowed by the app shell. Same traversal
+    guards as the repo-root resolver; dist holds only build output, so no
+    extension deny-list is needed.
+    """
+    if not SERVE_WEB_DIST or not os.path.isdir(WEB_DIST_ROOT):
+        return None
+    rel = rel.strip("/")
+    if not rel:
+        return _dist_index()
+    parts = [p for p in rel.split("/") if p]
+    if any(p.startswith("..") for p in parts):
+        return None
+    candidate = os.path.normpath(os.path.join(WEB_DIST_ROOT, *parts))
+    if candidate != WEB_DIST_ROOT and not candidate.startswith(WEB_DIST_ROOT + os.sep):
+        return None
+    if os.path.isfile(candidate):
+        return candidate
+    if os.path.isfile(candidate + ".html"):
+        return candidate + ".html"
+    return None
+
+
+def _dist_index():
+    if not SERVE_WEB_DIST:
+        return None
+    index = os.path.join(WEB_DIST_ROOT, "index.html")
+    return index if os.path.isfile(index) else None
 
 
 def _resolve_static(rel: str):
@@ -118,15 +162,23 @@ def _resolve_static(rel: str):
 
 @app.get("/{full_path:path}")
 def serve_static(full_path: str):
+    # 1) The web-app bundle (exact file or exported route html), when enabled.
+    resolved = _resolve_dist(full_path)
+    # 2) The surviving repo-root pages (terms/privacy/about + their assets).
+    if resolved is None:
+        resolved = _resolve_static(full_path)
+    # 3) SPA fallback for client-side routes / deep links, mirroring the Static
+    #    Site's rewrite-everything-to-index behavior.
+    if resolved is None:
+        resolved = _dist_index()
+    if resolved is not None:
+        return FileResponse(resolved)
     if not full_path.strip("/"):
         if WEB_APP_URL:
             return RedirectResponse(WEB_APP_URL, status_code=307)
         return JSONResponse({"ok": True, "service": "wingman-api",
                              "note": "The web app is served separately; set WEB_APP_URL to redirect here."})
-    resolved = _resolve_static(full_path)
-    if resolved is None:
-        raise HTTPException(status_code=404)
-    return FileResponse(resolved)
+    raise HTTPException(status_code=404)
 
 
 if __name__ != "__main__":

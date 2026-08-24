@@ -128,3 +128,49 @@ def test_deny_names_agent_settings():
 def test_deny_ext_case_insensitive():
     # base is lowercased before the ext check.
     assert main._resolve_static("SERVER.PY") is None
+
+
+# --------------------------------------------------------------------------- #
+# frontend/dist serving (SERVE_WEB_DIST) — opt-in, guarded, never shadows the
+# repo-root legal pages (serve_static tries _resolve_static before _dist_index).
+# --------------------------------------------------------------------------- #
+def _dist(tmp_path, monkeypatch, *files):
+    root = tmp_path / "dist"
+    root.mkdir()
+    for rel in files:
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x")
+    monkeypatch.setattr(main, "SERVE_WEB_DIST", True)
+    monkeypatch.setattr(main, "WEB_DIST_ROOT", str(root))
+    return root
+
+
+def test_dist_off_returns_none(monkeypatch):
+    monkeypatch.setattr(main, "SERVE_WEB_DIST", False)
+    assert main._resolve_dist("index.html") is None
+    assert main._dist_index() is None
+
+
+def test_dist_exact_and_route_html(tmp_path, monkeypatch):
+    root = _dist(tmp_path, monkeypatch, "index.html", "tracker.html", "_expo/static/js/app.js")
+    assert main._resolve_dist("index.html") == str(root / "index.html")
+    # expo-router's exported route html answers the extensionless route path.
+    assert main._resolve_dist("tracker") == str(root / "tracker.html")
+    assert main._resolve_dist("_expo/static/js/app.js") == str(root / "_expo" / "static" / "js" / "app.js")
+    # root path serves the app shell.
+    assert main._resolve_dist("") == str(root / "index.html")
+
+
+def test_dist_misses_return_none_not_index(tmp_path, monkeypatch):
+    # A miss must NOT fall back to index here — serve_static gives the repo-root
+    # pages (terms/privacy/about) their chance first, THEN applies _dist_index().
+    _dist(tmp_path, monkeypatch, "index.html")
+    assert main._resolve_dist("terms.html") is None
+    assert main._resolve_dist("no-such-route") is None
+
+
+def test_dist_traversal_rejected(tmp_path, monkeypatch):
+    _dist(tmp_path, monkeypatch, "index.html")
+    assert main._resolve_dist("../secret.txt") is None
+    assert main._resolve_dist("a/../../outside.html") is None

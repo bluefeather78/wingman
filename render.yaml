@@ -10,11 +10,19 @@ services:
     name: wingman
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    # Also builds the Expo web export so this service serves the app at the root of the
+    # custom domain (SERVE_WEB_DIST below) — one origin for app + API, no CORS in prod,
+    # and the Google OAuth callback host stays put. The separate static site below remains
+    # an alternative; point the custom domain at it and drop these two lines to use it.
+    buildCommand: pip install -r requirements.txt && cd frontend && npm ci && npx expo export -p web
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: "3.13.2"
+      # Serve frontend/dist at the root (deliberately never set locally — a stale local
+      # dist would silently shadow the Metro dev server; see app/main.py).
+      - key: SERVE_WEB_DIST
+        value: "1"
       - key: GEMINI_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY

@@ -316,6 +316,7 @@ FEATURE_LABELS = {
     "tag_suggestions":   "Tag suggestions",
     "resume_import":     "Resume / LinkedIn import",
     "profile_basics":    "Profile basics",
+    "profile_extract":   "Profile extraction (tags + basics)",
     "deadline_check":    "Deadline check",
     "other":             "Other",
 }
@@ -367,6 +368,10 @@ def provider_for_model(model, surface=None):
 # longer one has to be checked first — the same ordering constraint generate_mock_text()
 # already lives under.
 _FEATURE_SIGNATURES = [
+    # The merged tags+basics pass. FIRST, because it does the work of `infer_subjects`'s tag
+    # branch and `profile_basics` and so matches their wording too; whichever signature is
+    # tested first wins, and this one is the accurate answer for that call.
+    ("pulling out everything an opportunity-matching app needs", "profile_extract"),
     ("infer which subject categories",                            "infer_subjects"),
     ("Rank the best 10-12 matches",                               "ranking"),
     ("find real, current",                                        "venue_search"),
@@ -645,6 +650,60 @@ def get_user(userid):
     return rows[0] if rows else None
 
 
+# Every column on `users` EXCEPT `data`. There is no "select everything but X" in
+# PostgREST, so the list is explicit — and because a missing column 400s the whole read
+# (the trap mailing_list_schema.sql and user_costs_schema.sql both carry), a failure here
+# falls back to `*` once and latches, so a pre-migration database degrades to the old
+# behaviour rather than breaking sign-in.
+_ACCOUNT_COLUMNS = (
+    "userid,first_name,last_name,email,password_hash,location,google_id,created_at,"
+    "updated_at,token_version,subscription_status,trial_ends_at,subscription_end_at,"
+    "stripe_customer_id,stripe_subscription_id,promo_codes_used,is_adult,"
+    "parental_consent,terms_accepted_at,privacy_accepted_at,terms_version"
+)
+_account_select = _ACCOUNT_COLUMNS
+
+
+def get_user_account(userid):
+    """The account row WITHOUT the `data` blob — identity, tokens, subscription.
+
+    `data` holds the student's whole app state (a 37KB tracker is ordinary), and the two
+    hottest reads on the app — /api/auth/refresh and the subscription gate — need none of
+    it. Reading it anyway made every app open pull that blob down from Supabase several
+    times over to answer questions about the columns beside it.
+    """
+    global _account_select
+    query = "?" + urllib.parse.urlencode(
+        {"userid": f"eq.{userid}", "select": _account_select})
+    try:
+        rows = _users_request("GET", query)
+    except urllib.error.HTTPError as e:
+        if _account_select == "*" or e.code != 400:
+            raise
+        # One of the columns above has not been migrated in yet. Stop asking for the list.
+        print("[WARN] users select fell back to '*' (a column above is missing): "
+              f"{_error_body(e).get('message') or e}")
+        _account_select = "*"
+        return get_user_account(userid)
+    return rows[0] if rows else None
+
+
+def get_user_data(userid):
+    """Just the `data` jsonb for this account, or None if there is no such account.
+
+    The inverse of get_user_account: /api/data/load wants only this, and pulling the
+    account columns alongside it is what made three key reads cost three full-row reads.
+    None means "no such account" and {} means "account with nothing stored" — the two must
+    stay distinguishable, because update_user_data turns the first into handle_data_save's
+    404 and the second into an ordinary first write.
+    """
+    query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}", "select": "data"})
+    rows = _users_request("GET", query)
+    if not rows:
+        return None
+    return rows[0].get("data") or {}
+
+
 def get_user_by_email(email):
     """The account using this address, or None. Case-insensitive; see normalize_email.
 
@@ -780,10 +839,11 @@ def update_password_hash(userid, password_hash):
 
 
 def update_user_data(userid, key, value):
-    record = get_user(userid)
-    if not record:
+    # Read-modify-write of one key inside the `data` jsonb. Only `data` is selected —
+    # the account columns beside it are never looked at here.
+    data = get_user_data(userid)
+    if data is None:
         return False
-    data = record.get("data") or {}
     data[key] = value
     query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
     _users_request("PATCH", query, data={"data": data})

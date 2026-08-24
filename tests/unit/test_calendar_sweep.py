@@ -24,10 +24,20 @@ def _marked(event_id, marker):
     return {"id": event_id, "extendedProperties": {"private": {go.WINGMAN_EVENT_PROP: marker}}}
 
 
-def test_sweep_deletes_only_untracked_marked_events(restore_calendar_request):
+def test_sweep_mirrors_the_tracker_including_unmarked_events(restore_calendar_request):
+    """The Wingman calendar MIRRORS the Quest Log: anything not currently tracked goes.
+
+    This deliberately reversed on 2026-08-24. The sweep used to spare unmarked events so a
+    calendar the student had also added their own entries to survived intact — but the marker
+    only started being written on 2026-08-22, so every event older than that was permanently
+    unsweepable. Measured on the first real account: 45 events for 17 tracked dates, 22 of
+    them orphans no sync could ever remove, including deadlines for opportunities deleted
+    weeks earlier. The calendar is app-created under calendar.app.created and exists to
+    reflect the app, so an unmarked event on it is now swept like any other.
+    """
     pages = iter([
         {"items": [_marked("ev1", "opp-a::0"), _marked("ev2", "opp-gone::0"),
-                   {"id": "ev3"}],  # hand-added by the student — no marker
+                   {"id": "ev3"}],  # no marker: predates the marker, or hand-added
          "nextPageToken": "p2"},
         {"items": [_marked("ev4", "opp-gone::1"),
                    {"id": "ev5", "extendedProperties": {"private": {}}}]},
@@ -45,9 +55,28 @@ def test_sweep_deletes_only_untracked_marked_events(restore_calendar_request):
     go._calendar_request = fake
     deleted, errors = go._sweep_stale_events("tok", "calendars/cal1", {"opp-a::0"})
 
-    assert (deleted, errors) == (2, [])
-    # Paginates, and spares both the still-tracked event and the unmarked ones.
-    assert sorted(deleted_ids) == ["ev2", "ev4"]
+    # ev1 is the ONLY survivor: it is the only currently-tracked date. ev3/ev5 carry no
+    # marker and are swept too, which is the whole point of the change.
+    assert (deleted, errors) == (4, [])
+    assert sorted(deleted_ids) == ["ev2", "ev3", "ev4", "ev5"]
+
+
+def test_sweep_spares_every_currently_tracked_event(restore_calendar_request):
+    """The other half of mirroring: a tracked date is never removed, so a sync cannot
+    delete an event it is about to need."""
+    deleted_ids = []
+
+    def fake(method, url, token, payload=None):
+        if method == "GET":
+            return {"items": [_marked("ev1", "opp-a::0"), _marked("ev2", "opp-a::1")]}
+        if method == "DELETE":
+            deleted_ids.append(url.rsplit("/", 1)[-1])
+            return {}
+        raise AssertionError(method)
+
+    go._calendar_request = fake
+    deleted, errors = go._sweep_stale_events("tok", "calendars/cal1", {"opp-a::0", "opp-a::1"})
+    assert (deleted, errors, deleted_ids) == (0, [], [])
 
 
 def test_already_deleted_event_is_not_a_failure(restore_calendar_request):

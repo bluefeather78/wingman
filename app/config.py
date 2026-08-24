@@ -56,6 +56,18 @@ MESSAGES_MODEL = "gemini-3.5-flash-lite"
 # thinking tokens, which draw from this SAME budget (see gemini_common.py's "FOURTH
 # finding" docstring — at max_tokens=700 there, thinking alone consumed 673 of it).
 MESSAGES_MAX_TOKENS = 2000
+# Ceiling on a client-supplied "maxTokens", mirroring CLAUDE_MAX_TOKENS_CEILING below.
+# Callers whose answer length scales with their INPUT send their own budget rather than
+# living inside the uniform default: profile-tag extraction returns one tag per thing the
+# profile mentions, and tag enrichment one object per tag, so both grow with the student.
+# At the flat 2000 a broad profile silently truncated — and because extractJSON repairs a
+# truncated array rather than failing, the shortfall came back looking like a complete,
+# shorter answer, i.e. a cap on how many interests a student is allowed to have.
+# Unused budget is free (billing is on tokens produced), so asking generously costs nothing;
+# this is a guard on an endpoint any signed-in browser can post to, not a model limit. Keep
+# it clear of the model's own output limit, remembering that Gemini 3.x thinking tokens draw
+# from this SAME budget.
+MESSAGES_MAX_TOKENS_CEILING = 8000
 
 # ---------- /api/messages-claude (Anthropic-backed, profile chat only) ----------
 # profileChatNextQuestion/profileChatStarterQuestionsFromAI (script.js's callClaude())
@@ -199,3 +211,57 @@ REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 # the `users` table as it stands today, which is why they shipped first.
 USER_ACTIVITY_SETUP_SQL = "user_activity_schema.sql"
 USER_METRICS_SETUP_SQL = "user_metrics_daily_schema.sql"
+
+
+# ---------- Lifecycle email (Resend) ----------
+# Three transactional emails around the account lifecycle: a welcome at signup, a reminder
+# a couple of days before the free trial ends, and a confirmation when a subscription is
+# cancelled. NOT a marketing system — there is no list, no segments and no broadcast, and
+# there deliberately is no path in this repo that mails everybody at once.
+#
+# The sending half is Resend's HTTPS API, called with raw urllib exactly as
+# subscription_common.py calls Stripe (no SDK, matching the stdlib-only convention). What a
+# provider buys that cannot be rebuilt here is SPF/DKIM/DMARC on the sending domain, a
+# warmed IP, and bounce/complaint handling. Mail from a cold domain to a population living
+# on Gmail and school Google Workspace accounts goes to spam, and school MXes are the least
+# forgiving recipients there are.
+#
+# If RESEND_API_KEY is unset the whole path runs in MOCK mode — same convention as
+# GEMINI_API_KEY/ANTHROPIC_API_KEY — so signup and cancel work offline. A mock send writes
+# NO email_sends row, deliberately: a claim row would suppress the real send once a key is
+# configured, i.e. developing offline would silently cost real users their welcome email.
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_URL = "https://api.resend.com/emails"
+
+# Must be on a domain verified in the Resend dashboard, or every send 403s. The display
+# name is part of the value ("Wingman <hello@...>") because that is the format Resend takes.
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "Highschool Wingman <hello@highschoolwingman.com>")
+EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO", "")
+
+# Where links in an email point. Falls back to the production origin rather than to
+# localhost: an email is read outside this process, so a localhost link is never right for
+# a real recipient, and a wrong-but-plausible dev value is worse than an obvious one.
+EMAIL_APP_URL = (os.environ.get("EMAIL_APP_URL")
+                 or os.environ.get("WEB_APP_URL")
+                 or "https://highschoolwingman.com").rstrip("/")
+
+# CAN-SPAM requires a physical postal address on commercial mail. All three of these are
+# transactional and arguably exempt, but the footer carries it unconditionally — the
+# exemption is a legal argument, and losing it costs more than a line of text. Set the real
+# address in .env; the placeholder is deliberately obvious so it cannot ship unnoticed.
+EMAIL_POSTAL_ADDRESS = os.environ.get(
+    "EMAIL_POSTAL_ADDRESS", "[SET EMAIL_POSTAL_ADDRESS IN .env]")
+
+# How many days before trial_ends_at the reminder goes out. A window, not an instant: the
+# sweep runs once a day, so anything expiring inside the next N days and not yet reminded
+# is due. Two days leaves a weekday to act on it without arriving so early it is forgotten.
+TRIAL_REMINDER_DAYS = int(os.environ.get("TRIAL_REMINDER_DAYS", "2") or 2)
+
+# Shared secret for POST /api/email/sweep, the endpoint a scheduler calls daily. It is on
+# the SHIPPED app (ops/ is localhost-only and never mounted on Render, so an admin button
+# cannot be what sends the trial reminder), which means it is internet-reachable and needs
+# its own guard. If unset the endpoint fails CLOSED with a 503 rather than running
+# unauthenticated — the same choice JWT_SECRET makes.
+EMAIL_CRON_SECRET = os.environ.get("EMAIL_CRON_SECRET", "")
+
+EMAIL_SETUP_SQL = "email_schema.sql"

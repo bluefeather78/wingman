@@ -8,7 +8,7 @@
 ## Overview
 
 A complete end-to-end subscription/payment system has been added to the Wingman app with:
-- **3-day free trial** for all new accounts
+- **7-day free trial** for all new accounts
 - **$9.99/month** Pro plan after trial
 - **Promo code support** (1 free month, discounts)
 - **Stripe integration** for secure payments
@@ -66,7 +66,7 @@ A complete end-to-end subscription/payment system has been added to the Wingman 
 ### For Users
 
 1. **Automatic Trial**
-   - All new accounts start with 3-day trial
+   - All new accounts start with 7-day trial
    - Trial countdown shown in account panel
    - Trial end date displayed on subscription page
 
@@ -114,7 +114,7 @@ A complete end-to-end subscription/payment system has been added to the Wingman 
 
 ### Payment Flow
 
-1. User registers → Auto-starts 3-day trial
+1. User registers → Auto-starts 7-day trial
 2. User clicks "Upgrade Now" → `upgradeSubscription()` called
 3. Promo code (optional) → `applyPromoCode()` validates
 4. Stripe checkout session created → User redirected to checkout
@@ -141,7 +141,7 @@ Use Stripe test cards for checkout testing:
 
 ### Manual Testing Steps
 
-1. **Register new account** - Should auto-start 3-day trial
+1. **Register new account** - Should auto-start 7-day trial
 2. **Click "Manage Plan"** - Should show trial countdown
 3. **Enter promo code** - Should validate in real-time
 4. **Click "Upgrade Now"** - Should redirect to Stripe checkout
@@ -176,7 +176,7 @@ PROMO_CODES = {
 
 Update in `subscription_common.py`:
 ```python
-TRIAL_DAYS = 3  # Change trial length
+TRIAL_DAYS = 7  # Change trial length
 PLAN_PRICE_CENTS = 999  # Change to $X.XX
 PLAN_PRICE_ID = "price_..."  # Update Stripe Price ID
 ```

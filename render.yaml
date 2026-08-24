@@ -47,6 +47,27 @@ services:
       # local dev, so Google sign-in from the deployed web app won't complete.
       - key: GOOGLE_APP_REDIRECTS
         sync: false
+      # ---- Lifecycle email (Resend) ----
+      # Without RESEND_API_KEY the send path runs in MOCK mode: signup and cancel still
+      # work, nothing is mailed, and no email_sends row is written (a claim row would
+      # suppress the real send once a key arrives). The sending domain must be verified in
+      # the Resend dashboard or every send comes back 403.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_REPLY_TO
+        sync: false
+      # CAN-SPAM's physical postal address, rendered in every footer. The default is a
+      # deliberately obvious placeholder so it cannot ship unnoticed.
+      - key: EMAIL_POSTAL_ADDRESS
+        sync: false
+      # Shared secret for POST /api/email/sweep, the daily trial-reminder trigger. It has
+      # to be on the SHIPPED service — ops/ is localhost-only, so the console cannot be
+      # what sends the reminder. Unset means the endpoint 503s rather than running
+      # unauthenticated; must match the EMAIL_CRON_SECRET GitHub Actions secret.
+      - key: EMAIL_CRON_SECRET
+        sync: false
 
   # ---------------- Static Site: the Expo (React Native Web) frontend ----------------
   # Phase 3: same monorepo, second Render service. Builds the Expo web export and serves the

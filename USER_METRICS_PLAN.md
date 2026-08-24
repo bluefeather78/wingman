@@ -130,8 +130,8 @@ number on the page.
 | Cost per activated user | window AI spend / users at stage 5+ | OK |
 
 **Conversion's denominator is accounts whose trial has *expired*, never all accounts.**
-With a 3-day trial and 9 accounts, dividing by everyone puts every signup from the last
-72 hours in the denominator as a failure. The tile must show `n/d` alongside the
+With a 7-day trial and 9 accounts, dividing by everyone puts every signup from the last
+week in the denominator as a failure. The tile must show `n/d` alongside the
 percentage so a 1-of-2 reads as 1-of-2.
 
 **`has_access` is not a status.** Derive every gate from `subscription_state(record)`

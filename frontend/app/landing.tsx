@@ -15,33 +15,69 @@ import { colors, fonts, LANDING_MAX_WIDTH, navShadow, popShadow, radius, space }
 // native: hands off to the system browser, since there's no in-app webview dependency here).
 const WALKTHROUGH_URL = backendUrl('/walkthrough.html');
 
-// Mounts the walkthrough iframe and best-effort auto-starts its own internal player (it has
-// no autoplay query param or postMessage API of its own, so this reaches in and clicks its
-// "Play/pause" control once the bundle has unpacked). Same-origin in production (the API
-// service serves both the app and this file), so this actually works there; on a local dev
-// setup where Metro (8081) and the API (8000) are different origins it can't reach across
-// the iframe boundary, and silently no-ops — the poster's own play chip is the fallback.
+// The film's own player persists its playhead in localStorage under
+// 'animstage-v3:t', and this composition is authored to play exactly once
+// ({"mode":"times","count":1}) — so a second viewing restores time === duration,
+// immediately re-hits the end, and holds the final frame instead of playing.
+// Remounting the iframe cannot fix that on its own: the stored time is read while
+// the player builds its initial state, so it has to be cleared BEFORE the new
+// document runs. Same-origin in production (the API service serves both the app
+// and walkthrough.html), so the parent shares that storage area; on a local dev
+// setup where Metro (8081) and the API (8000) differ it throws and we no-op.
+const PLAYHEAD_STORAGE_KEY = 'animstage-v3:t';
+
+function clearWalkthroughPlayhead(win?: Window | null) {
+  try {
+    (win ?? window).localStorage.removeItem(PLAYHEAD_STORAGE_KEY);
+  } catch {
+    // cross-origin (dev) or storage disabled — nothing we can do from here
+  }
+}
+
+// Mounts the walkthrough iframe and rewinds its internal player to 0:00 (it has no
+// autoplay/seek query param or postMessage API of its own, so this reaches in and
+// drives its own transport controls once the bundle has unpacked). Belt-and-braces
+// over the pre-mount localStorage clear above: whichever of the two lands, the film
+// starts from the beginning. Same-origin in production so this actually works there;
+// cross-origin in dev, where it silently no-ops.
 function WalkthroughFrame({ frameKey }: { frameKey: number }) {
   const ref = useRef<HTMLIFrameElement | null>(null);
   useEffect(() => {
     let cancelled = false;
     let attempts = 0;
-    const tryPlay = () => {
+    const tryStart = () => {
       if (cancelled) return;
       attempts += 1;
       try {
-        const doc = ref.current?.contentDocument;
-        const btn = doc?.querySelector<HTMLElement>('button[aria-label*="play" i]');
-        if (btn) {
-          btn.click();
+        const frame = ref.current;
+        const doc = frame?.contentDocument;
+        // The transport buttons carry title=, not aria-label=.
+        const buttons = Array.from(doc?.querySelectorAll('button') ?? []);
+        const rewind = buttons.find((b) => /return to start/i.test(b.title));
+        const playPause = buttons.find((b) => /play\/pause/i.test(b.title));
+        if (rewind && playPause) {
+          // The player rewrites the stored playhead every frame, so this reads its
+          // CURRENT time — nearly always 0 here, since the pre-mount clear already
+          // did the job. Rewinding unconditionally would snap a healthy film back
+          // after the ~300ms it took to get here, so only act on a real offset.
+          const at = parseFloat(
+            frame?.contentWindow?.localStorage.getItem(PLAYHEAD_STORAGE_KEY) || '0',
+          );
+          if (isFinite(at) && at > 1) {
+            rewind.click();
+            // The play/pause button draws a triangle only while PAUSED — the state a
+            // film that already ran to its end comes back in. Reading the icon is how
+            // we tell without reaching into the bundle's React state.
+            if (playPause.querySelector('path[d^="M3 2l9 5"]')) playPause.click();
+          }
           return;
         }
       } catch {
         return; // cross-origin (dev) — nothing more we can do from here
       }
-      if (attempts < 30) setTimeout(tryPlay, 300);
+      if (attempts < 30) setTimeout(tryStart, 300);
     };
-    const t = setTimeout(tryPlay, 300);
+    const t = setTimeout(tryStart, 300);
     return () => {
       cancelled = true;
       clearTimeout(t);
@@ -63,7 +99,8 @@ function WalkthroughFrame({ frameKey }: { frameKey: number }) {
 export default function Landing() {
   const router = useRouter();
   // 0 = poster showing. >0 = iframe mounted, keyed by this value so every play click forces
-  // a fresh mount (fresh <iframe>, video restarts from 0:00) even if it was already playing.
+  // a fresh mount (fresh <iframe>) even if it was already playing. The remount alone does
+  // NOT rewind — see clearWalkthroughPlayhead above for what actually gets it back to 0:00.
   const [filmKey, setFilmKey] = useState(0);
   const ctaSecondaryPop = usePopInteraction(3, colors.slate900, 1);
   const scrollRef = useRef<ScrollView>(null);
@@ -71,6 +108,9 @@ export default function Landing() {
 
   function playWalkthrough() {
     if (Platform.OS === 'web') {
+      // Before the remount, not after: the player reads the stored playhead while
+      // building its initial state, so a later clear would arrive too late.
+      clearWalkthroughPlayhead();
       setFilmKey((k) => k + 1);
     } else {
       Linking.openURL(WALKTHROUGH_URL);
@@ -120,7 +160,7 @@ export default function Landing() {
               <Text style={styles.ctaSecondaryText}>See how it works</Text>
             </Pressable>
           </View>
-          <Text style={styles.trialNote}>3-day free trial. No card required.</Text>
+          <Text style={styles.trialNote}>7-day free trial. No card required.</Text>
         </View>
 
         {/* Audience cards */}

@@ -101,6 +101,15 @@ export interface Milestone {
   isPast: boolean;
   // The date shown is last cycle's, rolled forward — see cycleYearShift.
   projected: boolean;
+  // This specific date is a prediction, not something read off the program's page. True when
+  // the deadline check flagged the entry itself, OR when the client projected the whole cycle
+  // forward (a projected date is an estimate by construction, whatever the stored flag says).
+  //
+  // Per-DATE on purpose. The row-level `wasEstimated` only says "something on this card is a
+  // guess", which on a mixed row either implies a confirmed deadline is a guess or lets a
+  // guessed opening pass as fact — and the opening is exactly the date that decides whether
+  // the card reads "Happening Now".
+  estimated: boolean;
 }
 
 // script.js getDisplayMilestones — dedupe (date,label), sort, flag past.
@@ -121,6 +130,7 @@ export function getDisplayMilestones(item: TrackerItem): Milestone[] {
       type: d.type || 'deadline',
       isPast: false,
       projected: shift > 0,
+      estimated: shift > 0 || (d as { estimated?: boolean }).estimated === true,
     });
   });
   milestones.sort((a, b) => a.date.localeCompare(b.date));

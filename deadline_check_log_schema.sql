@@ -5,7 +5,14 @@ CREATE TABLE IF NOT EXISTS deadline_check_log (
     id                  bigint generated always as identity primary key,
     opportunity_id      text not null,
     checked_at          timestamptz not null,
-    source              text not null,  -- 'cached', 'mock', 'fresh, real search', 'fresh, silent search', 'stale-fallback'
+    -- 'cached'              served from the 7-day cache, no API call
+    -- 'mock'                no ANTHROPIC_API_KEY; fabricated and deliberately not stored
+    -- 'fresh, real search'  verified and written to the opportunities row
+    -- 'unverified-fallback' phase 1 never searched; nothing written, row left due
+    -- 'unparsed-fallback'   searched, but phase 2's JSON was unreadable; nothing written
+    -- 'kept-existing'       searched, found no dates, row kept the ones it had
+    -- 'stale-fallback'      the check raised; served whatever was cached, however old
+    source              text not null,
     status              text,            -- 'running', 'not_running', 'unknown', or null for cached/fallback checks
     web_searches        integer,         -- number of web searches performed (null for cached/mock)
     cost_usd            numeric,         -- cost of the API call (null for cached/mock)

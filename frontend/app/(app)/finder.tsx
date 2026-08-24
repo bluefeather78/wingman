@@ -1,35 +1,71 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
-import { addTrackerItem, flattenItems, loadTrackerData } from '@/api/trackerStore';
+import { addTrackerItemChecked, flattenItems, loadTrackerData } from '@/api/trackerStore';
 import type { Opportunity } from '@/api/types';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import { ACTIVE_KINDS, KIND_CONFIG } from '@/lib/kinds';
 import { countProfileWords } from '@/lib/profile';
+import { type EnrichedTag } from '@/lib/profileTags';
+import {
+  cachedProfileFilterTags,
+  getProfileDerived,
+  getProfileFilterValues,
+  refreshProfileDerived,
+  type FilterTagsSlot,
+  type ModelCalls,
+  type ProfileRecord,
+  type ProfileStore,
+} from '@/lib/profileDerived';
 import { parseGradeFromText } from '@/lib/grade';
 import { extractJSON } from '@/lib/extractJSON';
 import { inferSubjects, preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
 import { markNewlyAdded } from '@/lib/newlyAdded';
+import { awaitProfileWrites } from '@/lib/profileWrites';
 import { applyDeadlineCheckToInfo, extractTrackerInfo, findBucketForKind } from '@/lib/tracker';
-import { MiniBadge, PopButton, Screen, SoftCard, Txt, usePopInteraction } from '@/ui/components';
+import { MiniBadge, PopButton, ReviewBadge, Screen, SoftCard, Txt, usePopInteraction } from '@/ui/components';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
 interface Result {
   opp: Opportunity;
   reason: string;
   tier: 'strong' | 'look';
+  // Which kind's ranking call surfaced this. Set by the profile-driven fan-out; absent on a
+  // single-kind form search. Preferred over deriving a kind from opp.type, which only ever
+  // guessed at what the search actually did.
+  kind?: string;
 }
 const callGemini = httpClient.callGemini.bind(httpClient);
+// The profile-derived slots need both providers and a place to persist to. Defined once at
+// module scope: they hold no state, so a new object per render would only defeat the
+// in-flight de-duplication inside getProfileDerived.
+const modelCalls: ModelCalls = {
+  gemini: callGemini,
+  claude: httpClient.callClaude.bind(httpClient),
+};
+const profileStore: ProfileStore = {
+  load: () => httpClient.loadData<ProfileRecord>('student-profile'),
+  save: (record) => httpClient.saveData('student-profile', record),
+};
 type Stage = 'home' | 'quiz' | 'form' | 'results';
 
+// Quiet retries before the catalog failure is shown to the student. Two is enough to ride
+// out a cold backend or a dropped connection without leaving them staring at a spinner.
+const CATALOG_RETRIES = 2;
+const CATALOG_RETRY_DELAY_MS = 800;
+
 // Map a catalog opportunity's `type` to a kind key (used when adding from a mixed suggest list).
+// Every type the catalog actually carries must appear here: an unmapped type falls through
+// to 'summer' and files the opportunity in the Quest Log as a summer program, which is how
+// volunteer roles and the lone `Academic` row ended up labelled camps.
 function kindForOpp(opp: Opportunity): string {
   const map: Record<string, string> = {
     Program: 'summer', Internship: 'internship', Conference: 'conference',
     Journal: 'journal', Research: 'research-competition', Competition: 'pure-competition',
+    Volunteer: 'volunteer', Academic: 'pure-competition',
   };
   return map[(opp.type as string) ?? ''] ?? 'summer';
 }
@@ -49,6 +85,7 @@ const QUIZ_SUB: Record<string, { label: string; desc: string; kind: string }[]> 
   timeoff: [
     { label: 'Hands-on work experience', desc: 'Work with a lab, company, or organization', kind: 'internship' },
     { label: 'A summer program', desc: 'Camps, pre-college programs, academies', kind: 'summer' },
+    { label: 'Volunteering or service', desc: 'Give time to a cause or community organization', kind: 'volunteer' },
   ],
 };
 
@@ -60,17 +97,48 @@ const FILTER_FIELDS = [
 ] as const;
 type FilterKey = (typeof FILTER_FIELDS)[number]['key'];
 
-// The "Your Profile" facet's enriched tags, cached on the shared student-profile record
-// by the old app (PROFILE_DERIVED_SLOTS.filterTags) — read for free, never regenerated here.
-interface EnrichedTag {
-  tag: string;
-  intent?: string;
-  nextSteps?: string[];
+// Plenty of catalog rows carry no cost, season or format. The facet list was built from
+// non-empty values only, so those rows could not satisfy ANY checked option and silently
+// disappeared the moment a student touched a filter. They now get an explicit option they
+// can see and choose, rather than being quietly excluded.
+const BLANK_FACET = '__unspecified__';
+const BLANK_FACET_LABEL = 'Not specified';
+function facetValue(opp: Opportunity, key: FilterKey): string {
+  const v = opp[key];
+  return typeof v === 'string' && v.trim() ? v : BLANK_FACET;
 }
+
+// The "Your Profile" facet's enriched tags, stored on the shared student-profile record
+// (PROFILE_DERIVED_SLOTS.filterTags). EnrichedTag and the generator now live in
+// src/lib/profileTags.ts — this screen both READS the slot and, when it is missing or
+// stale, computes and persists it. Until that writer existed the facet worked only for
+// accounts carrying tags from the retired SPA.
 interface TagScore {
   reasoning?: string;
   rank: number;
 }
+
+// ---------- Session-scoped result cache ----------
+// The authed shell renders a <Slot/>, so navigating away UNMOUNTS this screen. That used to
+// discard the results and re-run two paid AI calls on the next visit, which meant the same
+// unchanged profile produced a different list every time the student opened the tab, with
+// nothing on screen explaining why.
+//
+// Deliberately a module singleton and NOT persisted: it survives tab-switching and dies on
+// reload. It is keyed on the profile text it was searched from, so deepening the profile
+// invalidates it and the next visit genuinely re-searches — a cached list must never
+// outlive the thing it claims to be based on.
+interface SessionSearch {
+  profileKey: string;
+  results: Result[];
+  suggestMode: boolean;
+  kind: string;
+  note: string | null;
+  // Tag scores ride along with the results they were computed against, so restoring a
+  // cached list also restores the work done on top of it.
+  tagScores: Map<string, Record<string, TagScore>>;
+}
+let sessionSearch: SessionSearch | null = null;
 
 // batchScoreOpportunitiesWithAI, ported: one Gemini call scoring the visible results
 // against the selected tag; returns null on failure (distinct from "nothing matched").
@@ -124,15 +192,25 @@ export default function Finder() {
   const router = useRouter();
   const [opps, setOpps] = useState<Opportunity[] | null>(null);
   const [oppsError, setOppsError] = useState<string | null>(null);
+  const [oppsLoading, setOppsLoading] = useState(true);
+  // Mount flag shared by every async path here, so a retry loop that outlives the screen
+  // can't setState on an unmounted component.
+  const aliveRef = useRef(true);
+  // The last-loaded student-profile record, so the slot readers don't re-fetch it per call.
+  const profileRecord = useRef<ProfileRecord | null>(null);
   const [profileText, setProfileText] = useState('');
   // "Your profile is empty" is also what an unloaded profile looks like, so the hero flashed
   // that on every visit before the fetch landed. Gate it on the load actually resolving.
   const [profileLoaded, setProfileLoaded] = useState(false);
-  const [stage, setStage] = useState<Stage>('home');
+  // Come back to the tab and you land back ON the list, not on a hero telling you it
+  // exists. The results survived the unmount (sessionSearch); making the student press
+  // "View my matches" to see them again is a step that only exists because of how this
+  // screen is built.
+  const [stage, setStage] = useState<Stage>(() => (sessionSearch?.results.length ? 'results' : 'home'));
   const [browseOpen, setBrowseOpen] = useState(false);
   const [quizBranch, setQuizBranch] = useState<string | null>(null);
-  const [kind, setKind] = useState<string>(ACTIVE_KINDS[0]);
-  const [suggestMode, setSuggestMode] = useState(false);
+  const [kind, setKind] = useState<string>(() => sessionSearch?.kind ?? ACTIVE_KINDS[0]);
+  const [suggestMode, setSuggestMode] = useState(() => sessionSearch?.suggestMode ?? false);
 
   const [description, setDescription] = useState('');
   const [grade, setGrade] = useState('');
@@ -141,13 +219,18 @@ export default function Finder() {
   const [remote, setRemote] = useState(false);
 
   const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<Result[]>([]);
-  const [note, setNote] = useState<string | null>(null);
+  // Seeded from the session cache so tab-switching returns the same list rather than
+  // re-running the search. Validated against the profile once it loads (see below).
+  const [results, setResults] = useState<Result[]>(() => sessionSearch?.results ?? []);
+  const [note, setNote] = useState<string | null>(() => sessionSearch?.note ?? null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [trackedIds, setTrackedIds] = useState<Set<string>>(new Set());
   // Hover-lift for result cards (.pop-card:hover in the live app) — one shared id rather
   // than a hook per card, since the card list is rendered via .map(), not its own component.
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
+  // Which card's review popover is open. One id for the whole list, so opening a second one
+  // closes the first — the rule toggleReviewInfo() enforced in the retired SPA.
+  const [openReviewId, setOpenReviewId] = useState<string | null>(null);
   const [hoveredSaveBtnId, setHoveredSaveBtnId] = useState<string | null>(null);
   const [pressedSaveBtnId, setPressedSaveBtnId] = useState<string | null>(null);
   const [hoveredQuizOption, setHoveredQuizOption] = useState<number | null>(null);
@@ -165,35 +248,106 @@ export default function Finder() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [tagScores, setTagScores] = useState<Record<string, TagScore> | null>(null);
   const [tagScoring, setTagScoring] = useState(false);
-  const tagScoreCache = useRef(new Map<string, Record<string, TagScore>>());
+  const tagScoreCache = useRef(sessionSearch?.tagScores ?? new Map<string, Record<string, TagScore>>());
+  // True while the tag slot is being generated for a profile that has none yet.
+  const [tagsBuilding, setTagsBuilding] = useState(false);
+
+  // Load the catalog, retrying transient failures quietly before admitting defeat. Every
+  // entry point on this screen is dead without it, so a failure has to become something the
+  // student can SEE and act on — it used to be recorded and never rendered, which left
+  // "Suggest opportunities for me" as a button that did nothing at all.
+  const loadOpportunities = useCallback(async (attempt = 0): Promise<void> => {
+    setOppsError(null);
+    setOppsLoading(true);
+    try {
+      // Discontinued programs never reach the results, the browse list, or the ranker —
+      // filtered at the source so no path can miss it. The test is `=== 'not_running'`, never
+      // `!== 'running'`: the catalog's `status` is NULL on 1195 of its 1239 active rows (never
+      // deadline-checked), and reading that absence as "not running" would empty Fresh Finds.
+      const r = await httpClient.getOpportunities();
+      if (!aliveRef.current) return;
+      setOpps(r.filter((o) => o.status !== 'not_running'));
+    } catch (e) {
+      if (!aliveRef.current) return;
+      if (attempt < CATALOG_RETRIES) {
+        await new Promise((res) => setTimeout(res, CATALOG_RETRY_DELAY_MS * (attempt + 1)));
+        if (!aliveRef.current) return;
+        return loadOpportunities(attempt + 1);
+      }
+      setOppsError((e as Error).message);
+    } finally {
+      if (aliveRef.current) setOppsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let alive = true;
-    // Discontinued programs never reach the results, the browse list, or the ranker —
-    // filtered at the source so no path can miss it. The test is `=== 'not_running'`, never
-    // `!== 'running'`: the catalog's `status` is NULL on 1195 of its 1239 active rows (never
-    // deadline-checked), and reading that absence as "not running" would empty Fresh Finds.
-    httpClient
-      .getOpportunities()
-      .then((r) => alive && setOpps(r.filter((o) => o.status !== 'not_running')))
-      .catch((e) => alive && setOppsError((e as Error).message));
-    httpClient
-      .loadData<{ synthesized?: string; filterTags?: { enrichedTags?: EnrichedTag[] } }>('student-profile')
+    aliveRef.current = true;
+    void loadOpportunities();
+    // Wait for any profile rewrite still running on My Vibe BEFORE reading the profile.
+    // Without this the finder read whatever was stored at that instant — still the previous
+    // profile — matched its session cache against that stale text and showed the old list,
+    // then the synthesis landed and the list changed underneath the student. The catalog
+    // fetch above deliberately does not wait: it is independent of the profile, so it can
+    // get on with the slower request while we hold here.
+    awaitProfileWrites()
+      .then(() => (aliveRef.current ? httpClient.loadData<ProfileRecord>('student-profile') : null))
       .then((p) => {
-        if (!alive) return;
-        setProfileText(p?.synthesized ?? '');
-        const tags = p?.filterTags?.enrichedTags;
-        if (Array.isArray(tags)) setProfileTags(tags.filter((t) => t && typeof t.tag === 'string'));
+        if (!aliveRef.current) return;
+        const text = p?.synthesized ?? '';
+        setProfileText(text);
+        // A cached list must never outlive the profile it was searched from. If the student
+        // deepened their story on another tab, drop it and let the auto-run search again.
+        if (sessionSearch && sessionSearch.profileKey !== text) {
+          sessionSearch = null;
+          tagScoreCache.current = new Map();
+          setResults([]);
+          setNote(null);
+          // We restored straight onto the results stage from the cache; with the cache gone
+          // there is nothing to show there, so fall back to the hero rather than an empty page.
+          setStage('home');
+        }
+        profileRecord.current = p ?? null;
+        // Paint from the stored slot immediately where it is still fresh (never blocking on
+        // a model call to draw a filter bar), then warm every slot in the background so the
+        // next search, the tag facet, the basics tiles and the chat openers are all served
+        // from cache. cachedProfileFilterTags returns null — distinct from [] — when nothing
+        // has been computed for the current text yet.
+        const cachedTags = cachedProfileFilterTags(p);
+        if (cachedTags) setProfileTags(cachedTags.filter((t) => t && typeof t.tag === 'string'));
+        if (countProfileWords(text) >= PROFILE_SUFFICIENT_LENGTH) {
+          if (!cachedTags) setTagsBuilding(true);
+          refreshProfileDerived(profileStore, modelCalls, p);
+          // Re-read the tags once the refresh lands. A failure leaves the facet hidden.
+          void getProfileDerivedTags(p);
+        }
       })
       .catch(() => {})
       .finally(() => {
-        if (alive) setProfileLoaded(true);
+        if (aliveRef.current) setProfileLoaded(true);
       });
-    loadTrackerData().then((d) => alive && setTrackedIds(new Set(flattenItems(d).map((i) => i.id)))).catch(() => {});
+    loadTrackerData()
+      .then((d) => aliveRef.current && setTrackedIds(new Set(flattenItems(d).map((i) => i.id))))
+      .catch(() => {});
     return () => {
-      alive = false;
+      aliveRef.current = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Read the tag slot through the shared cache, so this shares one in-flight call with the
+  // background warm above rather than paying for a second. Never throws: the facet is an
+  // enhancement on top of results already on screen, so a failure just hides the dropdown.
+  async function getProfileDerivedTags(record: ProfileRecord | null) {
+    try {
+      const slot = (await getProfileDerived(profileStore, modelCalls, 'filterTags', record)) as FilterTagsSlot;
+      if (!aliveRef.current) return;
+      setProfileTags((slot.enrichedTags || []).filter((t) => t && typeof t.tag === 'string'));
+    } catch (e) {
+      console.warn('Profile tag build failed; the tag facet stays hidden:', (e as Error).message);
+    } finally {
+      if (aliveRef.current) setTagsBuilding(false);
+    }
+  }
 
   // Score the current result set against the selected profile tag (cached per tag+ids,
   // like the old tagScoreCache — toggling filters or saving cards never re-pays the call).
@@ -233,14 +387,39 @@ export default function Finder() {
 
   // Auto-run the profile-based suggestion once when entering with a ready profile.
   const autoRan = useRef(false);
+  // Whether the auto-run decision has been MADE yet — distinct from whether it ran. Until
+  // both the catalog and the profile have landed we cannot know if a search is about to
+  // start, and rendering the idle hero in that gap makes it blink to the spinner a frame
+  // later. A ref can't drive this: the hero has to re-render when it settles.
+  const [autoRunSettled, setAutoRunSettled] = useState(!!sessionSearch?.results.length);
   useEffect(() => {
     if (autoRan.current) return;
-    if (opps && profileReady && stage === 'home' && !results.length) {
-      autoRan.current = true;
-      void suggestForMe();
-    }
+    if (!opps || !profileLoaded) return; // still deciding — keep showing the loading state
+    autoRan.current = true;
+    if (profileReady && stage === 'home' && !results.length) void suggestForMe();
+    setAutoRunSettled(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opps, profileReady]);
+  }, [opps, profileLoaded, profileReady]);
+
+  // The single "Finding your matches…" state: profile loading, catalog loading, the gap
+  // before the auto-run starts, and the search itself. Not shown once the catalog has
+  // failed — that has its own card with a retry, and a spinner would sit there forever.
+  const booting = !oppsError && (!profileLoaded || !autoRunSettled || searching);
+
+  // The ONLY copy this screen shows while it is working. Declared once because two branches
+  // render it: the boot/search state, and the "ready profile, no results yet" case that used
+  // to be an idle "Fresh Finds" hero with its own Suggest button. From the student's side
+  // both are the same thing — the tab is getting their matches — so both say the same thing.
+  //
+  // Nothing can park here indefinitely: the auto-run fires as soon as the catalog and
+  // profile land, and a search that FAILS routes to the results stage (see search()'s catch)
+  // where the error and a way forward are actually visible, rather than falling back here.
+  const loadingHero = (
+    <LoadingRow
+      title="Finding your matches…"
+      sub="Searching based on everything in your profile."
+    />
+  );
 
   function openForm(k: string) {
     setKind(k);
@@ -265,15 +444,97 @@ export default function Finder() {
     setNote(null);
     const cfg = k ? KIND_CONFIG[k] : null;
     const strict = !!cfg?.strictType;
-    const gradeNum = parseGradeFromText(grade);
     try {
+      // Subjects + grade come from the profile's stored filter values, recomputed only when
+      // the profile itself meaningfully changes — this was an unconditional Gemini call on
+      // every search, which both cost money per search and let the same profile produce
+      // different subjects (and so different results) each time.
       let subjectHints: string[] = [];
+      let profileGrade: number | null = null;
       try {
-        subjectHints = await inferSubjects(callGemini, desc);
+        const fv = await getProfileFilterValues(profileStore, modelCalls, profileRecord.current);
+        subjectHints = fv.subjects;
+        profileGrade = fv.grade;
       } catch {
-        /* best effort */
+        /* best effort — no hints just means keyword-only scoring */
       }
-      const pool = preFilter(opps, desc, subjectHints, cfg?.dbTypes ?? null, strict, gradeNum);
+      // The form's dropdown wins when set; otherwise the grade comes from whatever
+      // grade-level language the student's own profile text happens to contain, if any.
+      const gradeNum = parseGradeFromText(grade) ?? profileGrade;
+
+      // ---- The profile-driven path fans out across EVERY kind, one ranking call each ----
+      // Restored from the retired SPA. Collapsing this to a single untyped search was the
+      // real cause of Fresh Finds returning far fewer results: one 100-row pool and one
+      // ranking call, instead of six type-scoped pools and six rankings. Each kind is
+      // independent, so they run concurrently (wall time is the slowest call, not the sum)
+      // and a failure is isolated — one flaky response used to blank out every other kind's
+      // already-successful results.
+      if (!k) {
+        const perKind = await Promise.all(
+          ACTIVE_KINDS.map(async (kind) => {
+            const kcfg = KIND_CONFIG[kind];
+            if (!kcfg) return [];
+            try {
+              const { pool: kpool } = preFilter(
+                opps, desc, subjectHints, kcfg.dbTypes ?? null, !!kcfg.strictType, gradeNum,
+              );
+              if (!kpool.length) return [];
+              const ranked = await rankCandidates(callGemini, desc, kpool, prefs || null, !!kcfg.strictType);
+              const byId = new Map(kpool.map((o) => [o.id, o]));
+              return ranked
+                .filter((r) => byId.has(r.id))
+                .map((r) => ({
+                  opp: byId.get(r.id) as Opportunity,
+                  reason: r.reason || '',
+                  tier: (['strong', 'look'].includes(r.tier) ? r.tier : 'look') as 'strong' | 'look',
+                  kind,
+                }));
+            } catch (err) {
+              console.error(`Ranking failed for kind "${kind}":`, (err as Error).message);
+              return [];
+            }
+          }),
+        );
+        // One opportunity can be ranked by more than one kind (its Type only belongs to one,
+        // but the type filter widens when a kind is sparse). Keep the first, best-tiered hit
+        // so the same card can't appear twice in the list.
+        const seen = new Set<string>();
+        const merged = perKind
+          .flat()
+          .sort((a, b) => (a.tier === b.tier ? 0 : a.tier === 'strong' ? -1 : 1))
+          .filter((r) => (seen.has(r.opp.id) ? false : (seen.add(r.opp.id), true)));
+        setResults(merged);
+        setNote(null);
+        rememberSearch(merged, null, k);
+        setSelected(new Set());
+        setVisibleCount(10);
+        setStage('results');
+        return;
+      }
+
+      const { pool, typeMatches, widened, strictEmpty } = preFilter(
+        opps, desc, subjectHints, cfg?.dbTypes ?? null, strict, gradeNum,
+      );
+      // A strict kind with nothing of its type in the catalog. Say so and stop BEFORE the
+      // paid ranking call — there is nothing here to rank, and widening would have handed
+      // back a page of the wrong kind of opportunity.
+      if (strictEmpty) {
+        setResults([]);
+        setNote(`We don't have any ${(cfg?.name ?? 'opportunities of this type').toLowerCase()} listings in the catalog right now. Try another type, or check back soon.`);
+        rememberSearch([], `We don't have any ${(cfg?.name ?? 'opportunities of this type').toLowerCase()} listings in the catalog right now. Try another type, or check back soon.`, k);
+        setSelected(new Set());
+        setVisibleCount(10);
+        setStage('results');
+        return;
+      }
+      // The type filter was dropped because too few rows carried it. The student asked for
+      // one kind of thing and is about to be shown others — tell them, rather than letting
+      // it look like the app ignored the choice they just made.
+      const widenNote = widened
+        ? typeMatches === 0
+          ? `We don't have any ${(cfg?.name ?? 'matching').toLowerCase()} listings yet, so these are other opportunity types that fit what you described.`
+          : `Only ${typeMatches} ${(cfg?.name ?? 'matching').toLowerCase()} listing${typeMatches === 1 ? '' : 's'} matched what you described, so we've included other opportunity types below.`
+        : null;
       const byId = new Map(pool.map((o) => [o.id, o]));
       try {
         // rankCandidates already retries one parse failure internally; add one more full
@@ -292,19 +553,48 @@ export default function Finder() {
           .filter((x): x is Result => x !== null);
         if (!mapped.length) throw new Error('AI ranking returned no usable matches');
         setResults(mapped);
+        setNote(widenNote);
+        rememberSearch(mapped, widenNote, k);
       } catch (err) {
         console.error('AI ranking unavailable, falling back to keyword order:', (err as Error).message);
-        setNote('Showing keyword matches — AI ranking is unavailable right now.');
-        setResults(pool.slice(0, 12).map((opp) => ({ opp, reason: '', tier: 'look' as const })));
+        const fallback = pool.slice(0, 12).map((opp) => ({ opp, reason: '', tier: 'look' as const }));
+        // Both facts matter and neither may hide the other: the ranking is degraded AND the
+        // type filter may have been dropped.
+        const fallbackNote = [widenNote, 'Showing keyword matches — AI ranking is unavailable right now.']
+          .filter(Boolean).join(' ');
+        setNote(fallbackNote);
+        setResults(fallback);
+        rememberSearch(fallback, fallbackNote, k);
       }
       setSelected(new Set());
       setVisibleCount(10);
       setStage('results');
     } catch (e) {
-      setNote(`Search failed: ${(e as Error).message}`);
+      // Land on the results stage even though there are none. The note and the "No matches
+      // this time" card live there, so a failure is something the student can SEE and act
+      // on; staying on the home stage left the message rendered nowhere, and now that the
+      // idle hero is gone it would leave a spinner running over a search that had stopped.
+      const msg = `Search failed: ${(e as Error).message}`;
+      setNote(msg);
+      setResults([]);
+      rememberSearch([], msg, k);
+      setStage('results');
     } finally {
       setSearching(false);
     }
+  }
+
+  // Persist a finished search into the session cache so returning to this tab shows the
+  // same list instead of paying for a fresh one. Keyed on the profile text it was based on.
+  function rememberSearch(list: Result[], noteText: string | null, k: string | null) {
+    sessionSearch = {
+      profileKey: profileText,
+      results: list,
+      suggestMode: k === null,
+      kind: k ?? kind,
+      note: noteText,
+      tagScores: tagScoreCache.current,
+    };
   }
 
   async function suggestForMe() {
@@ -317,8 +607,18 @@ export default function Finder() {
   // overlaid on top — the same two-step sequence buildTracker() used, dropped somewhere in
   // the RN port in favor of a bare getDeadlineCheck() call that left status/note/requirements
   // /action items empty. A total failure falls back to a database-only stub, exactly as before.
-  async function addOneToTracker(opp: Opportunity, reason: string) {
-    const bucket = findBucketForKind(suggestMode ? kindForOpp(opp) : kind);
+  // Returns what actually happened, so the caller can stop claiming an add that the store
+  // refused. The Quest Log rejects an item whose id OR url is already tracked, and this used
+  // to swallow that — the card flipped to "In Quest Log", the batch was badged NEW, and
+  // nothing had been written.
+  async function addOneToTracker(
+    opp: Opportunity,
+    reason: string,
+    resultKind?: string,
+  ): Promise<{ added: boolean; existingName?: string }> {
+    // Same precedence as the card's category badge: the kind that actually surfaced this
+    // beats a guess derived from opp.type, so the Quest Log files it where it was found.
+    const bucket = findBucketForKind(resultKind ?? (suggestMode ? kindForOpp(opp) : kind));
     const url = (opp.url as string) ?? null;
     const type = (opp.type as string) ?? null;
     const reviewStatus = (opp.review_status as string) ?? null;
@@ -333,7 +633,7 @@ export default function Finder() {
         info = await extractTrackerInfo(callGemini, opp);
       }
       applyDeadlineCheckToInfo(info, await httpClient.getDeadlineCheck(opp.id));
-      await addTrackerItem(bucket, {
+      const res = await addTrackerItemChecked(bucket, {
         id: opp.id,
         name: opp.name,
         url,
@@ -350,7 +650,7 @@ export default function Finder() {
         importantDates: Array.isArray(info.important_dates)
           ? info.important_dates
               .filter((d) => d && d.date_iso)
-              .map((d) => ({ label: d.label || 'Date', dateISO: d.date_iso, type: d.type || 'deadline' }))
+              .map((d) => ({ label: d.label || 'Date', dateISO: d.date_iso, type: d.type || 'deadline', estimated: d.estimated }))
               .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
           : [],
         deadlineLabel: info.deadline_label || 'CHECK SITE',
@@ -366,9 +666,10 @@ export default function Finder() {
             }))
           : [],
       });
+      return { added: res.added, existingName: res.existing?.name };
     } catch (err) {
       console.error(`Failed to fetch details for ${opp.name}:`, (err as Error).message);
-      await addTrackerItem(bucket, {
+      const res = await addTrackerItemChecked(bucket, {
         id: opp.id,
         name: opp.name,
         url,
@@ -389,6 +690,7 @@ export default function Finder() {
         applyLabel: 'Visit site',
         actionItems: [],
       });
+      return { added: res.added, existingName: res.existing?.name };
     }
   }
 
@@ -398,18 +700,37 @@ export default function Finder() {
     const ids = [...selected];
     setAddProgress({ done: 0, total: ids.length });
     try {
+      // Only ids the store ACTUALLY wrote get marked tracked and badged NEW. A duplicate
+      // (same id or same url as something already tracked) is reported by name instead of
+      // being silently dropped behind a "In Quest Log" label.
+      const addedIds: string[] = [];
+      const duplicates: string[] = [];
       for (let i = 0; i < ids.length; i++) {
         const r = results.find((x) => x.opp.id === ids[i]);
-        if (r) await addOneToTracker(r.opp, r.reason);
+        if (r) {
+          const outcome = await addOneToTracker(r.opp, r.reason, r.kind);
+          if (outcome.added) addedIds.push(ids[i]);
+          else duplicates.push(outcome.existingName || r.opp.name);
+        }
         setAddProgress({ done: i + 1, total: ids.length });
       }
       // Only this batch carries the NEW treatment in the Quest Log — see markNewlyAdded.
-      markNewlyAdded(selected);
-      setTrackedIds((p) => new Set([...p, ...selected]));
+      markNewlyAdded(addedIds);
+      setTrackedIds((p) => new Set([...p, ...addedIds]));
       setSelected(new Set());
+      if (duplicates.length) {
+        const names = duplicates.slice(0, 3).join(', ');
+        const more = duplicates.length > 3 ? ` and ${duplicates.length - 3} more` : '';
+        setNote(
+          addedIds.length
+            ? `Added ${addedIds.length}. Already in your Quest Log: ${names}${more}.`
+            : `Already in your Quest Log: ${names}${more}. Nothing new to add.`,
+        );
+      }
       // Adding is the point of departure to the Quest Log — land there instead of leaving
       // the student on a Fresh Finds page that now just shows the same cards as "tracked".
-      router.push('/(app)/tracker');
+      // Nothing added means nothing to go and look at, so stay put and show the reason.
+      if (addedIds.length) router.push('/(app)/tracker');
     } catch (e) {
       setNote(`Couldn't add: ${(e as Error).message}`);
     } finally {
@@ -425,6 +746,19 @@ export default function Finder() {
       else n.add(id);
       return n;
     });
+  }
+  // Everything the Clear control undoes, counted the same way it clears — the field facets,
+  // the profile tag, and the untracked toggle. Keep the two in step or the count lies.
+  const activeFilterCount =
+    FILTER_FIELDS.reduce((n, f) => n + filters[f.key].size, 0) +
+    (selectedTag ? 1 : 0) +
+    (untrackedOnly ? 1 : 0);
+
+  function clearAllFilters() {
+    setFilters({ type: new Set(), price: new Set(), season: new Set(), location: new Set() });
+    setSelectedTag(null);
+    setUntrackedOnly(false);
+    setVisibleCount(10);
   }
   function toggleFilter(key: FilterKey, value: string) {
     setFilters((p) => {
@@ -453,7 +787,7 @@ export default function Finder() {
     let filtered = sortedResults.filter((r) => {
       for (const f of FILTER_FIELDS) {
         const set = filters[f.key];
-        if (set.size && !set.has((r.opp[f.key] as string) ?? '')) return false;
+        if (set.size && !set.has(facetValue(r.opp, f.key))) return false;
       }
       return true;
     });
@@ -476,22 +810,33 @@ export default function Finder() {
   if (stage === 'home') {
     return (
       <Screen>
+        {/* The catalog failed to load after its quiet retries. Every path on this screen
+            needs it, so this replaces the hero rather than sitting beside a CTA that
+            cannot work. */}
+        {!!oppsError && (
+          <SoftCard style={styles.heroCard}>
+            <Text style={styles.heroTitle}>We couldn't load the opportunities</Text>
+            <Text style={[styles.heroSub, styles.heroSubItalic]}>
+              This is on our side, not yours — your profile and Quest Log are safe. {oppsError}
+            </Text>
+            <PopButton
+              label={oppsLoading ? 'Retrying…' : 'Try again'}
+              loading={oppsLoading}
+              onPress={() => void loadOpportunities()}
+              style={styles.selfStart}
+            />
+          </SoftCard>
+        )}
+        {!oppsError && (
         <SoftCard style={styles.heroCard}>
-          {!profileLoaded ? (
-            <View style={styles.loadingRow}>
-              <ActivityIndicator color={colors.orangeDeep} size="small" />
-              <View style={styles.flex1}>
-                <Text style={styles.heroTitleSm}>Loading your profile…</Text>
-              </View>
-            </View>
-          ) : searching ? (
-            <View style={styles.loadingRow}>
-              <ActivityIndicator color={colors.orangeDeep} size="small" />
-              <View style={styles.flex1}>
-                <Text style={styles.heroTitleSm}>Finding your matches…</Text>
-                <Text style={styles.heroSub}>Searching based on everything in your profile.</Text>
-              </View>
-            </View>
+          {/* One loading state, not two. Fetching the profile is setup the student never
+              asked for and shouldn't have to watch — from their side the tab is doing one
+              thing, so it says one thing. The state still has to exist (it is what stops
+              "Your profile is empty" flashing before the profile has loaded) and it still
+              covers the gap before the auto-run starts, or the default hero would blink
+              between the two. */}
+          {booting ? (
+            loadingHero
           ) : !profileText ? (
             <>
               <Text style={styles.heroTitle}>Your profile is empty</Text>
@@ -509,17 +854,30 @@ export default function Finder() {
           ) : results.length ? (
             <>
               <Text style={styles.heroTitle}>Your matches are ready</Text>
+              {/* These are the matches from earlier this session, not a fresh search — say
+                  so, and offer the re-run explicitly rather than doing it unasked. */}
               <Text style={[styles.heroSub, styles.heroSubItalic]}>Based on everything in your profile.</Text>
-              <PopButton label="View my matches →" onPress={() => setStage('results')} style={styles.selfStart} />
+              <View style={styles.heroActions}>
+                <PopButton label="View my matches →" onPress={() => setStage('results')} />
+                <Pressable onPress={() => { sessionSearch = null; void suggestForMe(); }}>
+                  <Text style={styles.link}>Search again</Text>
+                </Pressable>
+              </View>
             </>
           ) : (
-            <>
-              <Text style={styles.heroTitle}>Fresh Finds</Text>
-              <Text style={[styles.heroSub, styles.heroSubItalic]}>We'll use your profile to surface the best fits.</Text>
-              <PopButton label="Suggest opportunities for me" onPress={suggestForMe} style={styles.selfStart} />
-            </>
+            loadingHero
           )}
         </SoftCard>
+        )}
+
+        {/* Held results must be reachable no matter which hero branch is showing. The hero
+            tests the PROFILE first, so a student who searched by browsing without a profile
+            saw "Your profile is empty" with their results stranded behind it. */}
+        {!oppsError && !!results.length && !profileReady && (
+          <Pressable style={styles.centerLink} onPress={() => setStage('results')}>
+            <Text style={styles.link}>← Back to your {results.length} match{results.length === 1 ? '' : 'es'}</Text>
+          </Pressable>
+        )}
 
         <Pressable style={styles.centerLink} onPress={() => setBrowseOpen((b) => !b)}>
           <Text style={styles.link}>{browseOpen ? 'Hide opportunity types' : 'Click here to browse opportunities'}</Text>
@@ -666,6 +1024,20 @@ export default function Finder() {
         </View>
       </LinearGradient>
 
+      {/* An open facet panel closes when the student presses anywhere else. Rendered as a
+          full-bleed transparent backdrop UNDER the panel (zIndex below facetPanel, above
+          the page) so a press that lands outside is caught here, while presses inside the
+          panel never reach it. Cross-platform: no document-level listener, works on native.
+          Note the panels sit inside the filter bar's stacking context, so this also has to
+          out-rank the bar itself — hence filterBackdrop's zIndex sits between them. */}
+      {openFacet !== null && (
+        <Pressable
+          style={styles.filterBackdrop}
+          onPress={() => setOpenFacet(null)}
+          accessibilityLabel="Close filter menu"
+        />
+      )}
+
       {/* Filter row */}
       <View style={styles.filterBar}>
         <Text style={styles.filterLabel}>FILTER:</Text>
@@ -679,15 +1051,22 @@ export default function Finder() {
               <Text style={styles.filterToggleText}>▾ Your Profile{selectedTag ? ' (1)' : ''}</Text>
             </Pressable>
             {openFacet === 'profile' && (
+              /* Scrolls, because the tag list has no fixed length: it is as long as the
+                 profile is broad. This panel is absolutely positioned, so an over-long list
+                 simply ran off the bottom of the viewport and the tags below the fold could
+                 not be reached at all. `None` sits outside the scroller so the way to clear
+                 the filter is always visible, never scrolled past. */
               <View style={[styles.facetPanel, styles.facetPanelWide]}>
                 <Pressable style={styles.facetRow} onPress={() => { setSelectedTag(null); setVisibleCount(10); setOpenFacet(null); }}>
                   <Text style={styles.facetRowText}>{selectedTag ? '○' : '●'} None</Text>
                 </Pressable>
-                {profileTags.map((t) => (
-                  <Pressable key={t.tag} style={styles.facetRow} onPress={() => { setSelectedTag(t.tag); setVisibleCount(10); setOpenFacet(null); }}>
-                    <Text style={styles.facetRowText}>{selectedTag === t.tag ? '●' : '○'} {t.tag}</Text>
-                  </Pressable>
-                ))}
+                <ScrollView style={styles.facetScroll} nestedScrollEnabled>
+                  {profileTags.map((t) => (
+                    <Pressable key={t.tag} style={styles.facetRow} onPress={() => { setSelectedTag(t.tag); setVisibleCount(10); setOpenFacet(null); }}>
+                      <Text style={styles.facetRowText}>{selectedTag === t.tag ? '●' : '○'} {t.tag}</Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
               </View>
             )}
           </View>
@@ -696,7 +1075,14 @@ export default function Finder() {
           <Text style={styles.filterToggleText}>{untrackedOnly ? '☑' : '☐'} Only untracked</Text>
         </Pressable>
         {FILTER_FIELDS.map((f) => {
-          const values = [...new Set(sortedResults.map((r) => (r.opp[f.key] as string) ?? '').filter(Boolean))].sort();
+          // Real values sorted alphabetically, with "Not specified" pinned LAST — it is an
+          // absence, not a peer of the real options, and sorting it among them invites
+          // reading it as one.
+          const raw = [...new Set(sortedResults.map((r) => facetValue(r.opp, f.key)))];
+          const values = [
+            ...raw.filter((v) => v !== BLANK_FACET).sort(),
+            ...(raw.includes(BLANK_FACET) ? [BLANK_FACET] : []),
+          ];
           if (values.length < 2) return null;
           const active = filters[f.key].size;
           return (
@@ -721,7 +1107,9 @@ export default function Finder() {
                 <View style={styles.facetPanel}>
                   {values.map((v) => (
                     <Pressable key={v} style={styles.facetRow} onPress={() => toggleFilter(f.key, v)}>
-                      <Text style={styles.facetRowText}>{filters[f.key].has(v) ? '☑' : '☐'} {v}</Text>
+                      <Text style={styles.facetRowText}>
+                        {filters[f.key].has(v) ? '☑' : '☐'} {v === BLANK_FACET ? BLANK_FACET_LABEL : v}
+                      </Text>
                     </Pressable>
                   ))}
                 </View>
@@ -729,17 +1117,61 @@ export default function Finder() {
             </View>
           );
         })}
+        {/* Only shown once something is actually filtering. A permanently-visible Clear is
+            noise, and its absence was the only way out of a filter combination that hid
+            everything short of un-ticking each box by hand. */}
+        {activeFilterCount > 0 && (
+          <Pressable style={styles.clearFilters} onPress={clearAllFilters}>
+            <Text style={styles.clearFiltersText}>✕ Clear filters ({activeFilterCount})</Text>
+          </Pressable>
+        )}
       </View>
       {!!note && <Text style={styles.note}>{note}</Text>}
-      {tagScoring && <Text style={styles.note}>Scoring matches against your profile…</Text>}
+      {tagScoring && <LoadingRow title="Scoring matches against your profile…" inline />}
+      {tagsBuilding && <LoadingRow title="Building your profile filters…" inline />}
+
+      {/* Empty states. These are two genuinely different situations and must not share a
+          message: "the search found nothing" is about the search, "your filters hid
+          everything" is about a control the student can undo right here. Before this the
+          page simply rendered nothing at all, which reads as broken rather than empty. */}
+      {!results.length && (
+        <SoftCard style={styles.emptyCard}>
+          <Text style={styles.heroTitle}>No matches this time</Text>
+          <Text style={[styles.heroSub, styles.heroSubItalic]}>
+            {suggestMode
+              ? "We couldn't find opportunities that fit what's in your profile yet. Adding more detail gives us far more to work with."
+              : "Nothing in the catalog lined up with what you described. Try describing it differently, or browse by type."}
+          </Text>
+          <View style={styles.heroActions}>
+            <PopButton label="Deepen your story" onPress={() => router.push('/(app)/profile')} />
+            <Pressable onPress={() => { setStage('home'); setBrowseOpen(true); }}>
+              <Text style={styles.link}>Browse all opportunity types</Text>
+            </Pressable>
+          </View>
+        </SoftCard>
+      )}
+      {!!results.length && !filteredResults.length && (
+        <SoftCard style={styles.emptyCard}>
+          <Text style={styles.heroTitle}>Your filters hid everything</Text>
+          <Text style={[styles.heroSub, styles.heroSubItalic]}>
+            {results.length} match{results.length === 1 ? '' : 'es'} {results.length === 1 ? 'is' : 'are'} waiting behind the filters above.
+          </Text>
+          <PopButton label="Clear all filters" onPress={clearAllFilters} style={styles.selfStart} />
+        </SoftCard>
+      )}
 
       {/* Result cards */}
-      {visibleResults.map(({ opp, reason, tier, aiReasoning, aiRank }) => {
+      {visibleResults.map(({ opp, reason, tier, kind: resultKind, aiReasoning, aiRank }) => {
         const isSelected = selected.has(opp.id);
         const isTracked = trackedIds.has(opp.id);
-        const cat = suggestMode ? (KIND_CONFIG[kindForOpp(opp)]?.name ?? 'Opportunity') : KIND_CONFIG[kind].name;
-        const reviewed = opp.review_status === 'positive';
-        const mixed = opp.review_status === 'mixed';
+        // Prefer the kind whose ranking call actually surfaced this card. kindForOpp only
+        // ever guessed from opp.type, and guessed wrong for any row a widened pool returned.
+        const cat = resultKind
+          ? (KIND_CONFIG[resultKind]?.name ?? 'Opportunity')
+          : suggestMode
+            ? (KIND_CONFIG[kindForOpp(opp)]?.name ?? 'Opportunity')
+            : KIND_CONFIG[kind].name;
+        const reviewOpen = openReviewId === opp.id;
         const metaPills = [opp.org, opp.type, opp.price, opp.location, opp.state && opp.state !== 'All States' ? opp.state : null, opp.season]
           .filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
         const cardHovered = hoveredCardId === opp.id;
@@ -753,6 +1185,9 @@ export default function Finder() {
               popShadow(cardHovered ? 6 : 4),
               cardHovered && styles.resultCardHovered,
               isSelected && styles.resultCardSelected,
+              // Cards are siblings in source order, so without this the popover on card N is
+              // painted over by card N+1 instead of overlapping it.
+              reviewOpen && styles.resultCardReviewOpen,
             ]}
           >
             <View style={styles.cardTopRow}>
@@ -763,8 +1198,12 @@ export default function Finder() {
                 ) : (
                   <MiniBadge label="Worth a look" bg={colors.slate100} fg={colors.slate900} />
                 )}
-                {reviewed && <MiniBadge label="Well reviewed" bg={colors.emerald100} fg={colors.emerald900} />}
-                {mixed && <MiniBadge label="Mixed reviews" bg="#FFEDD5" fg="#7C2D12" />}
+                <ReviewBadge
+                  status={opp.review_status as string | null | undefined}
+                  summary={opp.review_summary as string | null | undefined}
+                  open={reviewOpen}
+                  onToggle={() => setOpenReviewId((cur) => (cur === opp.id ? null : opp.id))}
+                />
               </View>
               {isTracked ? (
                 <Pressable style={styles.trackedTag} onPress={() => router.push('/(app)/tracker')}>
@@ -853,6 +1292,22 @@ export default function Finder() {
   );
 }
 
+// The one "working" indicator this screen uses. Every progress state renders through it, so
+// the hero spinner and the in-results progress lines cannot drift apart in style. `inline`
+// is for the ones that sit in the results scroll rather than inside the hero card: they need
+// their own vertical breathing room, which the card already supplies.
+function LoadingRow({ title, sub, inline }: { title: string; sub?: string; inline?: boolean }) {
+  return (
+    <View style={[styles.loadingRow, inline && styles.loadingRowInline]}>
+      <ActivityIndicator color={colors.orangeDeep} size="small" />
+      <View style={styles.flex1}>
+        <Text style={[styles.heroTitleSm, inline && styles.loadingRowInlineTitle]}>{title}</Text>
+        {!!sub && <Text style={styles.heroSub}>{sub}</Text>}
+      </View>
+    </View>
+  );
+}
+
 // ---------- Small soft form controls (lavender, Poppins-ish) ----------
 function TextArea({ value, onChangeText, placeholder }: { value: string; onChangeText: (t: string) => void; placeholder?: string }) {
   return (
@@ -909,10 +1364,18 @@ const styles = StyleSheet.create({
   flex1: { flex: 1, minWidth: 0 },
   selfStart: { alignSelf: 'flex-start', marginTop: 8 },
   centerLink: { alignItems: 'center' },
+  // A primary action with a quieter alternative beside it (View matches / Search again,
+  // Deepen your story / Browse all).
+  heroActions: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 8, flexWrap: 'wrap' },
+  emptyCard: { padding: 32, gap: 8, alignItems: 'flex-start' },
   link: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.muted, textDecorationLine: 'underline' },
 
   heroCard: { padding: 40, gap: 8 },
   loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  loadingRowInline: { paddingVertical: 8 },
+  // Smaller than the hero's, because in the results list this sits above the cards rather
+  // than being the only thing on screen.
+  loadingRowInlineTitle: { fontSize: 16, lineHeight: 22 },
   heroTitle: { fontFamily: fonts.display, fontSize: 30, lineHeight: 38, color: colors.navy, maxWidth: 576 },
   heroTitleSm: { fontFamily: fonts.display, fontSize: 24, lineHeight: 30, color: colors.navy },
   heroSub: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: colors.inkSoft, marginTop: 4 },
@@ -962,16 +1425,35 @@ const styles = StyleSheet.create({
   filterTogglePressed: { transform: [{ translateX: 2 }, { translateY: 2 }] },
   filterToggleOn: { backgroundColor: colors.lavender },
   filterToggleText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate900 },
+  // Invisible press-catcher for "click outside to close". Sits BELOW the filter bar
+  // (zIndex 20) and above the page content, deliberately: at a higher zIndex it would also
+  // swallow presses on the facet toggles, so switching from one facet to another would take
+  // two clicks (close, then open) instead of one. The panel itself is inside the bar's
+  // stacking context, so it stays above this too.
+  filterBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 },
+  clearFilters: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.md },
+  clearFiltersText: { fontFamily: fonts.body, fontSize: 13, fontWeight: '700', color: colors.orangeDeep, textDecorationLine: 'underline' },
   facetPanel: { position: 'absolute', top: '100%', left: 0, marginTop: 8, width: 224, backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.lg, padding: 12, zIndex: 50, gap: 2 },
   facetPanelWide: { width: 320 },
+  facetScroll: { maxHeight: 320 },
   facetRow: { paddingVertical: 4 },
   facetRowText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: colors.slate900 },
 
   resultCard: { backgroundColor: colors.white, borderWidth: 4, borderColor: colors.slate900, borderRadius: radius.xxl, padding: 24, gap: 16 },
+  // Raised only while a popover is open, so the panel overlaps the cards BELOW this one
+  // (equal z-index means the later sibling wins). Deliberately below filterBar's 20: the
+  // cards come after the filter bar in source order, so at 20 they would tie and a raised
+  // card would cover an open filter panel.
+  resultCardReviewOpen: { zIndex: 15 },
   resultCardHovered: { transform: [{ translateX: -2 }, { translateY: -2 }] },
   resultCardSelected: { borderColor: '#A3E635', backgroundColor: '#F7FEE7' },
-  cardTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' },
-  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 1 },
+  // zIndex on both rows is what lets ReviewBadge's popover paint OVER the card's later
+  // content instead of under it. RN-web gives every View `position: relative; z-index: 0`,
+  // which creates a stacking context per row and traps the popover inside this one — see the
+  // STACKING note on ReviewBadge in src/ui/components.tsx. 1 is enough (it only has to beat
+  // the card's other children at 0) and stays clear of the filter bar's 20.
+  cardTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', zIndex: 1 },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 1, zIndex: 1 },
   trackedTag: { backgroundColor: '#1E293B', borderRadius: radius.pill, paddingHorizontal: 16, paddingVertical: 8 },
   trackedTagText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.white },
   saveBtn: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.pill, paddingHorizontal: 20, paddingVertical: 10 },

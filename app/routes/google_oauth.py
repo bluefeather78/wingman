@@ -25,7 +25,8 @@ from app.core import (
     _check_signup_consent, _unique_userid_from_email, _users_request,
     _is_missing_column_error, MissingUserColumns, DuplicateEmail,
 )
-from app.deps import read_json_body, json_response, json_error, login_response
+from app.services.email import send_lifecycle_email_async
+from app.deps import json_body, json_response, json_error, login_response
 from app.auth import get_current_user, AuthedUser
 from app.auth.tokens import verify_access_token, AuthError, AuthConfigError
 from app.services import google_oauth as g
@@ -232,8 +233,7 @@ def handle_google_session(request: Request):
 
 
 @router.post("/api/auth/google/finish")
-async def handle_google_finish(request: Request):
-    body = await read_json_body(request)
+def handle_google_finish(request: Request, body: dict = Depends(json_body)):
     token = body.get("token") or ""
     entry = g._take_google_token(token)
     if not entry or entry.get("kind") != "pending":
@@ -274,6 +274,11 @@ async def handle_google_finish(request: Request):
         return json_error(502, f"Could not reach Supabase: {e}")
 
     record = get_user(userid)
+
+    # A Google signup is still a signup — it gets the same welcome email as the form path.
+    # Easy to miss precisely because create_user() is called from two places; the
+    # email_sends claim means adding it here can never double up with account.py's.
+    send_lifecycle_email_async(userid, "welcome", record=record)
     try:
         return json_response(200, login_response(record))
     except AuthConfigError as e:
@@ -402,9 +407,17 @@ def handle_google_calendar_callback(request: Request):
     return RedirectResponse("/tracker?calendar_connected=1", status_code=302)
 
 
-# Marks an event as written by this app. The sweep (see _sweep_stale_events) only ever
-# deletes events carrying it, so a Wingman calendar the student has also added their own
-# entries to survives a sync intact.
+# Identifies WHICH tracked date an event belongs to, as `${itemId}::${dateIndex}`. Its job is
+# to let a sync PATCH the event it already wrote instead of creating a second one; it is no
+# longer what decides whether an event may be deleted.
+#
+# It used to be that gate: the sweep only removed events carrying this marker, so that a
+# Wingman calendar the student had also added their own entries to survived a sync intact.
+# That protected a case nobody hit and broke the case everybody hits — the marker only landed
+# from 2026-08-22, so every event written before it was permanently unsweepable. Measured on
+# the first real account: 45 events on the calendar for 17 tracked dates, 22 of them orphans
+# that no sync could ever clean up, including deadlines for opportunities deleted from the
+# app weeks earlier. The calendar is now a MIRROR of the Quest Log (see _sweep_stale_events).
 WINGMAN_EVENT_PROP = "wingmanId"
 
 
@@ -423,11 +436,94 @@ def _calendar_request(method, url, access_token, payload=None):
     return json.loads(body) if body else {}
 
 
+def _list_wingman_events(access_token, calendar_path):
+    """Every event on the Wingman calendar that WE wrote, as {wingmanId: [event ids]}.
+
+    A marker can legitimately map to more than one event only when something has already
+    gone wrong (see _existing_event_map), so the list is ordered oldest-first and callers
+    keep the first.
+    """
+    by_marker = {}
+    page_token = None
+    while True:
+        params = {"maxResults": "2500", "showDeleted": "false"}
+        if page_token:
+            params["pageToken"] = page_token
+        page = _calendar_request(
+            "GET",
+            f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events?{urllib.parse.urlencode(params)}",
+            access_token,
+        )
+        for ev in page.get("items") or []:
+            marker = ((ev.get("extendedProperties") or {}).get("private") or {}).get(
+                WINGMAN_EVENT_PROP)
+            if marker and ev.get("id"):
+                by_marker.setdefault(marker, []).append(ev["id"])
+        page_token = page.get("nextPageToken")
+        if not page_token:
+            break
+    return by_marker
+
+
+# NOTE: forcing the Wingman calendar visible in the student's sidebar is NOT possible and
+# should not be re-attempted. PATCH /users/me/calendarList/<id> returns 401 under the
+# calendar.app.created scope (verified 2026-08-24 with a token that reads and writes events
+# on that very calendar) — the scope covers events on app-created calendars, not the user's
+# calendar list. Discovery is handled instead by NAMING the calendar in the sync result and
+# returning a link straight into it; see handle_calendar_sync.
+
+
+def _existing_event_map(access_token, calendar_path):
+    """(marker -> the event id to reuse, [extra event ids that duplicate one]).
+
+    More than one event under a marker means a duplicate we created earlier: the marker is
+    `${itemId}::${dateIndex}`, which addresses exactly one date, so a second event under it
+    is never a distinct deadline. The oldest is kept because it is the one whose id any
+    client may still be holding.
+    """
+    by_marker = _list_wingman_events(access_token, calendar_path)
+    keep = {marker: ids[0] for marker, ids in by_marker.items() if ids}
+    extras = [eid for ids in by_marker.values() for eid in ids[1:]]
+    return keep, extras
+
+
+def _delete_events(access_token, calendar_path, event_ids):
+    """Delete the given events. Returns (deleted, errors); never raises."""
+    deleted, errors = 0, []
+    for event_id in event_ids:
+        if not event_id:
+            continue
+        try:
+            _calendar_request(
+                "DELETE",
+                f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events/{urllib.parse.quote(event_id)}",
+                access_token,
+            )
+            deleted += 1
+        except urllib.error.HTTPError as e:
+            # Already gone on Google's side is the outcome we wanted anyway.
+            if e.code in (404, 410):
+                deleted += 1
+            else:
+                errors.append(f"Google API error {e.code} deleting an event")
+        except Exception as e:
+            errors.append(str(e))
+    return deleted, errors
+
+
 def _sweep_stale_events(access_token, calendar_path, keep_ids):
-    """Delete every event WE wrote to the Wingman calendar whose wingmanId is no longer
-    tracked. This is what removes a deadline from the calendar after the student takes the
-    opportunity out of the Quest Log: nothing client-side has to remember the Google event
-    id, and it self-heals across devices and across removals made while offline.
+    """Make the Wingman calendar MIRROR the Quest Log: delete every event on it that is not
+    one of the currently-tracked deadlines. This is what removes a deadline after the student
+    takes the opportunity out of the Quest Log — nothing client-side has to remember the
+    Google event id, and it self-heals across devices and across removals made while offline.
+
+    An event with NO marker is now deleted too. That is a deliberate widening (2026-08-24):
+    the marker only started being written on 2026-08-22, so restricting deletion to marked
+    events left every older one stranded on the calendar forever. This calendar is created by
+    the app, for the app, under the calendar.app.created scope — it is not a calendar the
+    student keeps their own life in, and the whole point of the feature is that it reflects
+    what the app says. The cost of the widening is real and worth stating: anything the
+    student adds to THIS calendar by hand will be removed on the next sync.
 
     Returns (deleted_count, errors). Errors never fail the sync — the upserts already
     landed, and a half-swept calendar is better than a sync that reports failure."""
@@ -450,37 +546,22 @@ def _sweep_stale_events(access_token, calendar_path, keep_ids):
         for ev in page.get("items") or []:
             props = ((ev.get("extendedProperties") or {}).get("private") or {})
             marker = props.get(WINGMAN_EVENT_PROP)
-            if not marker or marker in keep_ids:
+            # No marker => written before markers existed, or not ours. Either way it is not
+            # a currently-tracked deadline, and this calendar mirrors the Quest Log.
+            if marker and marker in keep_ids:
                 continue
             stale.append(ev.get("id"))
         page_token = page.get("nextPageToken")
         if not page_token:
             break
 
-    for event_id in stale:
-        if not event_id:
-            continue
-        try:
-            _calendar_request(
-                "DELETE",
-                f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events/{urllib.parse.quote(event_id)}",
-                access_token,
-            )
-            deleted += 1
-        except urllib.error.HTTPError as e:
-            # Already gone on Google's side is the outcome we wanted anyway.
-            if e.code in (404, 410):
-                deleted += 1
-            else:
-                errors.append(f"Google API error {e.code} deleting an event")
-        except Exception as e:
-            errors.append(str(e))
-    return deleted, errors
+    got, errs = _delete_events(access_token, calendar_path, stale)
+    return deleted + got, errors + errs
 
 
 @router.post("/api/calendar/sync")
-async def handle_calendar_sync(request: Request, user: AuthedUser = Depends(get_current_user)):
-    body = await read_json_body(request)
+def handle_calendar_sync(body: dict = Depends(json_body),
+                         user: AuthedUser = Depends(get_current_user)):
     userid = user.id
     events = body.get("events") or []
     # `sweep` asks the server to also remove events for deadlines that are no longer
@@ -509,7 +590,25 @@ async def handle_calendar_sync(request: Request, user: AuthedUser = Depends(get_
     except Exception as e:
         return json_error(502, f"Could not prepare your {WINGMAN_CALENDAR_NAME} calendar: {e}")
 
+    # Marker -> existing event id, so a client that has lost its googleEventId PATCHes the
+    # event it already wrote instead of creating a second one. Without this, anything that
+    # rebuilds the stored dates (notably "Check for updates") produced a duplicate on the
+    # student's real calendar on every sync — and the sweep could not clean them up, because
+    # the old event's marker is still in the tracked set, so it is not stale by definition.
+    # Belt and braces with the client-side fix that stopped dropping the id in the first
+    # place: this also covers two devices syncing at once, and an item removed and re-added.
+    existing_by_marker, duplicate_event_ids = {}, []
+    if events:
+        try:
+            existing_by_marker, duplicate_event_ids = _existing_event_map(
+                access_token, f"calendars/{urllib.parse.quote(calendar_id)}")
+        except Exception as e:
+            # Non-fatal: fall back to the old create-if-no-id behaviour rather than failing
+            # a sync over a listing hiccup.
+            print(f"[WARN] Could not map existing calendar events: {e}")
+
     results = []
+    calendar_html_link = ""
     for event in events:
         item_id = event.get("id")
         title = (event.get("title") or "").strip()
@@ -532,6 +631,11 @@ async def handle_calendar_sync(request: Request, user: AuthedUser = Depends(get_
             # not currently tracked", which would eat their own entries.
             "extendedProperties": {"private": {WINGMAN_EVENT_PROP: item_id}},
         }
+        # Trust the client's id when it has one; otherwise adopt whatever we already wrote
+        # under this marker rather than creating a parallel event.
+        if not google_event_id:
+            google_event_id = existing_by_marker.get(item_id)
+
         try:
             calendar_path = f"calendars/{urllib.parse.quote(calendar_id)}"
             if google_event_id:
@@ -551,6 +655,11 @@ async def handle_calendar_sync(request: Request, user: AuthedUser = Depends(get_
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 created = json.loads(resp.read())
+            if not calendar_html_link:
+                # An event's htmlLink opens Google Calendar focused on THIS calendar, which
+                # is a far more reliable "show me" link than trying to build a calendar URL
+                # out of a secondary calendar's id.
+                calendar_html_link = created.get("htmlLink") or ""
             results.append({"id": item_id, "status": "ok", "googleEventId": created.get("id")})
         except urllib.error.HTTPError as e:
             # A previously-synced event deleted on Google's side 404s on PATCH — fall
@@ -577,6 +686,15 @@ async def handle_calendar_sync(request: Request, user: AuthedUser = Depends(get_
         except Exception as e:
             results.append({"id": item_id, "status": "error", "error": str(e)})
 
+    # Remove duplicates left behind by earlier syncs. Bounded to events carrying OUR marker
+    # where the same marker appears twice, i.e. two calendar entries for one date slot, and
+    # reported rather than done silently. The sweep cannot do this itself: those markers are
+    # still tracked, so by its definition they are not stale.
+    deduped, dedupe_errors = 0, []
+    if duplicate_event_ids:
+        deduped, dedupe_errors = _delete_events(
+            access_token, f"calendars/{urllib.parse.quote(calendar_id)}", duplicate_event_ids)
+
     deleted = 0
     sweep_errors = []
     if sweep:
@@ -592,9 +710,15 @@ async def handle_calendar_sync(request: Request, user: AuthedUser = Depends(get_
             access_token, f"calendars/{urllib.parse.quote(calendar_id)}", keep_ids
         )
 
+    # Tell the client WHERE the events went. Without this the app says "synced", the student
+    # looks at their PRIMARY calendar, sees nothing, and reasonably concludes it is broken —
+    # which is exactly what happened. Events can only ever land on this app-created calendar.
     return json_response(200, {
         "ok": True,
         "results": results,
         "deleted": deleted,
-        "sweepErrors": sweep_errors,
+        "deduped": deduped,
+        "sweepErrors": sweep_errors + dedupe_errors,
+        "calendarName": WINGMAN_CALENDAR_NAME,
+        "calendarLink": calendar_html_link,
     })

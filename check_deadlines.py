@@ -26,6 +26,21 @@ important_dates AND stamp last_checked_at, destroying good data and then hiding 
 behind the 7-day TTL. The interactive path falls back to the cached value and deliberately
 does not stamp, so the next request re-rolls the search decision.
 
+THREE more ways a check can produce nothing writable, all routed through the one shared
+deadline_write_decision() so the batch loop and the interactive endpoint cannot drift:
+
+  * phase 1 never searched          -> {}    (the original guard, above)
+  * phase 2's JSON was unreadable   -> None  (2026-08-24). This used to collapse into {} and
+    be WRITTEN as an authoritative status=unknown with no dates: one garbled response wiped
+    a row's real deadlines and the stamp then served that hole to every student for 7 days.
+    "We looked but cannot read the answer" is not "there is nothing to find".
+  * searched, parsed, found nothing, and the row already HAS dates -> keep them. A verified
+    empty result is far more often a search miss than a program withdrawing its dates; a
+    genuinely dead program comes back as not_running, which still writes.
+
+A row with no existing dates is still written and stamped on an empty result — there is
+nothing to lose, and not stamping would re-bill that row on every view forever.
+
 MEASURED COST: $0.0676 for a row that searched once, against a historical median of $0.0790
 for the interactive checks that really did search (36 of them in deadline_check_log). The
 two-phase version is CHEAPER per verified check, because MAX_SEARCHES caps web_search at 1
@@ -303,6 +318,13 @@ b. No current-cycle dates found, but you found last cycle's real dates AND the p
 (no evidence it's discontinued) → roll each date forward by ~1 year (or to the next plausible \
 occurrence), was_estimated=true, status="running". This is the expected path when a new cycle's page \
 isn't live yet — use it; don't default to "unknown."
+b2. The current cycle publishes SOME real dates (very often just the deadline) but NOT the opening, \
+and a prior cycle published both → do NOT simply roll last cycle's opening forward a year. Take the \
+opens-to-deadline INTERVAL from the prior cycle and apply it to this cycle's real deadline — if \
+applications opened 10 weeks before last cycle's deadline, estimate this cycle's opening 10 weeks \
+before the posted one. was_estimated=true. Whenever a cycle has shifted, the interval survives and the \
+calendar date does not, so this is the more accurate estimate; it is also the single most common way an \
+opening date can be recovered at all.
 c. Found only a vague pattern (e.g. "opens in fall," "rolling through spring") → construct a concrete \
 estimated date from it (pick a reasonable specific day within the stated window), was_estimated=true, \
 explain the basis briefly in important_date_note.
@@ -320,6 +342,11 @@ Programs frequently have multiple deadlines — list each distinctly with its ow
 "deadline", "event_start", "event_end", "other").
 - Actively search for the OPENS date specifically, not just the close — this is the field most often \
 missed. Estimate it from the prior cycle if not explicitly posted (was_estimated=true).
+- An "opens" entry is REQUIRED whenever the program has any application or registration step. It is \
+the single most decision-relevant date a student has: the app marks a program HAPPENING NOW the \
+moment its first date has passed, so a program carrying only a deadline reads as "not started yet" \
+right up until the day it closes. If the current cycle's opening is not posted, project the prior \
+cycle's (was_estimated=true). Omit it only if no cycle you found ever published one.
 - Every date you reason about must appear as a structured entry in "important_dates" — never leave a date \
 mentioned only in prose in important_date_note. If you have enough basis to write a date into the note, \
 you have enough basis to add the matching structured entry.
@@ -339,6 +366,13 @@ evidence anyone has for that. This holds even if you have run out of search budg
 roll-forward needs no further searching, only the dates you already have.
 - Prefer reporting a reasonably-estimated date over omitting it. Only leave a category out if \
 step (e) above genuinely applies.
+- If you report a deadline but NO opens date, say in one clause why — "rolling admissions, no \
+published open date", "no prior cycle found", "registration is continuous". A deadline with no \
+opens date and no explanation is an incomplete answer, not a complete one.
+- Never report an estimated date as today's date. An estimate must be what its own stated basis \
+computes to — "~10 weeks before the January 10 deadline" is late October, not today. Anchoring an \
+estimate to the current date makes a program read as open right now when it is not; omit the date \
+instead if you cannot work out the real one.
 
 Write this up in plain prose. State the status and why, list every date you found or estimated \
 with its label and whether it is confirmed or estimated, and name the pages you actually \
@@ -371,8 +405,25 @@ notes already establish, not research, and it is required: an empty "important_d
 program that visibly ran last year tells the student nothing about when to come back. Drop a \
 past date only when the notes say the program is discontinued, or describe a genuine one-off \
 event with no sign of recurrence.
+- If the notes mention a registration or application OPENING date at all — this cycle's, or one \
+projected from a prior cycle — it MUST appear as an entry with "type": "opens". This is the date \
+the app reads to decide whether a program is open right now, and it is the one most often lost \
+between the research and the schema. Never drop it to save space, and never demote it to "other".
+- An estimated date must be the RESULT of the arithmetic its basis implies, and must never be \
+today's date. If the notes say an opening falls ~10 weeks before a January 10 deadline, the answer \
+is late October — not today, and not "now". Substituting today is a specific observed failure \
+(2026-08-24): a row was given an opening of that very day while its own note said ~10-11 weeks \
+before a 2027-01-10 deadline, which wrongly made the program read as open right now. If you cannot \
+do the arithmetic, omit the date rather than anchoring it to today.
+- Set "estimated" PER DATE: true if that specific date came from a prior cycle, an interval, or \
+a vague pattern; false only if it is explicitly posted for the current cycle. A row routinely \
+mixes the two — a confirmed deadline beside a projected opening — and the app shows this marker \
+next to each date, so getting it per-entry is what stops a real date being labelled a guess and, \
+worse, a guess being shown as fact. Do NOT also write "(estimated)" into the label; the field is \
+what the app renders.
 - "was_estimated" is true if ANY reported date came from a prior cycle or a vague pattern \
-rather than an explicitly posted current-cycle date.
+rather than an explicitly posted current-cycle date — it is the row-level roll-up of the \
+per-date flags above, not a substitute for them.
 - If the notes say the program is permanently discontinued, status is "not_running" and you \
 report no future dates. If they say the current cycle is closed but the program recurs, \
 status is "running" with forward-dated entries — the ones the notes give if they give them, \
@@ -385,7 +436,8 @@ get projected, per the rule above.
 Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, \
 matching exactly this schema: {{"status": "running, not_running, or unknown", \
 "important_dates": [{{"label": "short specific label", "date_iso": "YYYY-MM-DD", "type": \
-"opens, deadline, event_start, event_end, or other"}}], "was_estimated": true or false, \
+"opens, deadline, event_start, event_end, or other", "estimated": true or false}}], \
+"was_estimated": true or false, \
 "important_date_note": "one short sentence: status/estimate basis/caveat, or null"}}. Keep the \
 response well within a 1000-token budget: up to 8 important_dates entries, ordered \
 chronologically. If you must shorten, drop the least specific/least useful entry first (e.g. a \
@@ -433,11 +485,22 @@ def extract_deadlines(opp, notes, sources, api_key):
                     f"RESEARCHER'S NOTES:\n{notes}\n\nReturn the JSON object now.")
     text, usage = call_claude(build_extract_system(), user_content, api_key,
                               use_web_search=False)
-    return extract_json(text) or {}, estimate_cost(usage)
+    # None (not {}) when the JSON could not be parsed at all. The caller MUST be able to
+    # tell "the model answered and found nothing" from "we could not read the answer" —
+    # collapsing the two into {} is what let a garbled phase 2 be written to the catalog as
+    # an authoritative status=unknown with no dates. See deadline_write_decision().
+    return extract_json(text), estimate_cost(usage)
 
 
 def check_one(opp, api_key, retry_on_silent=True):
     """Both phases. (info, cost, searches, attempts).
+
+    `info` carries THREE distinguishable outcomes, and every caller must tell them apart
+    before writing anything (use deadline_write_decision below rather than re-deriving it):
+        {}    phase 1 never searched, even after the retry — nothing was looked at.
+        None  phase 1 searched but phase 2's JSON could not be parsed — we looked, but we
+              cannot read what came back.
+        dict  a real answer, which may still legitimately be status=unknown with no dates.
 
     TWO CALLS, and the split is the accuracy design — see check_reviews.py and
     gemini_common.py's SEVENTH finding. Demanding JSON collapses the search rate; measured
@@ -464,11 +527,115 @@ def check_one(opp, api_key, retry_on_silent=True):
     return info, cost + extract_cost, searches, attempts
 
 
+# ---------- What to do with a check's result ----------
+# Shared by BOTH call sites (main() below and app/routes/opportunities.py's interactive
+# endpoint) so the two cannot drift about when a row may be overwritten. Every "do not
+# write" branch also means "do not stamp dates_last_checked_at", which is the whole point:
+# stamping hides the hole behind the 7-day TTL and serves it to every student for a week.
+SOURCE_VERIFIED = "fresh, real search"
+SOURCE_SILENT = "unverified-fallback"       # phase 1 never searched
+SOURCE_UNPARSED = "unparsed-fallback"       # searched, but phase 2's JSON was unreadable
+SOURCE_KEPT = "kept-existing"               # searched, found nothing, row already had dates
+
+
+class DeadlineDecision:
+    """(write?, the normalized fields, a log source, a human reason)."""
+
+    __slots__ = ("write", "status", "important_dates", "was_estimated", "note",
+                 "source", "reason")
+
+    def __init__(self, write, source, reason, status=None, important_dates=None,
+                 was_estimated=False, note=None):
+        self.write = write
+        self.source = source
+        self.reason = reason
+        self.status = status
+        self.important_dates = important_dates or []
+        self.was_estimated = was_estimated
+        self.note = note
+
+
+def normalize_deadline_info(info):
+    """One raw phase-2 dict -> the four column values, coerced. Never raises."""
+    info = info if isinstance(info, dict) else {}
+    status = info.get("status") if info.get("status") in VALID_STATUS else "unknown"
+    dates = info.get("important_dates")
+    if not isinstance(dates, list):
+        dates = []
+    dates = [d for d in dates if isinstance(d, dict) and d.get("date_iso")]
+    return status, dates, bool(info.get("was_estimated")), info.get("important_date_note")
+
+
+def missing_opens_date(dates):
+    """True when a result carries a deadline but no registration-opens date.
+
+    Worth counting rather than shrugging at, because of what it does downstream: the app
+    marks an opportunity HAPPENING NOW once its FIRST date has passed, so a row whose only
+    date is a deadline can never say that — it reads "not started yet" right until the day it
+    closes, which is the opposite of the truth for a student who could apply today. Measured
+    2026-08-24: 13 of the 34 active rows that carry any dates (38%) had no opens entry.
+    """
+    types = {d.get("type") for d in (dates or []) if isinstance(d, dict)}
+    return "deadline" in types and "opens" not in types
+
+
+def deadline_write_decision(info, searches, existing_dates=None):
+    """Decide whether a check's result may be written over the catalog row.
+
+    Four outcomes, three of which write nothing and leave the row DUE for a re-check:
+
+      searches == 0        phase 1 never looked. check_one returns {}, so writing it blanks
+                           the row's real dates. Long-standing guard; unchanged.
+      info is None         phase 1 DID look but phase 2's JSON was unreadable. This used to
+                           fall through to `{}` and be written as an authoritative
+                           status=unknown with no dates — a garbled response silently wiping
+                           good deadlines, then locked in for 7 days by the stamp.
+      nothing found, but   a verified "found nothing" is far more often a search miss than a
+      the row has dates    program actually withdrawing its dates (a genuinely dead program
+                           comes back as not_running, which is handled below). Keep what is
+                           there and leave the row due so the next pass re-rolls.
+      anything else        write and stamp.
+
+    Two deliberate exceptions to the "nothing found" rule:
+      * status == not_running writes even with zero dates. "This program is discontinued"
+        is real, student-visible information, and it is exactly the case where an empty
+        important_dates is the correct answer rather than a failure.
+      * a row that has NO existing dates has nothing to preserve, so an empty result is
+        written and stamped. Not stamping there would re-bill that row on every single
+        view, forever, to re-learn the same nothing.
+    """
+    if not searches:
+        return DeadlineDecision(False, SOURCE_SILENT,
+                                "no web search was invoked, even after a retry")
+    if info is None:
+        return DeadlineDecision(False, SOURCE_UNPARSED,
+                                "the search ran but the extracted JSON was unreadable")
+
+    status, dates, was_estimated, note = normalize_deadline_info(info)
+    if not dates and status != "not_running" and (existing_dates or []):
+        return DeadlineDecision(False, SOURCE_KEPT,
+                                "found no dates; keeping the ones already on the row")
+    return DeadlineDecision(True, SOURCE_VERIFIED, "verified by a real search",
+                            status=status, important_dates=dates,
+                            was_estimated=was_estimated, note=note)
+
+
 def main():
     parser = argparse.ArgumentParser()
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--sample", type=int, help="Check a random N-row sample instead of the full catalog.")
     group.add_argument("--all", action="store_true", help="Check every active row (default if no flag given).")
+    # Targeted re-checks. Without this the only scopes were "everything" (~$84) and "a random
+    # sample", so acting on a known, specific gap — say the rows carrying a deadline but no
+    # registration-opens date — meant paying for the whole catalog to fix a handful of rows.
+    # Same shape as the scraper's --seed-ids, and it pairs with clear_deadline_cache.py, which
+    # takes ids too. Note the interactive endpoint checks staleness and this does not: an id
+    # given here is re-checked whether or not its cache is fresh, which is the point.
+    group.add_argument("--ids", nargs="+", metavar="ID",
+                       help="Check these specific opportunity ids, ignoring the 7-day cache.")
+    group.add_argument("--missing-opens", action="store_true",
+                       help="Check every active row that has a deadline but no registration-opens "
+                            "date. That gap makes an opportunity unable to read 'Happening Now'.")
     parser.add_argument("--dry-run", action="store_true",
                         help="No writes (opportunities or agent_runs) — still calls the API at "
                              "full cost, but dumps results to a local JSON file instead.")
@@ -505,6 +672,20 @@ def main():
     if args.sample:
         mode = "sample"
         items = random.sample(all_active, min(args.sample, len(all_active)))
+    elif args.ids:
+        mode = "ids"
+        by_id = {o["id"]: o for o in all_active}
+        items = [by_id[i] for i in args.ids if i in by_id]
+        for missing in [i for i in args.ids if i not in by_id]:
+            print(f"[WARN] No ACTIVE opportunity with id {missing!r} — skipped.")
+    elif args.missing_opens:
+        mode = "missing-opens"
+        items = [o for o in all_active if missing_opens_date(o.get("important_dates"))]
+        print(f"[OK] {len(items)} active row(s) carry a deadline but no opens date.")
+
+    if not items:
+        print("[OK] Nothing to check — the selected scope matched no rows.")
+        return
 
     # Preview: scope resolved, report and stop before the first (paid) Claude call.
     if args.preview:
@@ -526,6 +707,9 @@ def main():
     errors = 0
     total_searches = 0
     silent_search_count = 0
+    unparsed_count = 0
+    kept_count = 0
+    missing_opens_count = 0
     retried = 0
     dry_run_results = []
 
@@ -547,16 +731,19 @@ def main():
             # important_dates AND stamp last_checked_at — destroying good data and then
             # hiding the damage behind the staleness filter. Leaving the row untouched keeps
             # what is there and leaves it due, so the next pass re-rolls.
-            if searches == 0:
-                silent_search_count += 1
-                print(f"[SILENT after retry] nothing written; row keeps its existing dates "
-                      f"and stays due, ${cost:.4f}")
+            decision = deadline_write_decision(info, searches, opp.get("important_dates"))
+            if not decision.write:
+                if decision.source == SOURCE_SILENT:
+                    silent_search_count += 1
+                elif decision.source == SOURCE_UNPARSED:
+                    unparsed_count += 1
+                else:
+                    kept_count += 1
+                print(f"[{decision.source}] nothing written ({decision.reason}); row keeps "
+                      f"its existing dates and stays due, ${cost:.4f}")
                 continue
-            status = info.get("status") if info.get("status") in VALID_STATUS else "unknown"
-            important_dates = info.get("important_dates") or []
-            if not isinstance(important_dates, list):
-                important_dates = []
-            important_dates = [d for d in important_dates if isinstance(d, dict) and d.get("date_iso")]
+            status = decision.status
+            important_dates = decision.important_dates
             changed = status != opp.get("status") or important_dates != (opp.get("important_dates") or [])
             if changed:
                 updated += 1
@@ -568,8 +755,8 @@ def main():
                     "url": opp.get("url"),
                     "status": status,
                     "important_dates": important_dates,
-                    "was_estimated": bool(info.get("was_estimated")),
-                    "important_date_note": info.get("important_date_note"),
+                    "was_estimated": decision.was_estimated,
+                    "important_date_note": decision.note,
                     "changed": changed,
                     "web_searches": searches,
                     "cost_usd": round(cost, 4),
@@ -578,13 +765,17 @@ def main():
                 supabase_patch(supabase_url, "opportunities", {"id": f"eq.{opp['id']}"}, {
                     "status": status,
                     "important_dates": important_dates,
-                    "was_estimated": bool(info.get("was_estimated")),
-                    "important_date_note": info.get("important_date_note"),
+                    "was_estimated": decision.was_estimated,
+                    "important_date_note": decision.note,
                     "dates_last_checked_at": now_iso,
                     "updated_at": now_iso,
                 }, service_key)
-            silent = " [SILENT: no search invoked]" if searches == 0 else ""
-            print(f"{status}, {searches} search(es){silent}, ${cost:.4f}" + (" [changed]" if changed else ""))
+            no_opens = missing_opens_date(important_dates)
+            if no_opens:
+                missing_opens_count += 1
+            print(f"{status}, {searches} search(es), ${cost:.4f}"
+                  + (" [changed]" if changed else "")
+                  + (" [no opens date]" if no_opens else ""))
         except urllib.error.HTTPError as e:
             errors += 1
             print(f"[ERROR] HTTP {e.code}")
@@ -598,6 +789,9 @@ def main():
 
     print(f"\n[SUMMARY] checked: {len(items)}, updated: {updated}, errors: {errors}, "
           f"silent (no-search) checks after retry: {silent_search_count}/{len(items)}, "
+          f"unreadable extractions: {unparsed_count}/{len(items)}, "
+          f"searched-but-empty (row kept its dates): {kept_count}/{len(items)}, "
+          f"deadline but no opens date: {missing_opens_count}, "
           f"silent-search retries: {retried}, cost: ${total_cost:.4f}")
     if mode == "sample" and items:
         per_item = total_cost / len(items)

@@ -3,7 +3,7 @@
 ## What Was Built
 
 A complete, production-ready subscription system with:
-- ✅ **3-day free trial** - All new users automatically get a trial
+- ✅ **7-day free trial** - All new users automatically get a trial
 - ✅ **$9.99/month Pro Plan** - Paid subscription via Stripe
 - ✅ **Promo Codes** - Support for promotional codes (1 free month included)
 - ✅ **Subscription Management Page** - Users can manage their plan
@@ -45,7 +45,7 @@ python server.py
 ```
 
 1. Sign up a new account
-2. Account panel should show "Trial: 3 days left"
+2. Account panel should show "Trial: 7 days left"
 3. Click "Manage Plan" to see subscription page
 4. Click "Upgrade Now" for Stripe checkout
 5. Use test card: `4242 4242 4242 4242`

@@ -1,6 +1,7 @@
 import type { Bucket } from '@/lib/constants';
 import { ALL_BUCKETS } from '@/lib/constants';
 import { httpClient } from './httpClient';
+import { isVerifiedDeadlineSource } from '@/lib/tracker';
 
 // The tracker is shared with the original web app: it persists under the SAME data key
 // (`hs-tracker-data`) in the SAME shape — a JSON *string* of a 6-bucket object, each bucket
@@ -12,6 +13,10 @@ export interface ImportantDate {
   label: string;
   dateISO: string;
   type: string; // opens | deadline | event_start | event_end | other
+  // Whether THIS date was estimated (prior cycle / interval / vague pattern) rather than
+  // read off a current-cycle page. Undefined on rows predating 2026-08-24 — unknown, not
+  // confirmed. See status.ts getDisplayMilestones for how it reaches the card.
+  estimated?: boolean;
   // Written back by the Google Calendar sync so the next run PATCHes the same event
   // instead of creating a duplicate. Same field, same meaning as the retired SPA's.
   googleEventId?: string | null;
@@ -65,7 +70,12 @@ export async function loadTrackerData(): Promise<TrackerData> {
 // payload would delete a student's synced deadlines because we could not parse our own data.
 // A server/network failure needs no flag — httpClient.loadData throws and never reaches here.
 export async function loadTrackerDataChecked(): Promise<{ data: TrackerData; unreadable: boolean }> {
-  const raw = await httpClient.loadData<string | Record<string, unknown>>(TRACKER_KEY);
+  return parseTrackerData(await httpClient.loadData<string | Record<string, unknown>>(TRACKER_KEY));
+}
+
+// The stored-value -> TrackerData step on its own, so the cached-value path (peekTrackerData)
+// and the fetched one cannot drift in how they migrate legacy buckets or coerce arrays.
+function parseTrackerData(raw: string | Record<string, unknown> | null): { data: TrackerData; unreadable: boolean } {
   if (!raw) return { data: emptyData(), unreadable: false };
   let parsed: Record<string, unknown>;
   try {
@@ -103,13 +113,34 @@ export type SavedState = Record<string, boolean>;
 
 export async function loadTrackerSaved(): Promise<SavedState> {
   try {
-    const raw = await httpClient.loadData<string | SavedState>(SAVED_KEY);
-    if (!raw) return {};
+    return parseSaved(await httpClient.loadData<string | SavedState>(SAVED_KEY));
+  } catch {
+    return {};
+  }
+}
+
+function parseSaved(raw: string | SavedState | null | undefined): SavedState {
+  if (!raw) return {};
+  try {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     return parsed && typeof parsed === 'object' ? (parsed as SavedState) : {};
   } catch {
     return {};
   }
+}
+
+// --- Cached reads ----------------------------------------------------------
+// The last values the client already fetched, parsed the same way, with no network. Both
+// return undefined when nothing has been loaded yet, which is what lets a screen tell
+// "no data" apart from "not fetched" — the distinction Home Base's spinner turns on.
+export function peekTrackerData(): TrackerData | undefined {
+  const raw = httpClient.peekData<string | Record<string, unknown>>(TRACKER_KEY);
+  return raw === undefined ? undefined : parseTrackerData(raw).data;
+}
+
+export function peekTrackerSaved(): SavedState | undefined {
+  const raw = httpClient.peekData<string | SavedState>(SAVED_KEY);
+  return raw === undefined ? undefined : parseSaved(raw);
 }
 
 export async function saveTrackerSaved(state: SavedState): Promise<void> {
@@ -122,9 +153,18 @@ export function flattenItems(data: TrackerData): TrackerItem[] {
 
 export interface DeadlineRefreshResult {
   data: TrackerData;
+  /** Items we got a real answer for. NOT the number of tracked items. */
   checked: number;
   updated: number;
+  /** Tracked items with no catalog row behind them — they cannot be auto-checked. */
+  skipped: number;
+  /** Refused by the subscription gate (402). */
+  blocked: number;
   failed: number;
+  /** The session expired mid-run, so the sweep stopped early. */
+  signedOut: boolean;
+  /** Total items considered, i.e. checked + skipped + blocked + failed. */
+  total: number;
 }
 
 // Quest Log's "Check for updates" button — ported from script.js's refreshTracker(), minus
@@ -137,36 +177,73 @@ export async function refreshTrackerDeadlines(
 ): Promise<DeadlineRefreshResult> {
   const data = await loadTrackerData();
   const items = flattenItems(data);
+  let checked = 0;
   let updated = 0;
+  let skipped = 0;
+  let blocked = 0;
   let failed = 0;
+  let signedOut = false;
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     onProgress?.(i, items.length);
-    try {
-      const info = await httpClient.getDeadlineCheck(item.id);
-      if (!info) continue;
-      let changed = false;
-      if (info.status && ['running', 'not_running', 'unknown'].includes(info.status) && info.status !== item.status) {
-        item.status = info.status;
-        changed = true;
+    // getDeadlineCheckResult, not getDeadlineCheck: the caller reports back to the student,
+    // so it has to know whether an empty answer means "nothing changed", "this item has no
+    // catalog row", "your trial lapsed" or "the network failed". Collapsing those into null
+    // is what let this report "no changes found" for items it never checked at all.
+    const res = await httpClient.getDeadlineCheckResult(item.id);
+    if (res.outcome !== 'ok' || !res.info) {
+      if (res.outcome === 'not-found') {
+        skipped++;
+      } else if (res.outcome === 'blocked') {
+        blocked++;
+      } else if (res.outcome === 'auth') {
+        // The session is gone, so every remaining item would fail the same way. Stop and
+        // say so rather than grinding through the rest and reporting them as failures.
+        signedOut = true;
+        break;
+      } else {
+        failed++;
       }
-      if (Array.isArray(info.important_dates) && info.important_dates.length) {
-        const mapped = info.important_dates
-          .filter((d) => d && d.date_iso)
-          .map((d) => ({ label: d.label || 'Date', dateISO: d.date_iso, type: d.type || 'deadline' }));
-        if (JSON.stringify(mapped) !== JSON.stringify(item.importantDates ?? [])) changed = true;
-        item.importantDates = mapped;
-      }
-      if (typeof info.was_estimated === 'boolean') item.wasEstimated = info.was_estimated;
-      if (info.important_date_note) item.note = info.important_date_note;
-      if (changed) updated++;
-    } catch {
-      failed++;
+      continue;
     }
+    checked++;
+    const info = res.info;
+    let changed = false;
+    if (info.status && ['running', 'not_running', 'unknown'].includes(info.status) && info.status !== item.status) {
+      item.status = info.status;
+      changed = true;
+    }
+    // Same source gate as applyDeadlineCheckToInfo: an empty list may only overwrite when
+    // the answer was actually verified, so a discontinued program's dates can be cleared
+    // while a mock or fallback echo can never wipe good ones.
+    if (Array.isArray(info.important_dates)
+        && (isVerifiedDeadlineSource(info.source) || info.important_dates.length)) {
+      const previous = item.importantDates ?? [];
+      const mapped = info.important_dates
+        .filter((d) => d && d.date_iso)
+        .map((d, idx) => ({
+          label: d.label || 'Date',
+          dateISO: d.date_iso,
+          type: d.type || 'deadline',
+          estimated: d.estimated,
+          // Carry the Google Calendar event id forward. Dropping it made the next sync
+          // POST a NEW event, while the old one — still carrying the same index-based
+          // wingmanId — was not an orphan the sweep would remove, so the student's real
+          // calendar gained a duplicate entry on every single refresh. Matching by index
+          // is what keeps this consistent: the wingmanId IS `${item.id}::${index}`, so
+          // slot N's event is by definition the event for slot N's date.
+          googleEventId: previous[idx]?.googleEventId ?? null,
+        }));
+      if (JSON.stringify(mapped) !== JSON.stringify(previous)) changed = true;
+      item.importantDates = mapped;
+    }
+    if (typeof info.was_estimated === 'boolean') item.wasEstimated = info.was_estimated;
+    if (info.important_date_note) item.note = info.important_date_note;
+    if (changed) updated++;
   }
   onProgress?.(items.length, items.length);
   await saveTrackerData(data);
-  return { data, checked: items.length, updated, failed };
+  return { data, checked, updated, skipped, blocked, failed, signedOut, total: items.length };
 }
 
 export function countItems(data: TrackerData): number {
@@ -174,16 +251,48 @@ export function countItems(data: TrackerData): number {
 }
 
 function existsAcross(data: TrackerData, id: string, url?: string | null): boolean {
-  return ALL_BUCKETS.some((b) => data[b].some((i) => i.id === id || (!!url && i.url === url)));
+  return !!findAcross(data, id, url);
+}
+
+// The item already holding this id or url, if any — the same test existsAcross makes, but
+// it hands back WHICH item, so a caller can name it instead of just refusing.
+function findAcross(data: TrackerData, id: string, url?: string | null): TrackerItem | null {
+  for (const b of ALL_BUCKETS) {
+    const hit = data[b].find((i) => i.id === id || (!!url && i.url === url));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+export interface AddTrackerResult {
+  data: TrackerData;
+  /** False when the item was already tracked (by id OR by url) and nothing was written. */
+  added: boolean;
+  /** The item that blocked the add, so the caller can say WHAT it collided with. */
+  existing: TrackerItem | null;
+}
+
+// Add (idempotent by id/url across all buckets) and persist, reporting whether it actually
+// wrote anything. The plain addTrackerItem() below cannot say — and Fresh Finds believed it
+// always succeeded, so an opportunity sharing a URL with something already tracked was
+// silently dropped while still being marked tracked and badged NEW in the Quest Log.
+// (Named like loadTrackerDataChecked: same "…Checked variant tells you what the plain one
+// swallows" idiom.)
+export async function addTrackerItemChecked(
+  bucket: Bucket,
+  item: TrackerItem,
+): Promise<AddTrackerResult> {
+  const data = await loadTrackerData();
+  const existing = findAcross(data, item.id, item.url);
+  if (existing) return { data, added: false, existing };
+  data[bucket] = [...data[bucket], { ...item, bucket }];
+  await saveTrackerData(data);
+  return { data, added: true, existing: null };
 }
 
 // Add (idempotent by id/url across all buckets) and persist. Returns the updated data.
 export async function addTrackerItem(bucket: Bucket, item: TrackerItem): Promise<TrackerData> {
-  const data = await loadTrackerData();
-  if (existsAcross(data, item.id, item.url)) return data;
-  data[bucket] = [...data[bucket], { ...item, bucket }];
-  await saveTrackerData(data);
-  return data;
+  return (await addTrackerItemChecked(bucket, item)).data;
 }
 
 export async function removeTrackerItem(id: string): Promise<TrackerData> {

@@ -20,6 +20,9 @@ import app.core as core
 # signature string that silently re-routes spend is caught here.
 # ---------------------------------------------------------------------------
 SIGNATURE_CASES = [
+    # First in the source too: the merged pass does the work of the tag-extraction and
+    # profile-basics prompts, so its wording matches theirs and precedence decides.
+    ("pulling out everything an opportunity-matching app needs",   "profile_extract"),
     ("infer which subject categories",                            "infer_subjects"),
     ("Rank the best 10-12 matches",                               "ranking"),
     ("find real, current",                                        "venue_search"),

@@ -20,7 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.config import GEMINI_API_KEY, ANTHROPIC_API_KEY
 from app.routes import (
     ai, opportunities, account, user_data, google_oauth, mailing_list,
-    subscription, resume, auth,
+    subscription, resume, auth, email,
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -71,7 +71,7 @@ async def http_exception_as_error(request: Request, exc: StarletteHTTPException)
 
 # ---------------- Public API routers ----------------
 for module in (ai, opportunities, account, user_data, google_oauth, mailing_list,
-               subscription, resume, auth):
+               subscription, resume, auth, email):
     app.include_router(module.router)
 
 

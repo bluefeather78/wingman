@@ -146,6 +146,16 @@ def insert_user_opportunity(name, url, opp_type, section, meta, fit, note,
                             userid=None):
     """Insert a user-submitted opportunity, deduped against the whole catalog.
 
+    Returns the catalog id this submission resolves to, or None if nothing could be
+    resolved. That return value is load-bearing as of 2026-08-24: the Quest Log stores it
+    as the tracked item's id so a hand-added opportunity can use the SAME shared, cached
+    deadline check a catalog opportunity does. Without an id the item carried a local slug,
+    /api/opportunities/<slug>/deadline 404'd, and "Check for updates" silently skipped it
+    while still reporting "no changes found".
+
+    An EXACT duplicate returns the existing row's id rather than None — that row is the
+    right thing to track, and it may already carry a verified, cached deadline answer.
+
     Dedupe is tiered, and only the top tier rejects (see url_dedupe for why the data
     forbids anything stronger):
       - exact match on the normalized URL -> skip the insert entirely;
@@ -158,20 +168,21 @@ def insert_user_opportunity(name, url, opp_type, section, meta, fit, note,
     """
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         print("[User Opportunity] Supabase credentials not configured")
-        return
+        return None
 
     existing = catalog_dedupe_rows()
     if existing is None:
         print("[User Opportunity] Could not read catalog for dedupe — refusing to "
               "insert blind (would risk a duplicate).")
-        return
+        return None
 
     exact, candidates = url_dedupe.find_duplicates(
         url, name, existing, apply_url=apply_url or None)
     if exact:
         print(f"[User Opportunity] Skipped — already in catalog as "
               f"{exact.get('id')} ({exact.get('name')}): {url}")
-        return
+        # Not a failure: this IS the row to track, so hand its id back to the caller.
+        return exact.get("id")
     if candidates:
         print(f"[User Opportunity] {len(candidates)} possible duplicate(s) for {url!r}; "
               f"inserting for review anyway: "
@@ -242,7 +253,9 @@ def insert_user_opportunity(name, url, opp_type, section, meta, fit, note,
         "submission_payload": (submission_payload or None),
     }
 
-    insert_opportunity_row(row, review_fields, generated_id, name)
+    if not insert_opportunity_row(row, review_fields, generated_id, name):
+        return None
+    return generated_id
 
 
 def catalog_dedupe_rows():

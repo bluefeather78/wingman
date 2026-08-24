@@ -32,7 +32,7 @@ that specific failure and returns a 503 naming this file, rather than the bare
 They come out of the migration with `subscription_status = 'trial'` (the column default)
 and `trial_ends_at = NULL`. A NULL end date is deliberately read as *"the trial clock has
 not started"*, not as *"expired"* — `ensure_trial_started()` in `server.py` stamps a real
-3-day window on the row the first time that account signs in. Backfilling the dates in SQL
+7-day window on the row the first time that account signs in. Backfilling the dates in SQL
 instead would start everyone's trial the moment you run the migration, burning it for
 people who don't come back for a month.
 

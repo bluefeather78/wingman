@@ -16,6 +16,7 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
+import Svg, { Circle, Rect } from 'react-native-svg';
 import { APP_MAX_WIDTH, colors, fonts, popShadow, radius, softShadow, space, type } from './theme';
 
 // ---------- Text ----------
@@ -270,6 +271,78 @@ export function MiniBadge({ label, bg, fg, borderColor = colors.slate900 }: { la
   );
 }
 
+// ---------- Review status badge (check_reviews.py's review_status / review_summary) ----------
+// Click-to-reveal, ported from the retired SPA's reviewBadgeHTML()/toggleReviewInfo(): the pill
+// alone signals the verdict, and the full review_summary appears only once the student taps it,
+// as a floating popover anchored to the pill. Absolutely positioned on purpose, so it OVERLAPS
+// the card content below rather than making the card taller and shoving every card after it
+// down the page.
+//
+// The RN port rendered these as inert MiniBadges, which dropped the summary with no way to
+// reach it. That is the half worth keeping: the badge is check_reviews.py's verdict and the
+// summary is the evidence behind it, and a verdict a student cannot interrogate is exactly what
+// the two-phase review agent exists to avoid. `negative` was dropped in that port too and is
+// restored here — "Reported issues" is the one verdict a student most needs to see.
+export const REVIEW_STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
+  positive: { label: 'Well reviewed', bg: colors.emerald100, fg: colors.emerald900 },
+  mixed: { label: 'Mixed reviews', bg: '#FFEDD5', fg: '#7C2D12' },
+  negative: { label: 'Reported issues', bg: '#FFE4E6', fg: '#881337' },
+  // insufficient_data / null / undefined: no independent evidence either way — nothing worth
+  // surfacing, so no badge at all rather than a hollow "insufficient data" pill.
+};
+
+// `open`/`onToggle` are lifted to the screen rather than held here so only one popover can be
+// open at a time across a list of cards — the same rule toggleReviewInfo() enforced by closing
+// every other panel before opening one.
+//
+// STACKING — this popover cannot lift itself, and the reason is a react-native-web quirk worth
+// knowing before touching any overlay in this app. RN-web renders every <View> as
+// `position: relative; z-index: 0` — not `z-index: auto`. A z-index of 0 on a POSITIONED
+// element creates a stacking context, so each row between this badge and the card traps
+// whatever is inside it: the popover's own z-index only ranks it among its siblings inside the
+// badge row, and it is the BADGE ROW that then competes with the card's later children. Those
+// are all z-index 0 too, and at an equal z-index the later sibling paints on top — so the
+// popover rendered UNDER the card's own "WHY IT FITS" text and meta pills no matter how high
+// its z-index went. Every ancestor up to the card therefore carries a raise of its own; see
+// cardTopRow/badgeRow in finder.tsx and cardTop/badgeRow in tracker.tsx. Do not "simplify"
+// those away, and add the same raise to any new screen that renders a ReviewBadge.
+export function ReviewBadge({
+  status,
+  summary,
+  open,
+  onToggle,
+}: {
+  status?: string | null;
+  summary?: string | null;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const meta = status ? REVIEW_STATUS_META[status] : undefined;
+  if (!meta) return null;
+  return (
+    <View style={[styles.reviewWrap, open && styles.reviewWrapOpen]}>
+      <Pressable
+        onPress={onToggle}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${meta.label}. Tap to see why.`}
+        accessibilityHint="Shows the independent-review summary for this opportunity"
+      >
+        <View style={[styles.miniBadge, styles.reviewBadge, { backgroundColor: meta.bg }]}>
+          <Text style={[styles.miniBadgeText, { color: meta.fg }]}>{meta.label}</Text>
+        </View>
+      </Pressable>
+      {open && (
+        // A press inside the panel closes it too, and — more importantly — never reaches the
+        // card underneath, which on the Quest Log would otherwise open the opportunity's link.
+        <Pressable style={[styles.reviewPopover, popShadow(4)]} onPress={onToggle}>
+          <Text style={styles.reviewPopoverText}>{summary || 'No further detail available.'}</Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
 // ---------- Status pill (.status-pill — 2px navy border, 10px uppercase 800) ----------
 export type OppStatus = 'not_started' | 'in_progress' | 'completed';
 export const PROGRESS_STATUS_LABEL: Record<OppStatus, string> = {
@@ -396,50 +469,36 @@ export function IconBtn({ children, onPress, size = 30 }: { children: ReactNode;
   );
 }
 
-// ---------- Wingman logo (favicon.svg, drawn with Views) ----------
+// ---------- Wingman logo (favicon.svg, drawn as real SVG) ----------
 // FOUR orange bars rising left→right, plus a glowing yellow dot above the tallest bar
-// (a 35%-opacity halo behind a solid dot). Geometry copied from favicon.svg's 100-unit
-// viewBox: bars at x 24/38/52/66, width 10, heights 14/22/30/40 (bottom edge y=76),
-// dot at (71,32) r 6.5 with halo r 13. Colors are the file's own #F97316 / #FACC15.
+// (a 35%-opacity halo behind a solid dot). Geometry is favicon.svg's 100-unit viewBox
+// verbatim: bars at x 24/38/52/66, width 10 (so pitch 14, gap 4), bottom edge y=76,
+// heights 16/24/32/40 — an even 8-unit step per bar. Dot at (71,32) r 6.5, halo r 13.
+// Colors are the file's own #F97316 / #FACC15.
+//
+// This is drawn with react-native-svg, NOT with absolutely-positioned Views. The View
+// version put every edge on a fractional pixel (at size 32 the bars start at 7.68 /
+// 12.16 / 16.64 / 21.12 and are 3.2 wide), and both RN-web and native snap a View's box
+// to whole device pixels — so the four identical 4-unit gaps rendered as a mix of 1px
+// and 2px and the bars visibly failed to sit on an even grid. An SVG renderer
+// antialiases fractional geometry instead of snapping it, so the grid survives at any
+// size. Keep the numbers below in sync with favicon.svg — they are the same mark.
+const LOGO_BARS: Array<[x: number, y: number, h: number]> = [
+  [24, 60, 16],
+  [38, 52, 24],
+  [52, 44, 32],
+  [66, 36, 40],
+];
+
 export function Logo({ size = 32 }: { size?: number }) {
-  const u = size / 100;
-  const bar = (x: number, y: number, h: number) => (
-    <View
-      key={x}
-      style={{
-        position: 'absolute',
-        left: x * u,
-        top: y * u,
-        width: 10 * u,
-        height: h * u,
-        borderRadius: 2 * u,
-        backgroundColor: '#F97316',
-      }}
-    />
-  );
-  const circle = (r: number, opacity: number) => (
-    <View
-      style={{
-        position: 'absolute',
-        left: (71 - r) * u,
-        top: (32 - r) * u,
-        width: 2 * r * u,
-        height: 2 * r * u,
-        borderRadius: r * u,
-        backgroundColor: '#FACC15',
-        opacity,
-      }}
-    />
-  );
   return (
-    <View style={{ width: size, height: size }}>
-      {circle(13, 0.35)}
-      {bar(24, 62, 14)}
-      {bar(38, 54, 22)}
-      {bar(52, 46, 30)}
-      {bar(66, 36, 40)}
-      {circle(6.5, 1)}
-    </View>
+    <Svg width={size} height={size} viewBox="0 0 100 100">
+      <Circle cx={71} cy={32} r={13} fill="#FACC15" opacity={0.35} />
+      {LOGO_BARS.map(([x, y, h]) => (
+        <Rect key={x} x={x} y={y} width={10} height={h} rx={2} fill="#F97316" />
+      ))}
+      <Circle cx={71} cy={32} r={6.5} fill="#FACC15" />
+    </Svg>
   );
 }
 
@@ -540,6 +599,24 @@ const styles = StyleSheet.create({
 
   miniBadge: { borderRadius: radius.pill, paddingVertical: 4, paddingHorizontal: 12, alignSelf: 'flex-start' },
   miniBadgeText: { fontFamily: fonts.bodyXBold, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' },
+  reviewWrap: { position: 'relative', alignSelf: 'flex-start' },
+  // Only the open one is raised, so a closed badge never steals presses from the card it sits on.
+  reviewWrapOpen: { zIndex: 40 },
+  reviewBadge: { borderWidth: 2, borderColor: colors.slate900 },
+  reviewPopover: {
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    marginTop: 6,
+    minWidth: 220,
+    maxWidth: 320,
+    backgroundColor: colors.white,
+    borderWidth: 2,
+    borderColor: colors.slate900,
+    borderRadius: radius.md,
+    padding: 12,
+  },
+  reviewPopoverText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 18, color: colors.slate500 },
 
   statusPill: { borderWidth: 2, borderColor: colors.navy, borderRadius: radius.pill, paddingVertical: 3, paddingHorizontal: 10, alignSelf: 'flex-start' },
   statusPillPressable: { cursor: 'pointer' },

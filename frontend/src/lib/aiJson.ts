@@ -5,6 +5,10 @@ export type GeminiCall = (
   system: string,
   userContent: string,
   useWebSearch?: boolean,
+  // Optional output budget, clamped server-side and never below the uniform default — so
+  // passing it can only raise headroom, and omitting it keeps every existing call site's
+  // behaviour exactly as it was.
+  maxTokens?: number,
 ) => Promise<string>;
 
 export type ClaudeDetailedCall = (
@@ -23,10 +27,11 @@ export async function callGeminiJSON<T = unknown>(
   system: string,
   userContent: string,
   useWebSearch = false,
+  maxTokens?: number,
 ): Promise<T> {
   try {
-    return extractJSON<T>(await callGemini(system, userContent, useWebSearch));
+    return extractJSON<T>(await callGemini(system, userContent, useWebSearch, maxTokens));
   } catch {
-    return extractJSON<T>(await callGemini(system, userContent, useWebSearch));
+    return extractJSON<T>(await callGemini(system, userContent, useWebSearch, maxTokens));
   }
 }

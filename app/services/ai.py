@@ -82,6 +82,76 @@ def mock_rank_candidates(user_content):
     ])
 
 
+def mock_profile_tag_strings(user_content):
+    """Filter tags for the Fresh Finds 'Your Profile' facet. Built from the profile's own
+    sentences so the mock facet reads like the student's text rather than canned strings."""
+    body = user_content.split('profile:', 1)[-1].strip()
+    parts = [p.strip() for p in re.split(r'[.\n]+', body) if len(p.strip().split()) >= 3]
+    tags = []
+    for p in parts:
+        words = p.split()
+        tag = ' '.join(words[:6])[:60]
+        if tag and tag not in tags:
+            tags.append(tag)
+    # Uncapped, matching the live extractor: the facet returns as many tags as it takes to
+    # cover the profile, so a mock that stopped at 10 would hide exactly the overflow
+    # behaviour (batched enrichment, the scrolling dropdown) that offline mode exists to
+    # exercise.
+    return json.dumps(tags or ['Exploring new opportunities'])
+
+
+def mock_tags_and_basics(user_content):
+    """The MERGED profile-extraction pass: basics + enriched tags in one object.
+
+    Reuses the two mocks it replaced rather than inventing a third answer, so offline mode
+    keeps saying the same thing about the same profile that the separate calls used to.
+    """
+    body = user_content.split('STUDENT PROFILE:', 1)[-1]
+    # Drop the prompt's own closing instruction, or it is read as one of the student's
+    # sentences and comes back as a tag.
+    body = body.split('Return the JSON object', 1)[0]
+    tags = json.loads(mock_profile_tag_strings('profile: ' + body))
+    return json.dumps({
+        "basics": json.loads(mock_profile_basics(body)),
+        "tags": [
+            {
+                "tag": t,
+                "intent": f"Wants to go further with {t.lower()}",
+                "nextSteps": ["Find a program or competition", "Build something to show for it"],
+            }
+            for t in tags
+        ],
+    })
+
+
+def mock_enrich_profile_tags(user_content):
+    """One enrichment object per tag, echoing the tag so the position-independent match in
+    enrichProfileTags() is exercised offline too."""
+    tags = re.findall(r'^\s*\d+\.\s*(.+)$', user_content, re.M)
+    return json.dumps([
+        {
+            "tag": t.strip(),
+            "intent": f"Wants to go further with {t.strip().lower()}",
+            "nextSteps": ["Find a program or competition", "Build something to show for it"],
+        }
+        for t in tags
+    ])
+
+
+def mock_score_opportunities_for_tag(user_content):
+    """Rank the visible results against one profile tag. Returns a genuine SUBSET (the
+    real call omits poor matches), so the filter visibly filters in mock mode instead of
+    looking like a no-op."""
+    m = re.search(r'PROFILE TAG:\s*"([^"]*)"', user_content)
+    tag = m.group(1) if m else 'your profile'
+    ids = re.findall(r'^ID:\s*(\S+)\s*\|', user_content, re.M)
+    keep = ids[::2][:10]  # every other one — a subset, not everything
+    return json.dumps([
+        {"id": cid, "rank": i + 1, "reasoning": f"This lines up with your interest in {tag.lower()}."}
+        for i, cid in enumerate(keep)
+    ])
+
+
 def mock_infer_subjects(user_content):
     lower = user_content.lower()
     matches = [s for s in VALID_SUBJECTS if s.lower() in lower]
@@ -247,6 +317,27 @@ def generate_mock_text(system, user_content):
         return mock_infer_subjects(user_content)
     if "Rank the best 10-12 matches" in system:
         return mock_rank_candidates(user_content)
+    # The ranking prompt swaps in a DIFFERENT closing rule for strict-type kinds
+    # (Conference/Journal): "return EVERY candidate given", which does not contain the
+    # phrase above. Without this second signature those two kinds fell through to the
+    # empty `{}` at the bottom, and mock mode silently dropped them to keyword-only
+    # results while every other kind worked. Matched on the prompt's stable opening line,
+    # exactly as _FEATURE_SIGNATURES in app/core.py already does for the same reason.
+    if "helping a student find the best-fit extracurricular" in system:
+        return mock_rank_candidates(user_content)
+    # The merged profile-extraction pass (basics + enriched tags in one call). MUST be
+    # tested before the single-purpose branches below: it does their jobs, so its prompt
+    # necessarily reads like both of them and would be captured by either.
+    if "pulling out everything an opportunity-matching app needs" in system:
+        return mock_tags_and_basics(user_content)
+    # The "Your Profile" filter facet: tag extraction, tag enrichment, and scoring the
+    # visible results against a selected tag.
+    if "extracting specific interests, goals, and pursuits" in system:
+        return mock_profile_tag_strings(user_content)
+    if "interests/goals to the best opportunities" in system:
+        return mock_enrich_profile_tags(user_content)
+    if "Write directly to them in second person" in system:
+        return mock_score_opportunities_for_tag(user_content)
     if "find real, current" in system:
         return mock_venues_via_web()
     if "maintain a single, coherent running profile" in system:

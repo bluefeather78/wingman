@@ -401,6 +401,7 @@ tr.disabled-seed { opacity: .48; }
     <button class="vtab" data-view="review">Review queue<span class="count" id="reviewTabCount"></span></button>
     <button class="vtab" data-view="signups">Mailing lists<span class="count" id="signupTabCount"></span></button>
     <button class="vtab" data-view="users">Cost per user<span class="count" id="userTabCount"></span></button>
+    <button class="vtab" data-view="emails">Emails<span class="count" id="emailTabCount"></span></button>
   </div>
 
   <div id="globalNotice" class="notice err hidden" style="margin-bottom:24px"></div>
@@ -705,6 +706,97 @@ tr.disabled-seed { opacity: .48; }
     </div>
   </div>
 
+  <div class="view hidden" id="view-emails">
+    <div class="view-lead">
+      The three <strong>lifecycle</strong> emails &mdash; a welcome at signup, a reminder before
+      the free trial ends, and a cancellation confirmation. This is not a marketing system:
+      there is no list, no segments, and deliberately no path anywhere in this repo that mails
+      everybody at once.
+      <br><br>
+      Sending is <strong>Resend</strong>; the roster stays here. One address is handed over at
+      the moment of sending and nothing syncs a contact list to a third party &mdash; that
+      would mean continuously exporting the names and addresses of minors, and would need a
+      privacy-policy edit and a <span class="mono">TERMS_VERSION</span> bump first.
+      <br><br>
+      The daily trial sweep is <strong>not</strong> run from this page. These routes are
+      localhost-only and never mounted on Render, so a button here would only fire on days
+      this machine is on &mdash; and the student whose trial ends tomorrow is exactly the one
+      who will not be opening the app for us. The schedule lives in
+      <span class="mono">.github/workflows/lifecycle-emails.yml</span>, which calls
+      <span class="mono">POST /api/email/sweep</span> on the deployed service. The button below
+      is a manual catch-up, and it is safe to press twice.
+    </div>
+
+    <div class="hint hidden" id="emailSetup" style="padding:10px 14px;margin-bottom:16px">
+      The <span class="mono">email_sends</span> table is missing. Run
+      <span class="mono">email_schema.sql</span> in the Supabase SQL editor (it is idempotent),
+      then restart with <span class="mono">restart_server.ps1</span>. Until then
+      <strong>nothing is sent at all</strong> &mdash; a send claims its row before calling the
+      provider, so no table means no claim, and no claim means no send. That is deliberate:
+      sending with no record of having sent is how a daily sweep mails the same student every
+      morning.
+    </div>
+
+    <div class="kpis" id="emailKpis"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Templates</h2>
+        <div class="tabs" id="emailKindTabs">
+          <button class="tab active" data-kind="welcome">Welcome</button>
+          <button class="tab" data-kind="trial_ending">Trial ending</button>
+          <button class="tab" data-kind="goodbye">Goodbye</button>
+        </div>
+        <div class="spacer"></div>
+        <input id="emailPreviewUser" placeholder="render for userid (optional)"
+               style="width:200px">
+        <button class="btn btn-sm" id="emailPreviewBtn">Preview</button>
+        <input id="emailTestTo" placeholder="send a test to&hellip;" style="width:210px">
+        <button class="btn" id="emailTestBtn">Send test</button>
+      </div>
+      <div class="card-body tight">
+        <div class="hint" style="padding:10px 14px" id="emailPreviewMeta">
+          Rendered against a sample account until you name a real userid.
+        </div>
+        <iframe id="emailPreviewFrame" title="Email preview" sandbox=""
+                style="width:100%;height:560px;border:0;border-top:1px solid var(--border);
+                       background:#FBF8F3"></iframe>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Due a trial reminder</h2>
+        <div class="spacer"></div>
+        <button class="btn btn-sm" id="emailSweepPreview">Preview sweep</button>
+        <button class="btn" id="emailSweepRun">Run sweep now</button>
+      </div>
+      <div class="card-body tight">
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>User</th><th>Email</th><th>Trial ends</th></tr></thead>
+            <tbody id="emailDueBody"><tr><td colspan="3" class="empty">Loading&hellip;</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>Recent sends</h2></div>
+      <div class="card-body tight">
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr>
+              <th>When</th><th>Kind</th><th>User</th><th>Email</th>
+              <th>State</th><th>Detail</th>
+            </tr></thead>
+            <tbody id="emailSendBody"><tr><td colspan="6" class="empty">Loading&hellip;</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="view hidden" id="view-users">
     <div class="view-lead">
       What each account's own use of the product costs in AI, against the $9.99/month plan.
@@ -950,6 +1042,42 @@ tr.disabled-seed { opacity: .48; }
   </div>
 </div>
 
+<!-- Force a deadline re-check. Deliberately NOT part of the run modal: this launches no
+     agent and costs nothing here, but it queues a paid check per row that students pay for
+     later, so the confirmation has to talk about queued spend rather than a run. -->
+<div class="overlay" id="dlCacheModal">
+  <div class="modal" style="max-width:620px">
+    <div class="modal-head">
+      <h2>Force a deadline re-check</h2>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" id="dlCacheClose">Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="notice">A deadline answer is cached for 7 days and shared by everyone, so a
+        wrong one is shown to every student for a week. Clearing the cache is the only way to
+        re-ask inside that window. Nothing is deleted &mdash; the existing dates stay visible
+        until the fresh check replaces them.</div>
+      <div class="field">
+        <label for="dlCacheIds">Opportunity ids</label>
+        <textarea id="dlCacheIds" rows="4" placeholder="ec18228, ec17433&#10;one per line or comma-separated"></textarea>
+        <div class="help">Leave empty and tick the box below to clear every active row instead.</div>
+      </div>
+      <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px">
+        <input type="checkbox" id="dlCacheAll" style="margin-top:2px">
+        <span>Clear <strong>every active row</strong> &mdash; queues a paid check for the whole catalog.</span>
+      </label>
+      <div id="dlCacheResult" class="estimate" style="margin-top:14px">Run <strong>Preview</strong> to see
+        how many rows carry a cached check and what re-checking them would cost.</div>
+      <div id="dlCacheError" class="notice err hidden"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="dlCachePreview">Preview</button>
+      <div class="spacer"></div>
+      <button class="btn btn-primary" id="dlCacheApply" disabled>Clear cache</button>
+    </div>
+  </div>
+</div>
+
 <script>
 /* ===========================================================================
    State. `config` is fetched once (the static agent registry from server.py's
@@ -964,6 +1092,7 @@ const S = {
   snapshots: [], pending: [], pendingSource: '', selectedPending: new Set(),
   signups: [], signupStatus: 'pending_review', selectedSignups: new Set(),
   signupCounts: {}, mailingListReady: true,
+  emails: null, emailKind: 'welcome',
   pendingStatus: 'queue', moderationReady: true, editingOpp: null,
   duplicateTargets: {}, dupSubject: null, dupPick: null, dupTimer: null,
   range: 30, modalAgent: null, logCursor: 0, logTimer: null, pollTimer: null,
@@ -1757,6 +1886,7 @@ const VIEW_SUBTITLE = {
   users:  'What each user\u2019s own activity costs, against the plan they pay for',
   review: 'Scraped opportunities waiting on a human before students can see them',
   signups: 'Mailing-list signup recipes waiting on a human before any student is subscribed',
+  emails: 'The three lifecycle emails — what they say, who is due one, and what actually went out',
 };
 
 function showView(view) {
@@ -1764,6 +1894,7 @@ function showView(view) {
   // Loaded on demand rather than in refreshDashboard's Promise.all: this list changes
   // only when an agent runs or a person clicks, so polling it every 20s is pure traffic.
   if (view === 'signups') loadSignups();
+  if (view === 'emails') loadEmails();
   document.querySelectorAll('#viewTabs .vtab').forEach(
     t => t.classList.toggle('active', t.dataset.view === view));
   document.querySelectorAll('.view').forEach(
@@ -2130,8 +2261,8 @@ function renderSubscriptions() {
     </div>
     <div class="hint" style="margin-top:12px;line-height:1.6">
       The denominator is accounts whose trial has actually <strong>ended</strong>, never all
-      accounts: with a 3-day trial, dividing by everyone scores every signup from the last
-      72 hours as a failure before they have had a chance to decide. Beta grants are left out
+      accounts: with a 7-day trial, dividing by everyone scores every signup from the last
+      week as a failure before they have had a chance to decide. Beta grants are left out
       entirely — they never reached the choice.
     </div>`;
 
@@ -2655,6 +2786,7 @@ function renderCards() {
         </div>
         ${s.error ? `<div class="notice err" style="font-size:11.5px">${esc(String(s.error).slice(0, 220))}</div>` : ''}
         <button class="btn btn-primary btn-sm" style="width:100%" onclick="openRun('${key}')">Configure &amp; run</button>
+        ${key === 'deadline' ? `<button class="btn btn-ghost btn-sm" style="width:100%;margin-top:7px" onclick="openDeadlineCache()">Force re-check&hellip;</button>` : ''}
       </div></div>`;
   }).join('');
 }
@@ -3048,6 +3180,82 @@ function openRun(key) {
   if (s.status === 'running') startLogPolling();
 }
 
+/* ---------------- Force a deadline re-check ----------------
+   Apply stays disabled until a Preview has run. This action writes to every matched row and
+   its blast radius is invisible from the form — "all active rows" reads the same whether
+   that is 40 rows or 1,400 — so the count and the queued spend have to be seen first. */
+function resetDeadlineCachePreview() {
+  $('dlCacheApply').disabled = true;
+  $('dlCacheResult').className = 'estimate';
+  $('dlCacheResult').innerHTML = 'Run <strong>Preview</strong> to see how many rows carry a '
+    + 'cached check and what re-checking them would cost.';
+  $('dlCacheError').classList.add('hidden');
+}
+
+function openDeadlineCache() {
+  $('dlCacheIds').value = '';
+  $('dlCacheAll').checked = false;
+  resetDeadlineCachePreview();
+  $('dlCacheModal').classList.add('open');
+}
+
+async function runDeadlineCache(preview) {
+  const all = $('dlCacheAll').checked;
+  const ids = $('dlCacheIds').value.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+  const err = $('dlCacheError');
+  err.classList.add('hidden');
+  if (!all && !ids.length) {
+    err.textContent = 'Give at least one opportunity id, or tick "every active row".';
+    err.classList.remove('hidden');
+    return;
+  }
+  if (all && ids.length) {
+    err.textContent = 'Clearing every active row takes no id list — empty the box or untick it.';
+    err.classList.remove('hidden');
+    return;
+  }
+  const btn = preview ? $('dlCachePreview') : $('dlCacheApply');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = preview ? 'Checking…' : 'Clearing…';
+  try {
+    const d = await api('/api/agents/deadline/clear-cache', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, all, preview, confirm: !preview }),
+    });
+    const missing = (d.missing_ids || []).length
+      ? `<div style="margin-top:8px;color:var(--warn)">No row for: ${esc((d.missing_ids || []).join(', '))}</div>` : '';
+    if (preview) {
+      const sample = (d.sample || []).map(r => `${esc(r.id)} ${esc(r.name || '')}`).join('<br>');
+      $('dlCacheResult').className = 'estimate';
+      $('dlCacheResult').innerHTML =
+        `<strong>${d.cached}</strong> row(s) carry a cached check; <strong>${d.still_fresh}</strong> `
+        + `are still inside the 7-day window and would otherwise not be re-checked.<br>`
+        + `Clearing them queues about <strong>$${(d.est_queued_cost_usd ?? 0).toFixed(2)}</strong> `
+        + `of checks, paid as students open each one.`
+        + (sample ? `<div class="hint" style="margin-top:8px;font-size:11.5px">${sample}${d.cached > (d.sample || []).length ? '<br>…' : ''}</div>` : '')
+        + missing;
+      $('dlCacheApply').disabled = d.cached === 0;
+    } else {
+      $('dlCacheResult').className = 'estimate';
+      $('dlCacheResult').innerHTML =
+        `Cleared <strong>${d.cleared}</strong> row(s)${d.errors ? `, <strong>${d.errors}</strong> failed` : ''}. `
+        + `The next view of each runs a fresh check.`
+        + ((d.error_details || []).length ? `<div style="margin-top:8px;color:var(--danger)">${esc(d.error_details.join('; '))}</div>` : '')
+        + missing;
+      $('dlCacheApply').disabled = true;
+    }
+  } catch (e) {
+    err.textContent = e.message;
+    err.classList.remove('hidden');
+    // Re-enable Apply on failure so a transient error is retryable; a success deliberately
+    // leaves it disabled, since the rows are already cleared and a second pass is a no-op.
+    if (!preview) $('dlCacheApply').disabled = false;
+  } finally {
+    btn.textContent = label;
+    if (preview) btn.disabled = false;
+  }
+}
+
 function setRunButtons(disabled) {
   $('dryRunBtn').disabled = disabled;
   $('liveRunBtn').disabled = disabled;
@@ -3239,9 +3447,181 @@ $('previewBtn').onclick = doPreview;
 $('dryRunBtn').onclick = () => doRun(true);
 $('liveRunBtn').onclick = () => doRun(false);
 $('addSeedBtn').onclick = () => openSeedModal(null);
+$('dlCacheClose').onclick = () => $('dlCacheModal').classList.remove('open');
+$('dlCachePreview').onclick = () => runDeadlineCache(true);
+$('dlCacheApply').onclick = () => runDeadlineCache(false);
+$('dlCacheAll').onchange = resetDeadlineCachePreview;
+$('dlCacheIds').oninput = resetDeadlineCachePreview;
 $('seedClose').onclick = () => $('seedModal').classList.remove('open');
 $('seedSave').onclick = saveSeed;
 $('seedDelete').onclick = deleteSeed;
+/* ===========================================================================
+   Emails — the three lifecycle messages
+=========================================================================== */
+async function loadEmails() {
+  try {
+    S.emails = await api('/api/agents/emails?limit=200');
+  } catch (e) {
+    S.emails = null;
+    notice('Could not load email status: ' + e.message);
+  }
+  renderEmails();
+  loadEmailPreview();
+}
+
+function emailStatePill(state) {
+  const map = {
+    sent:    ['ok',     'sent'],
+    failed:  ['danger', 'failed'],
+    sending: ['warn',   'sending'],
+  };
+  const [cls, label] = map[state] || ['', state || 'unknown'];
+  return `<span class="pill ${cls}">${esc(label)}</span>`;
+}
+
+function renderEmails() {
+  const d = S.emails;
+  const dueBody = $('emailDueBody'), sendBody = $('emailSendBody');
+  if (!d) {
+    $('emailKpis').innerHTML = '<div class="empty">Could not load email status.</div>';
+    dueBody.innerHTML = '<tr><td colspan="3" class="empty">Unavailable.</td></tr>';
+    sendBody.innerHTML = '<tr><td colspan="6" class="empty">Unavailable.</td></tr>';
+    return;
+  }
+
+  // "no API key" and "no table" are different problems with different fixes, so they get
+  // two separate signals rather than one "not working".
+  $('emailSetup').classList.toggle('hidden', d.table_ready !== false);
+
+  const totals = { sent: 0, failed: 0, sending: 0 };
+  Object.values(d.counts || {}).forEach(c => {
+    totals.sent += c.sent || 0; totals.failed += c.failed || 0; totals.sending += c.sending || 0;
+  });
+
+  // MOCK is a KPI rather than a footnote: with no key everything below reads as a working
+  // pipeline that has simply had nothing to do, which is the single most misleading way
+  // this page can fail.
+  // .label/.value/.delta and an inline colour, matching every other KPI row on this page
+  // (renderMetricKpis) rather than inventing a second tile markup.
+  const tile = (label, value, delta, colour) =>
+    `<div class="kpi"><div class="label">${esc(label)}</div>
+      <div class="value"${colour ? ` style="color:var(--${colour})"` : ''}>${value}</div>
+      <div class="delta">${delta}</div></div>`;
+
+  $('emailKpis').innerHTML = [
+    d.configured
+      ? tile('Mode', 'Live', `<span class="mono">${esc(d.from || '')}</span>`)
+      : tile('Mode', 'Mock', 'RESEND_API_KEY is not set &mdash; nothing is being sent', 'warn'),
+    tile('Sent', num(totals.sent), `in the last ${num((d.sends || []).length)} records`),
+    tile('Failed', num(totals.failed), 'provider rejected or unreachable',
+         totals.failed ? 'danger' : null),
+    tile('Stuck', num(d.stuck),
+         'claimed but never finished &mdash; a crashed send, not one in flight',
+         d.stuck ? 'warn' : null),
+    tile('Due a reminder', d.due_error ? '?' : num((d.due_now || []).length),
+         `trials ending within ${num(d.trial_reminder_days)} day(s)`),
+  ].join('');
+
+  $('emailTabCount').textContent = (d.due_now || []).length || '';
+
+  // A failed read and an empty list look identical otherwise, and one of them means the
+  // reminder is not going out at all.
+  if (d.due_error) {
+    dueBody.innerHTML = `<tr><td colspan="3" class="empty">Could not read who is due: ${esc(d.due_error)}</td></tr>`;
+  } else if (!(d.due_now || []).length) {
+    dueBody.innerHTML = `<tr><td colspan="3" class="empty">No trial ends in the next ${esc(d.trial_reminder_days)} day(s).</td></tr>`;
+  } else {
+    dueBody.innerHTML = d.due_now.map(r => `<tr>
+      <td class="mono">${esc(r.userid)}</td>
+      <td class="mono">${esc(r.email || '—')}</td>
+      <td>${esc((r.trial_ends_at || '').slice(0, 10))} <span class="muted">(${ago(r.trial_ends_at)})</span></td>
+    </tr>`).join('');
+  }
+
+  const sends = d.sends || [];
+  sendBody.innerHTML = sends.length ? sends.map(r => `<tr>
+    <td title="${esc(r.claimed_at || '')}">${ago(r.claimed_at)}</td>
+    <td class="mono">${esc(r.kind)}</td>
+    <td class="mono">${esc(r.userid)}</td>
+    <td class="mono">${esc(r.email || '—')}</td>
+    <td>${emailStatePill(r.state)}</td>
+    <td class="mono muted">${esc(r.error || r.provider_message_id || '')}</td>
+  </tr>`).join('') : '<tr><td colspan="6" class="empty">Nothing sent yet.</td></tr>';
+}
+
+async function loadEmailPreview() {
+  const userid = ($('emailPreviewUser').value || '').trim();
+  const frame = $('emailPreviewFrame'), meta = $('emailPreviewMeta');
+  try {
+    const q = new URLSearchParams({ kind: S.emailKind });
+    if (userid) q.set('userid', userid);
+    const d = await api('/api/agents/emails/preview?' + q.toString());
+    // srcdoc into an empty sandbox: the preview is rendered, not executed, and cannot
+    // reach back into the console. It is also the same HTML the send path produces, byte
+    // for byte, because both come from render_for().
+    frame.srcdoc = d.html || '';
+    meta.innerHTML = `<strong>Subject:</strong> ${esc(d.subject || '')} &nbsp;&middot;&nbsp; `
+      + (d.is_sample
+          ? 'rendered against a <strong>sample</strong> account &mdash; name a real userid above to see their numbers'
+          : `rendered for <span class="mono">${esc(d.rendered_for)}</span>`);
+  } catch (e) {
+    frame.srcdoc = '';
+    meta.textContent = 'Could not render preview: ' + e.message;
+  }
+}
+
+async function sendEmailTest() {
+  const to = ($('emailTestTo').value || '').trim();
+  if (!to) { notice('Type an address to send the test to.'); return; }
+  const userid = ($('emailPreviewUser').value || '').trim();
+  const warn = `Send a real ${S.emailKind} email to ${to}?`
+    + '\n\nThis is NOT deduped and is NOT recorded — a test must not consume the real '
+    + 'account’s one send. Its subject is prefixed [TEST].';
+  if (!confirm(warn)) return;
+  try {
+    const d = await api('/api/agents/emails/test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: S.emailKind, to, userid: userid || null }),
+    });
+    notice(d.state === 'mock'
+      ? 'Mock mode: nothing was sent (RESEND_API_KEY is not set).'
+      : `Test sent to ${to}.`);
+  } catch (e) {
+    notice('Test send failed: ' + e.message);
+  }
+}
+
+async function runEmailSweep(dryRun) {
+  const warn = 'Run the trial-ending sweep now?'
+    + '\n\nThis sends real email to everyone whose trial ends soon and who has not already '
+    + 'been reminded for this trial window. Safe to press twice — the claim row is what '
+    + 'prevents a re-send, not this button.';
+  if (!dryRun && !confirm(warn)) return;
+  try {
+    const d = await api('/api/agents/emails/sweep', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dry_run: !!dryRun }),
+    });
+    notice(dryRun
+      ? `${d.due} account(s) would be emailed.`
+      : `Sweep done — sent ${d.sent}, skipped ${d.skipped}, failed ${d.failed}.`);
+    if (!dryRun) loadEmails();
+  } catch (e) {
+    notice('Sweep failed: ' + e.message);
+  }
+}
+
+document.querySelectorAll('#emailKindTabs .tab').forEach(t => t.onclick = () => {
+  S.emailKind = t.dataset.kind;
+  document.querySelectorAll('#emailKindTabs .tab').forEach(
+    x => x.classList.toggle('active', x === t));
+  loadEmailPreview();
+});
+$('emailPreviewBtn').onclick = () => loadEmailPreview();
+$('emailTestBtn').onclick = () => sendEmailTest();
+$('emailSweepPreview').onclick = () => runEmailSweep(true);
+$('emailSweepRun').onclick = () => runEmailSweep(false);
+
 document.querySelectorAll('#viewTabs .vtab').forEach(t => t.onclick = () => showView(t.dataset.view));
 document.querySelectorAll('#metricTabs .tab').forEach(t => t.onclick = () => showMetricPanel(t.dataset.panel));
 $('metricSort').onchange = e => { S.metricSort = e.target.value; renderMetricUsers(); };

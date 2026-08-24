@@ -28,7 +28,8 @@ import { httpClient } from '@/api/httpClient';
 import { ALL_BUCKETS, type Bucket } from '@/lib/constants';
 import { googleCalendarReturnUri } from '@/auth/googleSignIn';
 import { clearNewlyAdded, getNewlyAdded, markNewlyAdded } from '@/lib/newlyAdded';
-import { intakeExtractAndClassify, slugifyTracker } from '@/lib/tracker';
+import { getLastCheckedLabel, setLastCheckedLabel as rememberLastChecked } from '@/lib/lastChecked';
+import { applyDeadlineCheckToInfo, intakeExtractAndClassify, slugifyTracker } from '@/lib/tracker';
 import {
   assignCalendarColors,
   BUCKET_LABELS,
@@ -79,7 +80,7 @@ function sortEntries(entries: { item: TrackerItem; bucket: Bucket }[], newIds?: 
     return dateOf(a.item).localeCompare(dateOf(b.item));
   });
 }
-import { IconBtn, MiniBadge, PopButton, Screen, SoftCard, StatusPill, Txt, usePopInteraction } from '@/ui/components';
+import { IconBtn, MiniBadge, PopButton, ReviewBadge, Screen, SoftCard, StatusPill, Txt, usePopInteraction } from '@/ui/components';
 import { CalendarIcon, CalendarSyncIcon, ListIcon, RefreshIcon, StarIcon, XIcon } from '@/ui/icons';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
@@ -93,13 +94,22 @@ export default function Tracker() {
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<'calendar' | 'list'>('calendar');
   const [refreshing, setRefreshing] = useState(false);
-  const [lastCheckedLabel, setLastCheckedLabel] = useState('Last checked: never');
+  // Seeded from the module singleton so switching tabs and coming back still shows the
+  // last real result instead of resetting to "never" - see lib/lastChecked.ts.
+  const [lastCheckedLabel, setLastCheckedLabelState] = useState(getLastCheckedLabel);
+  const setLastCheckedLabel = useCallback((next: string) => {
+    rememberLastChecked(next);
+    setLastCheckedLabelState(next);
+  }, []);
   // Sync has four visible states, per the Quest Log sync designs: idle (nothing shown),
   // syncing (navy "Syncing…" + spinning glyph + a gray in-progress note), done (green
   // "Synced ✓" that fades at 4s over a green note that fades at 8s), and error (which
   // deliberately does NOT auto-clear — a failure the student never saw is a lie).
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
   const [syncNote, setSyncNote] = useState<string | null>(null);
+  // Deep link into the Wingman calendar in Google Calendar, so "where did they go?"
+  // is one tap rather than a hunt through the sidebar.
+  const [syncLink, setSyncLink] = useState<string | null>(null);
   const syncing = syncState === 'syncing';
   const syncLabelAnim = useRef(new Animated.Value(1)).current;
   const syncNoteAnim = useRef(new Animated.Value(1)).current;
@@ -118,6 +128,13 @@ export default function Tracker() {
   // Calendar tile -> list card jump, ported from script.js's goToTrackerCard(): switch to
   // list view, then once its cards exist scroll the matching one into view and flash it.
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  // Which card's review popover is open, lifted out of ListCard so only one is ever open —
+  // the rule the retired SPA's toggleReviewInfo() enforced by closing every other panel first.
+  const [openReviewId, setOpenReviewId] = useState<string | null>(null);
+  const toggleReview = useCallback(
+    (id: string) => setOpenReviewId((cur) => (cur === id ? null : id)),
+    [],
+  );
   const cardRefs = useRef<Map<string, { scrollIntoView?: (opts: unknown) => void }>>(new Map());
   const pendingScrollId = useRef<string | null>(null);
 
@@ -178,20 +195,46 @@ export default function Tracker() {
       return;
     }
     setRefreshing(true);
-    setLastCheckedLabel(`Checking (1/${total})…`);
+    // Progress ticks are component-only: they are transient, and remembering one would
+    // leave a frozen "Checking (3/12)…" on screen if the student navigates away mid-run.
+    // Only terminal outcomes go through setLastCheckedLabel and survive a tab change.
+    setLastCheckedLabelState(`Checking (1/${total})…`);
     try {
       const result = await refreshTrackerDeadlines((checked, count) => {
-        setLastCheckedLabel(`Checking (${Math.min(checked + 1, count)}/${count})…`);
+        setLastCheckedLabelState(`Checking (${Math.min(checked + 1, count)}/${count})…`);
       });
       setData(result.data);
       const stamp = new Date().toLocaleString('en-US', {
         month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
       });
-      let suffix = '';
-      if (result.updated) suffix = ` — ${result.updated} update${result.updated > 1 ? 's' : ''} found`;
-      else if (result.failed === result.checked) suffix = ' — check failed';
-      else suffix = ' — no changes found';
-      setLastCheckedLabel(`Last checked: ${stamp}${suffix}`);
+      // Report what actually happened, per outcome. This used to say "no changes found"
+      // whenever `updated` was 0 - including when nothing had been checked at all, which is
+      // the case for every opportunity added by URL before catalog linking existed. Telling
+      // a student their deadlines are current when nobody looked is the worst answer here,
+      // because it is the one that stops them checking themselves.
+      const parts: string[] = [];
+      if (result.updated) {
+        parts.push(`${result.updated} update${result.updated > 1 ? 's' : ''} found`);
+      } else if (result.checked) {
+        parts.push('no changes found');
+      }
+      if (result.skipped) {
+        parts.push(`${result.skipped} added by URL can’t be auto-checked`);
+      }
+      if (result.blocked) {
+        parts.push(`${result.blocked} needed an active plan`);
+      }
+      if (result.signedOut) {
+        parts.push('stopped — please sign in again');
+      }
+      if (result.failed) {
+        parts.push(`${result.failed} couldn’t be reached`);
+      }
+      setLastCheckedLabel(
+        result.checked
+          ? `Last checked: ${stamp} — ${parts.join(' · ')}`
+          : `Nothing could be checked (${stamp}) — ${parts.join(' · ') || 'no tracked opportunities'}`,
+      );
     } catch (e) {
       setLastCheckedLabel(`Check failed: ${(e as Error).message}`);
     } finally {
@@ -220,7 +263,8 @@ export default function Tracker() {
     syncLabelAnim.setValue(1);
     syncNoteAnim.setValue(1);
     setSyncState('syncing');
-    setSyncNote('Pulling deadlines into your Google Calendar — this can take up to a minute.');
+    setSyncLink(null);
+    setSyncNote(`Pulling deadlines into your Google Calendar — this can take up to a minute.`);
     try {
       const out = await syncTrackerToCalendar();
       if (out.kind === 'not-connected') {
@@ -241,16 +285,23 @@ export default function Tracker() {
       }
       // The design's wording for the clean case; anything notable (removals, failures) keeps
       // the counted breakdown instead — dropping "2 failed" to match a mockup would hide it.
-      const clean = !out.removed && !out.failed && !out.sweepErrors.length;
+      // NAME the calendar. Events go to a dedicated "Highschool Wingman" calendar and can
+      // never go anywhere else — the calendar.app.created scope only grants access to
+      // calendars this app created. Saying a bare "synced to Google Calendar" is what makes
+      // a student check their primary calendar, see nothing, and report the feature broken.
+      const where = `in your “${out.calendarName}” calendar`;
+      const clean = !out.removed && !out.deduped && !out.failed && !out.sweepErrors.length;
       if (clean) {
-        setSyncNote('Calendar synced — your deadlines are up to date in Google Calendar.');
+        setSyncNote(`Calendar synced — your deadlines are up to date ${where}.`);
       } else {
-        const parts: string[] = [`Synced ${out.synced} deadline${out.synced === 1 ? '' : 's'}`];
+        const parts: string[] = [`Synced ${out.synced} deadline${out.synced === 1 ? '' : 's'} ${where}`];
         if (out.removed) parts.push(`removed ${out.removed} no longer tracked`);
+        if (out.deduped) parts.push(`cleaned up ${out.deduped} duplicate${out.deduped === 1 ? '' : 's'}`);
         if (out.failed) parts.push(`${out.failed} failed`);
         if (out.sweepErrors.length) parts.push('some removals could not be completed');
         setSyncNote(`${parts.join(' · ')}.`);
       }
+      setSyncLink(out.calendarLink || null);
       setSyncState('done');
       fadeOutAfter(syncLabelAnim, 4000, () => setSyncState('idle'));
       fadeOutAfter(syncNoteAnim, 8000, () => setSyncNote(null));
@@ -287,23 +338,63 @@ export default function Tracker() {
         ? (section as Bucket)
         : 'researchCompetitions';
       const current = data ?? (await loadTrackerData());
-      const id = slugifyTracker(extracted.name || url, current[bucket].map((i) => i.id));
+      const name = extracted.name || 'Custom Opportunity';
+      const meta = extracted.meta || '';
+      const fit = extracted.fit || '';
+      const note = extracted.note || 'Added manually via URL.';
+
+      // Register the opportunity in the catalog FIRST, and track it under the id that comes
+      // back. That id is the whole reason this happens before the item is built: it is what
+      // makes /api/opportunities/<id>/deadline resolve, so a hand-added opportunity gets the
+      // same shared, cached, web-searched deadline check a Fresh Finds one does — both on
+      // add and on every later "Check for updates". Previously this was fired and forgotten
+      // after the fact, the item kept a local slug, and the deadline endpoint 404'd forever.
+      //
+      // The row lands is_active=false and stays there until someone activates it in the
+      // console; being addressable is not being published. If the submission cannot be
+      // resolved we fall back to the slug and the item is simply un-auto-checkable, which
+      // the refresh now says out loud instead of reporting "no changes found".
+      const catalogId = await httpClient.submitUserOpportunity({
+        name,
+        url,
+        type: extracted.category || 'Program',
+        section: bucket,
+        meta,
+        fit,
+        note,
+        important_dates: extracted.important_dates ?? [],
+        requirements: extracted.requirements ?? [],
+        apply_url: extracted.apply_url || url,
+        category: extracted.category ?? null,
+      });
+      const id = catalogId ?? slugifyTracker(extracted.name || url, current[bucket].map((i) => i.id));
+
+      // Same two-step sequence a Fresh Finds add uses: the Gemini extraction above, then the
+      // shared deadline check overlaid on top of it. A brand-new row is never a cache hit,
+      // so this is a real (paid) check; a URL that deduped into an existing catalog row may
+      // come back free and already verified.
+      if (catalogId) {
+        applyDeadlineCheckToInfo(extracted, await httpClient.getDeadlineCheck(catalogId));
+      }
+
       const item: TrackerItem = {
         id,
-        name: extracted.name || 'Custom Opportunity',
+        name,
         url,
         type: extracted.category || '',
         bucket,
         progressStatus: 'not_started',
         status: ['running', 'not_running', 'unknown'].includes(extracted.status) ? extracted.status : 'unknown',
-        meta: extracted.meta || '',
-        fit: extracted.fit || '',
-        note: extracted.note || 'Added manually via URL.',
+        meta,
+        fit,
+        // applyDeadlineCheckToInfo may have replaced `note` with the check's own
+        // important_date_note, which is the more authoritative caveat of the two.
+        note: extracted.note || note,
         noteType: extracted.status === 'not_running' ? 'flag' : (extracted.noteType || 'plain'),
         importantDates: Array.isArray(extracted.important_dates)
           ? extracted.important_dates
               .filter((d) => d && d.date_iso)
-              .map((d) => ({ label: d.label || 'Date', dateISO: d.date_iso, type: d.type || 'deadline' }))
+              .map((d) => ({ label: d.label || 'Date', dateISO: d.date_iso, type: d.type || 'deadline', estimated: d.estimated }))
               .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
           : [],
         deadlineLabel: extracted.deadline_label || 'CHECK SITE',
@@ -327,21 +418,6 @@ export default function Tracker() {
       markNewlyAdded([id]);
       setNewIds(new Set([id]));
       goToTrackerCard(id);
-      // Fire and forget — the item is already in the student's Quest Log, so a failed
-      // review-queue insert must never surface as an error here.
-      void httpClient.submitUserOpportunity({
-        name: item.name,
-        url,
-        type: extracted.category || 'Program',
-        section: bucket,
-        meta: item.meta,
-        fit: item.fit,
-        note: item.note,
-        important_dates: extracted.important_dates ?? [],
-        requirements: extracted.requirements ?? [],
-        apply_url: item.applyUrl ?? url,
-        category: extracted.category ?? null,
-      });
     } catch (err) {
       setIntakeError(
         `Couldn’t extract details — this only works with live API access. Error: ${(err as Error).message}`,
@@ -454,6 +530,11 @@ export default function Tracker() {
           ]}
         >
           {syncNote}
+          {syncState === 'done' && !!syncLink && (
+            <Text style={styles.syncLink} onPress={() => Linking.openURL(syncLink)}>
+              {'  Open calendar ›'}
+            </Text>
+          )}
         </Animated.Text>
       )}
 
@@ -504,6 +585,8 @@ export default function Tracker() {
                 onToggleSaved={toggleSaved}
                 highlighted={item.id === highlightId}
                 cardRef={(el) => { if (el) cardRefs.current.set(item.id, el); else cardRefs.current.delete(item.id); }}
+                reviewOpen={openReviewId === item.id}
+                onToggleReview={toggleReview}
               />
             ))
           )}
@@ -519,7 +602,7 @@ export default function Tracker() {
             <Text style={styles.emptyState}>Nothing saved yet — click "☆ Save for later" on any card to move it here.</Text>
           ) : (
             savedItems.map(({ item, bucket }) => (
-              <ListCard key={item.id} item={item} bucket={bucket} isSaved onRemove={remove} onToggleSaved={toggleSaved} />
+              <ListCard key={item.id} item={item} bucket={bucket} isSaved onRemove={remove} onToggleSaved={toggleSaved} reviewOpen={openReviewId === item.id} onToggleReview={toggleReview} />
             ))
           )}
           </View>
@@ -647,6 +730,8 @@ function ListCard({
   onToggleSaved,
   highlighted,
   cardRef,
+  reviewOpen,
+  onToggleReview,
 }: {
   item: TrackerItem;
   bucket: Bucket;
@@ -656,6 +741,8 @@ function ListCard({
   onToggleSaved: (id: string) => void;
   highlighted?: boolean;
   cardRef?: (el: unknown) => void;
+  reviewOpen?: boolean;
+  onToggleReview?: (id: string) => void;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const cardPop = usePopInteraction(4, colors.navy, 2);
@@ -704,7 +791,17 @@ function ListCard({
         ) : (
           <View key={i} style={styles.dateRow}>
             <Text style={styles.dateRowDate}>{formatMonthDay(e.m.date)}</Text>
-            <Text style={styles.dateRowLabel}>{e.m.label}</Text>
+            <Text style={styles.dateRowLabel}>
+              {e.m.label}
+              {/* Per-date, so a confirmed deadline and a projected opening on the SAME card
+                  are told apart. The card-level "Predicted dates from past cycle" banner
+                  can only say that something here is a guess. Suppressed when the label
+                  already says it — some rows were written before the flag existed and the
+                  model put "(estimated)" in the label text itself. */}
+              {e.m.estimated && !/estimat/i.test(e.m.label) && (
+                <Text style={styles.dateRowEstimated}>{'  (estimated)'}</Text>
+              )}
+            </Text>
           </View>
         ),
       )}
@@ -715,7 +812,9 @@ function ListCard({
     <Pressable
       ref={cardRef as never}
       {...cardPop.handlers}
-      style={[styles.listCard, cardPop.shadowStyle, notRunning && { opacity: 0.6 }, highlighted && styles.listCardHighlighted]}
+      // reviewOpen raises this card above the ones after it in source order, or the popover is
+      // painted over by the next card instead of overlapping it.
+      style={[styles.listCard, cardPop.shadowStyle, notRunning && { opacity: 0.6 }, highlighted && styles.listCardHighlighted, reviewOpen && styles.listCardReviewOpen]}
     >
       {isNew && (
         <View style={styles.newMarker}>
@@ -726,8 +825,12 @@ function ListCard({
         <View style={styles.badgeRow}>
           <MiniBadge label={BUCKET_LABELS[bucket]} bg={colors.violet200} fg={colors.violet900} />
           {notRunning && <MiniBadge label="Not running" bg="#FFE4E6" fg="#881337" />}
-          {item.reviewStatus === 'positive' && <MiniBadge label="Well reviewed" bg={colors.emerald100} fg={colors.emerald900} />}
-          {item.reviewStatus === 'mixed' && <MiniBadge label="Mixed reviews" bg="#FFEDD5" fg="#7C2D12" />}
+          <ReviewBadge
+            status={item.reviewStatus}
+            summary={item.reviewSummary}
+            open={!!reviewOpen}
+            onToggle={() => onToggleReview?.(item.id)}
+          />
         </View>
         <View style={styles.iconRow}>
           <IconBtn onPress={() => onToggleSaved(item.id)}>
@@ -811,6 +914,7 @@ const styles = StyleSheet.create({
   syncNote: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.muted, textAlign: 'center', marginTop: 6 },
   syncNoteDone: { color: colors.statusNowFg },
   syncNoteError: { color: colors.red },
+  syncLink: { color: colors.navy, textDecorationLine: 'underline', fontFamily: fonts.bodySemi },
 
   intakeWrap: { position: 'relative', zIndex: 50 },
   intakePanel: {
@@ -867,6 +971,7 @@ const styles = StyleSheet.create({
   savedHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 24 },
 
   listCard: { backgroundColor: colors.white, borderWidth: 4, borderColor: colors.slate900, borderRadius: radius.xxl, padding: 24, gap: 16 },
+  listCardReviewOpen: { zIndex: 20 },
   listCardHighlighted: { backgroundColor: colors.lavender, borderColor: colors.indigo },
   // The retired SPA's newBanner, restored value-for-value (script.js trackerCardHTML): a
   // lime tab notched over the card's top-left corner, not a badge in the flow. The negative
@@ -880,8 +985,12 @@ const styles = StyleSheet.create({
     ...popShadow(2),
   },
   newMarkerText: { fontFamily: fonts.bodyBold, fontSize: 10, letterSpacing: 0.5, textTransform: 'uppercase', color: colors.ink },
-  cardTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 },
-  badgeRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', flex: 1 },
+  // zIndex on both rows is what lets ReviewBadge's popover paint OVER the card's dates and
+  // meta below it rather than under them — RN-web makes every View its own stacking context
+  // at z-index 0, so the popover cannot escape this row on its own. See the STACKING note on
+  // ReviewBadge in src/ui/components.tsx. Kept at 1, well clear of topRow's 50.
+  cardTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, zIndex: 1 },
+  badgeRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', flex: 1, zIndex: 1 },
   iconRow: { flexDirection: 'row', gap: 6 },
   cardName: { fontFamily: fonts.display, fontSize: 30, lineHeight: 34, color: colors.slate900 },
   cardMeta: { fontFamily: fonts.bodyMed, fontSize: 14, color: colors.slate500, marginTop: 4 },
@@ -895,6 +1004,7 @@ const styles = StyleSheet.create({
   dateRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#EEEEEE' },
   dateRowDate: { fontFamily: fonts.bodyBold, fontSize: 14, color: '#0F1C33', width: 52 },
   dateRowLabel: { fontFamily: fonts.bodyMed, fontSize: 14, color: '#33404F', flex: 1 },
+  dateRowEstimated: { fontFamily: fonts.bodyMed, fontSize: 12, color: '#92400E' },
   detailsToggle: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.indigo600 },
   detailsBox: { backgroundColor: colors.slate50, borderWidth: 1, borderColor: colors.slate200, borderRadius: radius.md, padding: 12, gap: 4 },
   detailsText: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500 },

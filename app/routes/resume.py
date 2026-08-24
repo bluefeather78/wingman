@@ -3,12 +3,12 @@ server.py's handle_extract_from_resume / handle_extract_from_linkedin /
 handle_user_submitted_opportunity (PLAN_1_decompose.md). The extraction/insert logic
 lives in app.services.resume; these are the HTTP glue.
 """
-import threading
 
 from fastapi import APIRouter, Request, Depends
 
 from app.core import touch_user_activity
-from app.deps import read_json_body, json_response, json_error, subscription_block_reason
+from app.deps import (json_body, json_response, json_error, subscription_block_reason,
+                      raw_body as raw_body_dep)
 from app.auth import get_current_user, get_optional_user, AuthedUser
 from app.services import resume as resume_service
 
@@ -16,7 +16,8 @@ router = APIRouter()
 
 
 @router.post("/api/extract-from-resume")
-async def handle_extract_from_resume(request: Request, user: AuthedUser = Depends(get_current_user)):
+def handle_extract_from_resume(request: Request, raw: bytes = Depends(raw_body_dep),
+                               user: AuthedUser = Depends(get_current_user)):
     """Extract profile-relevant information from a resume (PDF or DOCX)."""
     # Identity is token-derived (was a query-string userid). Gate on subscription before
     # reading the file so a lapsed account can't make us parse a PDF or call Claude.
@@ -30,7 +31,6 @@ async def handle_extract_from_resume(request: Request, user: AuthedUser = Depend
         return json_error(400, "Request must be multipart/form-data with file field.")
 
     boundary = content_type.split("boundary=")[-1].strip().encode()
-    raw = await request.body()
 
     try:
         file_data = resume_service.extract_multipart_file(raw, boundary)
@@ -63,18 +63,14 @@ async def handle_extract_from_resume(request: Request, user: AuthedUser = Depend
 
 
 @router.post("/api/extract-from-linkedin")
-async def handle_extract_from_linkedin(request: Request, user: AuthedUser = Depends(get_current_user)):
+def handle_extract_from_linkedin(body: dict = Depends(json_body),
+                                 user: AuthedUser = Depends(get_current_user)):
     """Extract profile-relevant information from LinkedIn profile (text paste only)."""
     # Paid Claude call that writes into a profile, so it is token-gated and subscription-
     # gated exactly like the resume path — identity comes from the token, not the body.
     reason = subscription_block_reason(user.id)
     if reason:
         return json_error(402, reason)
-    try:
-        body = await read_json_body(request)
-    except Exception:
-        return json_error(400, "Malformed JSON.")
-
     linkedin_text = body.get("linkedin_text", "").strip()
     if not linkedin_text:
         return json_error(400, "Please paste your LinkedIn profile text. LinkedIn blocks "
@@ -96,19 +92,29 @@ async def handle_extract_from_linkedin(request: Request, user: AuthedUser = Depe
 
 
 @router.post("/api/user-submitted-opportunities")
-async def handle_user_submitted_opportunity(request: Request,
-                                            user: AuthedUser = Depends(get_optional_user)):
+def handle_user_submitted_opportunity(body: dict = Depends(json_body),
+                                      user: AuthedUser = Depends(get_optional_user)):
     """Accept user-submitted opportunity data, dedupe by URL, and insert into the
-    opportunities table with is_active=false. Runs asynchronously.
+    opportunities table with is_active=false.
+
+    Runs INLINE and returns the resolved catalog id (2026-08-24). It used to hand the work
+    to a background thread and answer {"status": "queued"} with no id, which meant a
+    hand-added opportunity had nothing to link to: the Quest Log gave it a local slug,
+    /api/opportunities/<slug>/deadline 404'd forever, and "Check for updates" skipped it
+    while still telling the student "no changes found". With an id, a custom add uses the
+    same shared, cached deadline check a catalog opportunity does.
+
+    The row still lands is_active=false — this endpoint never puts anything in front of
+    students. Activation stays the manual console step it has always been; the id is only
+    what makes the row addressable.
+
+    Failure is still never the student's problem: the item is already in their Quest Log by
+    the time this is called, so an unresolvable submission comes back 200 with id=null and
+    the client simply carries on unlinked.
 
     Soft auth: the userid here is provenance for the review queue, not access control (the
     row is public-review-queue data, not owned data). Use the token's identity when signed
     in, else record it as an unattributed submission — same residual as before."""
-    try:
-        body = await read_json_body(request)
-    except Exception:
-        return json_error(400, "Malformed JSON.")
-
     name = (body.get("name") or "").strip()
     # NOT lowercased — the stored URL must stay exactly as given (case-sensitive paths).
     url = (body.get("url") or "").strip()
@@ -126,18 +132,20 @@ async def handle_user_submitted_opportunity(request: Request,
     if not url or not name:
         return json_error(400, "URL and name are required.")
 
-    def background_insert():
-        try:
-            resume_service.insert_user_opportunity(
-                name, url, opp_type, section, meta, fit, note,
-                important_dates, requirements, apply_url, category, userid
-            )
-        except Exception as e:
-            print(f"[User Opportunity] Background insertion failed: {e}")
-
-    threading.Thread(target=background_insert, daemon=True).start()
+    try:
+        opp_id = resume_service.insert_user_opportunity(
+            name, url, opp_type, section, meta, fit, note,
+            important_dates, requirements, apply_url, category, userid
+        )
+    except Exception as e:
+        # Never surfaced as an error: see the docstring. The client gets id=null and the
+        # student's Quest Log entry is unaffected.
+        print(f"[User Opportunity] Insertion failed: {e}")
+        opp_id = None
 
     return json_response(200, {
-        "status": "queued",
-        "message": "Opportunity queued for addition to database",
+        "status": "linked" if opp_id else "unlinked",
+        "id": opp_id,
+        "message": ("Opportunity added to the review queue"
+                    if opp_id else "Opportunity could not be added to the review queue"),
     })

@@ -1249,7 +1249,7 @@ def get_user_metrics(days=30, limit=500):
         elif status == "trial" and u["trial_ends_at"] and is_trial_expired(u["trial_ends_at"]):
             eligible.append(u["userid"])
     # Denominator is accounts whose trial has actually ENDED, never all accounts: with a
-    # 3-day trial, dividing by everyone scores every signup from the last 72 hours as a
+    # 7-day trial, dividing by everyone scores every signup from the last week as a
     # failure before they have had a chance to decide.
     conversion = {
         "converted": len(converted), "eligible": len(eligible),
@@ -1929,6 +1929,109 @@ def activate_opportunities(ids, active=True):
     return {"ok": errors == 0, "activated": done if active else 0,
             "deactivated": 0 if active else done,
             "errors": errors, "error_details": details}
+
+
+# ---------------- Deadline cache ----------------
+# The console half of clear_deadline_cache.py. Nulling dates_last_checked_at is the ONLY
+# way to force a re-check inside the 7-day TTL, and until 2026-08-24 there was no working
+# way to do it at all (the script wrote a column name that does not exist, so PostgREST
+# rejected every PATCH). That mattered because the TTL is also what hides a bad answer:
+# whatever a row holds is served to every student for a week.
+DEADLINE_CACHE_COLUMN = "dates_last_checked_at"
+DEADLINE_STALE_DAYS = 7            # mirrors app.services.deadlines.DEADLINE_STALE_DAYS
+DEADLINE_CHECK_UNIT_COST = 0.07    # measured two-phase cost per verified check
+
+
+def _deadline_cache_is_fresh(stamp):
+    if not stamp:
+        return False
+    try:
+        checked = datetime.datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return now - checked < datetime.timedelta(days=DEADLINE_STALE_DAYS)
+
+
+def clear_deadline_cache(ids=None, want_all=False, dry=False):
+    """Make rows due for a fresh deadline check by nulling their cache stamp.
+
+    This agent-adjacent action is unlike the five agent cards in one important way: it
+    costs nothing to run and everything later. No API call is made here, but each cleared
+    row pays for a two-phase Claude check the next time a student opens it, so the console
+    quotes the queued spend rather than a $0.00 that would read as free.
+
+    status/important_dates are deliberately left in place. A stale answer beats a blank
+    card while the re-check is pending, and check_deadlines.deadline_write_decision() needs
+    the existing dates to know whether a later empty result may overwrite them.
+    """
+    ids = [str(i).strip() for i in (ids or []) if str(i).strip()]
+    if not ids and not want_all:
+        return {"ok": False, "error": "Give at least one opportunity id, or ask for all."}
+    if ids and want_all:
+        return {"ok": False, "error": "Clearing all takes no id list."}
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
+
+    select = f"id,name,{DEADLINE_CACHE_COLUMN}"
+    try:
+        if want_all:
+            # Active rows only — an inactive row is not reachable from the app, so clearing
+            # it buys nothing and would make a reviewer's queue pay for a check.
+            #
+            # PAGINATED past PostgREST's 1000-row max-rows cap. The catalog is ~1240 active
+            # rows, so a single request silently returns the first 1000 and the tail is never
+            # cleared — and the count shown to the operator would be short too, which is the
+            # worse half: "37 rows will be re-checked" reads as a complete answer.
+            rows, offset, page_size = [], 0, 1000
+            while True:
+                page = _supabase_request("opportunities", params={
+                    "select": select, "is_active": "eq.true", "order": "id",
+                    "limit": str(page_size), "offset": str(offset)}) or []
+                rows.extend(page)
+                if len(page) < page_size:
+                    break
+                offset += page_size
+        else:
+            rows = []
+            for i in range(0, len(ids), 50):
+                rows.extend(_supabase_request("opportunities", params={
+                    "select": select,
+                    "id": "in.(%s)" % ",".join(ids[i:i + 50])}) or [])
+    except Exception as e:
+        return {"ok": False, "error": f"Could not read the catalog: {str(e)[:200]}"}
+
+    found = {r["id"] for r in rows}
+    missing = [i for i in ids if i not in found]
+    # Only rows that actually carry a stamp have anything to clear.
+    targets = [r for r in rows if r.get(DEADLINE_CACHE_COLUMN)]
+    fresh = sum(1 for r in targets if _deadline_cache_is_fresh(r.get(DEADLINE_CACHE_COLUMN)))
+    summary = {
+        "ok": True,
+        "matched": len(rows),
+        "cached": len(targets),
+        "still_fresh": fresh,
+        "missing_ids": missing,
+        "est_queued_cost_usd": round(len(targets) * DEADLINE_CHECK_UNIT_COST, 2),
+        "sample": [{"id": r["id"], "name": r.get("name")} for r in targets[:20]],
+    }
+    if dry:
+        summary["cleared"] = 0
+        summary["dry"] = True
+        return summary
+
+    cleared, errors, details = 0, 0, []
+    for r in targets:
+        try:
+            _commit_patch(r["id"], {DEADLINE_CACHE_COLUMN: None})
+            cleared += 1
+        except Exception as e:
+            errors += 1
+            if len(details) < 5:
+                details.append(f"{r['id']}: {str(e)[:160]}")
+    summary.update({"ok": errors == 0, "cleared": cleared, "errors": errors,
+                    "error_details": details, "dry": False})
+    return summary
 
 
 _SNAPSHOT_COMMIT_RE = re.compile(r"Committed dry-run snapshot (\S+)")
@@ -3008,3 +3111,40 @@ def delete_seed(seed_id):
     result = _supabase_request("scraper_seeds", method="DELETE",
                                 params={"id": f"eq.{seed_id}"})
     return (result is not None), None if result is not None else "Supabase delete failed"
+
+
+# ---------------- Lifecycle email (review side) ----------------
+#
+# Thin wrappers over app/services/email.py rather than a second implementation. The console
+# must render exactly what a student receives — a preview built from its own copy of the
+# templates is a preview of something that is not being sent.
+
+def get_email_overview(limit=100):
+    from app.services import email as email_service
+    return email_service.email_status(limit=limit)
+
+
+def preview_lifecycle_email(kind, userid=None):
+    from app.services import email as email_service
+    from app.services.email_templates import EMAIL_KINDS
+    if kind not in EMAIL_KINDS:
+        return {"ok": False, "error": f"Unknown email kind: {kind!r}. "
+                                      f"Known: {', '.join(EMAIL_KINDS)}"}
+    return email_service.preview(kind, userid=(userid or "").strip() or None)
+
+
+def send_test_lifecycle_email(kind, to_email, userid=None):
+    from app.services import email as email_service
+    from app.core import get_user_account
+    record = None
+    if userid:
+        try:
+            record = get_user_account(str(userid).strip())
+        except Exception:
+            record = None
+    return email_service.send_test(kind, to_email, record=record)
+
+
+def run_lifecycle_sweep(dry_run=False):
+    from app.services import email as email_service
+    return email_service.run_trial_sweep(dry_run=dry_run)

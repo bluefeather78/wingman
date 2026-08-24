@@ -1,0 +1,82 @@
+# Daily trial-ending reminder sweep.
+#
+# This is the SCHEDULER, and it lives here rather than in the admin console for a reason
+# worth not re-deriving: ops/ is localhost-gated and deliberately never mounted on Render
+# (see render.yaml), so an admin button could only ever fire the sweep on days somebody's
+# laptop was on — and the person whose trial expires tomorrow is precisely the one who
+# won't be opening the app to trigger it for us.
+#
+# It does nothing but curl the deployed service. The service key stays on Render; this
+# workflow only ever holds the sweep secret, which authorises one action with no read
+# access to anything.
+#
+# REQUIRED REPOSITORY SECRETS (Settings -> Secrets and variables -> Actions):
+#   WINGMAN_API_BASE    e.g. https://highschoolwingman.com   (no trailing slash)
+#   EMAIL_CRON_SECRET   must match EMAIL_CRON_SECRET in the Render dashboard
+#
+# Until both are set the job fails loudly rather than silently no-opping — a scheduled
+# email job that quietly does nothing is indistinguishable from one that has nobody due.
+#
+# Safe to run more often than daily, and safe to re-run by hand: the email_sends claim in
+# app/services/email.py is what stops a second pass re-mailing anyone, not this schedule.
+
+name: Lifecycle emails
+
+on:
+  schedule:
+    # 15:00 UTC — mid-morning US Pacific, early evening in Europe. Deliberately not
+    # midnight UTC: GitHub's scheduler is heavily oversubscribed on the hour and on 00:00
+    # in particular, where runs are routinely delayed by 30+ minutes or dropped. A
+    # reminder that arrives at 3am local is also the least likely to be acted on.
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Resolve who is due without sending"
+        type: boolean
+        default: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the trial-ending sweep
+        env:
+          API_BASE: ${{ secrets.WINGMAN_API_BASE }}
+          CRON_SECRET: ${{ secrets.EMAIL_CRON_SECRET }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+          if [ -z "${API_BASE:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::WINGMAN_API_BASE and EMAIL_CRON_SECRET must both be set as repository secrets."
+            exit 1
+          fi
+
+          # --max-time covers the free Render instance's cold start (it sleeps after 15
+          # minutes of inactivity, and this job is often the first thing to wake it).
+          # The secret goes in a HEADER, never the query string: a URL carrying a
+          # credential is written to every proxy and access log along the way.
+          # `verbose: false` keeps the per-account address list out of the Actions log,
+          # which is readable by anyone with repo access.
+          code=$(curl -sS -o response.json -w '%{http_code}' \
+            --max-time 120 --retry 2 --retry-delay 30 --retry-connrefused \
+            -X POST "${API_BASE}/api/email/sweep" \
+            -H "X-Cron-Secret: ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d "{\"dry_run\": ${DRY_RUN}, \"verbose\": false}")
+
+          echo "HTTP ${code}"
+          cat response.json
+          echo
+
+          if [ "${code}" != "200" ]; then
+            echo "::error::Sweep failed with HTTP ${code}"
+            exit 1
+          fi
+
+          # A 200 whose body says ok:false is the un-run-migration case. Surface it as a
+          # failure so it shows up as a red run rather than as a green one that sent nothing.
+          if grep -q '"ok": *false' response.json; then
+            echo "::error::Sweep returned ok:false — see the body above (usually: run email_schema.sql)."
+            exit 1
+          fi

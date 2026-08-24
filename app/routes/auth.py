@@ -12,10 +12,10 @@
 
 Login/register live in account.py; these two are the token lifecycle around them.
 """
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Depends
 
-from app.core import get_user, bump_token_version
-from app.deps import read_json_body, json_response, json_error, login_response
+from app.core import get_user_account, bump_token_version
+from app.deps import json_body, json_response, json_error, login_response
 from app.auth import (
     get_current_user, AuthedUser, verify_refresh_token, AuthError, AuthConfigError,
 )
@@ -24,8 +24,7 @@ router = APIRouter()
 
 
 @router.post("/api/auth/refresh")
-async def handle_refresh(request: Request):
-    body = await read_json_body(request)
+def handle_refresh(body: dict = Depends(json_body)):
     token = body.get("refresh_token") or ""
     try:
         userid, ver = verify_refresh_token(token)
@@ -35,7 +34,7 @@ async def handle_refresh(request: Request):
         return json_error(401, "Your session has expired. Please sign in again.")
 
     try:
-        record = get_user(userid)
+        record = get_user_account(userid)
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
     if not record:
@@ -55,7 +54,7 @@ async def handle_refresh(request: Request):
 
 
 @router.post("/api/auth/logout-all")
-async def handle_logout_all(request: Request, user: AuthedUser = Depends(get_current_user)):
+def handle_logout_all(user: AuthedUser = Depends(get_current_user)):
     new_version = bump_token_version(user.id)
     if new_version is None:
         # Column not present (auth_schema.sql not run) or the account vanished — nothing to

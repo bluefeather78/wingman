@@ -41,6 +41,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // initAuth can now return a session restored from cache and revalidate it in the
+  // background, so "this session is dead" can arrive AFTER the first render. Clearing the
+  // user here is what makes (app)/_layout redirect to /login when that happens.
+  useEffect(() => httpClient.onSessionLost(() => setUser(null)), []);
+
   const value = useMemo<AuthState>(
     () => ({
       ready,

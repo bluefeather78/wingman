@@ -15,6 +15,22 @@ import type {
 // mock mode) is implemented now; the auth-dependent methods (login/register, token
 // storage, the Bearer interceptor, 401 handling) are stubbed here and filled in once
 // the Phase 2 contract lands — WITHOUT touching any screen or salvage module.
+// What a deadline check actually did, for callers that report back to the student.
+//   ok         a payload came back (it may still be a cached or fallback answer; the
+//              payload's own `source` says which)
+//   not-found  no catalog row behind this id — an item added by URL that never linked.
+//              NOT a failure: it simply cannot be auto-checked.
+//   blocked    402, the subscription gate refused a paid check
+//   auth       the session expired
+//   error      anything else: network, 5xx, malformed response
+export type DeadlineCheckOutcome = 'ok' | 'not-found' | 'blocked' | 'auth' | 'error';
+
+export interface DeadlineCheckResult {
+  outcome: DeadlineCheckOutcome;
+  info: Partial<TrackerInfo> | null;
+  message?: string;
+}
+
 export interface ApiClient {
   // --- Stable since Phase 1 (work today, incl. backend mock mode) ---
   getOpportunities(): Promise<Opportunity[]>;
@@ -22,7 +38,13 @@ export interface ApiClient {
   // so a hiccup can't block loading the tracker. userid attribution becomes a token in
   // Phase 2, but the endpoint itself is not auth-gated.
   getDeadlineCheck(oppId: string): Promise<Partial<TrackerInfo> | null>;
-  callGemini(system: string, userContent: string, useWebSearch?: boolean): Promise<string>;
+  // The same call with the REASON attached. Anything that reports back to the student
+  // must use this one: a 404 (no catalog row behind this tracked item) and a 402 (trial
+  // lapsed) and a network failure are three different things to tell somebody, and
+  // collapsing them into a bare null is what made the Quest Log's refresh claim it had
+  // checked opportunities it had not.
+  getDeadlineCheckResult(oppId: string): Promise<DeadlineCheckResult>;
+  callGemini(system: string, userContent: string, useWebSearch?: boolean, maxTokens?: number): Promise<string>;
   callClaude(
     system: string,
     userContent: string,
@@ -56,7 +78,14 @@ export interface ApiClient {
 
   // --- Gated user data (Bearer token; identity from token, body userid ignored) ---
   loadData<T = unknown>(key: string): Promise<T | null>;
+  // Last value seen for this key, synchronously, or undefined if never loaded. A render
+  // accelerator only — it never replaces the loadData() that reconciles it.
+  peekData<T = unknown>(key: string): T | undefined;
   saveData(key: string, value: unknown): Promise<void>;
+  // Subscribe to "the session we booted from cache turned out to be dead". Returns an
+  // unsubscribe. Fires whenever the session is dropped, including the background
+  // revalidation initAuth kicks off.
+  onSessionLost(listener: () => void): () => void;
   // Update the account's location (POST /api/account/location, hard-gated).
   saveLocation(location: string): Promise<void>;
   // Resume / LinkedIn quick-add extraction (both hard-gated; return the extracted text).
@@ -65,7 +94,11 @@ export interface ApiClient {
   // Queue a user-submitted opportunity for the review queue (soft auth: provenance comes
   // from the token when signed in, unattributed otherwise). Never rejects — the row is a
   // background nicety, the student's own Quest Log already has the item.
-  submitUserOpportunity(payload: UserOpportunitySubmission): Promise<void>;
+  // Resolves to the catalog id the submission landed on (a fresh pending row, or an
+  // existing row when the URL was already in the catalog), or null if it could not be
+  // resolved. The Quest Log tracks the item under that id so it can use the same shared,
+  // cached deadline check catalog opportunities use. Still never rejects.
+  submitUserOpportunity(payload: UserOpportunitySubmission): Promise<string | null>;
   // Subscription status + promo flow (payments themselves stay deferred).
   subscriptionStatus(): Promise<Record<string, unknown>>;
   validatePromo(code: string): Promise<{ valid?: boolean; kind?: string; description?: string; error?: string }>;
@@ -116,7 +149,15 @@ export interface CalendarSyncEvent {
 }
 
 export type CalendarSyncResult =
-  | { ok: true; results: { id: string; status: string; googleEventId?: string }[]; deleted: number; sweepErrors: string[] }
+  | { ok: true; results: { id: string; status: string; googleEventId?: string }[];
+      deleted: number;
+      /** Duplicate events removed - two calendar entries the app had written for one date. */
+      deduped: number;
+      sweepErrors: string[];
+      /** The dedicated calendar events land on - NOT the student's primary calendar. */
+      calendarName: string;
+      /** Opens Google Calendar focused on that calendar, when we wrote at least one event. */
+      calendarLink: string }
   | { ok: false; notConnected: true }
   | { ok: false; notConnected?: false; error: string };
 

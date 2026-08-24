@@ -921,7 +921,7 @@ Registration works again. Nothing is committed.
 
 Verified after the migration: all 15 pre-existing accounts kept access (13 of them have
 `trial_ends_at` NULL, read as "clock not started"), `ensure_trial_started()` stamps a real
-3-day window on first sign-in, registration succeeds for both an 18+ and an under-18
+7-day window on first sign-in, registration succeeds for both an 18+ and an under-18
 account with the consent fields correctly recorded, a backdated trial 402s the AI endpoints
 and swaps the live tab to the paywall without a reload, flipping the row to `active`
 restores access, and signing back in as a lapsed account lands on the paywall without the
@@ -961,7 +961,7 @@ returns 402 from the four endpoints that spend real money per call.
 - `cancel_subscription()` DELETEd the subscription, revoking access immediately, while the
   confirmation dialog promised access "until the end of your billing period". Now
   cancel-at-period-end, with `current_period_end` recorded so the gate honors it.
-- `days_until_trial_end()` floored, so a 3-day trial read "2 days left" one second in.
+- `days_until_trial_end()` floored, so a 7-day trial read "6 days left" one second in.
 - A `trial` row with NULL `trial_ends_at` — i.e. **every account that predates the
   migration** — would have been read as expired and paywalled the instant the migration
   ran. Now read as "clock not started", with `ensure_trial_started()` stamping a real

@@ -1,6 +1,7 @@
 import { AuthExpiredError, type ApiClient, type CalendarSyncResult, type UserOpportunitySubmission } from './ApiClient';
+import type { TrackerInfo } from '@/lib/tracker';
 import { sha256Hex } from './hash';
-import { clearTokens, loadTokens, saveTokens } from './tokenStore';
+import { clearSession, clearTokens, loadSession, loadTokens, saveSession, saveTokens } from './tokenStore';
 import type {
   AiResponse,
   AiResult,
@@ -32,6 +33,91 @@ let _currentUser: SessionUser | null = null;
 // Shared so concurrent 401s trigger exactly one refresh, not one each.
 let _refreshInFlight: Promise<boolean> | null = null;
 
+// Fires when a session we booted from cache turns out to be dead (see initAuth).
+const _sessionLostListeners = new Set<() => void>();
+
+// --- /api/data/load: one request per tick, and a read-through cache ---------
+//
+// Every key the app stores lives in the SAME `data` jsonb on the SAME row, so asking for
+// three of them separately made the server fetch that row three times — and because the
+// backend's Supabase calls are blocking, those "parallel" requests were serialized end to
+// end (measured 2026-08-24: 164ms each alone, 660ms wall for Home Base's three).
+//
+// So loads COALESCE: every loadData() in one tick joins a batch that goes out as a single
+// {keys:[...]} request. This is deliberately inside the client rather than at the call
+// sites — Home Base's three, the Quest Log's two and the calendar sweep's two are all
+// issued in one synchronous tick already (an async function runs to its first await
+// synchronously), so they all collapse with no screen changing a line.
+//
+// The cache is the second half: values are kept per key so a re-focus can paint from the
+// last known value instead of spinning for a round trip. It is a RENDER accelerator, not a
+// source of truth — peekData() never replaces the fetch, it only lets a screen show
+// something while the fetch is in flight. saveData writes through so our own writes can
+// never leave it stale, and forgetSession clears it so the next account starts clean.
+const _dataCache = new Map<string, unknown>();
+type PendingLoad = { resolve: (v: unknown) => void; reject: (e: unknown) => void };
+let _pendingLoads: Map<string, PendingLoad[]> | null = null;
+
+function flushLoads(): void {
+  const batch = _pendingLoads;
+  _pendingLoads = null;
+  if (!batch) return;
+  const keys = [...batch.keys()];
+  request<{ values?: Record<string, unknown>; value?: unknown }>('/api/data/load', {
+    method: 'POST',
+    // A single key still goes out as {keys:[k]} — the server answers {values} either way,
+    // and one shape here means one code path to reason about.
+    body: JSON.stringify({ keys }),
+  })
+    .then((data) => {
+      const values = data.values ?? {};
+      for (const [key, waiters] of batch) {
+        const value = values[key] ?? null;
+        _dataCache.set(key, value);
+        for (const w of waiters) w.resolve(value);
+      }
+    })
+    .catch((err) => {
+      // Every waiter in the batch gets the real error — an unreadable tracker and a dead
+      // network must stay distinguishable downstream (loadTrackerDataChecked depends on it).
+      for (const waiters of batch.values()) for (const w of waiters) w.reject(err);
+    });
+}
+
+function queueLoad(key: string): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    if (!_pendingLoads) {
+      _pendingLoads = new Map();
+      // Microtask, not setTimeout: it still collapses everything issued in this tick, and
+      // it does not add a macrotask of latency to a load that turns out to be alone.
+      Promise.resolve().then(flushLoads);
+    }
+    const waiters = _pendingLoads.get(key);
+    if (waiters) waiters.push({ resolve, reject });
+    else _pendingLoads.set(key, [{ resolve, reject }]);
+  });
+}
+
+// The `exp` claim of a JWT, in ms, or null if it cannot be read. No verification — this
+// only ever decides whether it is worth ASKING the server, which verifies for real.
+function tokenExpiryMs(token: string): number | null {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return null;
+    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+    const exp = (JSON.parse(json) as { exp?: number }).exp;
+    return typeof exp === 'number' ? exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+// 30s of slack so a token about to expire mid-flight is treated as already expired.
+function accessTokenLive(token: string): boolean {
+  const exp = tokenExpiryMs(token);
+  return exp !== null && exp - 30_000 > Date.now();
+}
+
 function sessionFromPayload(p: LoginResponse): SessionUser {
   return {
     userid: p.userid,
@@ -47,7 +133,10 @@ async function applyTokens(p: LoginResponse): Promise<SessionUser> {
   _access = p.token;
   _refresh = p.refresh_token;
   _currentUser = sessionFromPayload(p);
-  await saveTokens({ access: p.token, refresh: p.refresh_token });
+  await Promise.all([
+    saveTokens({ access: p.token, refresh: p.refresh_token }),
+    saveSession(_currentUser),
+  ]);
   return _currentUser;
 }
 
@@ -55,7 +144,23 @@ async function forgetSession(): Promise<void> {
   _access = null;
   _refresh = null;
   _currentUser = null;
-  await clearTokens();
+  _dataCache.clear();
+  await Promise.all([clearTokens(), clearSession()]);
+  for (const listener of _sessionLostListeners) listener();
+}
+
+// Carries the HTTP status alongside the message. Callers that only log or surface the text
+// are unaffected (it is still an Error), but a caller that must ACT on the reason can now
+// tell 404 "this opportunity is not in the catalog" from 402 "your trial lapsed" from a
+// network failure. The Quest Log's refresh depends on that distinction: it used to collapse
+// all three into null and report "no changes found" for opportunities it never checked.
+export class HttpError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'HttpError';
+    this.status = status;
+  }
 }
 
 // Parse the server's `{"error": "..."}` body (Phase 2 error shape) for a useful message.
@@ -116,7 +221,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       throw new AuthExpiredError();
     }
   }
-  if (!res.ok) throw new Error(await errorMessage(res));
+  if (!res.ok) throw new HttpError(res.status, await errorMessage(res));
   return (await res.json()) as T;
 }
 
@@ -133,13 +238,36 @@ function cleanAiText(data: AiResponse): string {
 
 export const httpClient: ApiClient = {
   // --- Auth ---
+  // Startup used to be: load tokens -> POST /api/auth/refresh -> only then decide which
+  // screen to render. That put a full server round trip in front of EVERY app open, before
+  // the first screen had even started loading its own data, purely to recover the identity
+  // payload — which we now keep beside the tokens.
+  //
+  // So: if the stored access token has not expired and we have a cached identity, boot from
+  // it immediately and revalidate in the BACKGROUND. Nothing is trusted that wasn't before —
+  // the token is still verified server-side on the very next call, and if the background
+  // refresh comes back negative (revoked, token_version bumped, account gone) the session is
+  // dropped and every onSessionLost listener fires, which bounces the user to /login.
+  //
+  // The slow path is unchanged and still awaited: no cached identity, or an access token
+  // already past its `exp`, means we cannot know who this is without asking.
   async initAuth(): Promise<SessionUser | null> {
     const pair = await loadTokens();
     if (!pair) return null;
     _access = pair.access;
     _refresh = pair.refresh;
-    // We have no stored user profile, only tokens — refresh to (a) validate the session and
-    // (b) recover the user payload. If it fails, the session is gone.
+
+    const cached = await loadSession<SessionUser>();
+    if (cached && accessTokenLive(pair.access)) {
+      _currentUser = cached;
+      // Fire-and-forget: a failure here tears the session down through forgetSession,
+      // which notifies the listeners. Never awaited, or we are back where we started.
+      void refreshOnce().then((ok) => {
+        if (!ok) void forgetSession();
+      });
+      return _currentUser;
+    }
+
     const ok = await refreshOnce();
     if (!ok) {
       await forgetSession();
@@ -222,11 +350,13 @@ export const httpClient: ApiClient = {
 
   // --- Gated user data ---
   async loadData<T = unknown>(key: string): Promise<T | null> {
-    const data = await request<{ value: T | null }>('/api/data/load', {
-      method: 'POST',
-      body: JSON.stringify({ key }),
-    });
-    return data.value ?? null;
+    return (await queueLoad(key)) as T | null;
+  },
+
+  // The last value seen for this key, or undefined if we have never loaded it. Synchronous
+  // and never hits the network — a screen paints from this, then reconciles with loadData.
+  peekData<T = unknown>(key: string): T | undefined {
+    return _dataCache.has(key) ? (_dataCache.get(key) as T) : undefined;
   },
 
   async saveData(key: string, value: unknown): Promise<void> {
@@ -234,6 +364,14 @@ export const httpClient: ApiClient = {
       method: 'POST',
       body: JSON.stringify({ key, value }),
     });
+    // Write through only AFTER the server took it, so a failed save cannot seed the cache
+    // with a value the account does not actually hold.
+    _dataCache.set(key, value);
+  },
+
+  onSessionLost(listener: () => void): () => void {
+    _sessionLostListeners.add(listener);
+    return () => _sessionLostListeners.delete(listener);
   },
 
   async saveLocation(location: string): Promise<void> {
@@ -273,17 +411,23 @@ export const httpClient: ApiClient = {
     return data.extracted_text ?? '';
   },
 
-  // Fire-and-forget by contract: submitUserOpportunityToDatabase() in the retired SPA
-  // swallowed every failure on purpose — the item is already in the student's Quest Log,
-  // and the review-queue row is a background nicety. Log, never surface.
-  async submitUserOpportunity(payload: UserOpportunitySubmission): Promise<void> {
+  // Still swallows every failure - the item is already in the student's Quest Log and a
+  // review-queue miss must never surface as an error. But it is no longer fire-and-forget:
+  // the resolved catalog id is the whole point of the call now (2026-08-24), because it is
+  // what lets a hand-added opportunity share the catalog's deadline cache.
+  async submitUserOpportunity(payload: UserOpportunitySubmission): Promise<string | null> {
     try {
-      await request<{ status?: string }>('/api/user-submitted-opportunities', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
+      const res = await request<{ status?: string; id?: string | null }>(
+        '/api/user-submitted-opportunities',
+        { method: 'POST', body: JSON.stringify(payload) },
+      );
+      // The id is what lets a hand-added opportunity share the catalog's deadline cache.
+      // Its absence is still not an error the student ever sees — they just get an item
+      // that cannot be auto-checked, which the Quest Log now says plainly.
+      return res?.id ?? null;
     } catch (e) {
       console.warn('Opportunity submission failed:', (e as Error).message);
+      return null;
     }
   },
 
@@ -320,17 +464,42 @@ export const httpClient: ApiClient = {
   },
 
   async getDeadlineCheck(oppId) {
+    return (await this.getDeadlineCheckResult(oppId)).info;
+  },
+
+  // Same call, but says WHY it came back empty. `getDeadlineCheck` above stays the thin
+  // never-throws wrapper for callers (the finder) that genuinely only want the overlay.
+  async getDeadlineCheckResult(oppId) {
     try {
-      return await request(`/api/opportunities/${encodeURIComponent(oppId)}/deadline`);
-    } catch {
-      return null;
+      const info = await request<Partial<TrackerInfo>>(
+        `/api/opportunities/${encodeURIComponent(oppId)}/deadline`,
+      );
+      return { outcome: 'ok' as const, info };
+    } catch (e) {
+      const status = e instanceof HttpError ? e.status : 0;
+      // 404 is not a failure — it is a tracked item with no catalog row behind it (an
+      // opportunity the student added by URL before linking existed, or one whose
+      // submission could not be resolved). It can never be auto-checked, which is a
+      // different thing to say than "the check failed".
+      const outcome =
+        status === 404 ? ('not-found' as const)
+        : status === 402 ? ('blocked' as const)
+        : e instanceof AuthExpiredError || status === 401 ? ('auth' as const)
+        : ('error' as const);
+      return { outcome, info: null, message: (e as Error).message };
     }
   },
 
-  async callGemini(system, userContent, useWebSearch = false): Promise<string> {
+  // `maxTokens` is optional and clamped server-side into [MESSAGES_MAX_TOKENS, ceiling], so
+  // it can only ever RAISE a call's headroom. Sent by callers whose answer length scales
+  // with their input — profile-tag extraction and enrichment both return one item per thing
+  // the profile mentions, which the uniform default silently truncated.
+  async callGemini(system, userContent, useWebSearch = false, maxTokens): Promise<string> {
+    const body: Record<string, unknown> = { system, userContent, useWebSearch };
+    if (maxTokens) body.maxTokens = maxTokens;
     const data = await request<AiResponse>('/api/messages', {
       method: 'POST',
-      body: JSON.stringify({ system, userContent, useWebSearch }),
+      body: JSON.stringify(body),
     });
     return cleanAiText(data);
   },
@@ -385,13 +554,19 @@ export const httpClient: ApiClient = {
     const data = (await res.json()) as {
       results?: { id: string; status: string; googleEventId?: string }[];
       deleted?: number;
+      deduped?: number;
       sweepErrors?: string[];
+      calendarName?: string;
+      calendarLink?: string;
     };
     return {
       ok: true,
       results: data.results ?? [],
       deleted: data.deleted ?? 0,
+      deduped: data.deduped ?? 0,
       sweepErrors: data.sweepErrors ?? [],
+      calendarName: data.calendarName ?? 'Highschool Wingman',
+      calendarLink: data.calendarLink ?? '',
     };
   },
 };

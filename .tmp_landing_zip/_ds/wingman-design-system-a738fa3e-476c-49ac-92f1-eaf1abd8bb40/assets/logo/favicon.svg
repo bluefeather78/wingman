@@ -1,8 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <circle cx="71" cy="32" r="13" fill="#FACC15" opacity="0.35"></circle>
-  <rect x="24" y="62" width="10" height="14" rx="2" fill="#F97316"></rect>
-  <rect x="38" y="54" width="10" height="22" rx="2" fill="#F97316"></rect>
-  <rect x="52" y="46" width="10" height="30" rx="2" fill="#F97316"></rect>
-  <rect x="66" y="36" width="10" height="40" rx="2" fill="#F97316"></rect>
-  <circle cx="71" cy="32" r="6.5" fill="#FACC15"></circle>
+  <!-- FOUR bars on an even grid: width 10, pitch 14 (gap 4), bottom edge y=76,
+       heights 16/24/32/40 so every top step is exactly 8. The 14/22/30/40 the mark
+       shipped with stepped 8/8/10, which reads as a kinked staircase. -->
+  <circle cx="71" cy="32" r="13" fill="#FACC15" opacity="0.35"/>
+  <rect x="24" y="60" width="10" height="16" rx="2" fill="#F97316"/>
+  <rect x="38" y="52" width="10" height="24" rx="2" fill="#F97316"/>
+  <rect x="52" y="44" width="10" height="32" rx="2" fill="#F97316"/>
+  <rect x="66" y="36" width="10" height="40" rx="2" fill="#F97316"/>
+  <circle cx="71" cy="32" r="6.5" fill="#FACC15"/>
 </svg>

@@ -4,27 +4,27 @@ handle_login (PLAN_1_decompose.md). Paths and JSON shapes unchanged.
 import json
 import urllib.error
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends
 
 from app.config import EMAIL_RE
 from app.core import (
-    get_user, get_user_by_email, create_user, MissingUserColumns, DuplicateEmail,
+    get_user_account, get_user_by_email, create_user, MissingUserColumns, DuplicateEmail,
     _check_signup_consent, ensure_trial_started, touch_user_activity,
     update_password_hash,
 )
-from app.deps import read_json_body, json_response, json_error, client_ip, login_response
+from app.deps import json_body, json_response, json_error, client_ip, login_response
 from app.auth import hash_password, verify_password, AuthConfigError
 from app.auth.ratelimit import login_limiter, register_limiter
+from app.services.email import send_lifecycle_email_async
 
 router = APIRouter()
 
 
 @router.post("/api/register")
-async def handle_register(request: Request):
+def handle_register(request: Request, body: dict = Depends(json_body)):
     if not register_limiter.allow(client_ip(request)):
         return json_error(429, "Too many sign-up attempts. Please wait a few minutes "
                                "and try again.")
-    body = await read_json_body(request)
     first_name = (body.get("firstName") or "").strip()
     last_name = (body.get("lastName") or "").strip()
     email = (body.get("email") or "").strip()
@@ -47,7 +47,7 @@ async def handle_register(request: Request):
 
     key = userid.lower()
     try:
-        if get_user(key):
+        if get_user_account(key):
             return json_error(409, "That user ID is already taken.")
         existing = get_user_by_email(email)
     except Exception as e:
@@ -83,7 +83,13 @@ async def handle_register(request: Request):
     # Auto-login the new account: the client goes straight to showApp() after register, so
     # it needs a token immediately or every gated call would 401. Fetch the fresh row and
     # return the same signed-in payload login does (identity + access/refresh tokens).
-    record = get_user(key)
+    record = get_user_account(key)
+
+    # Welcome email, fired and forgotten. Async because registration must not block on — or
+    # fail because of — a mail provider: the account exists either way, and an email that
+    # never arrives is a far smaller problem than a signup that 502s. Deduped by the
+    # email_sends claim, so a retried registration cannot produce two.
+    send_lifecycle_email_async(key, "welcome", record=record)
     try:
         return json_response(200, login_response(record))
     except AuthConfigError as e:
@@ -91,16 +97,15 @@ async def handle_register(request: Request):
 
 
 @router.post("/api/login")
-async def handle_login(request: Request):
+def handle_login(request: Request, body: dict = Depends(json_body)):
     if not login_limiter.allow(client_ip(request)):
         return json_error(429, "Too many sign-in attempts. Please wait a few minutes "
                                "and try again.")
-    body = await read_json_body(request)
     userid = (body.get("userid") or "").strip()
     password_hash = body.get("passwordHash") or ""
     key = userid.lower()
     try:
-        record = get_user(key)
+        record = get_user_account(key)
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
     if not record:

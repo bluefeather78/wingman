@@ -186,6 +186,20 @@ async def handle_pending_update(request: Request):
     return json_response(200 if result.get("ok") else 400, result, default=str)
 
 
+@router.post("/api/agents/deadline/clear-cache")
+async def handle_deadline_clear_cache(request: Request):
+    """Force a re-check by nulling dates_last_checked_at. `preview: true` counts without
+    writing; `all: true` needs `confirm: true` because it queues a paid check per row."""
+    body = await read_json_body(request)
+    want_all = bool(body.get("all"))
+    preview = bool(body.get("preview"))
+    if want_all and not preview and not body.get("confirm"):
+        return json_error(400, "Clearing every active row needs an explicit confirmation.")
+    result = core.clear_deadline_cache(ids=body.get("ids") or [], want_all=want_all,
+                                       dry=preview)
+    return json_response(200 if result.get("ok") else 400, result, default=str)
+
+
 @router.post("/api/agents/signups/moderate")
 async def handle_signups_moderate(request: Request):
     body = await read_json_body(request)
@@ -234,6 +248,50 @@ async def handle_agents_run(request: Request):
         "argv": argv[1:],
         "message": f"{core.AGENT_CONFIGS_SCHEMA[agent_name]['name']} started",
     }, default=str)
+
+
+# ---------------- Lifecycle email ----------------
+#
+# The console owns REVIEW of lifecycle email — the send log, template previews, a test send
+# to yourself, and who is currently due a trial reminder. It deliberately does NOT own the
+# daily trial sweep: this router is localhost-gated and never mounted on Render, so a
+# button here could only fire on days this machine is on. That trigger is
+# POST /api/email/sweep on the shipped service (app/routes/email.py). The manual-run button
+# below exists for a catch-up, not as the schedule.
+
+@router.get("/api/agents/emails")
+def handle_emails(request: Request):
+    return json_response(200, core.get_email_overview(
+        limit=_qs_int(request, "limit", 100, 1, 500)), default=str)
+
+
+@router.get("/api/agents/emails/preview")
+def handle_email_preview(request: Request):
+    kind = (request.query_params.get("kind") or "").strip()
+    result = core.preview_lifecycle_email(kind, request.query_params.get("userid"))
+    return json_response(200 if result.get("ok") else 400, result, default=str)
+
+
+@router.post("/api/agents/emails/test")
+async def handle_email_test(request: Request):
+    """Send one template to an address the operator types. Not deduped and never recorded —
+    see app/services/email.send_test on why a test must not consume a real user's send."""
+    body = await read_json_body(request)
+    result = core.send_test_lifecycle_email(
+        (body.get("kind") or "").strip(),
+        (body.get("to") or "").strip(),
+        body.get("userid"))
+    return json_response(200 if result.get("state") in ("sent", "mock") else 400,
+                         result, default=str)
+
+
+@router.post("/api/agents/emails/sweep")
+async def handle_email_sweep_manual(request: Request):
+    """A manual catch-up run of the trial sweep, for when the scheduler was down. Safe to
+    press twice — the email_sends claim is what prevents a re-send, not this button."""
+    body = await read_json_body(request)
+    result = core.run_lifecycle_sweep(dry_run=bool(body.get("dry_run")))
+    return json_response(200 if result.get("ok") else 400, result, default=str)
 
 
 # ---------------- Scraper seed CRUD ----------------

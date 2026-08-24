@@ -6,10 +6,11 @@ import datetime
 from fastapi import APIRouter, Request, Depends
 
 from app.core import (
-    get_user, ensure_trial_started, subscription_state, touch_user_activity,
+    get_user_account, ensure_trial_started, subscription_state, touch_user_activity,
     update_subscription,
 )
-from app.deps import read_json_body, json_response, json_error
+from app.deps import json_body, json_response, json_error
+from app.services.email import send_lifecycle_email_async
 from app.auth import get_current_user, get_optional_user, AuthedUser
 from subscription_common import (
     get_or_create_customer, create_checkout_session, cancel_subscription,
@@ -20,10 +21,10 @@ router = APIRouter()
 
 
 @router.post("/api/subscription/status")
-async def handle_subscription_status(request: Request, user: AuthedUser = Depends(get_current_user)):
+def handle_subscription_status(user: AuthedUser = Depends(get_current_user)):
     userid = user.id
     try:
-        record = get_user(userid)
+        record = get_user_account(userid)
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
     if not record:
@@ -33,8 +34,8 @@ async def handle_subscription_status(request: Request, user: AuthedUser = Depend
 
 
 @router.post("/api/subscription/checkout")
-async def handle_subscription_checkout(request: Request, user: AuthedUser = Depends(get_current_user)):
-    body = await read_json_body(request)
+def handle_subscription_checkout(body: dict = Depends(json_body),
+                                 user: AuthedUser = Depends(get_current_user)):
     userid = user.id
     email = (body.get("email") or "").strip()
     promo_code = (body.get("promo_code") or "").strip()
@@ -45,7 +46,7 @@ async def handle_subscription_checkout(request: Request, user: AuthedUser = Depe
         return json_error(400, "Missing required fields: email, success_url, cancel_url.")
 
     try:
-        record = get_user(userid)
+        record = get_user_account(userid)
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
     if not record:
@@ -72,10 +73,10 @@ async def handle_subscription_checkout(request: Request, user: AuthedUser = Depe
 
 
 @router.post("/api/subscription/cancel")
-async def handle_subscription_cancel(request: Request, user: AuthedUser = Depends(get_current_user)):
+def handle_subscription_cancel(user: AuthedUser = Depends(get_current_user)):
     userid = user.id
     try:
-        record = get_user(userid)
+        record = get_user_account(userid)
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
     if not record:
@@ -97,6 +98,13 @@ async def handle_subscription_cancel(request: Request, user: AuthedUser = Depend
                 period_end, datetime.timezone.utc).isoformat()
         update_subscription(userid, updates)
 
+        # Cancellation confirmation. Sent from the record we already have, merged with the
+        # updates just written rather than re-read: the email's most important sentence is
+        # the date access ends, and get_user_account() here could still return the
+        # pre-PATCH row. Purely transactional — no win-back offer, deliberately; see
+        # email_templates._goodbye.
+        send_lifecycle_email_async(userid, "goodbye", record={**record, **updates})
+
         return json_response(200, {
             "ok": True,
             "message": "Subscription canceled",
@@ -107,8 +115,8 @@ async def handle_subscription_cancel(request: Request, user: AuthedUser = Depend
 
 
 @router.post("/api/subscription/redeem-promo")
-async def handle_redeem_promo(request: Request, user: AuthedUser = Depends(get_current_user)):
-    body = await read_json_body(request)
+def handle_redeem_promo(body: dict = Depends(json_body),
+                        user: AuthedUser = Depends(get_current_user)):
     userid = user.id
     code = (body.get("promo_code") or "").strip().upper()
     if not code:
@@ -126,7 +134,7 @@ async def handle_redeem_promo(request: Request, user: AuthedUser = Depends(get_c
         return json_error(500, "That promo code is misconfigured.")
 
     try:
-        record = get_user(userid)
+        record = get_user_account(userid)
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
     if not record:
@@ -151,7 +159,7 @@ async def handle_redeem_promo(request: Request, user: AuthedUser = Depends(get_c
             "subscription_end_at": new_end,
             "promo_codes_used": used,
         })
-        record = get_user(userid)
+        record = get_user_account(userid)
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
 
@@ -164,10 +172,10 @@ async def handle_redeem_promo(request: Request, user: AuthedUser = Depends(get_c
 
 
 @router.post("/api/subscription/validate-promo")
-async def handle_validate_promo(request: Request, user: AuthedUser = Depends(get_optional_user)):
+def handle_validate_promo(body: dict = Depends(json_body),
+                          user: AuthedUser = Depends(get_optional_user)):
     # Not gated: this only reads a promo code's shape and (if signed in) whether this
     # account already used it. Soft auth — a signed-out caller still gets validity/kind.
-    body = await read_json_body(request)
     promo_code = (body.get("promo_code") or "").strip()
     userid = user.id if user else ""
 
@@ -180,7 +188,7 @@ async def handle_validate_promo(request: Request, user: AuthedUser = Depends(get
 
     if userid:
         try:
-            record = get_user(userid)
+            record = get_user_account(userid)
             if record:
                 used_codes = record.get("promo_codes_used") or []
                 if promo_code.upper() in used_codes:

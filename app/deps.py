@@ -6,7 +6,7 @@ import json
 
 from fastapi import Request, Response
 
-from app.core import get_user, subscription_state, _login_payload
+from app.core import get_user_account, subscription_state, _login_payload
 from app.auth import issue_tokens
 
 
@@ -34,6 +34,31 @@ async def read_json_body(request: Request):
         return json.loads(raw)
     except Exception:
         return {}
+
+
+# --- Body readers as DEPENDENCIES, so handlers can be plain `def` -------------------
+#
+# Every Supabase/provider call in this repo is blocking urllib (app.core._users_request and
+# friends), and FastAPI runs an `async def` handler ON the event loop. So one blocking call
+# froze the whole process: Home Base's three parallel /api/data/load calls were serialized
+# end to end (measured 2026-08-24 — 164ms each alone, 660ms wall for the three together).
+#
+# A plain `def` handler is run by FastAPI in a threadpool instead, which restores real
+# concurrency. The only thing forcing handlers to be async was `await request.body()`, so
+# that await moves into these dependencies: FastAPI resolves them on the loop, then calls
+# the sync handler off it. Semantics are identical to calling read_json_body() directly.
+#
+# Anything that awaits inside the handler body must STAY `async def` — the routes here
+# don't, but that is the line.
+async def json_body(request: Request):
+    """The parsed JSON body, as a dependency. Malformed/empty both give {}."""
+    return await read_json_body(request)
+
+
+async def raw_body(request: Request) -> bytes:
+    """The undecoded body, for the routes that parse it themselves (AI proxies pass it
+    straight through; the resume upload splits it on the multipart boundary)."""
+    return await request.body()
 
 
 async def read_json_body_strict(request: Request):
@@ -82,7 +107,7 @@ def subscription_block_reason(userid):
     if not userid:
         return None
     try:
-        record = get_user(userid)
+        record = get_user_account(userid)
     except Exception:
         return None
     if not record:

@@ -1,58 +1,97 @@
 #!/usr/bin/env python3
-"""Check what's stored for an opportunity in Supabase."""
+"""Print what's actually stored for one or more opportunities - the deadline columns first.
+
+The companion to clear_deadline_cache.py: look before you clear. Both were pointing at
+column names that no longer exist (`deadlines` was renamed to `important_dates` by
+merge_opens_date_into_important_dates.py, `opens_date` was folded into it as an "opens"
+entry, `deadline_note` is `important_date_note`, and the cache stamp is
+`dates_last_checked_at`, never `last_checked_at`). PostgREST 400s the WHOLE select on one
+unknown column, so this script could only ever print an error.
+
+USAGE:
+    python check_opp_data.py ec12081
+    python check_opp_data.py ec12081 us1787532028454524
+"""
+import argparse
+import datetime
 import json
 import os
-import urllib.request
-import urllib.parse
+import sys
 
-# Load env
-load_path = ".env"
-if os.path.exists(load_path):
-    with open(load_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key, value = key.strip(), value.strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-                value = value[1:-1]
-            if key and not os.environ.get(key):
-                os.environ[key] = value
+from supabase_common import load_dotenv, supabase_get
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+STALE_AFTER_DAYS = 7  # mirrors app/services/deadlines.DEADLINE_STALE_DAYS
+FIELDS = ("id,name,org,url,is_active,moderation_status,status,important_dates,"
+          "was_estimated,important_date_note,dates_last_checked_at,"
+          "link_status,link_checked_at,review_status")
 
-# Fetch opportunity
-query = urllib.parse.urlencode({
-    "select": "id,name,status,deadlines,opens_date,was_estimated,deadline_note,last_checked_at",
-    "id": "eq.ec12081"
-})
 
-try:
-    req = urllib.request.Request(
-        f"{SUPABASE_URL}/rest/v1/opportunities?{query}",
-        headers={
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        opps = json.loads(resp.read())
+def cache_state(stamp):
+    if not stamp:
+        return "never checked - next view runs a fresh (paid) check"
+    try:
+        checked = datetime.datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return f"unparseable ({stamp!r}) - treated as stale, so it will re-check"
+    age = datetime.datetime.now(datetime.timezone.utc) - checked
+    days = age.total_seconds() / 86400
+    if age < datetime.timedelta(days=STALE_AFTER_DAYS):
+        return f"FRESH - {days:.1f}d old, served from cache for another {STALE_AFTER_DAYS - days:.1f}d"
+    return f"stale - {days:.1f}d old, next view runs a fresh (paid) check"
 
-    if not opps:
-        print("[ERROR] Opportunity not found")
-        exit(1)
 
-    opp = opps[0]
-    print(f"Opportunity: {opp['name']}")
-    print(f"Status: {opp.get('status')}")
-    print(f"Deadlines: {opp.get('deadlines')}")
-    print(f"Opens Date: {opp.get('opens_date')}")
-    print(f"Was Estimated: {opp.get('was_estimated')}")
-    print(f"Deadline Note: {opp.get('deadline_note')}")
-    print(f"Last Checked: {opp.get('last_checked_at')}")
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("ids", nargs="+", help="Opportunity id(s) to inspect.")
+    args = parser.parse_args()
 
-except Exception as e:
-    print(f"[ERROR] {e}")
-    exit(1)
+    load_dotenv()
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if not url or not key:
+        print("[ERROR] SUPABASE_URL / SUPABASE_SERVICE_KEY not set in .env.")
+        sys.exit(1)
+
+    try:
+        rows = supabase_get(url, "opportunities", {
+            "select": FIELDS,
+            "id": "in.(%s)" % ",".join(args.ids),
+        }, key) or []
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        sys.exit(1)
+
+    by_id = {r["id"]: r for r in rows}
+    for opp_id in args.ids:
+        opp = by_id.get(opp_id)
+        print("=" * 72)
+        if not opp:
+            print(f"{opp_id}: not found")
+            continue
+        print(f"{opp['id']}  {opp.get('name')}")
+        print(f"  org           {opp.get('org')}")
+        print(f"  url           {opp.get('url')}")
+        print(f"  active        {opp.get('is_active')}   moderation: {opp.get('moderation_status')}")
+        print(f"  link          {opp.get('link_status')} (checked {opp.get('link_checked_at')})")
+        print(f"  review        {opp.get('review_status')}")
+        print("  -- deadlines --")
+        print(f"  status        {opp.get('status')}")
+        print(f"  was_estimated {opp.get('was_estimated')}")
+        print(f"  note          {opp.get('important_date_note')}")
+        print(f"  cache         {cache_state(opp.get('dates_last_checked_at'))}")
+        print(f"                {opp.get('dates_last_checked_at')}")
+        dates = opp.get("important_dates") or []
+        if not dates:
+            print("  important_dates: (none)")
+        else:
+            print(f"  important_dates ({len(dates)}):")
+            for d in dates:
+                if isinstance(d, dict):
+                    print(f"    {d.get('date_iso')}  {d.get('type'):<12} {d.get('label')}")
+                else:
+                    print(f"    {json.dumps(d)}")
+
+
+if __name__ == "__main__":
+    main()

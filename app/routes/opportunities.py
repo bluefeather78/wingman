@@ -18,7 +18,9 @@ from app.services.opportunities import fetch_opportunities
 from app.services import deadlines
 from check_deadlines import (
     check_one as check_deadline_one,
-    VALID_STATUS as DEADLINE_VALID_STATUS,
+    deadline_write_decision,
+    missing_opens_date,
+    SOURCE_SILENT,
     CLAUDE_MODEL as DEADLINE_CHECK_MODEL,
 )
 
@@ -42,7 +44,10 @@ def handle_deadline_check(opp_id: str, request: Request,
     """On-demand, cross-user-cached deadline check. Serves cached status/important_dates
     if last_checked_at is under DEADLINE_STALE_DAYS old; otherwise runs a fresh Claude
     Haiku web_search check (check_deadlines.check_one), re-caches, and returns it.
-    Rejects silent search skips and falls back to cache if no searches occurred."""
+
+    Falls back to the cached value WITHOUT stamping the TTL whenever the check produced
+    nothing trustworthy — no search ran, the extracted JSON was unreadable, or it found no
+    dates for a row that already has some. `source` in the response names which happened."""
     # Gate before any Supabase or Claude work: a fresh check is a paid web-search call.
     # Identity is token-derived (was a query-string userid). Hard-gating also closes the
     # old fail-open, where omitting userid slipped past the subscription paywall.
@@ -80,40 +85,54 @@ def handle_deadline_check(opp_id: str, request: Request,
         # single silent set of dates would be served to every student for a week.
         info, _cost, searches, _attempts = check_deadline_one(opp, ANTHROPIC_API_KEY)
 
-        # A still-silent check writes NOTHING and is served from cache instead.
-        if searches == 0:
-            print(f"[WARN] Deadline check for {opp_id} invoked no web search even after a "
-                  f"retry; keeping the cached value and NOT stamping last_checked_at, so "
-                  f"the next request tries again.")
-            payload = deadlines.cached_deadline_payload(opp, "unverified-fallback")
-            deadlines.log_deadline_check(opp_id, "unverified-fallback", opp.get("status"), 0,
-                                         _cost, opp.get("was_estimated"),
-                                         "Silent after retry; not written")
+        # One shared decision with the batch loop (check_deadlines.deadline_write_decision),
+        # so the two can never disagree about when a row may be overwritten. Three of its
+        # four outcomes write NOTHING and, just as importantly, do NOT stamp
+        # dates_last_checked_at — the row stays due and the next request re-rolls, instead of
+        # a hole being served to every student for 7 days:
+        #   silent   phase 1 never searched
+        #   unparsed phase 1 searched but phase 2's JSON was unreadable
+        #   kept     verified, but found no dates while the row already has some
+        decision = deadline_write_decision(info, searches, opp.get("important_dates"))
+        if not decision.write:
+            print(f"[WARN] Deadline check for {opp_id} not written ({decision.reason}); "
+                  f"keeping the cached value and NOT stamping dates_last_checked_at, so the "
+                  f"next request tries again.")
+            payload = deadlines.cached_deadline_payload(opp, decision.source)
+            deadlines.log_deadline_check(opp_id, decision.source, opp.get("status"),
+                                         searches, _cost, opp.get("was_estimated"),
+                                         decision.reason)
+            # Billed either way — the tokens were spent even though nothing was written.
+            # A silent call made no search, so it carries no per-search fee.
             record_user_cost_async(deadline_userid, "deadline_check",
-                                   "deadline_check", cost=_cost, searches=0,
+                                   "deadline_check", cost=_cost,
+                                   searches=0 if decision.source == SOURCE_SILENT else searches,
                                    model=DEADLINE_CHECK_MODEL)
             return json_response(200, payload)
 
-        status = info.get("status") if info.get("status") in DEADLINE_VALID_STATUS else "unknown"
-        important_dates = info.get("important_dates") or []
-        if not isinstance(important_dates, list):
-            important_dates = []
-        important_dates = [d for d in important_dates if isinstance(d, dict) and d.get("date_iso")]
+        status = decision.status
+        important_dates = decision.important_dates
 
-        source_flag = "fresh, real search"
-        print(f"[INFO] Deadline check for {opp_id}: {searches} web search(es) performed.")
+        source_flag = decision.source
+        # A deadline with no opens date is a silent downgrade, not an error: the app can
+        # never mark that opportunity "Happening Now", because that is driven by its FIRST
+        # date having passed. Logged so the gap is measurable rather than invisible.
+        no_opens = missing_opens_date(important_dates)
+        print(f"[INFO] Deadline check for {opp_id}: {searches} web search(es) performed."
+              + (" No opens date found — this row can never read Happening Now." if no_opens else ""))
 
         patch = {
             "status": status,
             "important_dates": important_dates,
-            "was_estimated": bool(info.get("was_estimated")),
-            "important_date_note": info.get("important_date_note"),
+            "was_estimated": decision.was_estimated,
+            "important_date_note": decision.note,
             "dates_last_checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
         deadlines.patch_opportunity_deadline(opp_id, patch)
         response = {**patch, "source": source_flag}
         deadlines.log_deadline_check(opp_id, source_flag, status, searches, _cost,
-                                     bool(info.get("was_estimated")))
+                                     decision.was_estimated,
+                                     "no opens date" if no_opens else None)
         record_user_cost_async(deadline_userid, "deadline_check",
                                "deadline_check", cost=_cost, searches=searches,
                                model=DEADLINE_CHECK_MODEL)

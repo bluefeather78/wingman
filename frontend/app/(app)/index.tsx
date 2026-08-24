@@ -6,6 +6,8 @@ import { httpClient } from '@/api/httpClient';
 import {
   loadTrackerData,
   loadTrackerSaved,
+  peekTrackerData,
+  peekTrackerSaved,
   saveTrackerData,
   type SavedState,
   type TrackerData,
@@ -43,14 +45,20 @@ interface StoredProfile {
 export default function Home() {
   const router = useRouter();
   const { user } = useAuth();
-  const [data, setData] = useState<TrackerData | null>(null);
-  const [saved, setSaved] = useState<SavedState>({});
-  const [profile, setProfile] = useState<string>('');
+  // Seed from whatever the client already has. This screen is remounted by expo-router on
+  // every visit, so without it a tab switch back to Home Base showed a full-screen spinner
+  // for a round trip it had already paid for once. The fetch below still runs and still
+  // overwrites these — the cache only decides whether the student watches it happen.
+  const cachedProfile = httpClient.peekData<StoredProfile>('student-profile');
+  const [data, setData] = useState<TrackerData | null>(() => peekTrackerData() ?? null);
+  const [saved, setSaved] = useState<SavedState>(() => peekTrackerSaved() ?? {});
+  const [profile, setProfile] = useState<string>(cachedProfile?.synthesized ?? '');
   const [tasksOpen, setTasksOpen] = useState(false);
   // Every card below has an empty state that is indistinguishable from "not loaded yet",
   // so rendering before the first load resolves flashes "Your profile is empty" / "Nothing
-  // here yet" on every tab switch. Hold the shell until the fetch lands.
-  const [loaded, setLoaded] = useState(false);
+  // here yet" on every tab switch. Hold the shell until the fetch lands — unless the cache
+  // already gave us a tracker to draw, in which case there is nothing to hold for.
+  const [loaded, setLoaded] = useState(() => peekTrackerData() !== undefined);
 
   // Cycle an action item's status (not_started → in_progress → completed → …), persisting
   // to the shared tracker data — ported from cycleActionItemState().

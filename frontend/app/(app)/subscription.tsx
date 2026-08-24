@@ -129,7 +129,7 @@ export default function Subscription() {
             <View style={styles.planRow}>
               <View style={styles.flex1}>
                 <Text style={styles.planRowName}>Free Trial</Text>
-                <Text style={styles.planRowPrice}>3 days</Text>
+                <Text style={styles.planRowPrice}>7 days</Text>
                 <Text style={styles.planRowNote}>Includes all features</Text>
               </View>
               {(status === 'trial' || status === 'beta') && (

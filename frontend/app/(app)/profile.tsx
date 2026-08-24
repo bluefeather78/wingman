@@ -6,8 +6,24 @@ import { httpClient } from '@/api/httpClient';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import { countProfileWords, profileHasTruncatedTail, repairProfileText, synthesizeProfile, transcriptStudentLines } from '@/lib/profile';
 import { diffNewProfileSentences, PROFILE_HIGHLIGHT_MS, profileSentenceKey, splitProfileSentences } from '@/lib/profileHighlight';
-import { extractProfileBasics } from '@/lib/ranking';
-import { profileChatNextQuestion, profileChatStarterQuestionsFromAI, profileChatTranscript, type ChatMessage } from '@/lib/profileChat';
+import { beginProfileWrite, endProfileWrite } from '@/lib/profileWrites';
+import {
+  getProfileDerived,
+  refreshProfileDerived,
+  type BasicsSlot,
+  type ModelCalls,
+  type ProfileRecord,
+  type ProfileStore,
+  type StarterPoolSlot,
+} from '@/lib/profileDerived';
+import {
+  drawStarterWindow,
+  FALLBACK_STARTER_QUESTIONS,
+  profileChatNextQuestion,
+  profileChatStarterQuestionsFromAI,
+  profileChatTranscript,
+  type ChatMessage,
+} from '@/lib/profileChat';
 import { PopButton, RightDrawer, Screen, SoftCard, Txt, usePopInteraction, VibeField } from '@/ui/components';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
@@ -16,10 +32,26 @@ const callClaudeDetailed = httpClient.callClaudeDetailed.bind(httpClient);
 const callGemini = httpClient.callGemini.bind(httpClient);
 const PROFILE_KEY = 'student-profile';
 
+// Shared with Fresh Finds: the profile-derived slots (subjects+grade, filter tags, basics,
+// chat openers) are computed once per profile "version" and stored on this same record.
+const modelCalls: ModelCalls = {
+  gemini: callGemini,
+  claude: callClaude,
+};
+const profileStore: ProfileStore = {
+  load: () => httpClient.loadData<ProfileRecord>(PROFILE_KEY),
+  save: (record) => httpClient.saveData(PROFILE_KEY, record),
+};
+
 interface StoredProfile {
   synthesized: string;
   updatedAt: string | null;
   chatRounds: number;
+  // Other slots stored on the same record and owned by other screens (filterTags backs
+  // Fresh Finds' "Your Profile" filter; filterValues/starterPool/basics are the retired
+  // SPA's derived caches). This screen must carry them through untouched — the save
+  // REPLACES the whole record, so anything not spread forward is destroyed.
+  [slot: string]: unknown;
 }
 
 function daysSince(iso: string): number | null {
@@ -110,7 +142,11 @@ export default function Profile() {
         if (!alive || !p || typeof p.synthesized !== 'string') return;
         setProfile(p);
         if (countProfileWords(p.synthesized) >= PROFILE_SUFFICIENT_LENGTH) {
-          extractProfileBasics(callGemini, p.synthesized).then((b) => alive && setBasics(b)).catch(() => {});
+          // Through the slot cache: this used to fire a fresh extractProfileBasics call on
+          // EVERY visit to My Vibe, for a profile that had not changed.
+          getProfileDerived(profileStore, modelCalls, 'basics', p)
+            .then((slot) => alive && setBasics((slot as BasicsSlot).fields || {}))
+            .catch(() => {});
         }
       })
       .catch(() => {})
@@ -158,6 +194,10 @@ export default function Profile() {
   async function mergeIntoProfile(newText: string, isTranscript: boolean): Promise<boolean> {
     const before = profile.synthesized;
     setBusy('saving');
+    // Tell the other screens the profile is mid-rewrite. Fresh Finds waits on this rather
+    // than reading the pre-merge text and showing a list it will have to swap out seconds
+    // later. Paired in the finally so a failed synthesis can't leave readers blocked.
+    beginProfileWrite();
     try {
       let merged: string;
       try {
@@ -166,16 +206,30 @@ export default function Profile() {
         const fb = isTranscript ? transcriptStudentLines(newText) : newText;
         merged = fb ? (before ? `${before} ${fb}` : fb) : before;
       }
+      // Spread the existing record. /api/data/save REPLACES the whole value at a key, so
+      // writing a bare literal here destroyed every other slot stored alongside the profile
+      // — including `filterTags`, which backs Fresh Finds' "Your Profile" filter. The facet
+      // survived until a student edited their profile once, then vanished for good.
       await persist({
+        ...profile,
         synthesized: merged,
         updatedAt: new Date().toISOString(),
         chatRounds: profile.chatRounds + (isTranscript ? 1 : 0),
       });
       showMergeHighlights(before, merged);
-      extractProfileBasics(callGemini, merged).then(setBasics).catch(() => {});
+      // The profile changed, so every derived slot is now stale. Refresh them all in the
+      // background (fire-and-forget, failures are not user-facing) so the next search, the
+      // tag facet and the chat drawer are served warm instead of paying on the critical
+      // path. Basics is read back here because this screen displays it.
+      const nextRecord: ProfileRecord = { ...profile, synthesized: merged };
+      refreshProfileDerived(profileStore, modelCalls, nextRecord);
+      getProfileDerived(profileStore, modelCalls, 'basics', nextRecord)
+        .then((slot) => setBasics((slot as BasicsSlot).fields || {}))
+        .catch(() => {});
       return merged !== before;
     } finally {
       setBusy(null);
+      endProfileWrite();
     }
   }
 
@@ -201,12 +255,35 @@ export default function Profile() {
     })();
   }
 
+  // Openers come from the cached 10-question pool (PROFILE_DERIVED_SLOTS.starterPool),
+  // serving a rotating window of 3 per open — three clean trios, then the fourth wraps and
+  // reuses two (10 is not a multiple of 3), and an unchanged profile never re-pays for any
+  // of them. They depend on the profile text and nothing else,
+  // which is what makes them safe to cache; follow-ups are the opposite and stay live.
+  // refreshProfileDerived warms the pool after every merge, and opening the drawer before
+  // that lands shares the SAME in-flight call rather than starting a second one.
+  //
+  // The slot is read through getProfileDerived with no record argument on purpose: the local
+  // `profile` state is written by persist() and never carries the slots the background
+  // refresh writes to the server, so passing it would read as a cache miss and re-pay for a
+  // pool that already exists.
+  //
+  // Regenerate stays a LIVE 3-question call — that button is the student explicitly saying
+  // "these don't suit me", which is the one place paying is clearly warranted, and its prompt
+  // carries a breadth directive the pool's does not. It deliberately does not touch the pool.
   async function loadStarters(regenerate: boolean) {
     setStartersLoading(true);
     try {
-      setStarters(await profileChatStarterQuestionsFromAI(callClaude, profile.synthesized, profile.chatRounds, regenerate));
+      if (regenerate) {
+        setStarters(await profileChatStarterQuestionsFromAI(callClaude, profile.synthesized, profile.chatRounds, true));
+      } else {
+        const slot = (await getProfileDerived(profileStore, modelCalls, 'starterPool')) as StarterPoolSlot;
+        setStarters(drawStarterWindow(slot.questions));
+      }
     } catch {
-      if (!regenerate) setStarters(["What's something you're weirdly good at that has nothing to do with school?"]);
+      // Only on the first open: a failed regenerate leaves the trio already on screen, which
+      // is better than replacing questions built from the profile with generic ones.
+      if (!regenerate) setStarters(FALLBACK_STARTER_QUESTIONS.slice());
     } finally {
       setStartersLoading(false);
     }
@@ -303,10 +380,20 @@ export default function Profile() {
 
   async function tidyUp() {
     setBusy('tidying');
+    beginProfileWrite();
     try {
       const repaired = await repairProfileText(callClaudeDetailed, profile.synthesized);
       await persist({ ...profile, synthesized: repaired, updatedAt: new Date().toISOString() });
-    } catch { /* keep */ } finally { setBusy(null); }
+      // A repair is a synthesis pass like any other — it rewrites the profile text, so every
+      // derived slot is now computed from text that no longer exists. Warm them in the
+      // background exactly as a merge does, or the tags/subjects/basics would go on
+      // describing the damaged version until some later reader happened to recompute them.
+      const nextRecord: ProfileRecord = { ...profile, synthesized: repaired };
+      refreshProfileDerived(profileStore, modelCalls, nextRecord);
+      getProfileDerived(profileStore, modelCalls, 'basics', nextRecord)
+        .then((slot) => setBasics((slot as BasicsSlot).fields || {}))
+        .catch(() => {});
+    } catch { /* keep */ } finally { setBusy(null); endProfileWrite(); }
   }
 
   // ---------- Resume / LinkedIn import ----------

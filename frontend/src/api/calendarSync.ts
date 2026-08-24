@@ -18,8 +18,16 @@ import type { CalendarSyncEvent } from './ApiClient';
 // whose id isn't in that set. Nothing has to remember the Google event id of an item the
 // student has already deleted (removeTrackerItem discards the item and its ids together),
 // and it self-heals — a removal made on another device, or while offline, is reconciled by
-// the next sync from anywhere. The server only ever deletes events carrying its own
-// `wingmanId` marker, so a student's hand-added entries on that calendar are left alone.
+// the next sync from anywhere.
+//
+// As of 2026-08-24 the sweep MIRRORS the Quest Log: it deletes every event on the Wingman
+// calendar that is not currently tracked, whether or not it carries our `wingmanId` marker.
+// It used to spare unmarked events to protect anything the student had added there by hand,
+// but the marker only started being written on 2026-08-22, so every older event was
+// permanently unremovable - 45 events for 17 tracked dates on the first real account. The
+// consequence is real and deliberate: anything added to THAT calendar by hand is removed on
+// the next sync. Events only ever land on the app-created "Highschool Wingman" calendar, not
+// the student's primary one - the calendar.app.created scope makes anything else impossible.
 
 export interface CollectedEvent extends CalendarSyncEvent {
   itemId: string;
@@ -33,6 +41,13 @@ export function collectTrackedDeadlineEvents(data: TrackerData, saved: Record<st
   ALL_BUCKETS.forEach((bucket) => {
     data[bucket].forEach((item: TrackerItem) => {
       if (saved[item.id]) return;
+      // Discontinued programs are excluded from every count and list in status.ts, and they
+      // must be excluded here too. cycleYearShift deliberately does not project a next cycle
+      // for `not_running`, so these carry REAL past dates — syncing them puts dead deadlines
+      // for a cancelled program on the student's actual calendar. Leaving them out also
+      // means the sweep takes any already-synced ones back off, since they stop appearing in
+      // the tracked set. The Quest Log still shows the card, flagged "Not running".
+      if (item.status === 'not_running') return;
       // Same next-cycle projection the app itself shows (cycleYearShift): syncing last
       // cycle's dead dates would put a passed deadline on the student's real calendar and
       // disagree with every date in the Quest Log. The event id stays `${item.id}::${idx}`,
@@ -76,7 +91,8 @@ function orgOf(item: TrackerItem): string {
 }
 
 export type SyncOutcome =
-  | { kind: 'ok'; synced: number; failed: number; removed: number; sweepErrors: string[] }
+  | { kind: 'ok'; synced: number; failed: number; removed: number; deduped: number;
+      sweepErrors: string[]; calendarName: string; calendarLink: string }
   | { kind: 'not-connected' }
   | { kind: 'error'; message: string };
 
@@ -123,5 +139,8 @@ export async function syncTrackerToCalendar(): Promise<SyncOutcome> {
   });
   if (synced) await saveTrackerData(data);
 
-  return { kind: 'ok', synced, failed, removed: res.deleted, sweepErrors: res.sweepErrors };
+  return {
+    kind: 'ok', synced, failed, removed: res.deleted, deduped: res.deduped,
+    sweepErrors: res.sweepErrors, calendarName: res.calendarName, calendarLink: res.calendarLink,
+  };
 }

@@ -43,3 +43,6 @@ scrape_review_*.json
 .coverage
 .pytest_cache/
 htmlcov/
+
+# Dev-only test account credentials (dev_test_account.py)
+.test-account.json

@@ -246,7 +246,10 @@ call pays no per-search fee — and it is in all three agents.
   because `server.py` caches a deadline answer for 7 days: one silent, invented set of dates
   is served to every student who opens that opportunity for a week. `check_one()` returns a
   4-tuple `(info, cost, searches, attempts)` — **both** call sites (this script's `main()`
-  and `server.py`'s on-demand endpoint) unpack it.
+  and the on-demand endpoint in `app/routes/opportunities.py`) unpack it. **`info` is
+  tri-state** as of 2026-08-24: `{}` when phase 1 never searched, `None` when phase 1 DID
+  search but phase 2's JSON could not be parsed, a dict otherwise. Neither caller may
+  re-derive what to do with that — both call `deadline_write_decision()`.
 - **A still-silent deadline check writes nothing, in both paths, and that is now load-bearing
   rather than merely cautious.** `check_one()` returns an *empty* info when the search never
   fired, so writing it would blank the row's real `status`/`important_dates` **and** stamp
@@ -254,8 +257,143 @@ call pays no per-search fee — and it is in all three agents.
   The interactive endpoint falls back to `cached_deadline_payload(opp, "unverified-fallback")`
   and deliberately does **not** stamp, so the next request re-rolls the search decision
   instead of being served the hole.
+- **`deadline_write_decision(info, searches, existing_dates)` is the single place that
+  decides whether a check may overwrite a row**, shared by the batch loop and the interactive
+  endpoint so they cannot drift. FOUR outcomes, three of which write nothing AND do not stamp
+  (`source` on the response names which):
+  - `unverified-fallback` — phase 1 never searched. The original guard, above.
+  - `unparsed-fallback` — phase 1 searched but phase 2's JSON was unreadable. **This used to
+    collapse into `{}` and be written as an authoritative `status=unknown` with no dates**:
+    one garbled response wiped a row's real deadlines, and the stamp then served that hole to
+    every student for 7 days. "We looked but cannot read the answer" is not "there is nothing
+    to find", and the silent-search guard never covered it because a search *did* happen.
+  - `kept-existing` — verified, but found no dates while the row already has some. A verified
+    empty result is far more often a search miss than a program withdrawing its dates; a
+    genuinely dead program comes back `not_running`, which still writes.
+  - `fresh, real search` — write and stamp.
+  Two deliberate exceptions to `kept-existing`: **`not_running` always writes** even with zero
+  dates (an empty `important_dates` is the *correct* answer for a discontinued program), and a
+  row with **no existing dates** is written and stamped, because there is nothing to lose and
+  not stamping would re-bill that row on every view forever.
+- **Nulling `dates_last_checked_at` is the only way to force a re-check inside the TTL**, and
+  until 2026-08-24 there was no working way to do it: `clear_deadline_cache.py` PATCHed
+  `last_checked_at`, a name that only ever existed in `check_deadlines.py`'s DDL comment, so
+  PostgREST rejected every write. That script now takes ids or `--all` (with `--dry-run` and a
+  `--yes-really` guard), `check_opp_data.py` inspects the same columns, and the console's
+  deadline card carries a **Force re-check** button over
+  `POST /api/agents/deadline/clear-cache`. All three quote the **queued** spend (~$0.07/row,
+  paid when a student next opens the row) rather than a $0.00 that would read as free, and the
+  whole-catalog read paginates past PostgREST's 1000-row cap — unpaginated it silently cleared
+  the first 1000 rows and reported a short count as if it were complete.
+- **A missing registration-OPENS date silently downgrades an opportunity**, and it is now
+  counted rather than shrugged at (`missing_opens_date()`, logged per interactive check and
+  totalled in the batch summary). `computeProgressStatus` marks an item **Happening Now** the
+  moment its FIRST date has passed — so a row whose only date is a deadline reads "Coming Up"
+  right until it flips to "Past" and can never say Happening Now, which is backwards for a
+  student who could be applying today. Measured 2026-08-24: **13 of the 34 active rows that
+  carry any dates (38%) had no `opens` entry**. All four prompts (both `check_deadlines.py`
+  phases, `extractTrackerInfo`, `intakeExtractAndClassify`) now require an opens entry
+  whenever there is an application step, require projecting the prior cycle's when the current
+  one is unposted, and require an explicit reason in the note when there genuinely is none.
+  Note the app deliberately does **not** assume "no opens date means applications are open" —
+  that would be wrong for a program opening months from now. Estimation is **best-effort from
+  the previous cycle's search data**, which is an explicitly accepted trade: a well-founded
+  estimate carrying `was_estimated` beats an empty field, and the app labels it "Predicted
+  dates from past cycle" wherever it shows.
+  - Ladder step **b2 is the one that actually recovers opening dates**: when the current cycle
+    posts a deadline but no opening and a prior cycle posted both, apply the prior cycle's
+    **opens-to-deadline INTERVAL** to the current deadline rather than rolling last year's
+    opening forward a year. When a cycle shifts, the interval survives and the calendar date
+    does not. Present in all three search prompts.
+  - **An estimated date must never be today's date.** Observed live on 2026-08-24: a row was
+    given an opening of that very day while its own note read "~10-11 weeks before a
+    2027-01-10 deadline" — which computes to late October, not today. The model stated the
+    right method and substituted "now" for the arithmetic, and that alone made the program
+    read HAPPENING NOW. All four prompts now require an estimate to be what its stated basis
+    computes to, and to be omitted rather than anchored to the current date. This is the
+    "never invent a date with no basis" rule failing in a new way: the basis was real and the
+    arithmetic was not.
+  - **`important_dates[].estimated` is per-DATE**, and the card renders "(estimated)" beside
+    each one it applies to. The row-level `was_estimated` stays as the roll-up but cannot do
+    this job: a row routinely mixes a confirmed deadline with a projected opening, so one
+    card-level banner either implies the real deadline is a guess or lets the guessed opening
+    pass as fact — and the opening is exactly the date that decides whether the card reads
+    "Happening Now". Before this the marker existed only when the model happened to type
+    "(estimated)" into the free-text label, which it did for IEEE and would not for the next
+    row. All four prompts now set the field and are told NOT to put it in the label;
+    `getDisplayMilestones` ORs it with `projected`, since a client-projected date is an
+    estimate by construction. Absent on rows written before 2026-08-24 — treated as unknown,
+    never as confirmed, and the renderer suppresses a duplicate when the label already says it.
+  - `check_deadlines.py` gained **`--ids ID...`** and **`--missing-opens`** so a known gap can
+    be re-checked for cents instead of paying ~$84 for a full pass to fix a handful of rows.
+    Both ignore the 7-day cache (that staleness filter belongs to the interactive endpoint,
+    not to a deliberate operator re-check), and both work with `--preview`, which is free.
+    `--missing-opens` selects on `missing_opens_date()`, so it needs a deadline present — a
+    row with no dates at all is a different problem and is not swept up by it.
+- **Measured backfill, 2026-08-24** (`agent_runs` id=61, `--missing-opens`, 8 rows, **$0.3788**,
+  8/8 searched, 0 silent, 0 unreadable): **5 of 8 gained an opens date** and 2 rows moved from
+  "Coming Up" to "Happening Now" — one correctly (Congressional App Challenge really is open),
+  one via the today-anchoring bug above. The 3 that still have none now carry an explicit
+  reason in `important_date_note` instead of a silent absence. One row hit `kept-existing`,
+  i.e. the empty-result guard firing on live data as designed.
+  - The run also exposed a limit worth knowing: **`kept-existing` protects against an EMPTY
+    result, not a THINNER one.** UChicago's Summer Language Institute went 7 dates -> 3 on a
+    verified check and the write was allowed, correctly — a verified correction must be able
+    to remove dates. There is no guard against a verified answer simply being worse, and
+    adding one would block legitimate corrections.
+- **The client may only DELETE dates on a verified `source`.** The deadline response carries
+  `source`, and `isVerifiedDeadlineSource()` in `frontend/src/lib/tracker.ts` accepts only
+  `cached` and `fresh, real search`. Both readers (`applyDeadlineCheckToInfo` and
+  `refreshTrackerDeadlines`) gate on it. The guard used to be a bare `.length`, so a verified
+  "discontinued, no dates" could never clear the dates `extractTrackerInfo` had guessed — the
+  card ended up reading `status: unknown` beside confident-looking dates nothing had ever
+  confirmed, and students read the dates, not the status. Widening it to clear on **any** empty
+  payload would be worse: `mock`, `stale-fallback`, `unverified-fallback` and `kept-existing`
+  all echo an empty array and would wipe good data. Add a source to the endpoint and it must be
+  classified in that list.
+- **The Quest Log's refresh counts four outcomes, not two.** `refreshTrackerDeadlines` returns
+  `checked / updated / skipped / blocked / failed / total` off `getDeadlineCheckResult`, which
+  carries the HTTP status through `HttpError`. A 404 is **not** a failure — it is a tracked
+  item with no catalog row, which can never be auto-checked — and a 402 is the paywall. All
+  three used to collapse into a bare `null` and be reported as "no changes found".
 - Cost is banked **per attempt** in both, so an exception on the retry cannot discard what
   the first call already spent. Same fix the scraper's two phases needed.
+- **The Quest Log's "Last checked" line survives navigation** (`src/lib/lastChecked.ts`, a
+  module singleton like `newlyAdded.ts`). It was component state, so switching tabs reset it
+  to "Last checked: never" — the check had really run, and the app then said it never had,
+  which reads as the refresh having failed. Progress ticks ("Checking 3/12…") are deliberately
+  NOT remembered: navigating away mid-run would freeze one on screen forever. Not persisted
+  either — a stamp from three days ago greeting a fresh load is staler than saying nothing.
+- **Google Calendar sync**, which is downstream of all of this and had two matching bugs:
+  a refresh rebuilt `importantDates` and dropped each entry's `googleEventId`, so the next
+  sync POSTed a **new** event while the old one — still carrying the same index-based
+  `wingmanId` — was by definition not stale and survived the sweep, giving the student a
+  duplicate on their real calendar per refresh. Fixed on both sides: the client carries the id
+  forward by index (the marker IS `${item.id}::${index}`, so slot N's event is slot N's date),
+  and the server maps `wingmanId -> event id` before upserting, adopts the existing event when
+  the client has no id, and deletes true duplicates, reporting them as `deduped`. Separately,
+  `collectTrackedDeadlineEvents` now **skips `not_running`** like every reader in `status.ts`:
+  `cycleYearShift` deliberately does not project a next cycle for a discontinued program, so
+  those carry REAL past dates and were putting dead deadlines on a student's calendar.
+- **Events go to a dedicated "Highschool Wingman" calendar and CANNOT go anywhere else.** The
+  `calendar.app.created` scope grants access only to calendars the app itself created, which
+  is what guarantees Wingman can never read or write a student's own calendars. The cost is
+  that "it isn't syncing" is almost always "I was looking at my primary calendar": the sync
+  result therefore NAMES the calendar and returns a `calendarLink` (taken from a written
+  event's `htmlLink`, which is far more reliable than constructing a URL from a secondary
+  calendar id). **Do not try to force the calendar visible** — `PATCH
+  /users/me/calendarList/<id>` returns **401** under this scope, verified 2026-08-24 with a
+  token that reads and writes events on that same calendar. The scope covers events on
+  app-created calendars, not the calendar list.
+- **The calendar MIRRORS the Quest Log — the sweep now deletes unmarked events too.** This
+  reversed a deliberate earlier choice, and the reversal is the more important half of the
+  fix. The marker only started being written 2026-08-22, so sparing unmarked events left
+  every older one permanently unsweepable: measured on the first real account, **45 events on
+  the calendar for 17 tracked dates — 22 unremovable orphans plus 6 duplicates**, including
+  deadlines for opportunities deleted from the app weeks earlier. The marker's job is now
+  only to identify WHICH tracked date an event is, so a sync PATCHes rather than duplicates.
+  State the consequence plainly rather than discovering it later: **anything a student adds
+  to that calendar by hand is removed on the next sync.**
 - **Phase 2 is skipped when phase 1 stayed silent** in both agents. Notes written without
   looking are not worth converting, nothing gets written either way, and skipping keeps a
   fully silent row at roughly the old per-row price.
@@ -534,8 +672,8 @@ the first pass:
   seeded its table from the roster rather than from the cost rows.
 
 **Trial-to-paid conversion's denominator is trials that have actually ENDED**, never all
-accounts. With a 3-day trial, dividing by everyone scores every signup from the last 72
-hours as a failure before they have had a chance to decide. `beta` grants are excluded
+accounts. With a 7-day trial, dividing by everyone scores every signup from the last
+week as a failure before they have had a chance to decide. `beta` grants are excluded
 from both halves and reported separately — they never reached the choice. A `canceled` or
 `past_due` account carrying a `stripe_subscription_id` counts as **converted**: cancelling
 later is churn, not a failure to convert, and folding the two together would make the rate
@@ -869,6 +1007,23 @@ before anyone activates it, backing the queue's per-row **Edit** modal.
 **User-submitted opportunities** — the Quest Log's "Add Opportunity" form posts to
 `/api/user-submitted-opportunities`, which writes an `is_active = false`,
 `source = "user-submitted"` row into the same review queue the scraper feeds.
+
+**That endpoint runs INLINE and returns the resolved catalog id** (2026-08-24). It used to
+hand the work to a background thread and answer `{"status": "queued"}` with no id, and the
+Quest Log fired it off *after* creating the item — so a hand-added opportunity had nothing to
+link to. It carried a local `slugifyTracker()` slug, `/api/opportunities/<slug>/deadline`
+404'd forever, and "Check for updates" skipped it while still reporting **"no changes
+found"** — the worst possible answer, because it is the one that stops a student checking
+themselves. The tracker item is now created under the returned id, so a custom add uses the
+same shared, cached deadline check a Fresh Finds add does, on add and on every later refresh.
+- An **exact URL duplicate returns the existing row's id** rather than nothing: that row is
+  the right thing to track, and it may already carry a verified, cached answer (a free hit).
+- The row still lands `is_active = false`. **Being addressable is not being published** — the
+  deadline endpoint reads a row by id with no `is_active` filter, while `/api/opportunities`
+  still serves only active rows. Activation remains the manual console step.
+- Failure is still never the student's problem: an unresolvable submission returns 200 with
+  `id: null`, the item stays in the Quest Log under a slug, and the refresh says plainly that
+  it cannot be auto-checked instead of claiming it checked it.
 Matching lives in **[url_dedupe.py](url_dedupe.py)**, kept separate from the `normalize_url()`
 that `scrape_opportunities.py` / `dryrun_common.py` / `migrate_to_supabase.py` each carry —
 those three are deliberately identical to each other and are **not** to be changed to match
@@ -1208,7 +1363,7 @@ plus five POST endpoints:
   moved the old flat-file `users_db.json` into this table — logic/shape is otherwise
   unchanged, this was a storage-backend swap only.
 
-**Subscription, trial, and signup consent.** Every account starts a **3-day free trial**
+**Subscription, trial, and signup consent.** Every account starts a **7-day free trial**
 that converts to a **$9.99/month** Stripe plan. `subscription_common.py` talks to Stripe
 over raw HTTP (no SDK, matching the stdlib-only philosophy) and holds the `PROMO_CODES`
 dict; four POST endpoints (`/api/subscription/status|checkout|cancel|validate-promo`) sit
@@ -1292,6 +1447,57 @@ in `server.py`.
    shapes were kept byte-identical through the RN rewrite so a student's data survived the
    cutover — do not "clean them up".
 
+**App-open latency: four serialized round trips, now one.** Home Base measured 5-6s to
+first paint in production. None of it was computation — it was the shape of the boot.
+`initAuth` awaited `/api/auth/refresh`, and only then did the screen fire
+`hs-tracker-data`, `hs-tracker-saved` and `student-profile` as three separate
+`/api/data/load` calls. Four causes compounded, and all four are fixed (2026-08-24):
+
+- **Blocking Supabase IO inside `async def` handlers meant the server did one thing at a
+  time.** `app/core._users_request` is blocking `urllib`, and FastAPI runs an `async def`
+  endpoint ON the event loop — so each Supabase read froze the whole process, including
+  requests already in flight. Measured: three `/api/data/load` calls that take 164ms each
+  alone took **660ms wall** when issued together. Every route that touches Supabase is now
+  a plain `def`, which FastAPI runs in a threadpool; the same three now take **223ms**.
+  The only thing forcing them async was `await request.body()`, so that moved into the
+  `json_body` / `raw_body` **dependencies** in `app/deps.py`. **A handler that awaits
+  anything in its own body must stay `async def`** — that is the line, and adding a new
+  Supabase-touching route as `async def` silently reintroduces this.
+- **One row, fetched once per key.** Every stored key lives in the same `data` jsonb on
+  the same row, so three keys cost three full-row reads. `/api/data/load` now also accepts
+  `{keys: [...]}` and answers `{values: {...}}`. The single-key `{key}` → `{value}` form is
+  unchanged and must stay — a browser running a stale bundle still uses it.
+- **The client batches, so no screen had to change.** `httpClient.loadData` coalesces every
+  call made in one tick into a single `{keys}` request (a microtask flush, not a timer —
+  an async function runs to its first `await` synchronously, so Home Base's three, the
+  Quest Log's two and the calendar sweep's two already all land in the same tick). Put the
+  batching here rather than at the call sites and there is nothing to remember to do.
+- **The identity is cached, so refresh left the critical path.** `SessionUser` only ever
+  came back in a login/refresh response, which is why startup had to await one before it
+  could even choose a screen. It is now persisted beside the tokens (`wingman.session_user`)
+  and `initAuth` boots from it when the stored access token's `exp` has not passed,
+  revalidating in the background. **This grants nothing** — the token is still verified
+  server-side on the next call — and a failed revalidation calls `forgetSession`, which
+  fires `onSessionLost`, which `AuthContext` turns into a redirect to `/login`.
+- **`peekData` / `peekTrackerData` are render accelerators, never a source of truth.**
+  expo-router remounts a screen on every visit, so Home Base showed a full-screen spinner
+  on each tab switch for a round trip it had already paid for. It now seeds its state from
+  the last loaded values and still runs the fetch. `saveData` writes through only *after*
+  the server accepts, so a failed save cannot seed the cache; `forgetSession` clears it so
+  the next account starts clean.
+- **Reads select what they need.** `get_user_account()` is every column except `data`
+  (identity/token/subscription — what refresh and the paywall gate read) and
+  `get_user_data()` is only `data`. `get_user()` (`select=*`) remains for the paths that
+  genuinely want both. PostgREST has no "everything but X", so the account list is explicit
+  and **falls back to `*` once and latches** if a column has not been migrated in — the
+  same 400-on-unknown-column trap `mailing_list_schema.sql` carries, except here it would
+  break sign-in.
+
+Measured end to end on `:8000` (warm, exported bundle): first paint of Home Base went from
+**781ms across 4 serialized round trips to 353ms across 1** (refresh now overlaps rather
+than blocking). The remaining fixed cost is the 1.9MB unsplit `entry-*.js`, which is a
+separate problem.
+
 **AI call flow**: `httpClient.callGemini(system, userContent, useWebSearch)` POSTs to
 `/api/messages` and returns cleaned text; `extractJSON()` (`src/lib/extractJSON.ts`) pulls a
 JSON value out of it by brace/bracket-depth scanning (tolerates trailing commentary, repairs
@@ -1315,12 +1521,135 @@ difference is not visible from the call sites — only from what each one depend
   makes them safe to cache. They live in a `starterPool` slot in `PROFILE_DERIVED_SLOTS`
   alongside `filterValues`/`filterTags`/`basics`: **10** questions generated per profile
   "version", from which each drawer open serves a rotating window of **3**
-  (`drawStarterWindow`), so four opens pass before anything repeats. Being a slot also means
-  `refreshProfileFilterValues()` pre-warms the pool right after every merge — it walks every
-  slot — so the drawer opens on a warm cache (measured: ~3.8s cold, 0ms warm) and
-  regeneration is tied to the existing `PROFILE_FILTER_REFRESH_WORDS` bar rather than a
-  second threshold meaning the same thing. **Regenerate stays a live call**: that button is
-  the explicit "these don't suit me", which is the one place paying is clearly warranted.
+  (`drawStarterWindow`) — three clean trios, then the fourth wraps and reuses two, since 10
+  is not a multiple of 3. Being a slot also means `refreshProfileDerived()` pre-warms the
+  pool right after every merge — it walks every slot — so the drawer opens on a warm cache
+  (measured: ~3.8s cold, 0ms warm), and regeneration is tied to the same freshness rule every
+  other slot uses rather than a second threshold meaning the same thing. **Regenerate stays a
+  live call**: that button is the explicit "these don't suit me", which is the one place
+  paying is clearly warranted.
+- **Tags, tag enrichment and the basics tiles are ONE model call** (`extractTagsAndBasics`
+  in `src/lib/profileTags.ts`, returning `{basics, tags}` with each tag already carrying its
+  intent and next steps). They were three calls that each uploaded and re-read the same
+  profile text to ask a different question about it, and they always run together because
+  every synthesis invalidates every slot at once — so the split bought nothing and cost two
+  extra round trips plus two extra copies of the input. A full profile update is now **3
+  model calls, down from 5**.
+  - `filterTags` and `basics` remain **separate slots** sharing one call: each keeps its own
+    copy of the text it was computed from, so one can be missing or mid-refresh without
+    saying anything about the other. The call is memoized by exact text (`sharedExtract`) so
+    the two slots requesting it together pay once, and it is **held rather than cleared on
+    settle** so a later lone reader reuses it — but a REJECTED promise is dropped
+    immediately, or one failure would be cached as the permanent answer.
+  - **Each half of the response is salvaged on its own.** A garbled `basics` must not empty
+    the tag facet, and vice versa; that isolation is the entire reason collapsing three calls
+    into one is acceptable. Tags that come back as bare strings (a common slip against the
+    object shape asked for) are topped up through the existing enrichment call rather than
+    left un-enriched.
+  - **`inferSubjects` is deliberately NOT merged in**, though it would fit. It is the one
+    derived value on the search critical path (`preFilter` cannot narrow the catalog without
+    it) and the merged answer is the slowest of the set because it carries every tag, so
+    folding it in would make a cold-cache search block on tag enrichment it never reads. That
+    is the same reasoning that made these independent slots in the first place; it still
+    holds for this one and stopped holding for the other three.
+  - **The chat opener pool is not merged either, for an unrelated reason**: it runs on
+    Anthropic. Moving it into a Gemini call would silently change the feature's provider and
+    mis-attribute its cost — the exact failure `provider_for_model()` exists to prevent.
+  - Its spend classifies as **`profile_extract`**, and that signature is tested **first** in
+    `_FEATURE_SIGNATURES` because the merged prompt necessarily contains the wording of the
+    two single-purpose prompts it replaced. `test_classify_feature.py` compares the source
+    list against its case list **in order**, so a new signature must be added to both at the
+    same position.
+- **Slot freshness is EXACT profile-text identity, and deliberately has no tolerance.**
+  `profileDerivedIsFresh` compares `slot.profile === synthesized`, so every synthesis pass
+  (a chat merge, a resume/LinkedIn import, or a **Tidy it up** repair) invalidates all four
+  slots and `refreshProfileDerived` rebuilds them in the background. There was a
+  `PROFILE_FILTER_REFRESH_WORDS = 10` tolerance here until 2026-08-24 — an edit moving the
+  word count by fewer than 10 words counted as a touch-up and kept the stored values. It was
+  a word-COUNT test, not a content test, which is what made it wrong: swapping "robotics" for
+  "chemistry" is a zero-word delta, so the tags, subjects and basics went on describing a
+  profile the student no longer had, with no way to notice and no expiry. The cost is
+  accepted and is **~5 model calls per synthesis** (4 Gemini — subjects, tag extraction, tag
+  enrichment, basics — plus 1 Claude for the opener pool, which is skipped free below 50
+  words). Reads are unaffected: unchanged text still matches exactly, so ordinary page visits
+  and repeat searches still cost nothing.
+- **Profile filter tags are MECE THEMES, not one tag per line of the profile.** The prompt
+  used to ask for "one entry for every distinct interest, goal, project or pursuit it
+  mentions" and explicitly forbade merging two different pursuits, so a 24-line profile
+  produced 24 dropdown rows — two separate volunteering placements, three separate clubs, a
+  row for one trivia night. A facet at that altitude cannot filter anything: each row matched
+  one program or none, and the student scrolled a copy of their own résumé looking for a
+  search term. Since 2026-08-24 it asks for a **mutually exclusive, collectively exhaustive**
+  set instead, pitched at the level a program is described ("Volunteering with organizations
+  that serve children", never "Volunteering with Kids Coming Together"; "Organizing student
+  clubs and enrichment events", never "Organized school Trivia Night").
+  - **Ties are broken by where the OPPORTUNITIES live**, which is the question the facet
+    exists to answer — a chatbot built to learn AI groups with studying AI, a chatbot being
+    sold groups with building products; a USAPhO score groups with competitions, not with
+    physics as a subject. Stating the tie-break matters: told only "mutually exclusive", the
+    model files the ambiguous item under both.
+  - **Grouping is not shortening.** Nothing may be dropped for being small, old or
+    unimpressive; an item that fits no theme joins the nearest one. The prompt gives a
+    granularity test (a theme covers 2+ profile items, or is a standing interest several
+    different programs could serve) and 6-12 as guidance, both to stop it collapsing into
+    "STEM" / "The arts", which would match most of the catalog.
+  - `intent` and `nextSteps` are now **area-level**, in the merged pass and in the top-up
+    `enrichRequest` alike. The finder's scorer feeds all three into its ranking call, and
+    "milestones for *Organized school Trivia Night*" was close to meaningless.
+  - The legacy `buildProfileFilterTags`/`extractProfileTagStrings` pair was **deleted** in
+    the same change. Nothing imported it and it carried the old per-item prompt verbatim,
+    which is precisely how the retired rule would come back.
+  - The prompt's opening line (`pulling out everything an opportunity-matching app needs`) is
+    unchanged **on purpose** — it is the `profile_extract` signature in `_FEATURE_SIGNATURES`,
+    so rewording it would silently move this feature's spend into `other`.
+- **The tag facet has NO CAP on tag count** — `extractTagsAndBasics` returns as many themes
+  as it takes to cover what the profile actually says, and the 6-12 above is guidance to the
+  model, never a `.slice()`. Grouping reduces the count for a reason a reader can see;
+  truncation does not. There was a `PROFILE_TAG_LIMIT = 10`
+  until 2026-08-24, applied both in the prompt and as a `.slice()`; it dropped whatever fell
+  off the end, and it fell off by the model's own ordering of "most important", so a student
+  with a broad profile lost their less-central interests from the dropdown with nothing on
+  screen to say so. Two things a cap was implicitly protecting are now handled directly, and
+  removing it without them would be cosmetic:
+  - **Both calls send their own output budget, and enrichment TOPS UP.** The thing a tag cap
+    was really standing in for was `MESSAGES_MAX_TOKENS = 2000`: extraction returns one tag
+    per thing the profile mentions and enrichment one object per tag, so both answers grow
+    with the student, and a broad profile truncated. It truncated **invisibly** — `extractJSON`
+    repairs a truncated array rather than failing, so a short answer and a complete one are
+    indistinguishable, which is precisely how a token ceiling became a limit on how many
+    interests a student was allowed to have.
+    - `/api/messages` now accepts a client `maxTokens`, clamped by `_clamped_gemini_max_tokens`
+      into `[MESSAGES_MAX_TOKENS, MESSAGES_MAX_TOKENS_CEILING]` exactly as the Claude route
+      already did. It can only ever RAISE headroom, so every existing call site is untouched.
+      Unused budget is free (billing is on tokens produced) — the same reasoning profile
+      synthesis uses. Remember Gemini 3.x **thinking tokens draw from this same budget**.
+    - Extraction asks for the ceiling (`TAG_EXTRACT_MAX_TOKENS`), because the tag count is by
+      definition unknown before it runs. Enrichment sizes its budget from the count
+      (`enrichBudgetFor`), so a broader profile asks for more rather than the same.
+    - Enrichment is **one request for every tag**, then re-asks for exactly the ones that did
+      not come back, up to `ENRICH_MAX_ROUNDS`. That constant is a **non-termination guard,
+      not a size limit** — every round asks for all remaining tags, so the shortfall shrinks
+      fast (measured against a fake that hard-limits 20 objects per response: 50 -> 30 -> 10,
+      fully enriched in 3 rounds). A round that adds nothing breaks immediately, so a dead
+      enrichment endpoint costs one attempt, not `ENRICH_MAX_ROUNDS` of them.
+    - A batched version of this existed briefly and was replaced: a fixed batch size is just
+      the same ceiling one level down, and it made a short list pay for the plumbing. The one
+      thing worth carrying forward from it is that the positional fallback in `enrichRequest`
+      is **relative to the list THAT request was given** — on a top-up round the indexes mean
+      nothing against the original ordering, and reusing them hands tags another tag's intent.
+  - **The dropdown scrolls** (`facetScroll`, `maxHeight: 320`). The panel is absolutely
+    positioned, so an over-long list ran off the bottom of the viewport with the tags below
+    the fold unreachable. `None` sits outside the scroller so clearing the filter is always
+    visible.
+  - Extracted tags are **deduped case-insensitively**. Without a cap a repeat is likelier,
+    and a duplicate collides twice: `enrichBatch` keys results by tag string, and the facet
+    uses the tag as its React key.
+- **Slot WRITES are serialized** (`queueSlotWrite`), because `/api/data/save` replaces the
+  whole value at a key — so persisting one slot is a load-modify-save of the entire
+  `student-profile` record. `refreshProfileDerived` fires all four at once, and without the
+  queue two slots finishing within one load round-trip of each other both read the pre-write
+  record and the second save silently dropped the first slot. Only the persist step queues;
+  the model calls still run concurrently, so wall time is unchanged.
 - **Follow-ups** (`profileChatNextQuestion`) are one live call per bot turn, and must stay
   that way. A follow-up's whole job is to react to what the student just said, and a
   pre-generated question cannot. This was tried and reverted: with pooled follow-ups, a

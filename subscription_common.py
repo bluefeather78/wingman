@@ -20,7 +20,7 @@ STRIPE_API_URL = "https://api.stripe.com/v1"
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
 # Trial and pricing configuration
-TRIAL_DAYS = 3
+TRIAL_DAYS = 7
 PLAN_PRICE_CENTS = 999  # $9.99/month
 PLAN_PRICE_ID = os.environ.get("STRIPE_PRICE_ID", "price_test_subscription")  # Set in .env for real deployments
 
@@ -285,9 +285,9 @@ def days_until_trial_end(trial_ends_at_iso):
     try:
         end = datetime.datetime.fromisoformat(trial_ends_at_iso.replace("Z", "+00:00"))
         delta = end - datetime.datetime.now(datetime.timezone.utc)
-        # Round up, not down: on signup day a 3-day trial has 2 days and 23-odd hours
-        # left, and delta.days floors that to 2. Users read "2 days left" one second
-        # after starting a 3-day trial as the trial being short-changed.
+        # Round up, not down: on signup day a 7-day trial has 6 days and 23-odd hours
+        # left, and delta.days floors that to 6. Users read "6 days left" one second
+        # after starting a 7-day trial as the trial being short-changed.
         return max(0, math.ceil(delta.total_seconds() / 86400))
     except:
         return 0

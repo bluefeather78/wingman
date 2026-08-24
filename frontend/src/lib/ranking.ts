@@ -34,6 +34,23 @@ export function keywordScore(tokens: string[], opp: Opportunity): number {
   return score;
 }
 
+// What preFilter did to the type constraint, so the caller can TELL the student rather
+// than silently showing them a different kind of opportunity than they asked for.
+//  - `widened`: a type was requested but too few rows carried it, so the whole catalog was
+//    searched instead. `typeMatches` is how many rows of that type actually exist.
+//  - `strictEmpty`: a strict-type kind (Conference/Journal) with zero rows in the catalog.
+//    The pool comes back EMPTY rather than silently widening — see below.
+export interface PreFilterResult {
+  pool: Opportunity[];
+  typeMatches: number;
+  widened: boolean;
+  strictEmpty: boolean;
+}
+
+// Below this many rows of the requested type, the type filter is abandoned rather than
+// handing the ranker a pool too thin to rank. Named because two places reason about it.
+export const TYPE_FILTER_MIN_POOL = 15;
+
 // Narrow the full catalog to a scored candidate pool. `opportunities` is passed in
 // (it was the global OPPORTUNITIES in script.js).
 export function preFilter(
@@ -43,17 +60,30 @@ export function preFilter(
   typeFilter: string[] | null,
   strict: boolean,
   studentGrade: number | null,
-): Opportunity[] {
+): PreFilterResult {
   const tokens = [...new Set(tokenize(description).filter((t) => !STOPWORDS.has(t) && t.length >= 3))];
   const subjSet = new Set((subjectHints || []).map((s) => s.toLowerCase()));
   const typeSet = typeFilter && typeFilter.length ? new Set(typeFilter) : null;
 
   let base = opportunities;
+  let typeMatches = 0;
+  let widened = false;
   if (typeSet) {
     const byType = opportunities.filter((o) => o.type != null && typeSet.has(o.type));
+    typeMatches = byType.length;
     // Only hard-filter by type if it leaves a reasonable pool; `strict` skips the size
     // gate for kinds whose Type is rare but exact (Conference/Journal Venue).
-    if (byType.length >= 15 || (strict && byType.length > 0)) base = byType;
+    if (byType.length >= TYPE_FILTER_MIN_POOL || (strict && byType.length > 0)) {
+      base = byType;
+    } else if (strict) {
+      // A strict kind with NOTHING of its type must not fall through to the whole catalog.
+      // rankCandidates sends `requireAll` for these ("return EVERY candidate, do not omit
+      // any"), so widening here would order the model to return 100 wrong-type rows as if
+      // they were an exhaustive list of the real ones. Empty pool, and the caller says so.
+      return { pool: [], typeMatches: 0, widened: false, strictEmpty: true };
+    } else {
+      widened = true;
+    }
   }
   if (studentGrade != null) {
     // Hard filter, no size-gate: nearly all rows have null grade bounds, so this only
@@ -70,7 +100,8 @@ export function preFilter(
   const withScore = scored.filter((s) => s.score > 0);
   // Capped at 100: rankCandidates keeps only the best 10-12, and a smaller payload
   // means the model reads less before responding.
-  return (withScore.length >= 60 ? withScore : scored).slice(0, 100).map((s) => s.opp);
+  const pool = (withScore.length >= 60 ? withScore : scored).slice(0, 100).map((s) => s.opp);
+  return { pool, typeMatches, widened, strictEmpty: false };
 }
 
 // ---------- Model-backed steps ----------
@@ -121,17 +152,30 @@ export const PROFILE_BASICS_FIELDS = [
   { key: 'gender', label: 'Gender' },
 ] as const;
 
+// The field list and the never-guess rule, shared with the merged extraction pass so both
+// prompts describe the same three fields the same way.
+export const PROFILE_BASICS_RULE =
+  '"grade" (their school year, e.g. "11th grade"), "state" (US state or region they live in, spelled out), "gender". Set a key to null if the student did not say it — never guess, never infer from stereotypes, and never fill a value in just to avoid a null.';
+
 export async function extractProfileBasics(
   callGemini: GeminiCall,
   text: string,
 ): Promise<Record<string, string | null>> {
   if (!text || !text.trim()) return {};
-  const system = `You read a high school student's self-description and pull out a small set of specific profile facts, ONLY if the student actually stated or clearly implied them. Respond with ONLY a raw JSON object (no markdown, no preamble) with exactly these keys: "grade" (their school year, e.g. "11th grade"), "state" (US state or region they live in, spelled out), "gender". Set a key to null if the student did not say it — never guess, never infer from stereotypes, and never fill a value in just to avoid a null.`;
+  const system = `You read a high school student's self-description and pull out a small set of specific profile facts, ONLY if the student actually stated or clearly implied them. Respond with ONLY a raw JSON object (no markdown, no preamble) with exactly these keys: ${PROFILE_BASICS_RULE}`;
   const obj = await callGeminiJSON<Record<string, unknown>>(callGemini, system, text, false);
+  return normalizeProfileBasics(obj);
+}
+
+// Split out of the call above so the merged profile-extraction pass (profileTags.ts) applies
+// exactly the same rules to the same fields. A second copy of "what counts as a stated fact"
+// would let the two paths disagree about the same student.
+export function normalizeProfileBasics(obj: unknown): Record<string, string | null> {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+  const rec = obj as Record<string, unknown>;
   const out: Record<string, string | null> = {};
   PROFILE_BASICS_FIELDS.forEach(({ key }) => {
-    const v = obj[key];
+    const v = rec[key];
     out[key] =
       typeof v === 'string' && v.trim() && !/^(null|n\/?a|unknown|unspecified)$/i.test(v.trim())
         ? v.trim()

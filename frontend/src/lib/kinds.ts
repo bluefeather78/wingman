@@ -72,6 +72,20 @@ export const KIND_CONFIG: Record<string, KindConfig> = {
     label: 'Describe your project',
     placeholder: 'e.g. I built an AI-powered app that helps autistic children practice reading comprehension, using a speech recognition model fine-tuned on atypical speech and a visual system that shows images and asks kids questions about them out loud...',
   },
+  // The catalog's ~25 `Volunteer` rows had no kind covering them, so they were reachable
+  // ONLY through profile suggestions and were filed as summer camps once saved. Note the
+  // Quest Log has six fixed buckets and none of them is volunteering — findBucketForKind
+  // maps this to `internships`, which is what a volunteer placement actually resembles.
+  volunteer: {
+    name: 'Volunteering',
+    desc: 'Service roles and volunteer placements with an organization',
+    source: 'local',
+    dbTypes: ['Volunteer'],
+    heading: 'What kind of volunteering are you looking for?',
+    sub: "Tell us the causes you care about, any skills you'd bring, and how much time you can give.",
+    label: 'What you care about and want to do',
+    placeholder: "e.g. I care a lot about food insecurity in my city and want to help out somewhere hands-on. I'm comfortable with spreadsheets and social media, and I have free weekends during the school year...",
+  },
   'pure-competition': {
     name: 'Academic Competition',
     desc: 'Skills or knowledge tests — olympiads, quiz bowls, exams',

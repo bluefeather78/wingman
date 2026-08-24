@@ -1,10 +1,11 @@
 """Per-account data + location routes. Translated from server.py's handle_data_save /
 handle_data_load / handle_update_location (PLAN_1_decompose.md).
 """
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Depends
 
-from app.core import touch_user_activity, update_user_data, get_user, update_user_location
-from app.deps import read_json_body, json_response, json_error
+from app.core import (touch_user_activity, update_user_data, get_user_data,
+                      update_user_location)
+from app.deps import json_body, json_response, json_error
 from app.auth import get_current_user, AuthedUser
 
 router = APIRouter()
@@ -15,8 +16,8 @@ router = APIRouter()
 # Identity now comes only from the verified access token (user.id); any userid in the body
 # is ignored. get_current_user 401s a missing/invalid token before the handler runs.
 @router.post("/api/data/save")
-async def handle_data_save(request: Request, user: AuthedUser = Depends(get_current_user)):
-    body = await read_json_body(request)
+def handle_data_save(body: dict = Depends(json_body),
+                     user: AuthedUser = Depends(get_current_user)):
     userid = user.id
     key = body.get("key")
     if not key:
@@ -33,22 +34,36 @@ async def handle_data_save(request: Request, user: AuthedUser = Depends(get_curr
 
 
 @router.post("/api/data/load")
-async def handle_data_load(request: Request, user: AuthedUser = Depends(get_current_user)):
-    body = await read_json_body(request)
+def handle_data_load(body: dict = Depends(json_body),
+                     user: AuthedUser = Depends(get_current_user)):
+    """{key} -> {value}, or {keys: [...]} -> {values: {key: value}}.
+
+    The multi-key form exists because every screen needs two or three keys at once and
+    they all live in the SAME jsonb column: Home Base asked for hs-tracker-data,
+    hs-tracker-saved and student-profile as three requests, so one row was fetched from
+    Supabase three times to read three of its own keys. One request, one read.
+
+    The single-key form is unchanged and still answers {value} — native clients and the
+    save path both still use it, and a stale bundle in a browser must keep working.
+    """
     userid = user.id
-    key = body.get("key")
+    keys = body.get("keys")
     touch_user_activity(userid, "data_load")
     try:
-        record = get_user(userid)
+        data = get_user_data(userid)
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
-    value = (record.get("data") or {}).get(key) if record else None
-    return json_response(200, {"value": value})
+    data = data or {}
+    if isinstance(keys, list):
+        # An unknown key answers null, exactly as the single-key form does — absent and
+        # unset are the same thing to every caller here.
+        return json_response(200, {"values": {str(k): data.get(str(k)) for k in keys}})
+    return json_response(200, {"value": data.get(body.get("key"))})
 
 
 @router.post("/api/account/location")
-async def handle_update_location(request: Request, user: AuthedUser = Depends(get_current_user)):
-    body = await read_json_body(request)
+def handle_update_location(body: dict = Depends(json_body),
+                           user: AuthedUser = Depends(get_current_user)):
     userid = user.id
     location = (body.get("location") or "").strip()
     if not location:

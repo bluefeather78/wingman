@@ -52,6 +52,41 @@ export interface TokenPair {
   refresh: string;
 }
 
+// --- Cached identity -------------------------------------------------------
+//
+// The token pair alone cannot say who you are: SessionUser (name, email, subscription)
+// only ever came back in a login/refresh response, so initAuth had to spend a round trip
+// on /api/auth/refresh before the router could decide which screen to show — on every
+// single app open, in front of everything else. Persisting the identity beside the tokens
+// lets the app boot from it and revalidate off the critical path.
+//
+// This is a CACHE, not an authority. It grants nothing: every request still carries the
+// access token, and the server still verifies it. A tampered value buys a wrong name in
+// the account drawer and a redirect to /login on the first real call.
+const SESSION_KEY = 'wingman.session_user';
+
+export async function saveSession(user: unknown): Promise<void> {
+  try {
+    await setItem(SESSION_KEY, JSON.stringify(user));
+  } catch {
+    /* unserializable / storage unavailable — we simply boot without the cache */
+  }
+}
+
+export async function loadSession<T>(): Promise<T | null> {
+  const raw = await getItem(SESSION_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearSession(): Promise<void> {
+  await deleteItem(SESSION_KEY);
+}
+
 export async function loadTokens(): Promise<TokenPair | null> {
   const [access, refresh] = await Promise.all([getItem(ACCESS_KEY), getItem(REFRESH_KEY)]);
   if (access && refresh) return { access, refresh };

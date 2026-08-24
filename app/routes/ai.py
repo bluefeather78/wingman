@@ -13,14 +13,15 @@ import urllib.request
 from fastapi import APIRouter, Request, Response, Depends
 
 from app.config import (
-    GEMINI_API_KEY, MESSAGES_MODEL, MESSAGES_MAX_TOKENS,
+    GEMINI_API_KEY, MESSAGES_MODEL, MESSAGES_MAX_TOKENS, MESSAGES_MAX_TOKENS_CEILING,
     ANTHROPIC_API_KEY, ANTHROPIC_URL, CLAUDE_MODEL,
     CLAUDE_MAX_TOKENS, CLAUDE_MAX_TOKENS_CEILING,
 )
 from app.core import (
     touch_user_activity, record_interactive_cost_async, log_conversation_async,
 )
-from app.deps import json_response, json_error, subscription_block_reason, client_ip
+from app.deps import (json_response, json_error, subscription_block_reason, client_ip,
+                      raw_body as raw_body_dep)
 from app.auth import get_optional_user, AuthedUser
 from app.services.ai import generate_mock_text
 from gemini_common import call_gemini
@@ -35,6 +36,17 @@ def _clamped_max_tokens(requested):
     except (TypeError, ValueError):
         return CLAUDE_MAX_TOKENS
     return max(CLAUDE_MAX_TOKENS, min(n, CLAUDE_MAX_TOKENS_CEILING))
+
+
+def _clamped_gemini_max_tokens(requested):
+    """Same, for /api/messages. A caller whose answer length scales with its input (profile
+    tag extraction and enrichment) asks for its own budget; everyone else gets the uniform
+    default. Never BELOW the default, so this can only ever raise a call's headroom."""
+    try:
+        n = int(requested)
+    except (TypeError, ValueError):
+        return MESSAGES_MAX_TOKENS
+    return max(MESSAGES_MAX_TOKENS, min(n, MESSAGES_MAX_TOKENS_CEILING))
 
 
 def _mock_response(raw_body, ip, userid):
@@ -64,7 +76,8 @@ def _proxy_to_gemini(raw_body, ip, userid):
     try:
         text, usage = call_gemini(
             system, user_content, GEMINI_API_KEY,
-            use_web_search=use_web_search, max_tokens=MESSAGES_MAX_TOKENS,
+            use_web_search=use_web_search,
+            max_tokens=_clamped_gemini_max_tokens(payload.get("maxTokens")),
             model=MESSAGES_MODEL,
         )
     except urllib.error.HTTPError as e:
@@ -133,8 +146,8 @@ def _proxy_to_anthropic(raw_body, ip, userid):
 
 
 @router.post("/api/messages")
-async def handle_messages(request: Request, user: AuthedUser = Depends(get_optional_user)):
-    raw_body = await request.body()
+def handle_messages(request: Request, raw_body: bytes = Depends(raw_body_dep),
+                    user: AuthedUser = Depends(get_optional_user)):
     # Attribution-only: identity comes from the token if present, else None (signed-out /
     # mock mode still work — never a 401 here). subscription_block_reason(None) fails open.
     userid = user.id if user else None
@@ -149,8 +162,8 @@ async def handle_messages(request: Request, user: AuthedUser = Depends(get_optio
 
 
 @router.post("/api/messages-claude")
-async def handle_messages_claude(request: Request, user: AuthedUser = Depends(get_optional_user)):
-    raw_body = await request.body()
+def handle_messages_claude(request: Request, raw_body: bytes = Depends(raw_body_dep),
+                           user: AuthedUser = Depends(get_optional_user)):
     userid = user.id if user else None
     reason = subscription_block_reason(userid)
     if reason:

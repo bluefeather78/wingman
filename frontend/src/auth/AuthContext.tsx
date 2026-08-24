@@ -46,6 +46,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // user here is what makes (app)/_layout redirect to /login when that happens.
   useEffect(() => httpClient.onSessionLost(() => setUser(null)), []);
 
+  // The identity can also change WITHOUT the session ending: the background refresh (and
+  // every 402 from the subscription gate) carries a fresh has_access. Mirroring it into
+  // state is what makes (app)/_layout send an account whose trial lapsed mid-session to
+  // the paywall, instead of leaving it on a screen whose every request now fails.
+  useEffect(() => httpClient.onUserChanged((u) => setUser(u)), []);
+
   const value = useMemo<AuthState>(
     () => ({
       ready,

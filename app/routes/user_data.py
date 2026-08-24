@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends
 
 from app.core import (touch_user_activity, update_user_data, get_user_data,
                       update_user_location)
-from app.deps import json_body, json_response, json_error
-from app.auth import get_current_user, AuthedUser
+from app.deps import json_body, json_response, json_error, require_subscription
+from app.auth import AuthedUser
 
 router = APIRouter()
 
@@ -14,10 +14,17 @@ router = APIRouter()
 # These three routes were the IDOR (PLAN_2_auth.md): they read `userid` straight from the
 # request body and returned/wrote THAT account's data with no proof the caller owned it.
 # Identity now comes only from the verified access token (user.id); any userid in the body
-# is ignored. get_current_user 401s a missing/invalid token before the handler runs.
+# is ignored. require_subscription wraps get_current_user, so a missing/invalid token is
+# still a hard 401 before the handler runs.
+#
+# They gate on SUBSCRIPTION as well as identity: a student's profile and Quest Log are the
+# app, not an extra, so an account whose trial or subscription has ended cannot read or
+# write them. Nothing is deleted — the row is untouched and comes straight back the moment
+# they subscribe again. The client paywall derives from the same subscription_state(), so
+# the two cannot disagree; this is the half that a stale bundle or a direct API call hits.
 @router.post("/api/data/save")
 def handle_data_save(body: dict = Depends(json_body),
-                     user: AuthedUser = Depends(get_current_user)):
+                     user: AuthedUser = Depends(require_subscription)):
     userid = user.id
     key = body.get("key")
     if not key:
@@ -35,7 +42,7 @@ def handle_data_save(body: dict = Depends(json_body),
 
 @router.post("/api/data/load")
 def handle_data_load(body: dict = Depends(json_body),
-                     user: AuthedUser = Depends(get_current_user)):
+                     user: AuthedUser = Depends(require_subscription)):
     """{key} -> {value}, or {keys: [...]} -> {values: {key: value}}.
 
     The multi-key form exists because every screen needs two or three keys at once and
@@ -63,7 +70,7 @@ def handle_data_load(body: dict = Depends(json_body),
 
 @router.post("/api/account/location")
 def handle_update_location(body: dict = Depends(json_body),
-                           user: AuthedUser = Depends(get_current_user)):
+                           user: AuthedUser = Depends(require_subscription)):
     userid = user.id
     location = (body.get("location") or "").strip()
     if not location:

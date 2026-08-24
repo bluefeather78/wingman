@@ -126,6 +126,21 @@ AGENT_CONFIGS_SCHEMA = {
         "api": "Gemini 3.6-flash + googleSearch",
         "defaults": {"min_delay": 5, "timeout": 120},
     },
+    "tasks": {
+        "name": "Task Generator",
+        "description": "Work out each program's application steps, verified against its own page",
+        "script": "generate_action_items.py",
+        "db_agent": "action_item_generator",
+        "unit": "rows",
+        "writes": "updates",
+        "uses_gemini_search": False,  # never searches — it is handed the page we fetched
+        # A row whose page we cannot fetch makes NO model call: there would be nothing to
+        # verify the answer against, so it gets a locally-built generic checklist for free.
+        # ~1 page in 10 refuses our client, so the paid population is smaller than the row
+        # count and the per-row average is pulled below what a fetchable row really costs.
+        "api": "Gemini 3.5-flash-lite (no web search); unfetchable pages resolve locally for free",
+        "defaults": {"min_delay": 5, "timeout": 120},
+    },
     "mailinglist": {
         "name": "Mailing List Finder",
         "description": "Find each program's mailing-list signup form and store a recipe for it",

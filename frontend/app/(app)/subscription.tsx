@@ -8,9 +8,34 @@ import { colors, fonts, popShadow, radius } from '@/ui/theme';
 interface SubState {
   status?: string;
   days_left?: number;
+  has_access?: boolean;
   trial_ends_at?: string | null;
   subscription_end_at?: string | null;
   [key: string]: unknown;
+}
+
+// What the paywall says, mirroring subscription_block_reason() in app/deps.py so the
+// screen names the same situation the server's 402 does.
+function lapsedCopy(status: string): { title: string; body: string } {
+  if (status === 'past_due')
+    return {
+      title: 'We could not charge your card',
+      body: 'Update your payment details to restore access to Wingman. Your profile and Quest Log are untouched and come straight back.',
+    };
+  if (status === 'canceled')
+    return {
+      title: 'Your subscription has ended',
+      body: 'Resubscribe to pick up exactly where you left off — nothing has been deleted.',
+    };
+  if (status === 'beta')
+    return {
+      title: 'Your beta access has ended',
+      body: 'Subscribe to keep using Wingman. Everything you saved is still here.',
+    };
+  return {
+    title: 'Your free trial has ended',
+    body: 'Subscribe to keep using Wingman. Your profile and Quest Log are still here, waiting for you.',
+  };
 }
 
 function fmtDate(iso: string | null | undefined): string {
@@ -23,6 +48,11 @@ function fmtDate(iso: string | null | undefined): string {
 // The subscription page (#page-subscription), reached from the account drawer's Manage
 // Plan. Payments stay deferred: status, plans, and the promo-code flow work; Upgrade
 // surfaces the backend's answer (Stripe is not configured in this environment).
+//
+// It is ALSO the paywall screen: (app)/_layout redirects every other route here once
+// has_access goes false, so this is the only thing a lapsed account can see. The status
+// read on mount write-throughs to the cached session, so redeeming a grant code here lifts
+// the block immediately rather than on the next sign-in.
 export default function Subscription() {
   const { user } = useAuth();
   const [sub, setSub] = useState<SubState | null>((user?.subscription as SubState) ?? null);
@@ -38,7 +68,10 @@ export default function Subscription() {
   }, []);
 
   const status = sub?.status ?? 'trial';
+  const blocked = sub?.has_access === false;
+  const lapsed = lapsedCopy(status);
   const badge =
+    blocked ? { label: 'Ended', bg: '#FEE2E2', fg: '#991B1B' } :
     status === 'active' ? { label: 'Active', bg: '#D1FAE5', fg: '#065F46' }
     : status === 'beta' ? { label: 'Beta', bg: '#DEF5B0', fg: colors.navy }
     : status === 'canceled' ? { label: 'Canceled', bg: '#FEE2E2', fg: '#991B1B' }
@@ -93,6 +126,16 @@ export default function Subscription() {
           <Text style={styles.subTitle}>Manage your plan and billing</Text>
         </View>
 
+        {blocked && (
+          <View style={styles.lapsedCard}>
+            <Text style={styles.lapsedTitle}>{lapsed.title}</Text>
+            <Text style={styles.lapsedBody}>{lapsed.body}</Text>
+            <View style={styles.lapsedActions}>
+              <PopButton label="Subscribe — $9.99/month" small square onPress={upgrade} />
+            </View>
+          </View>
+        )}
+
         {/* Status card */}
         <View style={styles.statusCard}>
           <View style={styles.statusRow}>
@@ -104,7 +147,7 @@ export default function Subscription() {
               <Text style={[styles.badgeText, { color: badge.fg }]}>{badge.label}</Text>
             </View>
           </View>
-          {(status === 'trial' || status === 'beta') && (
+          {!blocked && (status === 'trial' || status === 'beta') && (
             <View style={styles.countdown}>
               <Text style={styles.countdownTitle}>
                 {daysLeft} day{daysLeft === 1 ? '' : 's'} left {status === 'beta' ? 'of beta access' : 'in trial'}
@@ -112,7 +155,7 @@ export default function Subscription() {
               <Text style={styles.countdownSub}>Your access ends {endDate}</Text>
             </View>
           )}
-          {status === 'active' && (
+          {!blocked && status === 'active' && (
             <View style={[styles.countdown, styles.activeInfo]}>
               <Text style={[styles.countdownTitle, { color: '#065F46' }]}>✓ Subscription Active</Text>
               <Text style={[styles.countdownSub, { color: '#047857' }]}>Renews {endDate}</Text>
@@ -132,7 +175,7 @@ export default function Subscription() {
                 <Text style={styles.planRowPrice}>7 days</Text>
                 <Text style={styles.planRowNote}>Includes all features</Text>
               </View>
-              {(status === 'trial' || status === 'beta') && (
+              {!blocked && (status === 'trial' || status === 'beta') && (
                 <View style={[styles.badge, { backgroundColor: '#DEF5B0' }]}>
                   <Text style={[styles.badgeText, { color: colors.navy }]}>Current</Text>
                 </View>
@@ -200,6 +243,11 @@ const styles = StyleSheet.create({
   headWrap: { alignItems: 'center', gap: 4 },
   title: { fontFamily: fonts.display, fontSize: 24, color: colors.navy },
   subTitle: { fontFamily: fonts.bodyMed, fontSize: 14, color: colors.slate500 },
+
+  lapsedCard: { backgroundColor: '#FEF2F2', borderWidth: 2, borderColor: '#FCA5A5', borderRadius: radius.lg, padding: 20, gap: 8 },
+  lapsedTitle: { fontFamily: fonts.display, fontSize: 20, color: '#991B1B' },
+  lapsedBody: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: '#B91C1C' },
+  lapsedActions: { flexDirection: 'row', marginTop: 8 },
 
   statusCard: { borderWidth: 2, borderColor: colors.slate200, borderRadius: radius.lg, padding: 24, gap: 16 },
   statusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },

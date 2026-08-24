@@ -101,7 +101,12 @@ SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
 # finder can drop discontinued programs from the results — it is NULL on 1195 of the
 # 1239 active rows (never deadline-checked), so any consumer must treat NULL as "no
 # verdict", never as "not running".
-OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject_tags,type,price,state,location,intl,season,review_status,review_summary,grade_min,grade_max,status"
+# `eligibility` joined this list 2026-08-24. It is maintained by refresh_opportunities.py
+# and was the only curated record of a program's entry requirements anywhere in the repo,
+# yet it never left the database — so the tracker prompt that invents prerequisites could
+# not see the column that knows them. Adding a field here widens what the client receives
+# AND what extractTrackerInfo can put in its prompt; keep it to columns students may see.
+OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject_tags,type,price,state,location,intl,season,review_status,review_summary,grade_min,grade_max,status,eligibility"
 OPPORTUNITIES_CACHE_TTL = 300  # seconds
 
 
@@ -233,17 +238,51 @@ USER_METRICS_SETUP_SQL = "user_metrics_daily_schema.sql"
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_URL = "https://api.resend.com/emails"
 
-# Must be on a domain verified in the Resend dashboard, or every send 403s. The display
-# name is part of the value ("Wingman <hello@...>") because that is the format Resend takes.
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "Highschool Wingman <hello@highschoolwingman.com>")
-EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO", "")
+# Resend is fronted by Cloudflare, which BLOCKS urllib's default "Python-urllib/x.y"
+# User-Agent — every send returns 403 with a text/plain "error code: 1010" body that never
+# reaches Resend at all. Identifying the client properly is what makes the same request
+# work, so this is load-bearing rather than decorative. Do not drop it.
+RESEND_USER_AGENT = "highschoolwingman/1.0 (+https://highschoolwingman.com)"
 
-# Where links in an email point. Falls back to the production origin rather than to
-# localhost: an email is read outside this process, so a localhost link is never right for
-# a real recipient, and a wrong-but-plausible dev value is worse than an obvious one.
-EMAIL_APP_URL = (os.environ.get("EMAIL_APP_URL")
-                 or os.environ.get("WEB_APP_URL")
-                 or "https://highschoolwingman.com").rstrip("/")
+# Must be on a domain verified in the Resend dashboard, or every send 403s. The display
+# name is part of the value ("Wingman <contactus@...>") because that is the format Resend
+# takes.
+EMAIL_FROM = os.environ.get(
+    "EMAIL_FROM", "Highschool Wingman <contactus@highschoolwingman.com>")
+
+# Defaults to the From address rather than to empty, because the goodbye email ends with
+# "just reply to this email and tell us. It gets read." An unset reply-to would make that
+# sentence false for anyone whose client honours it differently from From, and a promise
+# that quietly does not work is worse than not making it.
+EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO", "contactus@highschoolwingman.com")
+
+# Where links in an email point.
+#
+# WEB_APP_URL is inherited ONLY when it is not a loopback origin, and that guard is
+# load-bearing rather than tidy. In dev WEB_APP_URL is legitimately http://localhost:8081,
+# and inheriting it put "Keep my account: http://localhost:8081/subscription" into a real
+# trial-ending email — a link that resolves to the RECIPIENT's own machine, so it fails for
+# them and works when you test it, which is the worst possible way for this to be wrong.
+# An email is read outside this process; a localhost link is never right for anybody.
+#
+# Set EMAIL_APP_URL explicitly to override, including to a loopback origin if you really
+# are testing link routing locally — an explicit value is a decision, an inherited one is
+# an accident.
+_EMAIL_APP_URL_EXPLICIT = (os.environ.get("EMAIL_APP_URL") or "").strip()
+_WEB_APP_URL = (os.environ.get("WEB_APP_URL") or "").strip()
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "[::1]")
+
+
+def _is_loopback(url):
+    host = url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
+    return host in ("localhost", "127.0.0.1", "0.0.0.0", "::1") or host.startswith("[::1]")
+
+
+EMAIL_APP_URL = (
+    _EMAIL_APP_URL_EXPLICIT
+    or (_WEB_APP_URL if _WEB_APP_URL and not _is_loopback(_WEB_APP_URL) else "")
+    or "https://highschoolwingman.com"
+).rstrip("/")
 
 # CAN-SPAM requires a physical postal address on commercial mail. All three of these are
 # transactional and arguably exempt, but the footer carries it unconditionally — the

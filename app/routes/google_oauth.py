@@ -26,8 +26,9 @@ from app.core import (
     _is_missing_column_error, MissingUserColumns, DuplicateEmail,
 )
 from app.services.email import send_lifecycle_email_async
-from app.deps import json_body, json_response, json_error, login_response
-from app.auth import get_current_user, AuthedUser
+from app.deps import (json_body, json_response, json_error, login_response,
+                      require_subscription)
+from app.auth import AuthedUser
 from app.auth.tokens import verify_access_token, AuthError, AuthConfigError
 from app.services import google_oauth as g
 
@@ -561,7 +562,10 @@ def _sweep_stale_events(access_token, calendar_path, keep_ids):
 
 @router.post("/api/calendar/sync")
 def handle_calendar_sync(body: dict = Depends(json_body),
-                         user: AuthedUser = Depends(get_current_user)):
+                         user: AuthedUser = Depends(require_subscription)):
+    # Writing to a student's real calendar is using the app, so it is gated on standing as
+    # well as identity. Events already on the calendar are left alone — a lapsed account
+    # stops syncing, it does not get its calendar wiped.
     userid = user.id
     events = body.get("events") or []
     # `sweep` asks the server to also remove events for deadlines that are no longer

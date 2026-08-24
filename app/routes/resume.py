@@ -8,8 +8,8 @@ from fastapi import APIRouter, Request, Depends
 
 from app.core import touch_user_activity
 from app.deps import (json_body, json_response, json_error, subscription_block_reason,
-                      raw_body as raw_body_dep)
-from app.auth import get_current_user, get_optional_user, AuthedUser
+                      optional_subscribed_user, raw_body as raw_body_dep)
+from app.auth import get_current_user, AuthedUser
 from app.services import resume as resume_service
 
 router = APIRouter()
@@ -93,7 +93,7 @@ def handle_extract_from_linkedin(body: dict = Depends(json_body),
 
 @router.post("/api/user-submitted-opportunities")
 def handle_user_submitted_opportunity(body: dict = Depends(json_body),
-                                      user: AuthedUser = Depends(get_optional_user)):
+                                      user: AuthedUser = Depends(optional_subscribed_user)):
     """Accept user-submitted opportunity data, dedupe by URL, and insert into the
     opportunities table with is_active=false.
 
@@ -114,7 +114,9 @@ def handle_user_submitted_opportunity(body: dict = Depends(json_body),
 
     Soft auth: the userid here is provenance for the review queue, not access control (the
     row is public-review-queue data, not owned data). Use the token's identity when signed
-    in, else record it as an unattributed submission — same residual as before."""
+    in, else record it as an unattributed submission — same residual as before. A token
+    belonging to a LAPSED account is still refused (402): adding to your Quest Log is
+    using the app."""
     name = (body.get("name") or "").strip()
     # NOT lowercased — the stored URL must stay exactly as given (case-sensitive paths).
     url = (body.get("url") or "").strip()

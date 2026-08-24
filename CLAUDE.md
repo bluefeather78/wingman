@@ -107,11 +107,11 @@ app/                      FastAPI service (the only Python thing deployed)
   auth/                   JWT tokens, argon2 passwords, deps, ratelimit
 ops/                      LOCAL-ONLY console (WINGMAN_ENABLE_OPS): core.py, admin.py,
                           admin_console.html — never mounted on Render
-*.py (repo root)          the 6 offline agents + their shared libs (stdlib-only; app/
+*.py (repo root)          the 7 offline agents + their shared libs (stdlib-only; app/
                           imports check_deadlines). See the agents section below.
 legal/*.md                source of record -> build_legal.py -> terms.html/privacy.html
 *.sql (repo root)         one-time manual DDL, run by hand in the Supabase SQL editor
-tests/                    pytest suite for the backend (829 tests, all green)
+tests/                    pytest suite for the backend (945 tests, all green)
 walkthrough.html          the landing film (vendored ~1.5MB bundle) — see its section below
 styles.css, favicon.svg   kept ONLY for the legal/about pages the RN app links to
 ```
@@ -155,10 +155,10 @@ fetched at runtime anymore. `migrate_to_supabase.py` was the one-off script that
 table (from this file plus a sibling `opportunity finder/` project's seed data); not part of
 the regular dev loop.
 
-## The six background agents and the admin console
+## The seven background agents and the admin console
 
-Six offline Python scripts maintain the catalog. **Five of the six cost real money per run**
-(Gemini or Anthropic, most with web search). **Never run one of those five without fresh
+Seven offline Python scripts maintain the catalog. **Six of the seven cost real money per run**
+(Gemini or Anthropic, most with web search). **Never run one of those six without fresh
 explicit approval in chat** — this rule exists because of an unplanned ~$30 spend, and
 building UI for a run is not authorization to trigger it. `check_links.py` is the exception
 and is genuinely free; see its own section below for the one thing it *does* need care about.
@@ -171,6 +171,7 @@ and is genuinely free; see its own section below for the one thing it *does* nee
 | `deadline` | `check_deadlines.py` | `deadline_checker` | Deadlines + running/not-running status | Claude |
 | `mailinglist` | `find_mailing_lists.py` | `mailing_list_finder` | Find each program's mailing-list signup form, store a replayable recipe | no |
 | `links` | `check_links.py` | `link_checker` | Verify every catalog URL; repair what moved, deactivate what is gone | no — **free, plain HTTP** |
+| `tasks` | `generate_action_items.py` | `action_item_generator` | The application checklist per program, verified against the program's own page | no — page fetched by us, no search |
 
 Watch out for two things that have caused real bugs here:
 - The **scraper's `items_processed` counts SEEDS, not rows** — never sum it with the other
@@ -920,6 +921,192 @@ active, queue 268 → 255, 47 rows gained a suggestion. $0.00.
   warning is unrelated to cost and is stated in its own words: this run takes rows away from
   students.
 
+## Action items — the Quest Log's checklist, and the one place a task may claim a fact
+
+**A student tracking NYU's User Experience Design summer program was shown "Review
+prerequisite requirements (Algebra 2)".** No such prerequisite is on the program's page or
+in its catalog row. That one line is what this subsystem exists to make impossible, and
+every choice below traces back to it.
+
+The old design generated tasks in the BROWSER, per student, per add, from a single Gemini
+call. Three properties made a fabrication inevitable:
+
+- **It could not read the page.** `/api/messages` attaches exactly one tool, `googleSearch`
+  — no `web_fetch` (that lives only on `check_deadlines.py`'s Anthropic path) and no
+  `urlContext`. The prompt meanwhile said *"YOU MUST use web_search"* and *"Fetch this
+  URL"*. Neither tool existed in the call, so the model could not comply except by
+  answering from memory in the voice of a lookup — the identical failure
+  `refresh_opportunities.py` already carries a note about.
+- **The prompt licensed invention outright**: *"Infer these from the requirements you find
+  AND FROM WHAT'S TYPICAL FOR THIS TYPE OF OPPORTUNITY."* "Algebra 2" is precisely what a
+  STEM summer program typically requires. The dates in the same response had a never-invent
+  rule, a SELF-CHECK block and a server-side write guard; the tasks had none.
+- **Nothing could check the answer, and nobody could see it.** `_proxy_to_gemini` returns
+  only the response text — grounding and `web_search_requests` are discarded — so no caller
+  could tell a researched answer from a recalled one. And a per-student list is seen by
+  nobody else, which is why this surfaced as a user report rather than as a metric.
+
+It was also **permanent**: `refreshTrackerDeadlines` and `applyDeadlineCheckToInfo` never
+touched `actionItems`, so no code path could ever replace a wrong one. And it rendered as
+flat authoritative text, with no equivalent of the dates' `(est.)` marker.
+
+**Tasks are now catalog data**, generated by `generate_action_items.py` and stored on the
+opportunity row ([action_items_schema.sql](action_items_schema.sql) — another one-time
+manual DDL step; until it runs the agent aborts naming it and the app keeps its old
+per-student behaviour). They were never personalised — the prompt has always forbidden
+anything about the student's own project — so every student was paying for an identical
+answer and getting a slightly different one. Moving them makes an add instant, makes the
+list consistent, and, the actual reason, **makes it reviewable**.
+
+**The guarantee is in code, not in the prompt** — [page_text.py](page_text.py), free,
+stdlib-only, shared by the batch agent and the on-demand endpoint. Two tests, and there are
+two for a reason:
+
+- **`claim_is_supported()`** — every DISTINCTIVE word of the task must appear on the page we
+  fetched. Strip the generic application vocabulary and the program's own name (the same
+  subtraction `url_repair.py` makes, for the same reason) and "algebra" is what is left; it
+  is not on nyu.edu, so the task cannot be kept. **This runs on EVERY task regardless of
+  what the model labelled it.** Checking only the tasks the model *called* page-backed
+  leaves the loophole wide open — relabelling an invented prerequisite "generic" would walk
+  straight through, and that is the likeliest way this fails once the prompt asks for labels.
+- **`quote_is_on_page()`** — a page-backed task must supply a verbatim quote that really is
+  on the page. Test 1 says the words exist somewhere; this says the model read a sentence
+  rather than assembling a plausible one out of scattered words.
+
+**Failing test 1 DROPS a task; failing test 2 only DEMOTES it to generic.** A task whose
+words all check out asserts nothing unsupported — it merely did not prove a specific
+sentence — and the card labels it accordingly. Demote where demoting is honest; drop only
+what is unsupportable.
+
+- **No fuzzy matching, ever.** `url_repair.py` measured what a similarity ratio does to
+  exactly this judgement (at >= 0.72 it accepted "Summer Research Immersion" as proof of
+  "First-year Research Immersion"): the shared words are the category and the differing word
+  is the identity, which is backwards for a ratio. Normalizing curly quotes and dashes is
+  not fuzzy matching — those characters carry no information — but stemming and similarity
+  are. The cost of strictness is false negatives (the page says "Algebra II", the model
+  wrote "Algebra 2", so a real task is demoted). That is the right direction to be wrong in.
+- **`GENERIC_TOKENS` is the list of words that carry no claim.** Keep it generous, but
+  nothing that could be the SUBSTANCE of a requirement may enter it — "algebra", "sat",
+  "gpa", "citizen", a digit. `test_action_items.py` runs every line of the built-in generic
+  checklists through the verifier against an EMPTY page, so a checklist line that smuggles
+  in a claim fails the suite. That test already caught two: "or a coach" and "if one is
+  needed" were reworded rather than buying those words a pass.
+
+**A row whose page we cannot fetch costs NOTHING — there is no model call at all**, because
+there would be nothing to verify the answer against. Those rows get a per-type generic
+checklist built locally. This is not a degradation to apologise for: **the NYU row that
+started all this is one of them** (nyu.edu answers our client with a 202 and an empty body),
+so the outcome for that exact opportunity is now a free, honest, generic checklist and no
+possible Algebra 2. Roughly one page in ten refuses us — `check_links.py` measured ~9% 403s
+plus 41 TLS failures on pages a student's browser loads fine — so a fetch failure is a fact
+about our HTTP client, **never** about the program.
+
+**`action_items_write_decision()` is the single place that decides what may be written**,
+shared by the batch loop and `app/services/action_items.py` so the two cannot drift —
+exactly the role `deadline_write_decision()` plays for dates. Four outcomes, and
+`action_items_source` on the row names which:
+
+- `page-verified` — page read, model ran, something survived. Writes and **stamps**.
+- `page-empty` — page read, nothing program-specific survived. Generic checklist, and it
+  **stamps**: a page that states no requirements is a real finding, and not stamping would
+  re-bill that row on every run forever.
+- `generic-fallback` — page unfetchable. Writes a generic checklist but **does not stamp**,
+  so the row stays due and a later run retries; retrying is free, and stamping a transient
+  403 would freeze the row for 90 days. It also **refuses to overwrite an existing
+  page-verified list** — without that guard one bad-network run replaces every verified
+  checklist in the catalog.
+- `unparsed` — page read, model output unreadable. Keeps whatever the row has, does not stamp.
+
+**Single call, not two phases, and this is a deliberate divergence from the other agents.**
+`check_reviews.py` and `check_deadlines.py` are two-phase because demanding JSON collapses
+the SEARCH rate (prose 4/4, JSON 0/4). That reasoning does not transfer: this agent never
+searches, it is handed the page. With no search to suppress, a second phase buys nothing and
+doubles the per-row cost. Watch the **demotion rate** in the run summary — that is the signal
+that would justify adding a prose phase. Do not add it speculatively.
+
+**The two graded samples, and why the first one failed even though verification worked.**
+This is the most useful thing in this section: the checks below all passed on run 1 and the
+feature was still bad.
+
+| | run 62 (first) | run 63 (after the fix) |
+|---|---|---|
+| tasks proposed / 20 rows | 37 | 48 |
+| kept page-backed | 22 | 30 |
+| DROPPED as unsupported | 2 | 3 |
+| **demoted (quote not on page)** | **10 (31%)** | **1 (3%)** |
+| cost | $0.0355 | $0.0313 |
+
+Run 62 let nothing false through — and produced *"Complete the following Google form."* as a
+student's entire checklist, plus "Read frequently asked questions" and "Add course offering
+to shopping cart". Those are all **true**: they are on the page. Verification cannot catch
+them, because the problem is not truth, it is that they are navigation labels rather than
+application steps. Three causes, all fixed:
+
+- **87% of the lines reaching the model were site furniture** (measured on stsci.edu). Told
+  to quote verbatim, a model reaches for the most quotable strings available, and on an
+  unstripped page those are link labels. `html_to_text` now prefers the page's own
+  `<main>`/`<article>` region, strips nav/header/footer/aside/form, dedupes, and drops short
+  lines with no digit or colon. Same page: **17,564 chars -> 4,507, 520 lines -> 20, short
+  lines 87% -> 15%.** That single change is what took demotions from 31% to 3% — the model
+  had been quoting junk, not paraphrasing badly.
+- **The prompt conflated the step with the quote**, so the task text came back as a copy of
+  whatever was quotable. It now says explicitly that the step is the student's instruction in
+  the model's own words and the quote is merely its evidence, and it names link labels,
+  headings and button captions as things that are not steps.
+- **The safety rules made the model too conservative to be useful** — under two tasks a row,
+  several rows with exactly one. `MIN_ITEMS = 3` and `top_up()` guarantee a floor in code,
+  padding with generic steps (which assert nothing, so they cannot reintroduce the original
+  problem). Verified steps always sort first. **A prompt cannot be relied on for a floor any
+  more than for a ceiling.**
+
+`GENERIC_BY_TYPE`/`GENERIC_DEFAULT` are ordered most-universal-first, because `top_up()`
+takes from the front. Run 63 put "Draft your personal statement" on an IEEE *conference* row
+whose catalog `type` is not `Conference`, so it fell through to the default list — anything
+assuming a particular KIND of application belongs at the back, where only a row with nothing
+else reaches it.
+
+Cost settled at **~$0.0016/row, ~$2 for a full pass** — a quarter of the first estimate,
+because stripping chrome cut input tokens roughly fourfold and unfetchable rows cost nothing.
+Unfetchable was **5/20 in run 63** (403, empty-or-JS, not-html), higher than check_links'
+~9%; treat one row in five to four as generic-only.
+
+**Measured 2026-08-24, one real row** (UW Madison ALP, `precollege.wisc.edu/alp/`):
+**$0.0044**, 3 tasks proposed, 3 page-backed with real quotes, 0 dropped, 0 demoted. That
+projects to roughly **$5 for a full catalog pass** — well under the ~$10-15 planned, because
+unfetchable rows cost nothing and there is no per-search fee anywhere in this agent.
+
+**Two bugs this shipped with, both caught by an end-to-end run and worth not repeating.**
+`estimate_cost()` takes the **usage dict**, not three positional numbers — and a single
+`try` wrapping both the API call and the parse turned that plain `TypeError` into a report
+of "the model produced unreadable output", *and* discarded the cost of a call that had
+already been billed. Cost is now banked immediately after the call, before anything that can
+raise, and the parse has its own `except` that names the exception.
+
+**Client side.** `basis` is honoured in exactly one place — `normalizeVerifiedActionItems`,
+fed from `GET /api/opportunities/<id>/action-items`. Everything a model produces in the
+browser goes through `normalizeUnverifiedActionItems`, which **forces every item to
+`generic`** however confidently it was labelled, because nothing on that path has ever seen
+the page. A claim is page-backed because a page backed it, never because a model said so.
+`isPageBackedTask()` is the only test anywhere, and an item with **no** `basis` (everything
+written before 2026-08-24) reads as generic — unknown provenance is not evidence of
+provenance, the same rule `ImportantDate.estimated` follows.
+
+Home Base renders the two groups under separate headings ("From the program page" /
+"Typical steps — confirm on the site"). Existing students' lists all fall into the second
+group on first load, which looks like a downgrade and is not: it is the app stating what it
+always was. `dismissed` is a flag rather than a splice — the list is shared and regenerated,
+so a deleted task would reappear on the next refresh — and `mergeActionItems` keys on task
+TEXT, not id, because the ids are positional and a regenerated list that drops one task
+would otherwise hand slot 2's completion to slot 3's task. Same positional-id trap the
+Google Calendar sync hit with `importantDates`.
+
+**`eligibility` is now in `OPPORTUNITIES_FIELDS`.** It is maintained by
+`refresh_opportunities.py` and was the only curated record of a program's entry requirements
+anywhere in the repo, yet it never left the database — so the prompt that was inventing
+prerequisites could not see the column that knows them. It reaches the prompt as **context,
+never as proof**: both prompts state explicitly that it is our own note rather than the
+page, and that it may never be quoted as evidence.
+
 **Activating scraped opportunities** — `GET /api/agents/pending` lists `is_active = false`
 rows and `POST /api/agents/pending/activate` (`{ids, active}`) flips them, backing the
 console's **Review queue** tab. Nothing in this repo ever sets `is_active = true`
@@ -1400,12 +1587,43 @@ in `server.py`.
   That is every account predating the migration. `ensure_trial_started()` stamps a real
   window on first sign-in. Reading NULL as expired — which `is_trial_expired(None)` does if
   you take it literally — would paywall every existing user the moment the migration lands.
-- Enforcement was deliberately in **both** halves: the old client checked before unhiding
-  the app shell (no flash of a usable app), and server-side `subscription_block_reason()`
-  returns **402** from the four endpoints that cost money per call. The 402 is the real
-  control and is still live; **the RN app has no paywall screen** (payments deferred by
-  PLAN_3), so today the server gate is the only one. Calls with no identified user are not
-  blocked — unidentifiable, the same residual the cost attribution reports as unattributed.
+- **Enforcement is in both halves, and as of 2026-08-24 it covers the whole app rather
+  than only the calls that cost money.** It used to be the four paid endpoints, on the
+  reasoning that spend was what needed protecting — but a lapsed account could still open
+  Home Base, read and write its profile and Quest Log, and browse the catalog, so "your
+  trial has ended" meant nothing it could see. Both halves derive from the same
+  `subscription_state()`, so they cannot disagree about who is blocked.
+  - **Server (`app/deps.py`) is the real control.** `require_subscription` wraps
+    `get_current_user` (missing token → 401, lapsed account → **402** whose body is
+    `subscription_block_reason()`'s message); `optional_subscribed_user` is the soft form
+    for routes legitimately reachable signed-out — an unidentified caller is never blocked
+    (the same residual the cost attribution reports as unattributed), a caller who
+    identifies as a lapsed account is. Gated: `/api/data/{save,load}`,
+    `/api/account/location`, `/api/opportunities` (soft) and its deadline check,
+    `/api/mailing-list/*`, `/api/calendar/sync`, `/api/user-submitted-opportunities`
+    (soft). The AI proxies and the resume/LinkedIn imports keep their **inline**
+    `subscription_block_reason()` call — the proxies must stay reachable signed-out for
+    mock mode. `test_subscription_gate.py` asserts the wiring route by route, including
+    the routes that must stay UNGATED: every `/api/subscription/*` path, login/register
+    and the token lifecycle. **A paywall you cannot pay through is a lockout.**
+  - **Client**: `(app)/_layout.tsx` is the paywall. `has_access === false` (an explicit
+    false — an older cached session leaves it undefined and must not be locked out)
+    redirects every route to Manage Plan, and `NavBar locked` hides the four tabs, which
+    would otherwise each bounce straight back and read as the app being broken. The
+    account drawer stays: signing out must always be reachable.
+  - **The block arrives without a reload.** `httpClient` treats **every 402 as the same
+    thing** in one place — it flips the cached identity to `has_access:false`, persists it
+    and fires `onUserChanged`, which `AuthContext` turns into `setUser`. So a trial that
+    lapses mid-session moves the student to the paywall instead of leaving them on a
+    screen whose every request now fails. `applyTokens` (i.e. every background refresh)
+    and `subscriptionStatus()` notify through the same path, which is what **lifts** the
+    block the moment a grant promo code is redeemed.
+  - **Nothing is deleted and nothing is charged for the block.** A gated route refuses
+    before touching Supabase, so the row is untouched and comes straight back on
+    resubscribe; the paywall copy says so, because "has your data been deleted" is the
+    first thing a student assumes.
+  - A Supabase failure still **fails open** rather than locking out every paying user, and
+    calls with no identified user are still not blocked.
 - **Both `userid` and `email` must be unique across all accounts**, case-insensitively.
   `users` has no is_active/deleted column, so every row is a live account and any match is
   a real conflict. `handle_register()` checks both up front and names the field that
@@ -1751,7 +1969,11 @@ pureCompetitions, conferences, journals.
 off the stored profile but never regenerates them (no writer for that slot in RN).
 Clear-profile is a visual stub. Payments are deferred by the plan: the subscription screen
 shows status and runs the promo flow, and Upgrade surfaces whatever the unconfigured
-Stripe backend answers.
+Stripe backend answers — which is the one sharp edge of the access gate above. **A lapsed
+account is now correctly locked out of the app and, with Stripe unconfigured, has no way
+to pay its way back in**; the only route out today is a `grant` promo code
+(`BETAUSER`), which the paywall screen does accept. Configure `STRIPE_API_KEY` /
+`STRIPE_PRICE_ID` before the first real trial expires.
 
 **The landing page's walkthrough film** is [walkthrough.html](walkthrough.html) at the repo
 root — a **vendored, self-extracting ~1.5MB bundle** exported from a design canvas, carrying
@@ -1772,6 +1994,163 @@ which is mostly gitignored build/log noise, and it was untracked at one point af
 cutover — the landing page then iframes a URL that 404s on Render while working perfectly
 against a local checkout. If you touch the film, confirm `git ls-files walkthrough.html`
 prints it.
+
+## Lifecycle email — three messages, Resend, and the claim table
+
+Three transactional emails around the account lifecycle: **welcome** at signup,
+**trial_ending** a couple of days before the free trial expires, and **goodbye** when a
+subscription is cancelled. `app/services/email_templates.py` owns what they say;
+`app/services/email.py` owns whether they are sent at all.
+
+**This is not a marketing system, and the distinction is the design.** There is no list, no
+segments, no campaign composer, and deliberately no code path anywhere in this repo that
+mails everybody at once. A marketing platform (Mailchimp, Loops, Customer.io) was rejected
+for one reason: it requires continuously syncing the roster — names, emails, plan status —
+to a third party, for a user base that is largely minors. That contradicts
+`legal/privacy.md`, and switching it on would need a privacy edit, a `build_legal.py`
+re-run and a `TERMS_VERSION` bump first. What IS outsourced is the pipe: Resend gets one
+address at a time, at the moment of sending. What a provider buys and a repo cannot rebuild
+is SPF/DKIM/DMARC on the sending domain, a warmed IP, bounce/complaint handling and a
+suppression list — without which mail from a cold domain to Gmail and school Google
+Workspace accounts goes to spam, and school MXes are the least forgiving recipients there
+are.
+
+**`email_sends` is a CLAIM table, not a log**
+([email_schema.sql](email_schema.sql) — another one-time manual DDL step, and it also adds
+`users.lifecycle_email_optout`). The row is written **before** Resend is called, and its
+`unique (userid, kind, dedupe_key)` is what makes a repeated sweep safe: the second attempt
+loses the insert, sees 23505, and skips. A log written *after* the send cannot do this — the
+window between "Resend accepted it" and "we recorded it" is exactly where a crash puts a
+second copy in a real student's inbox. State the cost plainly: a send that crashes mid-flight
+leaves a row stuck at `sending` and is **never retried automatically**. That is the intended
+direction — a stuck row is visible in the console and clearable by hand, a duplicate cannot
+be un-sent.
+
+- **Failing to claim means not sending, including when the table is absent.** Until
+  `email_schema.sql` runs, every claim fails and nothing is ever sent; the console shows the
+  setup step. That reads as the feature being switched off, which is correct — the
+  alternative is sending with no record of having sent, i.e. a daily sweep that mails the
+  same student every morning.
+- **`dedupe_key` is why the constraint is three columns, not two.** A trial can be extended
+  (a `grant` promo code adds days to `trial_ends_at`), so keying `trial_ending` on
+  `(userid, kind)` alone would mean a student who redeems `BETAUSER` and gets a second trial
+  window never hears from us again. The key is the trial's end **date** — date, not
+  timestamp, so a grant shifting the end by hours does not mint a second send while one
+  adding days correctly does. `welcome`/`goodbye` use `''`, **not NULL**: Postgres treats
+  NULLs as distinct in a unique constraint, which would silently make every insert a fresh
+  row and defeat the whole table. Same trap `user_costs.model` documents.
+- **The pre-send guards release their claim** (`release_claim`). Opted-out and
+  no-address are decided *after* the row exists; leaving it behind would permanently
+  suppress a legitimate later send, so an account that opts back in would never get another
+  reminder. Never release after Resend has been handed the message.
+- **Mock mode writes NO claim row.** With no `RESEND_API_KEY` the whole path runs offline
+  (the convention `GEMINI_API_KEY`/`ANTHROPIC_API_KEY` already set) — but a claim would
+  suppress the real send once a key is configured, so developing offline would silently cost
+  real users their welcome email.
+- `_claim` classifies from an **already-read** error body rather than calling
+  `_missing_table_error(e)`: `_error_body` consumes the response stream and is readable
+  exactly once, so a second call gets `{}` and reports a missing table as a generic error —
+  precisely the case that most needs to name the .sql file.
+
+**The scheduler is NOT in the admin console, and cannot be.** `ops/` is localhost-gated and
+never mounted on Render, so a button there would only fire the trial sweep on days somebody's
+laptop is on — and the student whose trial ends tomorrow is exactly the one who will not open
+the app to trigger it for us. So:
+
+- **`app/` (shipped)** owns the triggers and the two production endpoints. `welcome` fires in
+  `handle_register` **and** in the Google signup completion (`create_user` is called from two
+  places; the claim means adding it in both cannot double up). `goodbye` fires in
+  `handle_subscription_cancel`, from `{**record, **updates}` rather than a re-read, because
+  the email's most important sentence is the date access ends and `get_user_account()` there
+  can still return the pre-PATCH row. All three go out through `send_lifecycle_email_async` —
+  a signup must not fail or hang because a mail provider is having a bad day.
+- **`POST /api/email/sweep`** (`app/routes/email.py`) is the daily trigger, called by
+  [.github/workflows/lifecycle-emails.yml](.github/workflows/lifecycle-emails.yml).
+  **The schedule is DISARMED as of 2026-08-24** — the workflow carries `workflow_dispatch`
+  only, so the trial reminder does NOT go out automatically and someone must press "Run
+  workflow". Welcome and goodbye are unaffected: they are event-driven from `app/routes/`,
+  not from here. Re-arming is uncommenting two lines and setting the two repository secrets;
+  the commented cron is 15:00 UTC, deliberately not midnight (GitHub's scheduler is heavily
+  oversubscribed on the hour and 00:00 runs are routinely delayed or dropped, and a 3am
+  reminder is the least likely to be acted on). Guarded by `EMAIL_CRON_SECRET` in an
+  **`X-Cron-Secret` header, never a query string** — a URL carrying a credential is written to every proxy log on the way. Unset
+  secret **fails closed with a 503**, the same choice `JWT_SECRET` makes. The per-account
+  detail list is dropped unless `verbose`, so a roster of minors' addresses never lands in an
+  Actions log.
+- **`GET /api/email/unsubscribe`** answers **HTML, not JSON** — it is opened in a browser by a
+  person, and a raw JSON blob reads as the link having failed, the one impression an
+  unsubscribe link must never give. It carries an HMAC of the userid under `JWT_SECRET` (not
+  a JWT: an unsubscribe link sits in a mailbox for years and must not expire), so nobody can
+  opt somebody else out by guessing an id. A failed write says so rather than claiming
+  success.
+- **The opt-out is honoured for all three kinds**, including the two that are defensibly
+  transactional and could legally ignore it. Most of this user base are minors, an
+  unsubscribe that quietly keeps sending is the exact silent failure the mailing-list feature
+  is measured against, and there is no volume here that makes the distinction worth the trust
+  cost.
+- `send_lifecycle_emails.py` at the repo root is the **local** runner (`--preview`,
+  `--dry-run`, `--days`, `--json`) for a manual catch-up. Unlike the six catalog agents **all
+  three tiers are free** — there is no model in this path. What `--preview` protects is not
+  money, it is a student's inbox.
+
+**The console's Emails tab** (`ops/admin_console.html`, `#view-emails`, backed by
+`GET /api/agents/emails`) owns the *review* half: the send log, per-kind counts, a stuck
+count, who is currently due, template previews, and a test send.
+
+- Preview and the real send both come from `render_for()`, so what an operator reviews is
+  byte-identical to what a student receives — a preview built from its own copy of the
+  templates is a preview of something that is not being sent. It renders into an
+  `iframe srcdoc` with an empty `sandbox`, so the email is rendered, not executed.
+- **The test send is deliberately NOT deduped and writes nothing.** A test is something you
+  repeat while editing copy, and a claim would both block the second attempt and — far worse
+  — consume the real user's one send, so previewing the welcome email against your own
+  account would mean that account never gets one. Its subject is prefixed `[TEST]`.
+- `configured` (no API key) and `table_ready` (no table) are reported **separately**: they
+  are different problems with different fixes, and one "not working" would hide which you
+  have. **Mock is a KPI tile**, not a footnote — with no key everything else on the page
+  reads as a working pipeline that has simply had nothing to do, which is the most
+  misleading way this page can fail.
+- `due_error` is reported rather than collapsing to zero, for the reason every count in this
+  repo states: an empty list and a failed read look identical, and one of them means the
+  reminder is not going out.
+
+**Templates**: table-based layout, inline styles, **no external CSS and no images** — Outlook
+renders through Word's HTML engine and remote images are blocked by default in most clients,
+so a logo would be a broken-image box on first open. **Every email ships a text/plain part**
+(a missing one is among the strongest spam signals there is). **No tracking pixel and no
+click-wrapping** — `legal/privacy.md` does not describe open tracking, so adding it is a
+privacy change and a `TERMS_VERSION` bump, not a template edit. `EMAIL_POSTAL_ADDRESS` is in
+every footer unconditionally: all three are arguably CAN-SPAM-exempt as transactional, but
+the exemption is a legal argument and losing it costs more than a line of text. The goodbye
+email carries **no win-back offer, deliberately** — the same email with a coupon in it is
+commercial, and the exemption is not worth trading for one.
+
+**Setup, in order** (nothing sends until all of it is done):
+1. Run [email_schema.sql](email_schema.sql) in the Supabase SQL editor.
+2. Create a Resend account, verify `highschoolwingman.com` as a sending domain (SPF/DKIM),
+   and put `RESEND_API_KEY` in `.env` and in the Render dashboard. A 403 whose message
+   mentions the domain is an unverified sender, not a bad key — `_resend_post` says so.
+3. Set `EMAIL_POSTAL_ADDRESS` — the default is a deliberately obvious placeholder
+   (`[SET EMAIL_POSTAL_ADDRESS IN .env]`) so it cannot ship unnoticed, and it renders in
+   every footer. `EMAIL_FROM`/`EMAIL_REPLY_TO` already default to
+   `contactus@highschoolwingman.com` and need overriding only if that changes.
+4. Only when re-arming the schedule: `EMAIL_CRON_SECRET` on Render **and** as a GitHub
+   Actions secret, plus `WINGMAN_API_BASE`.
+
+**`EMAIL_APP_URL` refuses to inherit a loopback `WEB_APP_URL`.** The fallback chain is
+`EMAIL_APP_URL` → `WEB_APP_URL` (only if not loopback) → the production origin. In dev
+`WEB_APP_URL` is legitimately `http://localhost:8081`, and inheriting it put
+`Keep my account: http://localhost:8081/subscription` into a real trial-ending email — a
+link that resolves to the RECIPIENT's own machine, so it fails for them and works when you
+test it, which is the worst possible way for this to be wrong. Setting `EMAIL_APP_URL`
+explicitly still overrides, loopback included: an explicit value is a decision, an inherited
+one is an accident.
+
+**Known gap, stated rather than discovered later:** the address on file may be a **school
+account that blocks outside mail**. The mailing-list feature already hit this and made the
+address editable for that reason; there is no editable field here, so a student on a locked
+school domain silently gets nothing. `email_sends.email` records the address actually used,
+which is the first thing to check when somebody says nothing arrived.
 
 ## Security notes for this repo
 

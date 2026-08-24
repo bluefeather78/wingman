@@ -1,4 +1,4 @@
-import type { TrackerData, TrackerItem } from '@/api/trackerStore';
+import { visibleTasks, type TrackerData, type TrackerItem } from '@/api/trackerStore';
 import { ALL_BUCKETS, type Bucket } from './constants';
 
 // Ported verbatim from script.js — the single source of truth for opportunity event-timing
@@ -274,7 +274,10 @@ export function allTodoUnitCounts(upcoming: UpcomingEntry[]) {
   const counts: Record<OppStatus, number> = { not_started: 0, in_progress: 0, completed: 0 };
   let total = 0;
   upcoming.forEach(({ item }) => {
-    (item.actionItems ?? []).forEach((ai) => {
+    // Dismissed tasks are excluded from every count, not merely hidden. A student who says
+    // a step does not apply to them and still sees it in "3 not started" has not been
+    // listened to, and the DUE SOON badge on Home Base reads off this number.
+    visibleTasks(item.actionItems).forEach((ai) => {
       const st = (ai.state as OppStatus) in counts ? (ai.state as OppStatus) : 'not_started';
       counts[st]++;
       total++;

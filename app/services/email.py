@@ -42,13 +42,14 @@ import urllib.parse
 import urllib.request
 
 from app.config import (
-    RESEND_API_KEY, RESEND_URL, EMAIL_FROM, EMAIL_REPLY_TO, EMAIL_APP_URL,
-    EMAIL_SETUP_SQL, TRIAL_REMINDER_DAYS, JWT_SECRET,
+    RESEND_API_KEY, RESEND_URL, RESEND_USER_AGENT, EMAIL_FROM, EMAIL_REPLY_TO,
+    EMAIL_APP_URL, EMAIL_SETUP_SQL, TRIAL_REMINDER_DAYS, JWT_SECRET,
 )
 from app.core import (
     _supabase_request_strict, _missing_table_error, _error_body, get_user_account,
     subscription_state,
 )
+from subscription_common import TRIAL_DAYS
 from app.services import email_templates
 from app.services.email_templates import EMAIL_KINDS
 
@@ -57,6 +58,13 @@ SENDS_TABLE = "email_sends"
 # PostgREST's code for a unique-constraint violation. This is the SUCCESS path of the claim
 # race, not an error: it means somebody else already owns this send.
 _UNIQUE_VIOLATION = "23505"
+
+# The codes that mean "email_schema.sql has not been run" — an unknown TABLE (PGRST205 /
+# 42P01) or an unknown COLUMN (PGRST204 / 42703, i.e. a table created in an older shape,
+# which is what the ALTER block in that file repairs). Mirrors _missing_table_error in
+# app.core; kept as a set here because the claim path must classify from an already-read
+# body rather than from the exception (see _claim).
+_MISSING_SCHEMA_CODES = {"PGRST205", "42P01", "PGRST204", "42703"}
 
 # How long a row may sit in 'sending' before the console calls it stuck rather than in
 # flight. A Resend call takes under a second; ten minutes is far past any real latency.
@@ -177,10 +185,16 @@ def _claim(userid, kind, dedupe_key, email, subject):
             extra_headers={"Prefer": "return=representation"})
         return (rows[0] if rows else {"userid": userid, "kind": kind}), None
     except urllib.error.HTTPError as e:
+        # _error_body consumes the response stream — it is readable EXACTLY ONCE. So the
+        # body is read here and both classifications are made from the parsed dict;
+        # calling _missing_table_error(e) after this would re-read an exhausted stream, get
+        # {}, and report a missing table as a generic error, which is precisely the case
+        # that most needs to name the .sql file.
         body = _error_body(e) or {}
-        if body.get("code") == _UNIQUE_VIOLATION:
+        code = body.get("code")
+        if code == _UNIQUE_VIOLATION:
             return None, "already_sent"
-        if _missing_table_error(e):
+        if code in _MISSING_SCHEMA_CODES:
             return None, "setup"
         return None, f"error: {body.get('message') or e}"
     except Exception as e:
@@ -249,6 +263,16 @@ def _resend_post(to_email, subject, html_body, text_body):
         headers={
             "Authorization": f"Bearer {RESEND_API_KEY}",
             "Content-Type": "application/json",
+            "Accept": "application/json",
+            # REQUIRED, not politeness. Resend sits behind Cloudflare, whose WAF rejects
+            # urllib's default "Python-urllib/3.13" User-Agent outright: every send came
+            # back 403 with a text/plain body reading "error code: 1010" (Cloudflare's
+            # "client banned"), which is NOT a Resend error and carries none of Resend's
+            # JSON, so it surfaced as a bare "Forbidden" naming nothing. Sending a real
+            # UA makes the identical request succeed. Same class of problem as the 403s
+            # check_links.py documents — the server is refusing OUR CLIENT, not the
+            # request.
+            "User-Agent": RESEND_USER_AGENT,
         },
     )
     try:
@@ -256,14 +280,24 @@ def _resend_post(to_email, subject, html_body, text_body):
             body = json.loads(resp.read() or b"{}")
             return body.get("id"), None
     except urllib.error.HTTPError as e:
-        detail = ""
+        raw = ""
         try:
-            detail = json.loads(e.read() or b"{}").get("message") or ""
+            raw = (e.read() or b"").decode("utf-8", "replace").strip()
         except Exception:
             pass
-        # 403 here is nearly always an unverified sending domain rather than a bad key.
-        # Say so — it is the single most common way this feature appears broken.
-        if e.code == 403 and "domain" in detail.lower():
+        detail = ""
+        try:
+            detail = (json.loads(raw) or {}).get("message") or ""
+        except Exception:
+            # NOT JSON. This is the case that mattered: a Cloudflare block answers
+            # text/plain, so parsing-and-discarding left the reason as a bare "Forbidden"
+            # and hid the one string ("error code: 1010") that identifies the problem.
+            detail = raw[:200]
+        if e.code == 403 and "1010" in raw:
+            detail = (f"blocked by Cloudflare ({raw.strip()}) — the request never reached "
+                      "Resend. Check the User-Agent header.")
+        elif e.code == 403 and "domain" in detail.lower():
+            # The other common 403, and a completely different fix.
             detail += " (verify the sending domain in the Resend dashboard)"
         return None, f"Resend {e.code}: {detail or e.reason}"
     except Exception as e:
@@ -547,7 +581,7 @@ def send_test(kind, to_email, record=None):
     # Rendered against a real account when one is named, so the numbers in the test are the
     # numbers that account would actually see; otherwise against a sample row that makes
     # its own fakeness obvious.
-    record = record or _sample_record()
+    record = record or _sample_record(kind)
     try:
         subject, html_body, text_body = render_for(kind, record)
     except Exception as e:
@@ -564,19 +598,37 @@ def send_test(kind, to_email, record=None):
     return {"state": "sent", "message_id": message_id, "subject": subject, "to": to_email}
 
 
-def _sample_record():
+def _sample_record(kind=None):
     """A stand-in account for previewing a template with nobody selected.
 
-    The values are obviously fake on purpose — a realistic-looking sample invites reading
-    a preview as a real user's email.
+    The IDENTITY values are obviously fake on purpose — a realistic-looking sample invites
+    reading a preview as a real user's email. The DATES are the opposite: they are staged
+    per kind so each preview shows the number a real recipient of THAT email would see.
+
+    This matters because every date in these templates is computed, not written. A single
+    fixed trial window cannot serve all three: dated two days out it previews the
+    trial-ending reminder correctly and makes the welcome email announce a "2-day trial"
+    for a product whose trial is TRIAL_DAYS long — which is not a template bug but is
+    indistinguishable from one, and was read as one.
+
+      welcome       a trial that has just started  -> the full TRIAL_DAYS
+      trial_ending  a trial about to expire        -> TRIAL_REMINDER_DAYS out, i.e. the
+                                                      window the sweep actually fires in
+      goodbye       a cancelled subscription       -> paid period still running
     """
+    if kind == "trial_ending":
+        trial_days = TRIAL_REMINDER_DAYS
+    else:
+        trial_days = TRIAL_DAYS
     return {
         "userid": "sample-student",
         "first_name": "Sample",
         "last_name": "Student",
         "email": "sample@example.com",
         "subscription_status": "trial",
-        "trial_ends_at": (_now() + datetime.timedelta(days=TRIAL_REMINDER_DAYS)).isoformat(),
+        # +0.5 so days_until_trial_end, which CEILINGS, lands on the intended figure
+        # rather than one above it.
+        "trial_ends_at": (_now() + datetime.timedelta(days=trial_days - 0.5)).isoformat(),
         "subscription_end_at": (_now() + datetime.timedelta(days=18)).isoformat(),
     }
 
@@ -589,7 +641,7 @@ def preview(kind, userid=None):
             record = get_user_account(userid)
         except Exception:
             record = None
-    record = record or _sample_record()
+    record = record or _sample_record(kind)
     try:
         subject, html_body, text_body = render_for(kind, record)
     except Exception as e:

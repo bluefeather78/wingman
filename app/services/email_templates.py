@@ -5,27 +5,54 @@ email goes out (claiming, deduping, the provider call), this one owns *what it s
 Splitting them is what lets the admin console preview a template without any risk of
 sending, and lets the copy be edited without touching the send path.
 
-Design notes that are not cosmetic:
+DESIGN PROVENANCE. The layout here is a port of three hand-designed HTML files
+(wingman-trial-welcome / -ending / -ended-goodbye): BENTO & POP as an email — cream canvas,
+a white hero card with a 3px navy border and the hard offset "pop" shadow, soft feature
+cards under it, and a dark gradient CTA banner. Four things had to change on the way in,
+and each is a correctness issue rather than a matter of taste:
 
-  * TABLE-BASED LAYOUT, INLINE STYLES, NO EXTERNAL CSS AND NO IMAGES. Outlook renders
-    through Word's HTML engine (no flexbox, no grid), Gmail strips <style> blocks in some
-    clients, and a remote image is blocked by default in most of them — so a logo image
-    would render as a broken-image box for most recipients on first open. The "pop" border
-    is reproduced with a solid border plus a second offset table cell, which is the one
-    part of BENTO & POP that survives an email client.
+  1. THE LOGO GLYPH IS REBUILT AS A TABLE. The source drew it with six
+     `position:absolute` divs. Gmail strips `position` outright and Outlook renders through
+     Word's HTML engine, so all six would collapse to the same origin — four orange bars
+     and two yellow dots stacked on one spot, which reads as a broken image rather than as
+     a logo. It is now nested tables with `bgcolor` and fixed cell heights, which renders
+     the same shape everywhere. `border-radius` degrades to square corners in Outlook and
+     nothing else moves.
 
-  * EVERY EMAIL SHIPS A PLAIN-TEXT PART. A missing text/plain part is one of the strongest
-    spam signals there is, and it matters more here than usual: this is a cold sending
-    domain mailing school Google Workspace accounts, which are the least forgiving
-    recipients in existence.
+  2. EVERY VALUE IS INTERPOLATED, NOT HARDCODED. The source carried `{{first_name}}` plus
+     a literal "7 days" and "tomorrow" in the badge, the preheader, the heading and the
+     dark banner. A trial can be extended by a `grant` promo code, so "7" is wrong for any
+     account that redeemed one, and "tomorrow" is wrong for four of the five days the
+     reminder window can fire on. All of it now comes from `ctx`, which
+     app/services/email.py derives in ONE place so a preview and a real send cannot
+     disagree about the most important number in the message.
 
+  3. THE UNSUBSCRIBE LINK IS A REAL UNSUBSCRIBE. The source pointed it at /login, which
+     signs a student in rather than opting them out — the exact silent failure this whole
+     feature is measured against. It now carries the HMAC token
+     app/routes/email.py verifies.
+
+  4. NO IMAGES, AND THE POSTAL ADDRESS IS REAL. `[Add your company name and postal address
+     here]` is replaced by EMAIL_POSTAL_ADDRESS. Remote images are blocked by default in
+     most clients, so nothing here loads an external asset.
+
+KNOWN DEGRADATION, ACCEPTED. The feature-card icons are inline `<svg>`, which Gmail and
+Outlook.com strip. The 40px icon column then renders empty and the card's text is
+unaffected — the layout holds, so this is a cosmetic loss in some clients rather than a
+broken email. Left as SVG deliberately: the alternative is an emoji, which renders
+inconsistently and reads as less considered than a blank column.
+
+OTHER RULES THAT STILL APPLY:
+
+  * TABLE-BASED LAYOUT, INLINE STYLES. Outlook has no flexbox and no grid.
+  * EVERY EMAIL SHIPS A PLAIN-TEXT PART. The source files had none. A missing text/plain
+    part is among the strongest spam signals there is, and it matters more than usual
+    here: a cold sending domain mailing school Google Workspace accounts.
   * NO TRACKING PIXEL, no click-wrapped links. Most of this user base are minors and
-    legal/privacy.md does not describe open-tracking. If open rates are ever wanted, that
-    is a privacy-policy change and a TERMS_VERSION bump first, not a template edit.
-
+    legal/privacy.md does not describe open-tracking. Adding it is a privacy-policy change
+    and a TERMS_VERSION bump, not a template edit.
   * The unsubscribe link is in the footer of ALL THREE, including the two that are
-    defensibly transactional. See email_schema.sql on why the opt-out is honoured for
-    every kind rather than for marketing only.
+    defensibly transactional. See email_schema.sql.
 """
 import html
 
@@ -36,95 +63,319 @@ from app.config import EMAIL_APP_URL, EMAIL_POSTAL_ADDRESS
 # refused by name rather than silently producing an empty email.
 EMAIL_KINDS = ("welcome", "trial_ending", "goodbye")
 
-# BENTO & POP, reduced to what an email client can actually render (frontend/src/ui/theme.ts).
+# Palette, from the source files (which track frontend/src/ui/theme.ts).
 CREAM = "#FBF8F3"
-NAVY = "#1D4E89"
-INK = "#1A2540"
-INK_SOFT = "#4A6685"
-ORANGE = "#F79256"
-ORANGE_DEEP = "#F4791D"
-HAIRLINE = "#D9DEEB"
-MUTED = "#8A93A6"
+NAVY = "#1d4e89"
+ORANGE = "#F97316"
+ORANGE_SOFT = "#FFF3E9"
+YELLOW = "#FACC15"
+BODY = "#374151"
+MUTED = "#8a8579"
+BANNER_DARK = "#101c36"
+BANNER_LIGHT = "#182750"
+BANNER_TEXT = "#c7d0e0"
+CARD_GREY = "#EEF2F8"
+
+DISPLAY = "'Trebuchet MS', Verdana, sans-serif"
+SANS = "Arial, Helvetica, sans-serif"
 
 
 def _e(value):
     """Escape a value for HTML. Every interpolation below goes through this — a student's
-    own first name is untrusted input that we are putting into a document, exactly like any
-    other user-supplied string."""
+    own first name is untrusted input being put into a document, exactly like any other
+    user-supplied string."""
     return html.escape(str(value or ""), quote=True)
 
 
-def _button(url, label):
-    """A bulletproof-ish CTA. A padded <a> rather than a nested table: Outlook drops the
-    padding, so the link still works and merely looks plainer there, which is the right way
-    round for a degradation."""
-    return (
-        f'<a href="{_e(url)}" style="display:inline-block;background:{ORANGE};'
-        f'color:#FFFFFF;font-family:Helvetica,Arial,sans-serif;font-size:15px;'
-        f'font-weight:700;text-decoration:none;padding:14px 26px;border-radius:10px;'
-        f'border:2px solid {ORANGE_DEEP}">{_e(label)}</a>'
-    )
+# ---------------- Structural pieces ----------------
 
+def _logo():
+    """Wordmark plus the bar-chart glyph, rebuilt as nested tables (see note 1 above).
 
-def _shell(preheader, heading, body_html, unsubscribe_url):
-    """The common wrapper: cream canvas, one white card, footer.
-
-    `preheader` is the grey line a client shows next to the subject in the inbox list. It
-    is rendered into a hidden div because otherwise the client invents one from the first
-    words of the body, which is usually the recipient's own name — the least informative
-    text available.
+    The bars are bottom-aligned cells of increasing height; the dot sits in a row above the
+    tallest one. `font-size:1px;line-height:1px` on each spacer cell is what stops Outlook
+    imposing a minimum line height and inflating the whole glyph.
     """
-    return f"""<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light only">
-<title>{_e(heading)}</title>
-</head>
-<body style="margin:0;padding:0;background:{CREAM}">
-<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">{_e(preheader)}</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{CREAM}">
-<tr><td align="center" style="padding:32px 16px">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px">
+    def bar(height):
+        return (f'<td width="6" valign="bottom"><table role="presentation" cellpadding="0" '
+                f'cellspacing="0" border="0"><tr><td width="6" height="{height}" '
+                f'bgcolor="{ORANGE}" style="width:6px;height:{height}px;background-color:{ORANGE};'
+                f'border-radius:2px;font-size:1px;line-height:1px">&nbsp;</td></tr></table></td>')
 
-    <tr><td style="padding-bottom:20px;font-family:Helvetica,Arial,sans-serif;
-        font-size:17px;font-weight:700;color:{NAVY};letter-spacing:-0.2px">
-      Highschool Wingman
-    </td></tr>
+    gap = '<td width="4" style="width:4px;font-size:1px;line-height:1px">&nbsp;</td>'
+    dot = (f'<td width="6" align="center" style="font-size:1px;line-height:1px">'
+           f'<table role="presentation" cellpadding="0" cellspacing="0" border="0">'
+           f'<tr><td width="8" height="8" bgcolor="{YELLOW}" style="width:8px;height:8px;'
+           f'background-color:{YELLOW};border-radius:50%;font-size:1px;line-height:1px">'
+           f'&nbsp;</td></tr></table></td>')
+    blank = '<td width="6" style="font-size:1px;line-height:1px">&nbsp;</td>'
 
-    <tr><td style="background:#FFFFFF;border:2px solid {NAVY};border-radius:14px;padding:32px 28px">
-      <h1 style="margin:0 0 16px;font-family:Helvetica,Arial,sans-serif;font-size:24px;
-          line-height:32px;font-weight:700;color:{INK}">{_e(heading)}</h1>
-      {body_html}
-    </td></tr>
+    return f"""
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td valign="bottom" style="padding-right:9px">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+              <tr>{blank}{gap}{blank}{gap}{blank}{gap}{dot}</tr>
+              <tr><td colspan="7" height="3" style="height:3px;font-size:1px;line-height:1px">&nbsp;</td></tr>
+              <tr>{bar(11)}{gap}{bar(16)}{gap}{bar(21)}{gap}{bar(26)}</tr>
+            </table>
+          </td>
+          <td valign="middle">
+            <span style="font-family:{DISPLAY};font-weight:700;font-size:22px;color:{NAVY};
+                  letter-spacing:-0.3px">Wingman</span>
+          </td>
+        </tr>
+      </table>"""
 
-    <tr><td style="padding:24px 8px 0;font-family:Helvetica,Arial,sans-serif;
-        font-size:12px;line-height:20px;color:{MUTED}">
-      You are receiving this because you have a Highschool Wingman account.<br>
-      <a href="{_e(unsubscribe_url)}" style="color:{MUTED}">Unsubscribe from these emails</a>
+
+def _cta(url, label, width_px):
+    """The primary button, with a VML fallback so Outlook gets the pill shape and the
+    border instead of a bare blue link."""
+    return f"""
+      <!--[if mso]>
+      <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="{_e(url)}"
+        style="height:52px;v-text-anchor:middle;width:{width_px}px;" arcsize="50%"
+        strokecolor="{NAVY}" strokeweight="3px" fillcolor="{ORANGE}">
+      <w:anchorlock/>
+      <center style="color:{NAVY};font-family:Arial,sans-serif;font-size:16px;font-weight:bold;">{_e(label)}</center>
+      </v:roundrect>
+      <![endif]-->
+      <!--[if !mso]><!-->
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td align="center" bgcolor="{ORANGE}" style="border-radius:999px;border:3px solid {NAVY};
+              box-shadow:3px 3px 0 {NAVY}">
+            <a href="{_e(url)}" target="_blank" style="display:block;padding:14px 32px;
+               font-family:{SANS};font-size:16px;font-weight:700;color:{NAVY};
+               text-decoration:none">{_e(label)}</a>
+          </td>
+        </tr>
+      </table>
+      <!--<![endif]-->"""
+
+
+def _hero(badge, badge_fg, badge_bg, heading, body, cta_url, cta_label, cta_width,
+          subnote=None):
+    sub = ""
+    if subnote:
+        sub = (f'<tr><td align="center" style="padding-top:16px;font-family:{SANS};'
+               f'font-size:13px;color:{MUTED}">{subnote}</td></tr>')
+    return f"""
+  <tr>
+    <td style="background-color:#FFFFFF;border:3px solid {NAVY};border-radius:22px;
+        box-shadow:6px 6px 0 {NAVY}">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td class="pad-mobile" style="padding:40px 40px 36px 40px" align="center">
+            <span style="display:inline-block;font-family:{SANS};font-size:12px;font-weight:700;
+                  letter-spacing:1px;text-transform:uppercase;color:{badge_fg};
+                  background-color:{badge_bg};border-radius:999px;padding:6px 14px">{badge}</span>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td align="center" style="padding:20px 0 14px 0;font-family:{DISPLAY};
+                    font-weight:800;font-size:30px;line-height:1.25;color:{NAVY}">{heading}</td>
+              </tr>
+              <tr>
+                <td align="center" style="padding:0 10px 26px 10px;font-family:{SANS};
+                    font-size:16px;line-height:1.6;color:{BODY}">{body}</td>
+              </tr>
+              <tr><td align="center">{_cta(cta_url, cta_label, cta_width)}</td></tr>
+              {sub}
+            </table>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>"""
+
+
+def _section(title):
+    return f"""
+  <tr>
+    <td align="left" class="pad-mobile" style="padding:0 4px 16px 4px;font-family:{DISPLAY};
+        font-weight:800;font-size:18px;color:{NAVY}">{title}</td>
+  </tr>"""
+
+
+def _cards(items):
+    """Soft feature cards. `items` is [(icon_svg, title, body)]."""
+    rows = []
+    for i, (icon, title, body) in enumerate(items):
+        if i:
+            rows.append('<tr><td style="height:14px;font-size:1px;line-height:14px">&nbsp;</td></tr>')
+        rows.append(f"""
+        <tr>
+          <td style="background-color:#FFFFFF;border-radius:22px;
+              box-shadow:0 2px 18px rgba(15,23,42,0.06);padding:22px 24px">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td width="40" valign="top">{icon}</td>
+                <td style="padding-left:14px;font-family:{SANS}">
+                  <div style="font-family:{DISPLAY};font-weight:700;font-size:16px;color:{NAVY};
+                       padding-bottom:4px">{title}</div>
+                  <div style="font-size:14px;line-height:1.55;color:{BODY}">{body}</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>""")
+    return ('\n  <tr><td>\n    <table role="presentation" width="100%" cellpadding="0" '
+            'cellspacing="0" border="0">' + "".join(rows) + "</table>\n  </td></tr>")
+
+
+def _banner(title, body, cta_url, cta_label):
+    """Dark CTA banner. background-color is set as well as the gradient — Outlook ignores
+    linear-gradient entirely and would otherwise render white text on white."""
+    return f"""
+  <tr>
+    <td class="pad-mobile" style="background-color:{BANNER_DARK};
+        background-image:linear-gradient(90deg,{BANNER_DARK},{BANNER_LIGHT});
+        border-radius:22px;padding:28px 32px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td align="center" style="font-family:{DISPLAY};font-weight:700;font-size:17px;
+              color:#FFFFFF;padding-bottom:8px">{title}</td>
+        </tr>
+        <tr>
+          <td align="center" style="font-family:{SANS};font-size:14px;line-height:1.6;
+              color:{BANNER_TEXT};padding-bottom:18px">{body}</td>
+        </tr>
+        <tr>
+          <td align="center">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td align="center" bgcolor="{ORANGE}" style="border-radius:999px">
+                  <a href="{_e(cta_url)}" target="_blank" style="display:block;padding:12px 28px;
+                     font-family:{SANS};font-size:14px;font-weight:700;color:{NAVY};
+                     text-decoration:none">{_e(cta_label)}</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>"""
+
+
+def _gap(height):
+    return (f'\n  <tr><td style="height:{height}px;line-height:{height}px;font-size:1px">'
+            '&nbsp;</td></tr>')
+
+
+def _footer(reason, unsubscribe_url):
+    return f"""
+  <tr>
+    <td align="center" style="font-family:{SANS};font-size:12px;line-height:1.7;
+        color:{MUTED};padding:0 20px">
+      This app is in beta &mdash; features are actively evolving and results may
+      occasionally be incomplete or inaccurate.
+      <br><br>
+      {reason}
+      <a href="{_e(unsubscribe_url)}" style="color:{NAVY};text-decoration:underline">Unsubscribe</a>
       &nbsp;&middot;&nbsp;
-      <a href="{_e(EMAIL_APP_URL)}/privacy.html" style="color:{MUTED}">Privacy</a>
+      <a href="{_e(EMAIL_APP_URL)}/privacy.html" style="color:{NAVY};text-decoration:underline">Privacy</a>
       &nbsp;&middot;&nbsp;
-      <a href="{_e(EMAIL_APP_URL)}/terms.html" style="color:{MUTED}">Terms</a>
+      <a href="{_e(EMAIL_APP_URL)}/terms.html" style="color:{NAVY};text-decoration:underline">Terms</a>
       <br><br>
       {_e(EMAIL_POSTAL_ADDRESS)}
-    </td></tr>
-
-  </table>
-</td></tr></table>
-</body></html>"""
+    </td>
+  </tr>"""
 
 
-def _p(text):
-    return (f'<p style="margin:0 0 16px;font-family:Helvetica,Arial,sans-serif;font-size:15px;'
-            f'line-height:24px;color:{INK_SOFT}">{text}</p>')
+def _shell(title, preheader, content, reason, unsubscribe_url):
+    """The document. `preheader` is the grey line a client shows beside the subject in the
+    inbox list; it is hidden in the body because otherwise the client invents one from the
+    first words of the message, which here is the recipient's own name — the least
+    informative text available. The zero-width joiners after it stop Gmail pulling the
+    following visible text in behind it."""
+    return f"""<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>{_e(title)}</title>
+<!--[if mso]>
+<noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
+<![endif]-->
+<style>
+  body, table, td {{ -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }}
+  table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
+  img {{ -ms-interpolation-mode: bicubic; border: 0; }}
+  body {{ margin: 0; padding: 0; width: 100% !important; background-color: {CREAM}; }}
+  a {{ text-decoration: none; }}
+  @media only screen and (max-width: 620px) {{
+    .email-container {{ width: 100% !important; }}
+    .pad-mobile {{ padding-left: 20px !important; padding-right: 20px !important; }}
+  }}
+</style>
+</head>
+<body style="margin:0; padding:0; background-color:{CREAM};">
+<div style="display:none; max-height:0; overflow:hidden; mso-hide:all; font-size:1px; line-height:1px; color:{CREAM};">
+  {preheader}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;
+</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:{CREAM};">
+<tr>
+<td align="center" style="padding:32px 16px;">
+
+<table role="presentation" class="email-container" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px; max-width:600px;">
+
+  <tr><td align="center" style="padding:0 0 28px 0;">{_logo()}</td></tr>
+{content}
+{_gap(36)}
+{_footer(reason, unsubscribe_url)}
+
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>"""
 
 
-def _footer_text(unsubscribe_url):
-    return (f"\n\n---\nYou are receiving this because you have a Highschool Wingman account.\n"
-            f"Unsubscribe: {unsubscribe_url}\n"
-            f"Privacy: {EMAIL_APP_URL}/privacy.html\n"
-            f"Terms: {EMAIL_APP_URL}/terms.html\n\n{EMAIL_POSTAL_ADDRESS}\n")
+# ---------------- Icons (see the KNOWN DEGRADATION note) ----------------
+
+_ICON_SEARCH = (
+    '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    f'<circle cx="11" cy="11" r="7" stroke="{NAVY}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    f'<line x1="21" y1="21" x2="16.65" y2="16.65" stroke="{NAVY}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    "</svg>")
+
+_ICON_CALENDAR = (
+    '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    f'<rect x="3" y="5" width="18" height="16" rx="2" stroke="{NAVY}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    f'<line x1="16" y1="3" x2="16" y2="7" stroke="{NAVY}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    f'<line x1="8" y1="3" x2="8" y2="7" stroke="{NAVY}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    f'<line x1="3" y1="10" x2="21" y2="10" stroke="{NAVY}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    "</svg>")
+
+_ICON_PROFILE = (
+    '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    f'<circle cx="12" cy="8" r="4" stroke="{NAVY}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    f'<path d="M4 20c0-4 4-6 8-6s8 2 8 6" stroke="{NAVY}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    "</svg>")
+
+
+def _footer_text(reason, unsubscribe_url):
+    return (
+        "\n\n---\n"
+        "This app is in beta — features are actively evolving and results may occasionally\n"
+        "be incomplete or inaccurate.\n\n"
+        f"{reason}\n"
+        f"Unsubscribe: {unsubscribe_url}\n"
+        f"Privacy: {EMAIL_APP_URL}/privacy.html\n"
+        f"Terms: {EMAIL_APP_URL}/terms.html\n\n"
+        f"{EMAIL_POSTAL_ADDRESS}\n")
+
+
+_WELCOME_REASON = "You&rsquo;re receiving this because you started a Wingman trial."
+_WELCOME_REASON_TXT = "You're receiving this because you started a Wingman trial."
+_GOODBYE_REASON = "You&rsquo;re receiving this because you had a Wingman subscription."
+_GOODBYE_REASON_TXT = "You're receiving this because you had a Wingman subscription."
 
 
 # ---------------- welcome ----------------
@@ -134,47 +385,61 @@ def _welcome(ctx, unsubscribe_url):
     days = ctx.get("trial_days")
     app = EMAIL_APP_URL
 
-    # The trial length is stated only when it is actually known. A hardcoded "7 days" would
-    # be wrong for any account that redeemed a grant code before opening the email, and a
-    # wrong number here is the kind of thing a student holds us to.
-    trial_line = (f"Your free trial runs for the next {_e(days)} days — "
-                  "no card needed until it ends."
-                  if days else "Your free trial is running now — no card needed to use it.")
+    # "7" is never hardcoded: a grant promo code extends the trial, so the number is only
+    # true for an account that redeemed nothing. With no known figure the copy drops the
+    # count rather than guessing one.
+    badge = f"{_e(days)}-day trial started" if days else "Trial started"
+    span = f"the next {_e(days)} days" if days else "your trial period"
+    banner_title = (f"Your trial ends in {_e(days)} days" if days
+                    else "Your trial is running now")
 
-    body = "".join([
-        _p(f"Hi {_e(name)} — you're in."),
-        _p("Wingman helps you find summer programs, internships, research competitions and "
-           "conferences that actually fit you, then keeps track of every deadline so none "
-           "of them go past you."),
-        _p("Three things worth doing first:"),
-        f'<ul style="margin:0 0 20px;padding-left:20px;font-family:Helvetica,Arial,sans-serif;'
-        f'font-size:15px;line-height:24px;color:{INK_SOFT}">'
-        '<li style="margin-bottom:8px"><strong>My Vibe</strong> — answer a few questions so '
-        'the matching has something to work with.</li>'
-        '<li style="margin-bottom:8px"><strong>Fresh Finds</strong> — get your first set of '
-        'matched opportunities.</li>'
-        '<li><strong>Quest Log</strong> — track anything you like the look of, and we watch '
-        'its deadlines for you.</li>'
-        '</ul>',
-        _p(trial_line),
-        f'<p style="margin:8px 0 0">{_button(app, "Open Wingman")}</p>',
+    content = "".join([
+        _hero(
+            badge=badge, badge_fg=ORANGE, badge_bg=ORANGE_SOFT,
+            heading=f"You&rsquo;re in, {_e(name)} &#127881;",
+            body=(f"Your Wingman trial is live for {span}. That&rsquo;s enough time to build "
+                  "your profile, get matched to real opportunities, and start tracking "
+                  "deadlines &mdash; no credit card, no pressure."),
+            cta_url=app, cta_label="Start exploring →", cta_width=240),
+        _gap(32),
+        _section("Here&rsquo;s what&rsquo;s waiting for you"),
+        _cards([
+            (_ICON_SEARCH, "Fresh Finds",
+             "Summer programs, internships, and competitions matched to your interests, "
+             "grade, and budget &mdash; out of a catalog of 1,300+."),
+            (_ICON_CALENDAR, "Quest Log",
+             "Track every deadline you&rsquo;re chasing on one calendar, so nothing slips "
+             "through the cracks."),
+            (_ICON_PROFILE, "My Vibe",
+             "Not sure what you&rsquo;re looking for? A quick quiz builds your profile so we "
+             "can match you to the right things."),
+        ]),
+        _gap(32),
+        _banner(banner_title,
+                "Build your profile now so your matches are ready before the trial&rsquo;s up.",
+                f"{app}/profile", "Build my profile"),
     ])
 
     text = (
-        f"Hi {name} — you're in.\n\n"
-        "Wingman helps you find summer programs, internships, research competitions and\n"
-        "conferences that actually fit you, then keeps track of every deadline.\n\n"
-        "Three things worth doing first:\n"
-        "  1. My Vibe — answer a few questions so the matching has something to work with.\n"
-        "  2. Fresh Finds — get your first set of matched opportunities.\n"
-        "  3. Quest Log — track anything you like, and we watch its deadlines for you.\n\n"
-        + (f"Your free trial runs for the next {days} days — no card needed until it ends.\n\n"
-           if days else "Your free trial is running now — no card needed to use it.\n\n")
-        + f"Open Wingman: {app}\n"
-        + _footer_text(unsubscribe_url)
+        f"You're in, {name}\n\n"
+        f"Your Wingman trial is live for {'the next %s days' % days if days else 'your trial period'}.\n"
+        "That's enough time to build your profile, get matched to real opportunities, and\n"
+        "start tracking deadlines — no credit card, no pressure.\n\n"
+        f"Start exploring: {app}\n\n"
+        "HERE'S WHAT'S WAITING FOR YOU\n\n"
+        "  Fresh Finds — summer programs, internships and competitions matched to your\n"
+        "    interests, grade and budget, out of a catalog of 1,300+.\n"
+        "  Quest Log — track every deadline you're chasing on one calendar.\n"
+        "  My Vibe — a quick quiz builds your profile so we can match you properly.\n\n"
+        + (f"Your trial ends in {days} days. " if days else "")
+        + "Build your profile now so your matches are ready before the trial's up.\n"
+        f"{app}/profile\n"
+        + _footer_text(_WELCOME_REASON_TXT, unsubscribe_url)
     )
 
-    return "Welcome to Highschool Wingman", "Here's how to get your first matches", body, text
+    return ("Welcome to your Wingman trial",
+            "Your Wingman trial just started &mdash; let&rsquo;s find you something worth applying to.",
+            content, text, _WELCOME_REASON, unsubscribe_url)
 
 
 # ---------------- trial_ending ----------------
@@ -185,36 +450,60 @@ def _trial_ending(ctx, unsubscribe_url):
     ends_on = ctx.get("trial_ends_display")
     app = EMAIL_APP_URL
 
-    # "in 2 days" / "tomorrow" / "today" rather than a bare date. The date is still given
-    # underneath, because a relative phrase read three days later is misleading and this is
-    # the one email whose whole job is a deadline.
+    # The source hardcoded "tomorrow" in the badge, the preheader and the heading. The
+    # reminder window can fire on any of several days, so it is computed once here and
+    # reused, and the absolute date is given underneath — a relative phrase read three days
+    # later is misleading, and this is the one email whose whole job is a deadline.
     when = ("today" if days is not None and days <= 0
             else "tomorrow" if days == 1
             else f"in {_e(days)} days" if days is not None
             else "soon")
+    badge = ("Trial ends today" if when == "today"
+             else "Trial ends tomorrow" if when == "tomorrow"
+             else f"Trial ends {when}")
+    dated = f" ({_e(ends_on)})" if ends_on else ""
 
-    body = "".join([
-        _p(f"Hi {_e(name)} — your free trial ends <strong>{when}</strong>"
-           + (f" ({_e(ends_on)})" if ends_on else "") + "."),
-        _p("After that, Wingman is $9.99 a month. Keeping it means your Quest Log, your "
-           "profile and every deadline we're watching stay exactly where they are."),
-        _p("If you'd rather not continue, you don't need to do anything — nothing is "
-           "charged automatically, and the trial simply stops."),
-        f'<p style="margin:8px 0 0">{_button(f"{app}/subscription", "Keep my account")}</p>',
+    content = "".join([
+        _hero(
+            badge=badge, badge_fg=ORANGE, badge_bg=ORANGE_SOFT,
+            heading=f"Your trial wraps up {when}, {_e(name)}",
+            body=("Keep your matches, your tracked deadlines, and everything you&rsquo;ve "
+                  f"built in Wingman by subscribing before your trial ends{dated}."),
+            cta_url=f"{app}/subscription", cta_label="Keep my plan →", cta_width=260,
+            subnote="$9.99/month after your trial &mdash; cancel anytime."),
+        _gap(32),
+        _section("Don&rsquo;t lose what you&rsquo;ve built"),
+        _cards([
+            (_ICON_SEARCH, "Fresh Finds",
+             "Your matches stop updating once the trial ends. Subscribe to keep discovering "
+             "new opportunities."),
+            (_ICON_CALENDAR, "Quest Log",
+             "Every deadline you&rsquo;re tracking stays put &mdash; but reminders pause if "
+             "your trial lapses."),
+        ]),
+        _gap(32),
+        _banner("Less than a Netflix subscription",
+                "$9.99/month keeps your matches, deadlines, and profile all in one place.",
+                f"{app}/subscription", "Subscribe now"),
     ])
 
     text = (
-        f"Hi {name} — your free trial ends {when}"
+        f"Your trial wraps up {when}, {name}"
         + (f" ({ends_on})" if ends_on else "") + ".\n\n"
-        "After that, Wingman is $9.99 a month. Keeping it means your Quest Log, your\n"
-        "profile and every deadline we're watching stay exactly where they are.\n\n"
-        "If you'd rather not continue, you don't need to do anything — nothing is charged\n"
-        "automatically, and the trial simply stops.\n\n"
-        f"Keep my account: {app}/subscription\n"
-        + _footer_text(unsubscribe_url)
+        "Keep your matches, your tracked deadlines, and everything you've built in Wingman\n"
+        "by subscribing before your trial ends. $9.99/month — cancel anytime.\n\n"
+        f"Keep my plan: {app}/subscription\n\n"
+        "DON'T LOSE WHAT YOU'VE BUILT\n\n"
+        "  Fresh Finds — your matches stop updating once the trial ends.\n"
+        "  Quest Log — your tracked deadlines stay put, but reminders pause.\n\n"
+        "Nothing is charged automatically. If you'd rather not continue, you don't need to\n"
+        "do anything.\n"
+        + _footer_text(_WELCOME_REASON_TXT, unsubscribe_url)
     )
 
-    return f"Your Wingman trial ends {when}", "Nothing is charged automatically", body, text
+    return (f"Your Wingman trial ends {when}",
+            f"Your Wingman trial ends {when} &mdash; keep your matches and deadlines by subscribing.",
+            content, text, _WELCOME_REASON, unsubscribe_url)
 
 
 # ---------------- goodbye ----------------
@@ -224,38 +513,74 @@ def _goodbye(ctx, unsubscribe_url):
     ends_on = ctx.get("access_ends_display")
     app = EMAIL_APP_URL
 
-    # Deliberately NO win-back discount or promo code. A cancellation confirmation stating
-    # the facts is transactional; the same email carrying an offer is commercial, and the
-    # exemption this whole feature leans on is not worth trading for a coupon.
-    access_line = (f"You keep full access until <strong>{_e(ends_on)}</strong> — you've paid "
-                   "for that time and nothing changes before then."
-                   if ends_on else
-                   "Your access ends at the close of the period you've already paid for.")
+    # This fires on CANCELLATION, so the copy says cancelled rather than "your trial has
+    # ended" as the source file did — see the note in CLAUDE.md about the two being
+    # different events with different triggers. Cancelling is cancel-at-period-end
+    # (subscription_common.cancel_subscription), so the access date is the sentence that
+    # matters most and is stated first.
+    access = (f"You keep full access until <strong>{_e(ends_on)}</strong> &mdash; you&rsquo;ve "
+              "paid for that time and nothing changes before then. "
+              if ends_on else
+              "Your access runs to the end of the period you&rsquo;ve already paid for. ")
 
-    body = "".join([
-        _p(f"Hi {_e(name)} — your subscription is cancelled. Sorry to see you go."),
-        _p(access_line),
-        _p("Your Quest Log and profile aren't deleted. If you come back, everything you "
-           "tracked is still there."),
-        _p("If something specific pushed you out — a program we never surfaced, a deadline "
-           "we got wrong — just reply to this email and tell us. It gets read."),
-        f'<p style="margin:8px 0 0">{_button(f"{app}/subscription", "Restart anytime")}</p>',
+    content = "".join([
+        _hero(
+            badge="Subscription cancelled", badge_fg=NAVY, badge_bg=CARD_GREY,
+            heading=f"Sorry to see you go, {_e(name)}",
+            body=(access + "Your profile, saved matches, and tracked deadlines are still "
+                  "here whenever you&rsquo;re ready to come back."),
+            cta_url=f"{app}/subscription", cta_label="Come back →", cta_width=220,
+            subnote="$9.99/month, cancel anytime."),
+        _gap(32),
+        # The feedback card, kept from the source. A reply actually reaches somebody:
+        # EMAIL_REPLY_TO defaults to the same address this mailto uses.
+        f"""
+  <tr>
+    <td class="pad-mobile" style="background-color:#FFFFFF;border-radius:22px;
+        box-shadow:0 2px 18px rgba(15,23,42,0.06);padding:26px 28px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td align="left" style="font-family:{DISPLAY};font-weight:700;font-size:16px;
+              color:{NAVY};padding-bottom:8px">Got a minute?</td>
+        </tr>
+        <tr>
+          <td align="left" style="font-family:{SANS};font-size:14px;line-height:1.6;
+              color:{BODY};padding-bottom:16px">
+            We&rsquo;re a small team building this for students and families. If there&rsquo;s
+            something that would&rsquo;ve made Wingman worth keeping, we&rsquo;d love to hear it.
+          </td>
+        </tr>
+        <tr>
+          <td align="left">
+            <a href="mailto:contactus@highschoolwingman.com" target="_blank"
+               style="font-family:{SANS};font-size:14px;font-weight:700;color:{NAVY};
+               text-decoration:underline">Share feedback &rarr;</a>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>""",
     ])
 
     text = (
-        f"Hi {name} — your subscription is cancelled. Sorry to see you go.\n\n"
-        + (f"You keep full access until {ends_on} — you've paid for that time and nothing\n"
-           "changes before then.\n\n" if ends_on else
-           "Your access ends at the close of the period you've already paid for.\n\n")
-        + "Your Quest Log and profile aren't deleted. If you come back, everything you\n"
-          "tracked is still there.\n\n"
-          "If something specific pushed you out — a program we never surfaced, a deadline\n"
-          "we got wrong — just reply to this email and tell us. It gets read.\n\n"
-        f"Restart anytime: {app}/subscription\n"
-        + _footer_text(unsubscribe_url)
+        f"Sorry to see you go, {name}.\n\n"
+        + (f"Your subscription is cancelled. You keep full access until {ends_on} — you've\n"
+           "paid for that time and nothing changes before then.\n\n" if ends_on else
+           "Your subscription is cancelled. Your access runs to the end of the period you've\n"
+           "already paid for.\n\n")
+        + "Your profile, saved matches, and tracked deadlines are still here whenever you're\n"
+          "ready to come back.\n\n"
+        f"Come back: {app}/subscription  ($9.99/month, cancel anytime)\n\n"
+        "GOT A MINUTE?\n"
+        "We're a small team building this for students and families. If there's something\n"
+        "that would've made Wingman worth keeping, we'd love to hear it — just reply, or\n"
+        "write to contactus@highschoolwingman.com.\n"
+        + _footer_text(_GOODBYE_REASON_TXT, unsubscribe_url)
     )
 
-    return "Your Wingman subscription is cancelled", "Your tracked opportunities are kept", body, text
+    return ("Sorry to see you go",
+            "Your Wingman subscription is cancelled &mdash; your profile will be waiting.",
+            content, text, _GOODBYE_REASON, unsubscribe_url)
 
 
 _BUILDERS = {
@@ -274,5 +599,6 @@ def render(kind, ctx, unsubscribe_url):
     """
     if kind not in _BUILDERS:
         raise ValueError(f"Unknown email kind: {kind!r}. Known: {', '.join(EMAIL_KINDS)}")
-    subject, preheader, body_html, text = _BUILDERS[kind](ctx or {}, unsubscribe_url)
-    return subject, _shell(preheader, subject, body_html, unsubscribe_url), text
+    subject, preheader, content, text, reason, unsub = _BUILDERS[kind](ctx or {},
+                                                                       unsubscribe_url)
+    return subject, _shell(subject, preheader, content, reason, unsub), text

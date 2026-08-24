@@ -4,10 +4,10 @@ the old Handler methods they replace.
 """
 import json
 
-from fastapi import Request, Response
+from fastapi import Depends, HTTPException, Request, Response
 
 from app.core import get_user_account, subscription_state, _login_payload
-from app.auth import issue_tokens
+from app.auth import issue_tokens, get_current_user, get_optional_user, AuthedUser
 
 
 def json_response(status, obj, default=None):
@@ -117,12 +117,37 @@ def subscription_block_reason(userid):
         return None
     if state["status"] == "past_due":
         return ("We could not charge your card. Update your payment details to "
-                "restore access to Wingman's AI features.")
+                "restore access to Wingman.")
     if state["status"] == "canceled":
         return ("Your subscription has ended. Resubscribe to keep using "
-                "Wingman's AI features.")
+                "Wingman.")
     if state["status"] == "beta":
-        return ("Your beta access has ended. Subscribe to keep using Wingman's "
-                "AI features.")
-    return ("Your free trial has ended. Subscribe to keep using Wingman's "
-            "AI features.")
+        return ("Your beta access has ended. Subscribe to keep using Wingman.")
+    return ("Your free trial has ended. Subscribe to keep using Wingman.")
+
+
+# --- The gate as a DEPENDENCY ------------------------------------------------------
+#
+# subscription_block_reason() above is the rule; these two apply it. Every route that is
+# "using the app" hangs off one of them, so an account whose trial or subscription has
+# ended has no server-side access left — not just no access to the calls that cost money.
+# The 402 body is the reason string, which the client shows on the paywall screen.
+#
+# require_subscription is the hard form (401 with no token, 402 with a lapsed one) and is
+# what the owned-data routes use. optional_subscribed_user is for the routes that are
+# legitimately reachable signed-out: an unidentified caller is never blocked (same
+# residual the cost attribution reports as unattributed), but a caller who DOES identify
+# as a lapsed account is.
+def require_subscription(user: AuthedUser = Depends(get_current_user)) -> AuthedUser:
+    reason = subscription_block_reason(user.id)
+    if reason:
+        raise HTTPException(status_code=402, detail=reason)
+    return user
+
+
+def optional_subscribed_user(user=Depends(get_optional_user)):
+    if user is not None:
+        reason = subscription_block_reason(user.id)
+        if reason:
+            raise HTTPException(status_code=402, detail=reason)
+    return user

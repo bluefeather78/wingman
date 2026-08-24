@@ -1,4 +1,5 @@
-"""Public opportunities routes: the catalog and the on-demand deadline check.
+"""Public opportunities routes: the catalog, the on-demand deadline check, and the
+on-demand action-item generation.
 
 Translated from server.py's handle_opportunities / handle_deadline_check
 (PLAN_1_decompose.md). Paths and JSON shapes are unchanged.
@@ -12,10 +13,16 @@ from app.config import (
     SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
 )
 from app.core import touch_user_activity, record_user_cost_async
-from app.deps import json_response, json_error, subscription_block_reason
-from app.auth import get_current_user, AuthedUser
+from app.deps import (json_response, json_error, require_subscription,
+                      optional_subscribed_user)
+from app.auth import AuthedUser
 from app.services.opportunities import fetch_opportunities
+from app.services import action_items as action_items_service
 from app.services import deadlines
+# Imported, never re-declared: user_costs.model must name the model that was actually
+# billed. The Sonnet/Haiku drift this repo already paid for came from exactly that — a pin
+# copied into a second file and left behind when the first one moved.
+from generate_action_items import MODEL as ACTION_ITEM_MODEL
 from check_deadlines import (
     check_one as check_deadline_one,
     deadline_write_decision,
@@ -28,7 +35,10 @@ router = APIRouter()
 
 
 @router.get("/api/opportunities")
-def handle_opportunities():
+def handle_opportunities(user: AuthedUser = Depends(optional_subscribed_user)):
+    """The catalog. Soft auth (it is public, read-only data and the signed-out landing
+    flow reaches it), but a caller who identifies as a lapsed account gets the 402 — the
+    catalog is what the app is for, so an expired trial does not keep browsing it."""
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
         return json_error(500, "SUPABASE_URL/SUPABASE_ANON_KEY not configured.")
     try:
@@ -40,7 +50,7 @@ def handle_opportunities():
 
 @router.get("/api/opportunities/{opp_id}/deadline")
 def handle_deadline_check(opp_id: str, request: Request,
-                          user: AuthedUser = Depends(get_current_user)):
+                          user: AuthedUser = Depends(require_subscription)):
     """On-demand, cross-user-cached deadline check. Serves cached status/important_dates
     if last_checked_at is under DEADLINE_STALE_DAYS old; otherwise runs a fresh Claude
     Haiku web_search check (check_deadlines.check_one), re-caches, and returns it.
@@ -48,13 +58,10 @@ def handle_deadline_check(opp_id: str, request: Request,
     Falls back to the cached value WITHOUT stamping the TTL whenever the check produced
     nothing trustworthy — no search ran, the extracted JSON was unreadable, or it found no
     dates for a row that already has some. `source` in the response names which happened."""
-    # Gate before any Supabase or Claude work: a fresh check is a paid web-search call.
-    # Identity is token-derived (was a query-string userid). Hard-gating also closes the
-    # old fail-open, where omitting userid slipped past the subscription paywall.
+    # Gated before any Supabase or Claude work by require_subscription: a fresh check is a
+    # paid web-search call. Identity is token-derived (was a query-string userid), which
+    # also closed the old fail-open where omitting userid slipped past the paywall.
     deadline_userid = user.id
-    reason = subscription_block_reason(deadline_userid)
-    if reason:
-        return json_error(402, reason)
     # Counts as activity even when the answer comes from cache and costs nothing —
     # this measures use of the app, not spend.
     touch_user_activity(deadline_userid, "deadline_check")
@@ -144,3 +151,34 @@ def handle_deadline_check(opp_id: str, request: Request,
         deadlines.log_deadline_check(opp_id, "stale-fallback", opp.get("status"), None, None,
                                      opp.get("was_estimated"), f"Error: {str(e)[:100]}")
         return json_response(200, payload)
+
+
+@router.get("/api/opportunities/{opp_id}/action-items")
+def handle_action_items(opp_id: str, user: AuthedUser = Depends(require_subscription)):
+    """The application checklist for one opportunity, shared by every student tracking it.
+
+    Almost always free: generate_action_items.py has already written a verified list onto
+    the row, and this just serves it. It generates only for a row the batch has not reached
+    — a scrape from last night, a user submission resolved minutes ago, a page that was
+    refusing our client when the agent last ran — and caches the result so the next student
+    to track it pays nothing.
+
+    Gated by require_subscription like the deadline check, for the same reason: the
+    generate branch is a paid model call. Every task in the response carries a `basis`, and
+    the client renders 'page' items plainly and everything else under "Typical steps".
+    """
+    touch_user_activity(user.id, "action_items")
+    try:
+        payload, cost = action_items_service.resolve(opp_id)
+    except Exception as e:
+        return json_error(502, f"Could not resolve action items: {e}")
+    if payload is None:
+        # No catalog row (a tracker item with no id we know), or the columns have not been
+        # migrated in yet. 404 rather than an empty list: the client must be able to tell
+        # "this program has no checklist" from "we could not look", exactly as
+        # refreshTrackerDeadlines distinguishes not-found from failed.
+        return json_error(404, "No catalog row for that opportunity.")
+    if cost:
+        record_user_cost_async(user.id, "gemini", "action_items", cost=cost,
+                               searches=0, model=ACTION_ITEM_MODEL)
+    return json_response(200, payload)

@@ -170,7 +170,7 @@ If we learn that we have collected personal information from a child under 13 wi
 
 Parents or guardians who have questions about a minor's use of Wingman may contact us at:
 
-**shamabildikar78@gmail.com**
+**contactus@highschoolwingman.com**
 
 ## 9. Information Retention
 
@@ -194,7 +194,7 @@ Users may stop using Wingman at any time.
 
 If you would like to request deletion of your account or personal information, contact:
 
-**shamabildikar78@gmail.com**
+**contactus@highschoolwingman.com**
 
 We will evaluate and respond to deletion requests in accordance with applicable law and our ability to verify the request.
 
@@ -230,7 +230,7 @@ Depending on the information involved and applicable law, you may have rights co
 
 To make a request, contact:
 
-**shamabildikar78@gmail.com**
+**contactus@highschoolwingman.com**
 
 We may need to verify your identity or authority before completing certain requests.
 
@@ -243,7 +243,7 @@ Washington, United States
 
 For privacy questions, requests, or concerns:
 
-**shamabildikar78@gmail.com**
+**contactus@highschoolwingman.com**
 
 ---
 

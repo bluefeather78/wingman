@@ -29,7 +29,14 @@ import { ALL_BUCKETS, type Bucket } from '@/lib/constants';
 import { googleCalendarReturnUri } from '@/auth/googleSignIn';
 import { clearNewlyAdded, getNewlyAdded, markNewlyAdded } from '@/lib/newlyAdded';
 import { getLastCheckedLabel, setLastCheckedLabel as rememberLastChecked } from '@/lib/lastChecked';
-import { applyDeadlineCheckToInfo, intakeExtractAndClassify, slugifyTracker } from '@/lib/tracker';
+import {
+  applyDeadlineCheckToInfo,
+  intakeExtractAndClassify,
+  normalizeUnverifiedActionItems,
+  normalizeVerifiedActionItems,
+  slugifyTracker,
+  type NormalizedActionItem,
+} from '@/lib/tracker';
 import {
   assignCalendarColors,
   BUCKET_LABELS,
@@ -373,8 +380,14 @@ export default function Tracker() {
       // shared deadline check overlaid on top of it. A brand-new row is never a cache hit,
       // so this is a real (paid) check; a URL that deduped into an existing catalog row may
       // come back free and already verified.
+      // The verified checklist for the row we just resolved. A URL that deduped into an
+      // existing catalog row comes back already generated and free; a genuinely new row is
+      // generated once here and then cached for every student after this one.
+      let sharedItems: NormalizedActionItem[] = [];
       if (catalogId) {
         applyDeadlineCheckToInfo(extracted, await httpClient.getDeadlineCheck(catalogId));
+        sharedItems = normalizeVerifiedActionItems(
+          (await httpClient.getActionItems(catalogId))?.action_items, catalogId);
       }
 
       const item: TrackerItem = {
@@ -401,14 +414,11 @@ export default function Tracker() {
         wasEstimated: !!extracted.was_estimated,
         applyUrl: extracted.apply_url || url,
         applyLabel: extracted.apply_label || 'Apply / learn more',
-        actionItems: Array.isArray(extracted.action_items)
-          ? extracted.action_items.slice(0, 5).map((ai, i) => ({
-              id: `${id}-t${i}`,
-              text: ai.text,
-              url: ai.url ?? null,
-              state: 'not_started',
-            }))
-          : [],
+        // Verified list when the submission resolved to a catalog row; otherwise the
+        // model's own, forced generic because nothing on this path ever read the page.
+        actionItems: sharedItems.length
+          ? sharedItems
+          : normalizeUnverifiedActionItems(extracted.action_items, id),
       };
       setData(await addTrackerItem(bucket, item));
       setIntakeStatus(`Added “${item.name}” ✓`);

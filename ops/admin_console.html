@@ -1158,7 +1158,10 @@ async function api(path, opts) {
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch (_) { data = null; }
-  if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
+  // `reason` as well as `error`: the ops email routes answer with the send-result shape
+  // ({state, reason}) rather than json_error's {error}, so a failed test send surfaced as
+  // a bare "HTTP 400" with the actual cause — the thing you need — thrown away.
+  if (!res.ok) throw new Error((data && (data.error || data.reason)) || `HTTP ${res.status}`);
   return data;
 }
 

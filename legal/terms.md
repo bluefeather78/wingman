@@ -300,7 +300,7 @@ Washington, United States
 
 For questions regarding these Terms or Wingman:
 
-**shamabildikar78@gmail.com**
+**contactus@highschoolwingman.com**
 
 ---
 

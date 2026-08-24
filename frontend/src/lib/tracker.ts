@@ -61,7 +61,9 @@ export interface TrackerInfo {
   apply_url?: string;
   apply_label?: string;
   calendar_events?: { date: string; text: string; type: string }[];
-  action_items?: { text: string; url: string | null }[];
+  // basis/evidence: see ActionItem in api/trackerStore.ts. A model that omits them is
+  // treated as having said 'generic' — the absence of a claim of proof is not proof.
+  action_items?: { text: string; url: string | null; basis?: string; evidence?: string | null }[];
   important_date_note?: string;
   // Only ever set by GET /api/opportunities/<id>/deadline — how trustworthy this payload
   // is. See VERIFIED_DEADLINE_SOURCES below; never present on an extractTrackerInfo result.
@@ -114,6 +116,104 @@ export function applyDeadlineCheckToInfo(
   if (deadlineInfo.important_date_note) info.note = deadlineInfo.important_date_note;
 }
 
+// ---------- Action-item rules, shared by BOTH prompts so they cannot drift ----------
+//
+// This block replaced an instruction that read: "Infer these from the requirements you find
+// AND FROM WHAT'S TYPICAL FOR THIS TYPE OF OPPORTUNITY." That is a licence to invent, and it
+// was taken: a student tracking NYU's User Experience Design summer program was handed
+// "Review prerequisite requirements (Algebra 2)" — a prerequisite that appears nowhere on
+// the program's page and nowhere in its catalog row. "Algebra 2" is simply what a STEM
+// summer program typically requires, which is exactly what the instruction asked for.
+//
+// The dates in this same response have carried a never-invent rule, a SELF-CHECK block and a
+// server-side write guard for months. The tasks had none, and they render as flat
+// authoritative text with no equivalent of the "(est.)" marker — so a student cannot tell an
+// invented prerequisite from a real one. The harm is not a wasted afternoon: a fabricated
+// eligibility bar makes a student self-reject from a program they actually qualify for.
+//
+// Note the prompt-level rule is only half the fix and is the weaker half. The other half is
+// server-side verification of `evidence` against the page text we fetched ourselves — a
+// prompt is guidance, code is a guarantee. See app/services/action_items.py.
+const ACTION_ITEM_RULES = `Action items — the concrete things a student must DO to apply in time, e.g. request a recommendation letter, draft an essay, gather transcripts, prepare a portfolio, get parent/guardian sign-off, register for a required test, pay a fee. List 3-5, each under 10 words. Skip entirely if status is not_running.
+
+EVERY action item is one of exactly two kinds, and you must label which:
+
+- "basis":"page" — the item states something SPECIFIC about THIS program that you actually read on a page you retrieved. Set "evidence" to the exact sentence or phrase from that page, copied VERBATIM, that says so. Copy it character for character; do not paraphrase, tidy, translate or summarise it. This is checked against the real page text and an item whose quote is not found there is discarded.
+- "basis":"generic" — ordinary application logistics that would be true of almost any program of this kind. Set "evidence" to null. A generic item must assert NOTHING specific about this program: "Draft your personal statement" is generic, "Draft the 500-word statement on your research goals" is not.
+
+NEVER state a prerequisite, required course, test, score, GPA, age or grade limit, required document, fee, or eligibility condition that you did not read verbatim on a page you retrieved. Not from memory, not from what programs like this usually require, not from the program's name or subject. If you did not retrieve the page, you have no page-backed items — say so by emitting only generic ones. Inventing a prerequisite tells a student they are ineligible for something they can actually do, and they will not apply. An empty or dull list is a far better outcome than a confident wrong one.
+
+If you are unsure which kind an item is, it is generic. If you cannot quote a page for a specific claim, drop the claim rather than the item: "Review the eligibility requirements" is a fine generic item; "Review prerequisite requirements (Algebra 2)" is not, unless the page says Algebra 2.
+
+Keep every item tactical and administrative — the logistics of applying. Never give advice about the student's own project or how to approach its substance: you do not know what they are working on and must not assume or invent it.
+
+For each action item also give your best-guess direct URL for where the student would go to do it — the specific application/submission portal, payment page, account sign-up, recommender form, or test registration. Use the most specific URL you actually saw during search; reuse the general apply/info URL if nothing more specific applies. Use null if you found no plausible page — never invent a URL path you did not see.`;
+
+export type RawActionItem = NonNullable<TrackerInfo['action_items']>[number];
+
+export interface NormalizedActionItem {
+  id: string;
+  text: string;
+  url: string | null;
+  state: string;
+  basis: 'page' | 'generic';
+  evidence: string | null;
+}
+
+function shapeActionItems(
+  raw: RawActionItem[] | undefined,
+  idPrefix: string,
+  trustBasis: boolean,
+): NormalizedActionItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((ai) => ai && typeof ai.text === 'string' && ai.text.trim())
+    .slice(0, 5)
+    .map((ai, i) => {
+      const evidence = typeof ai.evidence === 'string' && ai.evidence.trim()
+        ? ai.evidence.trim()
+        : null;
+      const pageBacked = trustBasis && ai.basis === 'page' && !!evidence;
+      return {
+        id: `${idPrefix}-t${i}`,
+        text: ai.text.trim(),
+        url: typeof ai.url === 'string' && ai.url.startsWith('http') ? ai.url : null,
+        state: 'not_started',
+        basis: (pageBacked ? 'page' : 'generic') as 'page' | 'generic',
+        evidence: pageBacked ? evidence : null,
+      };
+    });
+}
+
+// Tasks from GET /api/opportunities/<id>/action-items. `basis` is honoured here and ONLY
+// here, because that endpoint is the only place a task's quote has been checked against
+// page text we fetched ourselves (page_text.quote_is_on_page / claim_is_supported).
+export function normalizeVerifiedActionItems(
+  raw: RawActionItem[] | undefined,
+  idPrefix: string,
+): NormalizedActionItem[] {
+  return shapeActionItems(raw, idPrefix, true);
+}
+
+// Tasks a model produced in the browser — the fallback when an opportunity has no catalog
+// row to have been verified against. EVERYTHING here is forced to 'generic', however
+// confidently the model labelled it, and the deliberate consequence is that the Quest Log
+// files all of it under "Typical steps — confirm on the site".
+//
+// This is not caution, it is accuracy. The client cannot fetch the program's page — the
+// browser is blocked cross-origin, and /api/messages attaches only googleSearch, no
+// web_fetch and no urlContext — so nothing on this path has ever seen the page a task
+// claims to quote. Reading the model's own `basis:"page"` as proof would be taking its word
+// for the one thing it has repeatedly got wrong; that is how "Review prerequisite
+// requirements (Algebra 2)" reached a student's card in the first place. A claim is
+// page-backed because a page backed it, never because a model said so.
+export function normalizeUnverifiedActionItems(
+  raw: RawActionItem[] | undefined,
+  idPrefix: string,
+): NormalizedActionItem[] {
+  return shapeActionItems(raw, idPrefix, false);
+}
+
 // Extract structured tracking data (dates, action items, apply URL) for one opportunity.
 // Web search is ON; the prompt is ported verbatim from script.js.
 export async function extractTrackerInfo(
@@ -160,11 +260,26 @@ SELF-CHECK before responding:
 - Every specific date/estimate mentioned in "note" must have a matching structured entry in "important_dates", and vice versa — the two must agree.
 - Prefer including a reasonably-estimated date over omitting it. Only leave a category out if step (e) above genuinely applies.
 
-Action items — think through what a student would actually need to DO to meet the nearest deadline, not just the deadline itself: e.g. requesting a recommendation letter, drafting an essay, gathering transcripts, preparing a portfolio or writing sample, getting parent/guardian sign-off, registering for a required test. Infer these from the requirements you find and from what's typical for this type of opportunity. Keep every item tactical and administrative — the logistics of applying, never advice about the student's own project or how to approach its substance, since you have no way of knowing the specifics of their work and must not assume or invent any. List 3-5 short, concrete action items (skip this if status is not_running).
-For each action item, also give your best-guess direct URL for where the student would actually go to do it — the specific application/submission portal, payment or fee page, account sign-up/registration page, common-app or portal login, recommender/counselor form, or test-registration page, as applicable. Use the most specific URL you found during search (not just the homepage) whenever one exists. If nothing more specific than the general apply/info URL applies, reuse that URL. Only use null if you genuinely found no plausible page for that action — never invent or guess at a URL path that wasn't actually seen.
+${ACTION_ITEM_RULES}
 
-Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, matching exactly this schema: {"status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format, separated by ' · '","fit":"one sentence, under 25 words, on what this actually involves","note":"one sentence, under 25 words: status/estimate basis/caveat","noteType":"good, plain, or flag — use flag if not_running or a major caveat","important_dates":[{"label":"short specific label, e.g. 'Early Bird Registration'","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other","estimated":true or false}],"deadline_label":"short text like ROLLING or TBA — only used when the important_dates array is empty","was_estimated":true or false,"requirements":[{"date":"short date text","text":"under 12 words — what's needed, not a repeat of an important_dates entry"}],"apply_url":"the best URL for actually applying","apply_label":"short button label like 'Apply now'","calendar_events":[{"date":"YYYY-MM-DD","text":"under 8 words","type":"deadline, opens, notify, or conference"}],"action_items":[{"text":"short concrete task, under 10 words","url":"best-guess direct URL for this specific action (submission portal, payment page, sign-up page, etc.), or null"}]}. Stay well within a 1000-token response: at most 4 important_dates entries, 3 requirements items, 3 calendar_events, and 5 action_items. Never truncate mid-value or leave the JSON unclosed — shorten or drop optional arrays first, but keep at least the earliest date if one exists.`;
-  const userContent = `Opportunity: ${opp.name} (${opp.org ?? ''})\nURL: ${opp.url ?? ''}\nKnown info: ${opp.summary ?? ''}\n\nFetch this URL (and the base site if needed), and extract current tracking details per the schema. Look carefully for every relevant date — registration open/close, event dates, notifications — not just the final deadline.`;
+Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, matching exactly this schema: {"status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format, separated by ' · '","fit":"one sentence, under 25 words, on what this actually involves","note":"one sentence, under 25 words: status/estimate basis/caveat","noteType":"good, plain, or flag — use flag if not_running or a major caveat","important_dates":[{"label":"short specific label, e.g. 'Early Bird Registration'","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other","estimated":true or false}],"deadline_label":"short text like ROLLING or TBA — only used when the important_dates array is empty","was_estimated":true or false,"requirements":[{"date":"short date text","text":"under 12 words — what's needed, not a repeat of an important_dates entry"}],"apply_url":"the best URL for actually applying","apply_label":"short button label like 'Apply now'","calendar_events":[{"date":"YYYY-MM-DD","text":"under 8 words","type":"deadline, opens, notify, or conference"}],"action_items":[{"text":"short concrete task, under 10 words","url":"best-guess direct URL for this specific action (submission portal, payment page, sign-up page, etc.), or null","basis":"page or generic","evidence":"verbatim quote from the retrieved page when basis is page, else null"}]}. Stay well within a 1000-token response: at most 4 important_dates entries, 3 requirements items, 3 calendar_events, and 5 action_items. Never truncate mid-value or leave the JSON unclosed — shorten or drop optional arrays first, but keep at least the earliest date if one exists.`;
+  // Eligibility and the grade range are CURATED catalog columns, maintained by
+  // refresh_opportunities.py. Until 2026-08-24 they were not in OPPORTUNITIES_FIELDS, so the
+  // app never received them and this prompt never saw them — the one place in the system
+  // that knows a program's real entry requirements was invisible to the prompt that was
+  // inventing entry requirements. They are context, not proof: an action item still needs a
+  // verbatim page quote to count as page-backed, and the prompt says so below.
+  const grades = [opp.grade_min, opp.grade_max].some((g) => g !== null && g !== undefined)
+    ? `Grades (from catalog): ${opp.grade_min ?? '?'}-${opp.grade_max ?? '?'}\n`
+    : '';
+  const eligibility = opp.eligibility ? `Eligibility (from catalog): ${opp.eligibility}\n` : '';
+  const userContent = `Opportunity: ${opp.name} (${opp.org ?? ''})
+URL: ${opp.url ?? ''}
+Known info: ${opp.summary ?? ''}
+${eligibility}${grades}
+Fetch this URL (and the base site if needed), and extract current tracking details per the schema. Look carefully for every relevant date — registration open/close, event dates, notifications — not just the final deadline.
+
+The catalog lines above are our own stored notes, not the program's page. Use them to know what to look for and to sanity-check what you find — never quote them as "evidence" for a page-backed action item, and never treat their absence as proof that a requirement does not exist.`;
   return callGeminiJSON<TrackerInfo>(callGemini, system, userContent, true);
 }
 
@@ -197,10 +312,9 @@ Estimation is expected and encouraged, not a last resort — apply in order: (a)
 
 Find EVERY pertinent date — registration opens, early-bird vs. regular deadline, notification date, and event/conference start-end dates — each with a short label and a "type" of "opens", "deadline", "event_start", "event_end", or "other", in chronological order. Pay particular, deliberate attention to the registration/application OPENS date, not just the deadline — this is the field most often missed. An "opens" entry is REQUIRED whenever there is an application or registration step: the tracker marks a program HAPPENING NOW once its first date has passed, so a program carrying only a deadline reads as "not started yet" until the day it closes. Project the prior cycle's opening date if the current one isn't posted (was_estimated:true), and only omit it if no cycle published one — saying why in "note" if so. Only omit a date category if there's genuinely no basis to find or estimate one - i.e. nothing current AND nothing from any prior cycle. Set "estimated" PER DATE: true if that date came from a prior cycle, an interval or a vague pattern, false only if explicitly posted for the current cycle — the tracker renders this next to each date, and do not also put "(estimated)" in the label. Every date you have enough basis to mention in "note" (e.g. "registration typically opens Sept") must ALSO appear as a matching "important_dates" entry (was_estimated:true) — never describe date info in "note" without a corresponding structured entry, and vice versa. Prefer including a reasonably-estimated date over omitting it.
 
-Also think through 3-5 short, concrete action items a student would need to do to meet the nearest deadline (e.g. request a recommendation letter, draft an essay, gather transcripts) — infer these from requirements and what's typical for this type of opportunity. Keep every item tactical and administrative — the logistics of applying, never advice about the student's own project or its substance, since you don't know the specifics of their work and must not assume or invent any. Skip if status is not_running.
-For each action item, also give your best-guess direct URL for where the student would actually go to do it — the specific application/submission portal, payment or fee page, account sign-up/registration page, or test-registration page, as applicable. Use the most specific URL you found during search (not just the homepage) whenever one exists; reuse the general apply/info URL if nothing more specific applies; use null only if you genuinely found no plausible page — never invent a URL path that wasn't actually seen.
+${ACTION_ITEM_RULES}
 
-Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"name":"program/opportunity name from the page, or organization name if no program name found, under 50 chars","section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","important_dates":[{"label":"short label","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other","estimated":true or false}],"deadline_label":"short text like ROLLING, only if important_dates is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null","action_items":[{"text":"short concrete task, under 10 words","url":"best-guess direct URL for this specific action, or null"}]}. Stay well within 1000 tokens: at most 4 important_dates, 3 requirements, and 5 action_items.`;
+Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"name":"program/opportunity name from the page, or organization name if no program name found, under 50 chars","section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","important_dates":[{"label":"short label","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other","estimated":true or false}],"deadline_label":"short text like ROLLING, only if important_dates is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null","action_items":[{"text":"short concrete task, under 10 words","url":"best-guess direct URL for this specific action, or null","basis":"page or generic","evidence":"verbatim quote from the retrieved page when basis is page, else null"}]}. Stay well within 1000 tokens: at most 4 important_dates, 3 requirements, and 5 action_items.`;
   const userContent = `URL: ${url}
 ${notes ? `Extra context: ${notes}
 ` : ''}

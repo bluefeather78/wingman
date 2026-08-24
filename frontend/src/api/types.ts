@@ -93,5 +93,9 @@ export interface Opportunity {
   subject_tags?: string[] | null;
   grade_min?: number | null;
   grade_max?: number | null;
+  // Curated entry requirements, written by refresh_opportunities.py. Added to
+  // OPPORTUNITIES_FIELDS on 2026-08-24 so the tracker's extraction prompt can see the one
+  // column in the catalog that actually knows a program's prerequisites.
+  eligibility?: string | null;
   [key: string]: unknown;
 }

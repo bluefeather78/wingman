@@ -1,4 +1,4 @@
-import type { TrackerInfo } from '@/lib/tracker';
+import type { RawActionItem, TrackerInfo } from '@/lib/tracker';
 import type {
   AiResult,
   GoogleFinishInput,
@@ -7,6 +7,13 @@ import type {
   RegisterInput,
   SessionUser,
 } from './types';
+
+export interface ActionItemsResponse {
+  action_items?: RawActionItem[];
+  // How the list was arrived at — 'page-verified', 'page-empty', 'generic-fallback',
+  // 'unparsed' or 'stored'. Mirrors opportunities.action_items_source.
+  source?: string;
+}
 
 // The single seam every screen and every model-calling salvage module depends on.
 //
@@ -44,6 +51,11 @@ export interface ApiClient {
   // collapsing them into a bare null is what made the Quest Log's refresh claim it had
   // checked opportunities it had not.
   getDeadlineCheckResult(oppId: string): Promise<DeadlineCheckResult>;
+  // The shared application checklist for one opportunity, generated and verified against
+  // the program's own page by generate_action_items.py. Never rejects (null on failure):
+  // a missing checklist must not stop an opportunity being tracked, and the caller falls
+  // back to the model's own items, which are forced generic because nothing verified them.
+  getActionItems(oppId: string): Promise<ActionItemsResponse | null>;
   callGemini(system: string, userContent: string, useWebSearch?: boolean, maxTokens?: number): Promise<string>;
   callClaude(
     system: string,
@@ -86,6 +98,10 @@ export interface ApiClient {
   // unsubscribe. Fires whenever the session is dropped, including the background
   // revalidation initAuth kicks off.
   onSessionLost(listener: () => void): () => void;
+  // Subscribe to "the identity we hold changed without a new login" — a background refresh
+  // returning a fresh subscription block, a 402 telling us access has lapsed, or a
+  // subscriptionStatus() read. Returns an unsubscribe.
+  onUserChanged(listener: (user: SessionUser | null) => void): () => void;
   // Update the account's location (POST /api/account/location, hard-gated).
   saveLocation(location: string): Promise<void>;
   // Resume / LinkedIn quick-add extraction (both hard-gated; return the extracted text).

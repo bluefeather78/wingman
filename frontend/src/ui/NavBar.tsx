@@ -37,10 +37,15 @@ function subscriptionLabel(sub: { status?: string; days_left?: number } | undefi
   if (sub.status === 'beta') return `Beta access: ${days} day${days === 1 ? '' : 's'} left`;
   if (sub.status === 'active') return 'Active: $9.99/month';
   if (sub.status === 'canceled') return 'Canceled';
+  if (sub.status === 'past_due') return 'Payment failed';
   return null;
 }
 
-export function NavBar() {
+// `locked` = this account's trial/subscription has ended ((app)/_layout's paywall). The
+// tabs are hidden rather than disabled: they would each bounce straight back to Manage
+// Plan, and a row of buttons that silently refuse to navigate reads as the app being
+// broken. The wordmark and the account drawer stay — signing out must always be reachable.
+export function NavBar({ locked = false }: { locked?: boolean } = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, logout } = useAuth();
@@ -75,7 +80,7 @@ export function NavBar() {
     <SafeAreaView edges={['top']} style={styles.safe}>
       <View style={styles.column}>
         <View style={[styles.bar, navShadow()]}>
-          <Pressable style={styles.brand} onPress={() => router.push('/(app)' as never)}>
+          <Pressable style={styles.brand} onPress={() => !locked && router.push('/(app)' as never)}>
             <Logo size={32} />
             <Text style={styles.word}>Wingman</Text>
             <View style={styles.beta}>
@@ -84,7 +89,7 @@ export function NavBar() {
           </Pressable>
 
           <View style={styles.tabs}>
-            {TABS.map((t) => {
+            {(locked ? [] : TABS).map((t) => {
               const active = isActive(pathname, t.path);
               return (
                 <Pressable
@@ -186,7 +191,7 @@ export function NavBar() {
                 <View style={styles.btnRow}>
                   <SmallBtn
                     label="✉️ Email us"
-                    onPress={() => Linking.openURL('mailto:shamabildikar78@gmail.com?subject=Highschool%20Wingman%20Feedback')}
+                    onPress={() => Linking.openURL('mailto:contactus@highschoolwingman.com?subject=Highschool%20Wingman%20Feedback')}
                   />
                 </View>
               </View>

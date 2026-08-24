@@ -1,4 +1,4 @@
-import { AuthExpiredError, type ApiClient, type CalendarSyncResult, type UserOpportunitySubmission } from './ApiClient';
+import { AuthExpiredError, type ActionItemsResponse, type ApiClient, type CalendarSyncResult, type UserOpportunitySubmission } from './ApiClient';
 import type { TrackerInfo } from '@/lib/tracker';
 import { sha256Hex } from './hash';
 import { clearSession, clearTokens, loadSession, loadTokens, saveSession, saveTokens } from './tokenStore';
@@ -35,6 +35,30 @@ let _refreshInFlight: Promise<boolean> | null = null;
 
 // Fires when a session we booted from cache turns out to be dead (see initAuth).
 const _sessionLostListeners = new Set<() => void>();
+// Fires when the identity we hold CHANGES without a new login — the background refresh
+// coming back with a fresh subscription block, or a 402 telling us access has lapsed.
+// AuthContext turns this into setUser, which is what makes the paywall appear without a
+// reload. Without it a cached SessionUser could keep saying has_access:true for as long as
+// the app stayed open, and every screen would just fail with 402s it did not explain.
+const _userChangedListeners = new Set<(u: SessionUser | null) => void>();
+
+function notifyUserChanged(): void {
+  for (const listener of _userChangedListeners) listener(_currentUser);
+}
+
+// The subscription gate answers 402 from every route that IS the app (app/deps.py's
+// require_subscription). Rather than let each call site interpret that, record it once on
+// the cached identity: the (app) layout reads has_access and redirects to the paywall.
+// This is a MIRROR of the server's decision, never the decision itself — the server
+// re-derives it from subscription_state() on every request.
+function markSubscriptionBlocked(): void {
+  if (!_currentUser) return;
+  const sub = _currentUser.subscription;
+  if (sub?.has_access === false) return;
+  _currentUser = { ..._currentUser, subscription: { ...(sub ?? {}), has_access: false } };
+  void saveSession(_currentUser);
+  notifyUserChanged();
+}
 
 // --- /api/data/load: one request per tick, and a read-through cache ---------
 //
@@ -137,6 +161,9 @@ async function applyTokens(p: LoginResponse): Promise<SessionUser> {
     saveTokens({ access: p.token, refresh: p.refresh_token }),
     saveSession(_currentUser),
   ]);
+  // A refresh carries a freshly computed subscription block, so this is also how an
+  // expiry that happened while the app was open reaches the UI.
+  notifyUserChanged();
   return _currentUser;
 }
 
@@ -221,6 +248,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       throw new AuthExpiredError();
     }
   }
+  // The subscription gate. Every 402 in this app means the same thing, so it is handled
+  // here once: flip the cached identity to has_access:false (which routes the user to the
+  // paywall) and still throw, so the caller's own error path is unchanged.
+  if (res.status === 402) markSubscriptionBlocked();
   if (!res.ok) throw new HttpError(res.status, await errorMessage(res));
   return (await res.json()) as T;
 }
@@ -374,6 +405,11 @@ export const httpClient: ApiClient = {
     return () => _sessionLostListeners.delete(listener);
   },
 
+  onUserChanged(listener: (user: SessionUser | null) => void): () => void {
+    _userChangedListeners.add(listener);
+    return () => _userChangedListeners.delete(listener);
+  },
+
   async saveLocation(location: string): Promise<void> {
     await request<{ ok: boolean }>('/api/account/location', {
       method: 'POST',
@@ -432,8 +468,18 @@ export const httpClient: ApiClient = {
   },
 
   // Subscription (payments deferred; these back the Manage Plan page's status + promo flow).
+  // The freshest possible answer to "may this account use the app". It write-throughs to
+  // the cached identity, which is what lifts the paywall the moment a promo code is
+  // redeemed — without it the screen would say "beta access granted" while the router kept
+  // bouncing the student back to it.
   async subscriptionStatus(): Promise<Record<string, unknown>> {
-    return request<Record<string, unknown>>('/api/subscription/status', { method: 'POST', body: '{}' });
+    const state = await request<Record<string, unknown>>('/api/subscription/status', { method: 'POST', body: '{}' });
+    if (_currentUser && state && typeof state === 'object') {
+      _currentUser = { ..._currentUser, subscription: state as SessionUser['subscription'] };
+      void saveSession(_currentUser);
+      notifyUserChanged();
+    }
+    return state;
   },
   async validatePromo(code: string): Promise<{ valid?: boolean; kind?: string; description?: string; error?: string }> {
     return request('/api/subscription/validate-promo', { method: 'POST', body: JSON.stringify({ promo_code: code }) });
@@ -487,6 +533,22 @@ export const httpClient: ApiClient = {
         : e instanceof AuthExpiredError || status === 401 ? ('auth' as const)
         : ('error' as const);
       return { outcome, info: null, message: (e as Error).message };
+    }
+  },
+
+  // The shared, verified application checklist for one opportunity. Almost always a plain
+  // read — generate_action_items.py has already written and verified the list onto the
+  // catalog row — and it generates only for a row that agent has not reached yet.
+  //
+  // Never throws: a missing checklist must not stop an opportunity being tracked. The
+  // caller falls back to the model's own (unverified, and therefore generic-only) items.
+  async getActionItems(oppId) {
+    try {
+      return await request<ActionItemsResponse>(
+        `/api/opportunities/${encodeURIComponent(oppId)}/action-items`,
+      );
+    } catch {
+      return null;
     }
   },
 

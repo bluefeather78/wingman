@@ -1,7 +1,7 @@
 import type { Bucket } from '@/lib/constants';
 import { ALL_BUCKETS } from '@/lib/constants';
 import { httpClient } from './httpClient';
-import { isVerifiedDeadlineSource } from '@/lib/tracker';
+import { isVerifiedDeadlineSource, normalizeVerifiedActionItems } from '@/lib/tracker';
 
 // The tracker is shared with the original web app: it persists under the SAME data key
 // (`hs-tracker-data`) in the SAME shape — a JSON *string* of a 6-bucket object, each bucket
@@ -22,11 +22,63 @@ export interface ImportantDate {
   googleEventId?: string | null;
 }
 
+// Where a task's CONTENT came from — the task equivalent of ImportantDate.estimated, and
+// it exists for the same reason: the card cannot render a guess and a fact identically.
+//   'page'    the extractor quoted the program's own page for a specific claim, and that
+//             quote was checked against the fetched page text before the task was kept.
+//   'generic' ordinary application logistics ("draft your essay") that asserts nothing
+//             program-specific, so there is nothing to verify and nothing to get wrong.
+export type ActionItemBasis = 'page' | 'generic';
+
 export interface ActionItem {
   id: string;
   text: string;
   url: string | null;
   state: string;
+  // ABSENT on every item written before 2026-08-24. Read as 'generic', never as 'page':
+  // those were produced by a prompt that explicitly told the model to fill gaps with
+  // "what's typical for this type of opportunity", i.e. to invent — which is how a
+  // fabricated "Algebra 2 prerequisite" reached a real student's card. Unknown provenance
+  // is not evidence of provenance. Same rule as ImportantDate.estimated above.
+  basis?: ActionItemBasis;
+  // The verbatim line from the program page that supports a 'page' task. Kept so the claim
+  // stays auditable after the fact and so a re-check can re-verify it without re-asking a
+  // model. Null/absent on 'generic' tasks.
+  evidence?: string | null;
+  // The student said this one does not apply to them. Hidden everywhere and excluded from
+  // every count, but NOT deleted: the checklist is shared and regenerated, so a deleted
+  // task would simply reappear on the next refresh and the dismissal would read as broken.
+  dismissed?: boolean;
+}
+
+// The ONLY way to ask whether a task is page-backed. A bare `ai.basis === 'page'` scattered
+// across call sites is how the legacy-undefined case eventually gets read as verified by
+// one of them.
+export function isPageBackedTask(ai: Pick<ActionItem, 'basis' | 'evidence'>): boolean {
+  return ai.basis === 'page' && !!(ai.evidence && ai.evidence.trim());
+}
+
+export function visibleTasks(items: ActionItem[] | undefined): ActionItem[] {
+  return (items ?? []).filter((ai) => !ai.dismissed);
+}
+
+// Refreshing pulls the shared, re-verified checklist off the catalog row — which means the
+// incoming list is the source of truth for what the tasks ARE, and the stored one is the
+// source of truth for what the student has DONE with them. Merge on the task text: reset a
+// student's ticked-off progress on every refresh and the feature becomes something they
+// stop touching.
+//
+// Text is the key because there is no stable task id — the ids are positional
+// (`${oppId}-t0`), so a re-generated list that drops one task shifts every id after it and
+// would hand slot 2's completion to slot 3's task. The same positional-id trap the Google
+// Calendar sync hit with importantDates.
+export function mergeActionItems(existing: ActionItem[] | undefined, incoming: ActionItem[]): ActionItem[] {
+  const key = (t: string) => t.trim().toLowerCase().replace(/\s+/g, ' ');
+  const previous = new Map((existing ?? []).map((ai) => [key(ai.text), ai]));
+  return incoming.map((ai) => {
+    const was = previous.get(key(ai.text));
+    return was ? { ...ai, state: was.state, dismissed: was.dismissed } : ai;
+  });
 }
 
 export interface TrackerItem {
@@ -239,6 +291,21 @@ export async function refreshTrackerDeadlines(
     }
     if (typeof info.was_estimated === 'boolean') item.wasEstimated = info.was_estimated;
     if (info.important_date_note) item.note = info.important_date_note;
+
+    // Re-pull the shared checklist. Until now a refresh updated dates and never touched
+    // tasks, so a wrong task — the invented "Algebra 2" prerequisite among them — was
+    // permanent: there was no code path anywhere that could ever replace one. Almost always
+    // free (the catalog row already holds a verified list), and the merge keeps whatever the
+    // student has ticked off.
+    const shared = await httpClient.getActionItems(item.id);
+    const incoming = normalizeVerifiedActionItems(shared?.action_items, item.id);
+    if (incoming.length) {
+      const merged = mergeActionItems(item.actionItems, incoming);
+      if (JSON.stringify(merged) !== JSON.stringify(item.actionItems ?? [])) {
+        item.actionItems = merged;
+        changed = true;
+      }
+    }
     if (changed) updated++;
   }
   onProgress?.(items.length, items.length);

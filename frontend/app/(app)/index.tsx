@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import {
   loadTrackerData,
@@ -9,6 +9,9 @@ import {
   peekTrackerData,
   peekTrackerSaved,
   saveTrackerData,
+  isPageBackedTask,
+  visibleTasks,
+  type ActionItem,
   type SavedState,
   type TrackerData,
 } from '@/api/trackerStore';
@@ -37,6 +40,46 @@ import { colors, fonts, radius, space } from '@/ui/theme';
 
 interface StoredProfile {
   synthesized?: string;
+}
+
+// One task row. Extracted when the list split into page-backed and generic groups, so the
+// two cannot drift in how a row actually renders — only the heading above them differs.
+function TaskRow({ ai, onPress, onDismiss }: {
+  ai: ActionItem;
+  onPress: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <View style={styles.taskRow}>
+      <Text style={[styles.taskText, ai.state === 'completed' && styles.taskDone]}>
+        {ai.text}
+        {/* extractTrackerInfo already stores a per-step url; the old app rendered
+            it as a trailing arrow titled "Go to this step". */}
+        {!!ai.url && (
+          <Text style={styles.taskStepLink} onPress={() => Linking.openURL(ai.url as string)}>
+            {'  ↗'}
+          </Text>
+        )}
+      </Text>
+      <StatusPill
+        status={(ai.state as OppStatus) in ACTION_ITEM_STATUS_LABEL ? (ai.state as OppStatus) : 'not_started'}
+        kind="task"
+        onPress={onPress}
+      />
+      {/* The checklist is shared across every student tracking this program and is
+          regenerated on refresh, so a step that genuinely does not apply to THIS student
+          needs somewhere to go that survives the next regeneration. Dismissing marks it,
+          it does not delete it — see mergeActionItems. */}
+      <Pressable
+        onPress={onDismiss}
+        accessibilityLabel={`Dismiss "${ai.text}"`}
+        hitSlop={8}
+        style={styles.taskDismiss}
+      >
+        <Text style={styles.taskDismissMark}>{'×'}</Text>
+      </Pressable>
+    </View>
+  );
 }
 
 // Home Base — ported from the live app's #page-home: welcome banner + DUE SOON badge,
@@ -70,6 +113,23 @@ export default function Home() {
       next[bucket] = next[bucket].map((it) =>
         it.id === itemId
           ? { ...it, actionItems: (it.actionItems ?? []).map((ai) => (ai.id === actionId ? { ...ai, state: NEXT_STATE[ai.state] ?? 'not_started' } : ai)) }
+          : it,
+      );
+    }
+    setData(next);
+    await saveTrackerData(next);
+  }
+
+  // Mark a task as not applicable to this student. Deliberately a flag rather than a
+  // splice: the list comes from the shared catalog row and is re-pulled on every refresh,
+  // so a removed task would come straight back and the button would read as broken.
+  async function dismissActionItem(itemId: string, actionId: string) {
+    if (!data) return;
+    const next: TrackerData = { ...data };
+    for (const bucket of Object.keys(next) as (keyof TrackerData)[]) {
+      next[bucket] = next[bucket].map((it) =>
+        it.id === itemId
+          ? { ...it, actionItems: (it.actionItems ?? []).map((ai) => (ai.id === actionId ? { ...ai, dismissed: true } : ai)) }
           : it,
       );
     }
@@ -268,11 +328,32 @@ export default function Home() {
                   <Text style={styles.modalClose}>✕</Text>
                 </Pressable>
               </View>
-              {upcoming.map(({ item, nextDate, nextLabel }) => (
+              {upcoming.map(({ item, nextDate, nextLabel }) => {
+                // Tasks split by whether anything actually backs them. `isPageBackedTask`
+                // is the only test — a task with no `basis` (everything written before
+                // 2026-08-24) counts as generic, because those came from a prompt that was
+                // told to fill gaps with "what's typical", i.e. to make something up.
+                const allTasks = visibleTasks(item.actionItems);
+                const grounded = allTasks.filter(isPageBackedTask);
+                const generic = allTasks.filter((ai) => !isPageBackedTask(ai));
+                return (
                 <View key={item.id} style={styles.taskCard}>
                   <View style={styles.taskCardHead}>
                     <View style={styles.flex1}>
-                      <Text style={styles.taskCardName} numberOfLines={1}>{item.name}</Text>
+                      {/* The name is the link to the program's own page — ported from the old
+                          #todoModal, where every task card's title was an <a href={item.url}>.
+                          Underlined rather than bare: it was invisible as an affordance in RN. */}
+                      {item.url ? (
+                        <Text
+                          style={[styles.taskCardName, styles.taskCardNameLink]}
+                          numberOfLines={1}
+                          onPress={() => Linking.openURL(item.url as string)}
+                        >
+                          {item.name}
+                        </Text>
+                      ) : (
+                        <Text style={styles.taskCardName} numberOfLines={1}>{item.name}</Text>
+                      )}
                       {!!item.meta && <Text style={styles.taskCardMeta} numberOfLines={1}>{item.meta}</Text>}
                     </View>
                     <StatusPill status={computeProgressStatus(item)} />
@@ -280,24 +361,48 @@ export default function Home() {
                   <Text style={styles.taskCardDate}>
                     {nextDate ? `${shortDate(nextDate)} · ${nextLabel}` : nextLabel}{item.wasEstimated ? ' (est.)' : ''}
                   </Text>
-                  {(item.actionItems ?? []).length ? (
+                  {allTasks.length ? (
                     <View style={styles.taskRows}>
-                      {(item.actionItems ?? []).map((ai) => (
-                        <View key={ai.id} style={styles.taskRow}>
-                          <Text style={[styles.taskText, ai.state === 'completed' && styles.taskDone]}>{ai.text}</Text>
-                          <StatusPill
-                            status={(ai.state as OppStatus) in ACTION_ITEM_STATUS_LABEL ? (ai.state as OppStatus) : 'not_started'}
-                            kind="task"
-                            onPress={() => cycleActionItem(item.id, ai.id)}
-                          />
-                        </View>
-                      ))}
+                      {/* Two groups, and the heading is the whole point: a step we can point
+                          at a line of the program's page for, and a step that is merely how
+                          applications usually work. Rendering them alike is what let an
+                          invented "Algebra 2" prerequisite read as fact. The dates next to
+                          these already carry "(est.)" for exactly this reason. */}
+                      {grounded.length > 0 && (
+                        <>
+                          <Text style={styles.taskGroupLabel}>From the program page</Text>
+                          {grounded.map((ai) => (
+                            <TaskRow
+                              key={ai.id}
+                              ai={ai}
+                              onPress={() => cycleActionItem(item.id, ai.id)}
+                              onDismiss={() => dismissActionItem(item.id, ai.id)}
+                            />
+                          ))}
+                        </>
+                      )}
+                      {generic.length > 0 && (
+                        <>
+                          <Text style={styles.taskGroupLabel}>
+                            Typical steps — confirm on the site
+                          </Text>
+                          {generic.map((ai) => (
+                            <TaskRow
+                              key={ai.id}
+                              ai={ai}
+                              onPress={() => cycleActionItem(item.id, ai.id)}
+                              onDismiss={() => dismissActionItem(item.id, ai.id)}
+                            />
+                          ))}
+                        </>
+                      )}
                     </View>
                   ) : (
                     <Text style={styles.taskNone}>No sub-tasks generated for this one.</Text>
                   )}
                 </View>
-              ))}
+                );
+              })}
             </ScrollView>
           </Pressable>
         </Pressable>
@@ -360,8 +465,16 @@ const styles = StyleSheet.create({
   taskCardMeta: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: colors.slate500 },
   taskCardDate: { fontFamily: fonts.bodyBold, fontSize: 12, lineHeight: 16, color: colors.indigo600, marginBottom: 4 },
   taskRows: { borderTopWidth: 1, borderTopColor: colors.slate200, paddingTop: 8, gap: 6 },
+  // Deliberately quiet: this is a provenance label, not a section header competing with
+  // the program name. It has to be readable, not loud.
+  taskDismiss: { paddingHorizontal: 2 },
+  taskDismissMark: { fontFamily: fonts.bodyMed, fontSize: 15, lineHeight: 15, color: colors.slate400 },
+  taskGroupLabel: { fontFamily: fonts.bodyMed, fontSize: 10, letterSpacing: 0.4,
+    textTransform: 'uppercase', color: colors.slate400, marginTop: 2 },
   taskRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   taskText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: '#334155', flex: 1 },
   taskDone: { textDecorationLine: 'line-through', color: colors.slate400 },
+  taskCardNameLink: { textDecorationLine: 'underline' },
+  taskStepLink: { fontFamily: fonts.bodyBold, color: colors.indigo600 },
   taskNone: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate400, fontStyle: 'italic' },
 });

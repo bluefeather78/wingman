@@ -62,7 +62,7 @@ def handle_deadline_check(opp_id: str, request: Request,
     if not opp:
         return json_error(404, "Opportunity not found.")
 
-    if deadlines.deadline_cache_is_fresh(opp.get("last_checked_at")):
+    if deadlines.deadline_cache_is_fresh(opp.get("dates_last_checked_at")):
         payload = deadlines.cached_deadline_payload(opp, "cached")
         deadlines.log_deadline_check(opp_id, "cached", opp.get("status"), None, None,
                                      opp.get("was_estimated"))
@@ -108,7 +108,7 @@ def handle_deadline_check(opp_id: str, request: Request,
             "important_dates": important_dates,
             "was_estimated": bool(info.get("was_estimated")),
             "important_date_note": info.get("important_date_note"),
-            "last_checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "dates_last_checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
         deadlines.patch_opportunity_deadline(opp_id, patch)
         response = {**patch, "source": source_flag}

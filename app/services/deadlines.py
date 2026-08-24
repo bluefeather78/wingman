@@ -13,7 +13,10 @@ from app.core import _supabase_request
 from app.services.ai import mock_deadline_iso
 
 DEADLINE_STALE_DAYS = 7
-DEADLINE_FIELDS = "id,name,org,url,summary,status,important_dates,was_estimated,important_date_note,last_checked_at"
+# NOTE the column is dates_last_checked_at, NOT last_checked_at (that name only ever
+# existed in check_deadlines.py's DDL comment). Selecting the wrong name made PostgREST
+# 400 the whole select, so every on-demand deadline check 502'd (found 2026-08-23).
+DEADLINE_FIELDS = "id,name,org,url,summary,status,important_dates,was_estimated,important_date_note,dates_last_checked_at"
 
 
 def get_opportunity_for_deadline_check(opp_id):
@@ -92,7 +95,7 @@ def cached_deadline_payload(opp, source):
         "important_dates": opp.get("important_dates") or [],
         "was_estimated": opp.get("was_estimated"),
         "important_date_note": opp.get("important_date_note"),
-        "last_checked_at": opp.get("last_checked_at"),
+        "dates_last_checked_at": opp.get("dates_last_checked_at"),
         "source": source,
     }
 
@@ -108,6 +111,6 @@ def mock_deadline_check_payload(opp):
         "important_dates": [{"label": "Application Deadline", "date_iso": deadline_iso, "type": "deadline"}],
         "was_estimated": True,
         "important_date_note": "Mock data — set GEMINI_API_KEY for a real, live-searched check.",
-        "last_checked_at": None,
+        "dates_last_checked_at": None,
         "source": "mock",
     }

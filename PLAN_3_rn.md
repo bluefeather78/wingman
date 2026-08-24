@@ -372,12 +372,23 @@ Also: the account drawer is now the full #profilePanel port (location save via n
 the tab is titled "Wingman" with the real favicon (expo-router Head + favicon.png rendered
 from favicon.svg), and Home gained the See-all-tasks modal with persisted status cycling.
 
-Remaining, still open: the finder's "Your Profile" AI tag facet; profile Quick-add
-(resume/LinkedIn import modal) and Clear-profile are visual stubs; "Manage Plan" in the
-account drawer is a stub (payments deferred); landing "See how it works" doesn't scroll
-to the film section; the walkthrough film itself stays a poster (user is producing the
-video). Google button visually mirrors the live app's COMING SOON treatment but stays
-functional.
+**Round 3 (same day, commit ec2b890)** — user-reported details: `src/ui/icons.tsx` copies
+the live app's inline stroke SVGs path-for-path via **react-native-svg** (new dep — Metro
+restart needed; icon approximations from Ionicons read wrong, the Quest Log calendar
+especially); the Logo is redrawn from favicon.svg's REAL geometry (**four** bars + glow-halo
+dot, #F97316/#FACC15 — the 3-bar version came from the hero's inline variant); My Vibe
+prose is **PlusJakartaSans_600SemiBold** (`.vibe-value.vibe-body` = 600, new font face
+loaded); the finder's **"Your Profile" facet** is implemented — it reads the
+`filterTags.enrichedTags` the old app caches on the shared student-profile record (free),
+scores visible results with the same batch-scoring Gemini prompt (cached per tag+ids), and
+renders "PROFILE MATCH • RANK #N" with the indigo bar (WHY IT FITS bar is yellow); and both
+drawers **slide in from the right** via the new `RightDrawer` (account 300ms, story 250ms).
+
+Remaining, still open: profile Quick-add (resume/LinkedIn import modal) and Clear-profile
+are visual stubs; "Manage Plan" in the account drawer is a stub (payments deferred);
+landing "See how it works" doesn't scroll to the film section; the walkthrough film itself
+stays a poster (user is producing the video). Google button visually mirrors the live
+app's COMING SOON treatment but stays functional.
 
 ### Other live notes
 - Deadline endpoint `GET /api/opportunities/<id>/deadline` returns **502** server-side

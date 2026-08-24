@@ -31,6 +31,17 @@ def test_root_slash_returns_none():
     assert main._resolve_static("/") is None
 
 
+def test_walkthrough_film_is_served():
+    """The landing film survived the cutover and MUST resolve.
+
+    frontend/app/landing.tsx iframes it via backendUrl('/walkthrough.html'), so a 404
+    here breaks the landing page in production while working perfectly against a local
+    checkout — the file sits at the repo root, which is mostly gitignored, and it was
+    untracked once already after the Phase 3 cutover. That is the failure this pins.
+    """
+    assert main._resolve_static("walkthrough.html") == _norm("walkthrough.html")
+
+
 def test_allowed_static_assets():
     assert main._resolve_static("styles.css") == _norm("styles.css")
     assert main._resolve_static("terms.html") == _norm("terms.html")
@@ -52,9 +63,9 @@ def test_missing_file_returns_none():
 
 def test_retired_spa_files_return_none():
     # The old SPA was deleted at the cutover — these must 404, not resurrect.
+    # walkthrough.html is NOT one of them; see test_walkthrough_film_is_served.
     assert main._resolve_static("index.html") is None
     assert main._resolve_static("script.js") is None
-    assert main._resolve_static("walkthrough.html") is None
 
 
 def test_directory_returns_none():

@@ -1,60 +1,124 @@
 import type { Bucket } from '@/lib/constants';
+import { ALL_BUCKETS } from '@/lib/constants';
 import { httpClient } from './httpClient';
 
-// Server-persisted tracker items (via the gated data key/value store). One flat list keyed
-// by opportunity id; the Tracker screen groups it by bucket and reads saved dates into a
-// calendar. This is the RN equivalent of the old script.js tracker state, server-backed.
-const TRACKER_KEY = 'rn-tracker-items';
+// The tracker is shared with the original web app: it persists under the SAME data key
+// (`hs-tracker-data`) in the SAME shape — a JSON *string* of a 6-bucket object, each bucket
+// an array of items. Reading/writing the same key means a student's existing tracked items
+// show up here and stay in sync across both frontends during cutover.
+const TRACKER_KEY = 'hs-tracker-data';
 
-export interface TrackedDate {
+export interface ImportantDate {
   label: string;
   dateISO: string;
-  type: string;
+  type: string; // opens | deadline | event_start | event_end | other
+}
+
+export interface ActionItem {
+  id: string;
+  text: string;
+  url: string | null;
+  state: string;
 }
 
 export interface TrackerItem {
-  oppId: string;
-  bucket: Bucket;
+  id: string;
   name: string;
-  org?: string | null;
   url?: string | null;
-  summary?: string | null;
-  reason?: string;
-  // Filled in when the student runs a deadline check; drives the calendar view.
-  status?: string;
-  dates?: TrackedDate[];
-  checkedAt?: string;
+  type?: string | null;
+  bucket: Bucket;
+  progressStatus?: string;
+  status?: 'running' | 'not_running' | 'unknown' | string;
+  reviewStatus?: string | null;
+  reviewSummary?: string | null;
+  meta?: string;
+  fit?: string;
+  note?: string;
+  noteType?: string;
+  importantDates?: ImportantDate[];
+  deadlineLabel?: string;
+  wasEstimated?: boolean;
+  applyUrl?: string | null;
+  applyLabel?: string | null;
+  actionItems?: ActionItem[];
 }
 
-export async function loadTrackerItems(): Promise<TrackerItem[]> {
-  const items = await httpClient.loadData<TrackerItem[]>(TRACKER_KEY);
-  return Array.isArray(items) ? items : [];
+export type TrackerData = Record<Bucket, TrackerItem[]>;
+
+function emptyData(): TrackerData {
+  return {
+    summerPrograms: [], internships: [], researchCompetitions: [],
+    pureCompetitions: [], conferences: [], journals: [],
+  };
 }
 
-async function save(items: TrackerItem[]): Promise<void> {
-  await httpClient.saveData(TRACKER_KEY, items);
+export async function loadTrackerData(): Promise<TrackerData> {
+  const raw = await httpClient.loadData<string | Record<string, unknown>>(TRACKER_KEY);
+  if (!raw) return emptyData();
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = typeof raw === 'string' ? JSON.parse(raw) : (raw as Record<string, unknown>);
+  } catch {
+    return emptyData();
+  }
+  const data = emptyData();
+  // Legacy 4-bucket migration mirror (old app did the same).
+  if (Array.isArray((parsed as { competitions?: unknown }).competitions) && !Array.isArray(parsed.researchCompetitions)) {
+    parsed.researchCompetitions = (parsed as { competitions: unknown[] }).competitions;
+  }
+  ALL_BUCKETS.forEach((b) => {
+    const arr = parsed[b];
+    if (Array.isArray(arr)) {
+      data[b] = (arr as TrackerItem[]).map((it) => ({
+        ...it,
+        bucket: b,
+        importantDates: Array.isArray(it.importantDates) ? it.importantDates : [],
+        actionItems: Array.isArray(it.actionItems) ? it.actionItems : [],
+      }));
+    }
+  });
+  return data;
 }
 
-// Add (idempotent by oppId) and persist. Returns the updated list.
-export async function addTrackerItem(item: TrackerItem): Promise<TrackerItem[]> {
-  const items = await loadTrackerItems();
-  if (items.some((i) => i.oppId === item.oppId)) return items;
-  const next = [...items, item];
-  await save(next);
-  return next;
+export async function saveTrackerData(data: TrackerData): Promise<void> {
+  await httpClient.saveData(TRACKER_KEY, JSON.stringify(data));
 }
 
-export async function removeTrackerItem(oppId: string): Promise<TrackerItem[]> {
-  const items = await loadTrackerItems();
-  const next = items.filter((i) => i.oppId !== oppId);
-  await save(next);
-  return next;
+export function flattenItems(data: TrackerData): TrackerItem[] {
+  return ALL_BUCKETS.flatMap((b) => data[b]);
 }
 
-// Merge a patch (e.g. a deadline-check result) into one item and persist.
-export async function updateTrackerItem(oppId: string, patch: Partial<TrackerItem>): Promise<TrackerItem[]> {
-  const items = await loadTrackerItems();
-  const next = items.map((i) => (i.oppId === oppId ? { ...i, ...patch } : i));
-  await save(next);
-  return next;
+export function countItems(data: TrackerData): number {
+  return ALL_BUCKETS.reduce((n, b) => n + data[b].length, 0);
+}
+
+function existsAcross(data: TrackerData, id: string, url?: string | null): boolean {
+  return ALL_BUCKETS.some((b) => data[b].some((i) => i.id === id || (!!url && i.url === url)));
+}
+
+// Add (idempotent by id/url across all buckets) and persist. Returns the updated data.
+export async function addTrackerItem(bucket: Bucket, item: TrackerItem): Promise<TrackerData> {
+  const data = await loadTrackerData();
+  if (existsAcross(data, item.id, item.url)) return data;
+  data[bucket] = [...data[bucket], { ...item, bucket }];
+  await saveTrackerData(data);
+  return data;
+}
+
+export async function removeTrackerItem(id: string): Promise<TrackerData> {
+  const data = await loadTrackerData();
+  ALL_BUCKETS.forEach((b) => {
+    data[b] = data[b].filter((i) => i.id !== id);
+  });
+  await saveTrackerData(data);
+  return data;
+}
+
+export async function updateTrackerItem(id: string, patch: Partial<TrackerItem>): Promise<TrackerData> {
+  const data = await loadTrackerData();
+  ALL_BUCKETS.forEach((b) => {
+    data[b] = data[b].map((i) => (i.id === id ? { ...i, ...patch } : i));
+  });
+  await saveTrackerData(data);
+  return data;
 }

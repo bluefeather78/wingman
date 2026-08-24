@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { Linking, Pressable, StyleSheet, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Linking, Pressable, StyleSheet, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
-import { addTrackerItem } from '@/api/trackerStore';
+import { addTrackerItem, flattenItems, loadTrackerData } from '@/api/trackerStore';
 import type { Opportunity } from '@/api/types';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import { ACTIVE_KINDS, KIND_CONFIG } from '@/lib/kinds';
@@ -11,7 +11,7 @@ import { countProfileWords } from '@/lib/profile';
 import { parseGradeFromText } from '@/lib/grade';
 import { inferSubjects, preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
 import { findBucketForKind } from '@/lib/tracker';
-import { Badge, Chip, Field, PopButton, Screen, SoftCard, Txt } from '@/ui/components';
+import { Badge, Chip, Field, PopButton, PopCard, Screen, SoftCard, Txt } from '@/ui/components';
 import { colors, radius, space } from '@/ui/theme';
 
 interface Result {
@@ -21,6 +21,15 @@ interface Result {
 }
 const callGemini = httpClient.callGemini.bind(httpClient);
 type Stage = 'home' | 'quiz' | 'form' | 'results';
+
+// Map a catalog opportunity's `type` to a kind key (used when adding from a mixed suggest list).
+function kindForOpp(opp: Opportunity): string {
+  const map: Record<string, string> = {
+    Program: 'summer', Internship: 'internship', Conference: 'conference',
+    Journal: 'journal', Research: 'research-competition', Competition: 'pure-competition',
+  };
+  return map[(opp.type as string) ?? ''] ?? 'summer';
+}
 
 const GRADES = [
   { label: 'Any', v: '' },
@@ -70,17 +79,31 @@ export default function Finder() {
   const [results, setResults] = useState<Result[]>([]);
   const [note, setNote] = useState<string | null>(null);
   const [added, setAdded] = useState<Set<string>>(new Set());
+  const [trackedIds, setTrackedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let alive = true;
     httpClient.getOpportunities().then((r) => alive && setOpps(r)).catch((e) => alive && setOppsError((e as Error).message));
     httpClient.loadData<{ synthesized?: string }>('student-profile').then((p) => alive && setProfileText(p?.synthesized ?? '')).catch(() => {});
+    loadTrackerData().then((d) => alive && setTrackedIds(new Set(flattenItems(d).map((i) => i.id)))).catch(() => {});
     return () => {
       alive = false;
     };
   }, []);
 
   const profileReady = countProfileWords(profileText) >= PROFILE_SUFFICIENT_LENGTH;
+
+  // Auto-run the profile-based suggestion once when entering with a ready profile (matches
+  // the web app, which starts "Finding your matches…" on load rather than behind a button).
+  const autoRan = useRef(false);
+  useEffect(() => {
+    if (autoRan.current) return;
+    if (opps && profileReady && stage === 'home' && !results.length) {
+      autoRan.current = true;
+      void suggestForMe();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opps, profileReady]);
 
   function openForm(k: string) {
     setKind(k);
@@ -140,16 +163,37 @@ export default function Finder() {
   }
 
   async function addToTracker(opp: Opportunity, reason: string) {
+    const bucket = findBucketForKind(suggestMode ? kindForOpp(opp) : kind);
+    // Build the shared item shape; enrich dates from the cross-user deadline cache.
+    const meta = [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · ');
+    const item = {
+      id: opp.id,
+      name: opp.name,
+      url: (opp.url as string) ?? null,
+      type: (opp.type as string) ?? null,
+      bucket,
+      progressStatus: 'not_started',
+      status: 'unknown' as const,
+      reviewStatus: (opp.review_status as string) ?? null,
+      reviewSummary: (opp.review_summary as string) ?? null,
+      meta: meta || (opp.summary as string) || '',
+      fit: reason || (opp.summary as string) || '',
+      importantDates: [] as { label: string; dateISO: string; type: string }[],
+      applyUrl: (opp.url as string) ?? null,
+      applyLabel: 'Apply / learn more',
+      actionItems: [],
+    };
     try {
-      await addTrackerItem({
-        oppId: opp.id,
-        bucket: findBucketForKind(suggestMode ? 'summer' : kind),
-        name: opp.name,
-        org: opp.org ?? null,
-        url: opp.url ?? null,
-        summary: opp.summary ?? null,
-        reason,
-      });
+      const info = await httpClient.getDeadlineCheck(opp.id);
+      if (info?.important_dates?.length) {
+        item.importantDates = info.important_dates.map((d) => ({ label: d.label, dateISO: d.date_iso, type: d.type }));
+        if (info.status) item.status = info.status as typeof item.status;
+      }
+    } catch {
+      /* dates are best-effort */
+    }
+    try {
+      await addTrackerItem(bucket, item);
       setAdded((p) => new Set(p).add(opp.id));
     } catch (e) {
       setNote(`Couldn't add: ${(e as Error).message}`);
@@ -158,6 +202,23 @@ export default function Finder() {
 
   // ---------- Home stage ----------
   if (stage === 'home') {
+    // Auto-suggest loading state (matches :8000's "Finding your matches…").
+    if (suggestMode && searching) {
+      return (
+        <Screen>
+          <SoftCard style={styles.loadingCard}>
+            <ActivityIndicator color={colors.orange} />
+            <View style={styles.flex1}>
+              <Txt variant="h2">Finding your matches…</Txt>
+              <Txt variant="body">Searching based on everything in your profile.</Txt>
+            </View>
+          </SoftCard>
+          <Pressable style={styles.centerLink} onPress={() => setBrowseOpen((b) => !b)}>
+            <Txt variant="small" style={styles.link}>Click here to browse opportunities</Txt>
+          </Pressable>
+        </Screen>
+      );
+    }
     return (
       <Screen>
         {/* Suggest hero */}
@@ -290,6 +351,13 @@ export default function Finder() {
   return (
     <Screen>
       <BackLink label="New search" onPress={() => setStage(suggestMode ? 'home' : 'form')} />
+      <SoftCard color={colors.navy} style={styles.deepenBanner}>
+        <View style={styles.flex1}>
+          <Txt variant="h3" style={{ color: colors.white }}>Want more matches like these?</Txt>
+          <Txt variant="small" style={{ color: '#D6E4F5' }}>Deepen your story by adding more details.</Txt>
+        </View>
+        <PopButton label="Deepen your story" small onPress={() => router.push('/(app)/profile')} />
+      </SoftCard>
       <View style={{ gap: space.xs }}>
         <Txt variant="label">{suggestMode ? 'SUGGESTED FOR YOU' : KIND_CONFIG[kind].name.toUpperCase()}</Txt>
         <Txt variant="h1">
@@ -297,23 +365,44 @@ export default function Finder() {
         </Txt>
         {!!note && <Txt style={styles.note}>{note}</Txt>}
       </View>
-      {results.map(({ opp, reason, tier }) => (
-        <SoftCard key={opp.id} style={{ gap: space.sm }}>
-          <View style={styles.cardHead}>
-            <Txt variant="h3" style={styles.flex1}>
-              {opp.name}
-            </Txt>
-            {tier === 'strong' ? <Badge label="STRONG FIT" bg={colors.greenSoft} fg={colors.green} /> : <Badge label="WORTH A LOOK" bg={colors.lavender} fg={colors.navy} />}
-          </View>
-          {!!opp.org && <Txt variant="small">{opp.org}</Txt>}
-          {!!reason && <Txt variant="bodyStrong" style={{ color: colors.navy }}>“{reason}”</Txt>}
-          {!!opp.summary && <Txt variant="body" numberOfLines={3}>{opp.summary}</Txt>}
-          <View style={styles.actions}>
-            {!!opp.url && <PopButton label="Open" variant="secondary" small onPress={() => Linking.openURL(opp.url as string)} />}
-            <PopButton label={added.has(opp.id) ? 'Added ✓' : 'Add to tracker'} small onPress={() => addToTracker(opp, reason)} disabled={added.has(opp.id)} />
-          </View>
-        </SoftCard>
-      ))}
+      {results.map(({ opp, reason, tier }) => {
+        const cat = KIND_CONFIG[kindForOpp(opp)]?.name?.toUpperCase() ?? 'OPPORTUNITY';
+        const reviewed = !!opp.review_status && opp.review_status !== 'insufficient_data' && opp.review_status !== 'concerns_found';
+        const metaPills = [opp.org, opp.type, opp.price, opp.location, opp.state, opp.season]
+          .filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+        return (
+          <PopCard key={opp.id} style={{ gap: space.sm }}>
+            <View style={styles.badgeRow}>
+              <Badge label={cat} bg={colors.lavender} fg={colors.purple} />
+              {tier === 'strong' ? <Badge label="⚡ STRONG FIT" bg={colors.yellow} fg={colors.navyDeep} /> : <Badge label="WORTH A LOOK" bg={colors.lavender} fg={colors.navy} />}
+              {reviewed && <Badge label="✓ WELL REVIEWED" bg={colors.greenSoft} fg={colors.green} />}
+            </View>
+            <Txt variant="h2">{opp.name}</Txt>
+            {!!reason && (
+              <View style={{ gap: 2 }}>
+                <Txt variant="label">WHY IT FITS</Txt>
+                <Txt variant="bodyStrong" style={{ color: colors.ink }}>{reason}</Txt>
+              </View>
+            )}
+            {metaPills.length > 0 && (
+              <View style={styles.metaRow}>
+                {metaPills.slice(0, 6).map((p, i) => (
+                  <View key={i} style={styles.metaPill}><Txt variant="small" style={styles.metaPillText}>{p}</Txt></View>
+                ))}
+              </View>
+            )}
+            {!!opp.summary && <Txt variant="body" numberOfLines={3}>{opp.summary as string}</Txt>}
+            <View style={styles.actions}>
+              {!!opp.url && <PopButton label="Open" variant="secondary" small onPress={() => Linking.openURL(opp.url as string)} />}
+              {added.has(opp.id) || trackedIds.has(opp.id) ? (
+                <Badge label="📌 IN QUEST LOG" bg={colors.navy} fg={colors.white} />
+              ) : (
+                <PopButton label="Add to tracker" small onPress={() => addToTracker(opp, reason)} />
+              )}
+            </View>
+          </PopCard>
+        );
+      })}
     </Screen>
   );
 }
@@ -343,4 +432,10 @@ const styles = StyleSheet.create({
   note: { color: colors.orangeDeep, fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13 },
   cardHead: { flexDirection: 'row', gap: space.sm, alignItems: 'flex-start' },
   actions: { flexDirection: 'row', gap: space.sm, marginTop: space.xs, flexWrap: 'wrap' },
+  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, flexWrap: 'wrap' },
+  metaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  metaPill: { borderWidth: 1, borderColor: colors.borderSoft, borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 3 },
+  metaPillText: { color: colors.inkSoft },
+  loadingCard: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  deepenBanner: { flexDirection: 'row', alignItems: 'center', gap: space.md },
 });

@@ -2,8 +2,11 @@
 
 Return contract (pinned from source): returns an absolute filesystem path string
 when the resolved target is an existing, allowed file; returns None otherwise
-(dotfile/dotdir, agent_logs, traversal escape, denied ext/name, or missing file).
-Paths are anchored under main.REPO_ROOT (the repo root, which holds index.html).
+(empty/root path, dotfile/dotdir, agent_logs, traversal escape, denied ext/name,
+or missing file). Paths are anchored under main.REPO_ROOT. Since the Phase 3
+cutover (tag `workingwithauth`) the old SPA is gone: the route only serves the
+static pages the app still links to (terms/privacy/about + styles.css/favicon.svg),
+and the root path is handled by serve_static (status/redirect), never by a file.
 """
 import os
 
@@ -20,25 +23,24 @@ def _norm(*parts):
 # --------------------------------------------------------------------------- #
 # Allowed / existing files
 # --------------------------------------------------------------------------- #
-def test_empty_path_resolves_to_index():
-    assert main._resolve_static("") == _norm("index.html")
+def test_empty_path_returns_none():
+    assert main._resolve_static("") is None
 
 
-def test_root_slash_resolves_to_index():
-    assert main._resolve_static("/") == _norm("index.html")
-
-
-def test_index_html_returns_path():
-    assert main._resolve_static("index.html") == _norm("index.html")
+def test_root_slash_returns_none():
+    assert main._resolve_static("/") is None
 
 
 def test_allowed_static_assets():
     assert main._resolve_static("styles.css") == _norm("styles.css")
-    assert main._resolve_static("script.js") == _norm("script.js")
+    assert main._resolve_static("terms.html") == _norm("terms.html")
+    assert main._resolve_static("privacy.html") == _norm("privacy.html")
+    assert main._resolve_static("about.html") == _norm("about.html")
+    assert main._resolve_static("favicon.svg") == _norm("favicon.svg")
 
 
 def test_leading_slash_stripped():
-    assert main._resolve_static("/index.html") == _norm("index.html")
+    assert main._resolve_static("/terms.html") == _norm("terms.html")
 
 
 # --------------------------------------------------------------------------- #
@@ -48,8 +50,15 @@ def test_missing_file_returns_none():
     assert main._resolve_static("does-not-exist-xyz.html") is None
 
 
-def test_directory_without_index_returns_none():
-    # 'app' exists as a dir but has no index.html -> maps to app/index.html -> missing.
+def test_retired_spa_files_return_none():
+    # The old SPA was deleted at the cutover — these must 404, not resurrect.
+    assert main._resolve_static("index.html") is None
+    assert main._resolve_static("script.js") is None
+    assert main._resolve_static("walkthrough.html") is None
+
+
+def test_directory_returns_none():
+    # 'app' exists as a dir; directories are not served (no index.html mapping anymore).
     assert main._resolve_static("app") is None
 
 

@@ -4,19 +4,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-"Highschool Wingman" — a static vanilla-JS single-page app that helps high schoolers find and
-track extracurricular opportunities (summer programs, internships, research competitions,
-academic competitions, conferences, journals). No build step, no framework, no bundler.
-Tailwind CSS is loaded via CDN in [index.html](index.html).
+"Highschool Wingman" — an app that helps high schoolers find and track extracurricular
+opportunities (summer programs, internships, research competitions, academic competitions,
+conferences, journals). The frontend is an **Expo (React Native + RN-web) app in
+`frontend/`** targeting web + iOS + Android from one codebase; the backend is a FastAPI
+service in `app/`.
+
+**The old vanilla-JS SPA (index.html / script.js / styles.css / walkthrough.html) was
+retired 2026-08-23 at git tag `workingwithauth`** — check out that tag to see it. Every
+`script.js`/`index.html` reference in this file is historical: the *behavioral rationale*
+(profile-chat caching, tracker classification, mock mode, etc.) was ported verbatim into
+`frontend/src/lib/*` and still applies; the DOM-glue descriptions do not. `styles.css` and
+`favicon.svg` survive at the repo root only because terms/privacy/about pages use them.
 
 ## Running the app
+
+Backend (API + the static terms/privacy/about pages, on `http://localhost:8000`):
 
 ```
 python server.py
 ```
 
-or, equivalently, `uvicorn app.main:app --host 0.0.0.0 --port 8000`. Serves the static site
-and API on `http://localhost:8000`.
+or, equivalently, `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
+
+Frontend (RN-web dev server on `http://localhost:8081`, from `frontend/`):
+
+```
+EXPO_PUBLIC_API_BASE=http://127.0.0.1:8000 npx expo start --web --port 8081
+```
+
+**Never start Metro with `CI=1`** — CI mode disables the file watcher, so edits silently
+never rebundle. `cd frontend && npx tsc --noEmit` must stay clean. Web deploys via
+`expo export -p web` → `frontend/dist` (Render Static Site, see `render.yaml`); native
+ships via EAS. The API's root path returns a JSON status (or redirects when the
+`WEB_APP_URL` env var is set to the web origin).
 
 **As of the Phase 1 rearchitecture (2026-08-23, `PLAN_1_decompose.md`), the web layer is a
 FastAPI app under `app/`, not the old `http.server` monolith.** `server.py` is now a thin
@@ -45,7 +66,8 @@ function name in its new home.
   `app/core.py` (the shared seam: Supabase plumbing, account CRUD, cost/activity accounting,
   `subscription_state`), `app/services/*.py` (opportunities, deadlines, ai mocks,
   mailing_list, google_oauth, resume), `app/routes/*.py` (one router per domain),
-  `app/main.py` (the app; serves the SPA from the repo root via a deny-listed static route).
+  `app/main.py` (the app; a deny-listed static route serves ONLY the surviving root-level
+  static pages — terms/privacy/about + styles.css/favicon.svg — the SPA itself is gone).
 - **`ops/`** — the local-only operations console: `ops/core.py` (agent orchestration,
   metrics, user-costs, seeds, snapshots, review-queue moderation — everything that backed
   `/api/agents/*` and `/api/seeds`) and `ops/admin.py` (the router, every route
@@ -64,12 +86,18 @@ function name in its new home.
 
 ## Architecture
 
-**Three-file frontend, no modules:** [index.html](index.html) (markup/layout),
-[script.js](script.js) (~2500+ lines, all app logic, loaded as one non-module script),
-[styles.css](styles.css). Everything is global — functions and state (`let`/`const` at top
-level of script.js) are called directly from inline `onclick="..."`/`onsubmit="..."`
-attributes in the HTML. When adding a function that's invoked from HTML, it must stay a
-plain global function (not wrapped in a module or IIFE).
+**Frontend: the Expo app in `frontend/`** (see `PLAN_3_rn.md` for the full build log).
+Routes in `frontend/app/` (expo-router: landing, login, google-auth, and the authed
+`(app)/` group — Home Base / My Vibe / Fresh Finds / Quest Log / subscription); ported
+pure logic in `frontend/src/lib/` (ranking, profile, profileChat, tracker, status,
+extractJSON, profileHighlight — dependency-injected model access, no DOM); the API seam
+in `frontend/src/api/` (`httpClient` implements the Phase-2 bearer/refresh contract,
+`trackerStore` reads/writes the same `hs-tracker-data`/`hs-tracker-saved`/`student-profile`
+keys the old app used); the "BENTO & POP" design system in `frontend/src/ui/` (`theme.ts`
+tokens, `components.tsx`, `NavBar.tsx`, `icons.tsx` — exact SVG ports). Pixel parity with
+the retired SPA was verified against tag `workingwithauth` via computed-style diffs; the
+design source of truth is styles.css (kept for legal pages) plus the Claude Design
+"Wingman Design System" project.
 
 **Opportunity data**: the opportunity catalog (1200+ rows) lives in a Supabase (hosted
 Postgres) `opportunities` table, not a static file — `server.py`'s `/api/opportunities`
@@ -1281,33 +1309,11 @@ Home/Dashboard (progress bars, todo counts), Wizard/Finder (quiz or free-text pr
 (calendar + list views across buckets in `ALL_BUCKETS`: summerPrograms, internships,
 researchCompetitions, pureCompetitions, conferences, journals).
 
-**The landing page's walkthrough film** is [walkthrough.html](walkthrough.html) — a
-**vendored, self-extracting bundle** exported from a design canvas, holding its own React
-runtime, the composition source and every webfont in one ~1.5MB file. **Do not hand-edit
-it**: the real source is a `<script type="__bundler/manifest">` block of gzipped,
-base64'd assets, so every apparent line of it is machine-written. Re-export and replace
-the whole file to change the film. It is 1920x1080, 37 seconds, autoplays **once** on
-load, and ships its own dark play/scrub transport bar — that bar is the replay control,
-which is why nothing on the landing page draws one.
-
-Those two facts (heavy, and self-starting) are why it is **not** a plain `<iframe>` in
-the markup. `mountWalkthrough()`/`unmountWalkthrough()`/`initWalkthrough()` in
-[script.js](script.js) inject the frame only once `#page-landing-how` is ≥35% on screen,
-so the film starts when it is actually being watched rather than finishing unseen while
-the visitor is still reading the hero, and no landing visit pays the 1.5MB unless someone
-scrolls that far. `prefers-reduced-motion` suppresses the auto-mount; the poster stays
-clickable, which is also the fallback where `IntersectionObserver` is missing. The three
-`showPage`-adjacent functions that hide the landing page (`showLoginGate`, `showPaywall`,
-`showApp`) each call `unmountWalkthrough()` explicitly rather than trusting the observer
-to notice the section went `display:none`.
-
-It replaced the old "What You're Chasing" mock-progress-bar card, and took over that
-section's `id="page-landing-how"` so the hero's **See how it works** button lands on the
-film with the three explainer cards reading as its captions underneath. The film is
-authored for desktop: below ~500px wide its in-frame text is too small to read, and those
-three cards are deliberately the readable version of the same story. Note the *other*
-"What You're Chasing" in [index.html](index.html) is the in-app tracker header inside
-`#appShell` and is unrelated.
+**The landing page's walkthrough film** (`walkthrough.html`, a vendored ~1.5MB
+self-extracting bundle with lazy IntersectionObserver mounting) was **retired with the old
+SPA** — recover it from tag `workingwithauth` if ever needed. The RN landing renders the
+film section as a static poster frame; the user is producing a replacement video to embed
+there, so don't rebuild the old film.
 
 ## Security notes for this repo
 

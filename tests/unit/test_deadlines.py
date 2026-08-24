@@ -72,7 +72,7 @@ def test_cached_payload_full():
         "important_dates": [{"label": "x"}],
         "was_estimated": False,
         "important_date_note": "note",
-        "last_checked_at": "2026-08-23T00:00:00+00:00",
+        "dates_last_checked_at": "2026-08-23T00:00:00+00:00",
     }
     got = deadlines.cached_deadline_payload(opp, "db-cache")
     assert got == {
@@ -80,7 +80,7 @@ def test_cached_payload_full():
         "important_dates": [{"label": "x"}],
         "was_estimated": False,
         "important_date_note": "note",
-        "last_checked_at": "2026-08-23T00:00:00+00:00",
+        "dates_last_checked_at": "2026-08-23T00:00:00+00:00",
         "source": "db-cache",
     }
 
@@ -91,7 +91,7 @@ def test_cached_payload_missing_keys_default():
     assert got["important_dates"] == []   # None/missing -> []
     assert got["was_estimated"] is None
     assert got["important_date_note"] is None
-    assert got["last_checked_at"] is None
+    assert got["dates_last_checked_at"] is None
     assert got["source"] == "src"
 
 
@@ -108,7 +108,7 @@ def test_mock_payload_structure():
     got = deadlines.mock_deadline_check_payload(opp)
     assert got["status"] == "running"
     assert got["was_estimated"] is True
-    assert got["last_checked_at"] is None
+    assert got["dates_last_checked_at"] is None
     assert got["source"] == "mock"
     assert len(got["important_dates"]) == 1
     d = got["important_dates"][0]

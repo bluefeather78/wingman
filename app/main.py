@@ -14,7 +14,7 @@ import os
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import GEMINI_API_KEY, ANTHROPIC_API_KEY
@@ -84,17 +84,24 @@ if os.environ.get("WINGMAN_ENABLE_OPS"):
     print("[ops] Admin console ENABLED at /admin and /api/agents/* (localhost only)")
 
 
-# ---------------- Static SPA (repo root) ----------------
-# The old SimpleHTTPRequestHandler served the whole repo root. We keep serving the SPA
-# assets from there (index.html/script.js/styles.css/*.html + images/fonts) but refuse
-# source, secrets, and logs so the shipped service can't hand those out. Phase 3 moves
-# the frontend to a Render Static Site and this block goes away.
+# ---------------- Static pages (repo root) ----------------
+# The old vanilla-JS SPA was retired at tag `workingwithauth` (Phase 3 cutover): the web
+# frontend is now the Expo app in frontend/ (Metro in dev, Render Static Site in prod).
+# This route survives ONLY to serve the static pages the app still links to on this host
+# — terms.html / privacy.html / about.html plus the styles.css + favicon.svg they use —
+# with the same deny-list so the service can't hand out source, secrets, or logs.
 _DENY_EXT = {".py", ".pyc", ".pyo", ".log", ".sql", ".ps1", ".md", ".txt", ".sh"}
 _DENY_NAMES = {".env", "agent_settings.json"}
 
+# Where the web app now lives. When set (e.g. the Render Static Site origin), a browser
+# hitting this service's root is redirected there; otherwise a plain JSON status answers.
+WEB_APP_URL = os.environ.get("WEB_APP_URL", "").strip()
+
 
 def _resolve_static(rel: str):
-    rel = rel.strip("/") or "index.html"
+    rel = rel.strip("/")
+    if not rel:
+        return None  # the root is handled by serve_static, not by a file
     # Reject dotfiles/dotdirs (.env, .git, ...), agent logs, and traversal.
     parts = rel.split("/")
     if any(p.startswith(".") for p in parts) or "agent_logs" in parts:
@@ -102,8 +109,6 @@ def _resolve_static(rel: str):
     candidate = os.path.normpath(os.path.join(REPO_ROOT, rel))
     if candidate != REPO_ROOT and not candidate.startswith(REPO_ROOT + os.sep):
         return None
-    if os.path.isdir(candidate):
-        candidate = os.path.join(candidate, "index.html")
     base = os.path.basename(candidate).lower()
     _, ext = os.path.splitext(base)
     if ext in _DENY_EXT or base in _DENY_NAMES:
@@ -113,6 +118,11 @@ def _resolve_static(rel: str):
 
 @app.get("/{full_path:path}")
 def serve_static(full_path: str):
+    if not full_path.strip("/"):
+        if WEB_APP_URL:
+            return RedirectResponse(WEB_APP_URL, status_code=307)
+        return JSONResponse({"ok": True, "service": "wingman-api",
+                             "note": "The web app is served separately; set WEB_APP_URL to redirect here."})
     resolved = _resolve_static(full_path)
     if resolved is None:
         raise HTTPException(status_code=404)

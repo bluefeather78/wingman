@@ -36,7 +36,7 @@ PAGE = """<!DOCTYPE html>
 <body class="text-slate-900 bg-white">
 <div class="max-w-3xl mx-auto px-5 py-10">
   <div class="flex items-center justify-between gap-4 mb-8 pb-6 border-b-2 border-slate-200">
-    <a href="index.html" class="flex items-center gap-2 no-underline text-slate-900">
+    <a href="/" class="flex items-center gap-2 no-underline text-slate-900">
       <img src="favicon.svg" alt="" class="w-10 h-10 rounded-xl">
       <span class="font-heading font-extrabold text-xl">Wingman</span>
     </a>
@@ -46,7 +46,7 @@ PAGE = """<!DOCTYPE html>
 {body}
   </article>
   <div class="mt-10 pt-6 border-t-2 border-slate-200">
-    <a href="index.html" class="font-bold text-sm text-indigo-600 hover:underline">&larr; Back to Wingman</a>
+    <a href="/" class="font-bold text-sm text-indigo-600 hover:underline">&larr; Back to Wingman</a>
   </div>
 </div>
 </body>

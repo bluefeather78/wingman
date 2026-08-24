@@ -321,21 +321,49 @@ frontends share state (required for cutover):
 - **My Vibe** (`app/(app)/profile.tsx`): MATCHES — "story is ready" banner, basics tiles
   (grade/state/gender via `extractProfileBasics`), INTERESTS & EXPERIENCE prose, chat.
 
-### KNOWN GAPS — pick up here next session
-1. **Wide-screen width bug (highest priority).** On a wide monitor (~2000px) the top nav +
-   content stretch nearly edge-to-edge, while `:8000` centers everything in a **~1140px
-   column**. Fix: give the app `NavBar` bar and `Screen`'s inner container a shared centered
-   `maxWidth` (~1140, `alignSelf:'center'`), and the landing the same. `Screen` inner is
-   currently `maxWidth: 820`; NavBar bar uses `marginHorizontal` (stretches). This is likely
-   why the user felt "nothing changed" when comparing the landing on a wide screen.
-2. **Landing** (`app/landing.tsx`) not brought to parity: title should be **one line, larger**;
-   audience cards need **navy borders** (real ones are bordered, mine are plain SoftCards);
-   center at ~1140. The "See how it works" film is **deliberately left as caption cards** —
-   the user is generating an embedded video themselves; don't rebuild the film.
-3. **Fresh Finds** still missing: the **filter row** (Your Profile / Only untracked / Type /
-   Cost / Season / Format) and the floating **multi-select "Add to my tracker"** bar
-   (RN adds per-card today).
-4. **Quest Log list** missing: the ⭐ save icon and the **"Show details"** expander per card.
+### KNOWN GAPS — RESOLVED in the 2026-08-23 pixel-parity session (commit 35d8a9e)
+
+All four gaps above were closed, verified with a headless Playwright harness that logs both
+frontends into the same account and screenshots every screen at 1280 and 1920 (harness lives
+in the session scratchpad; the approach: inject the RN token pair into localStorage via
+`wingman.access_token`/`wingman.refresh_token`, grow the viewport to the RN inner scroll
+height for full-page captures):
+
+1. **Width bug fixed** — nav pill + content share a centered `APP_MAX_WIDTH = 896` column
+   (max-w-4xl, what `:8000` actually uses — not 1140; the landing uses 1100 and got
+   `LANDING_MAX_WIDTH`). NavBar is the live app's floating pill (sticky, blue glow,
+   drawn-favicon logo, teal 👤 badge opening an account drawer with Log out).
+2. **Landing rebuilt** section-for-section (one-line 48px hero, centered yellow badge,
+   3px-navy-bordered audience pop-cards, film poster frame, feature cards, gradient CTA,
+   founder card, footer).
+3. **Fresh Finds**: filter row (Only untracked + Type/Cost/Season/Format facet dropdowns)
+   and the old ⭐ Save Match selection model + fixed bottom "Add to my tracker →" bar;
+   result cards match resultCardHTML (border-4 slate-900 rounded-3xl, violet kind pill,
+   yellow Strong Fit, WHY IT FITS left-bar block, indigo-200 meta pills, In Quest Log tag).
+   NOT ported: the AI "Your Profile" tag facet (needs the profile-tag extraction slot).
+4. **Quest Log list**: ⭐ save / ✕ delete icon-btns, Saved for Later section, year-tag +
+   two-column date rows with "(cont.)", Show details expander, predicted/stale banners,
+   status-then-date sort. Calendar: month-cards (#F8FAFC/#CBD5E1, indigo current month)
+   with the exact assignCalendarColors palette — colors assigned from RAW bucket order
+   (sorting first flips them; the calendar deliberately uses unsorted entries).
+
+**Logic parity fixed alongside pixels** — `src/lib/status.ts` is a verbatim port of
+script.js computeProgressStatus (incl. running+wasEstimated → Future Event),
+getDisplayMilestones, earliestUpcoming, computeStats (saved-for-later excluded via the
+shared `hs-tracker-saved` key), upcoming/beyond selection. Before this the RN home showed
+"6 tracked / 2 Happening Now" against the old app's "0 Happening Now" (no-date items were
+misclassified).
+
+**Backend fix found by the parity run (commit 2a0bbf3):** the on-demand deadline endpoint's
+502 was the Phase-1 extraction selecting/patching a nonexistent `last_checked_at` column
+(the real column is `dates_last_checked_at` — check_deadlines.py and script.js both use it).
+Fixed in `app/services/deadlines.py` + `app/routes/opportunities.py`; verified 200.
+
+Remaining, still open: the finder's "Your Profile" AI tag facet; profile Quick-add
+(resume/LinkedIn import modal) and Clear-profile are visual stubs; landing "See how it
+works" doesn't scroll to the film section; the walkthrough film itself stays a poster
+(user is producing the video). Google button visually mirrors the live app's COMING SOON
+treatment but stays functional.
 
 ### Other live notes
 - Deadline endpoint `GET /api/opportunities/<id>/deadline` returns **502** server-side

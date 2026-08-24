@@ -62,13 +62,63 @@ export interface ApiClient {
   // Resume / LinkedIn quick-add extraction (both hard-gated; return the extracted text).
   extractFromResume(file: Blob, filename: string): Promise<string>;
   extractFromLinkedIn(text: string): Promise<string>;
+  // Queue a user-submitted opportunity for the review queue (soft auth: provenance comes
+  // from the token when signed in, unattributed otherwise). Never rejects — the row is a
+  // background nicety, the student's own Quest Log already has the item.
+  submitUserOpportunity(payload: UserOpportunitySubmission): Promise<void>;
   // Subscription status + promo flow (payments themselves stay deferred).
   subscriptionStatus(): Promise<Record<string, unknown>>;
   validatePromo(code: string): Promise<{ valid?: boolean; kind?: string; description?: string; error?: string }>;
   redeemPromo(code: string): Promise<Record<string, unknown>>;
   // Returns the Stripe checkout URL, or throws when payments aren't configured.
   subscriptionCheckout(promoCode: string): Promise<string | null>;
+
+  // --- Google Calendar sync ---
+  // The backend URL to open to grant calendar access. This is a SEPARATE grant from
+  // Google Sign-In (which only ever asks for openid/email/profile), so an account that
+  // signed in with Google still has to go through it. A top-level navigation can't carry
+  // an Authorization header, so the access token rides in the query string and the server
+  // derives the userid from it.
+  googleCalendarConnectUrl(appRedirect?: string): string | null;
+  // Upsert the given deadline events into the user's dedicated Wingman calendar, and
+  // (when sweep is set) delete the events we previously wrote for anything no longer in
+  // the list. Returns the raw outcome rather than throwing on 409, because "calendar not
+  // connected yet" is a prompt to connect, not an error.
+  syncCalendar(
+    events: CalendarSyncEvent[],
+    sweep?: boolean,
+  ): Promise<CalendarSyncResult>;
 }
+
+// The catalog's own column set — `apply_url`/`requirements` are carried in the
+// submission payload, NOT as opportunities columns (see url_dedupe's note on that).
+export interface UserOpportunitySubmission {
+  name: string;
+  url: string;
+  type?: string;
+  section?: string;
+  meta?: string;
+  fit?: string;
+  note?: string;
+  important_dates?: unknown[];
+  requirements?: unknown[];
+  apply_url?: string;
+  category?: string | null;
+}
+
+export interface CalendarSyncEvent {
+  // `${itemId}::${dateIdx}` — also the wingmanId stamped on the Google event.
+  id: string;
+  title: string;
+  description: string;
+  dateISO: string;
+  googleEventId?: string | null;
+}
+
+export type CalendarSyncResult =
+  | { ok: true; results: { id: string; status: string; googleEventId?: string }[]; deleted: number; sweepErrors: string[] }
+  | { ok: false; notConnected: true }
+  | { ok: false; notConnected?: false; error: string };
 
 // Thrown when a request needs auth but the session is gone/unrecoverable (refresh failed).
 // The router catches this to bounce the user to /login.

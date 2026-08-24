@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
-import { PopButton, Screen, SoftCard } from '@/ui/components';
+import { PopButton, Screen, SoftCard, usePopInteraction } from '@/ui/components';
 import { colors, fonts, popShadow, radius } from '@/ui/theme';
 
 interface SubState {
@@ -29,6 +29,7 @@ export default function Subscription() {
   const [promo, setPromo] = useState('');
   const [promoStatus, setPromoStatus] = useState('');
   const [upgradeStatus, setUpgradeStatus] = useState('');
+  const promoBtnPop = usePopInteraction(3, colors.navy, 1);
 
   useEffect(() => {
     let alive = true;
@@ -170,7 +171,7 @@ export default function Subscription() {
               placeholderTextColor={colors.slate400}
               autoCapitalize="characters"
             />
-            <Pressable style={[styles.promoBtn, popShadow(3, colors.navy)]} onPress={applyPromo}>
+            <Pressable {...promoBtnPop.handlers} style={[styles.promoBtn, promoBtnPop.shadowStyle]} onPress={applyPromo}>
               <Text style={styles.promoBtnText}>Apply</Text>
             </Pressable>
           </View>

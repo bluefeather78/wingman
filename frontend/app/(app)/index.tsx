@@ -1,6 +1,7 @@
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import {
   loadTrackerData,
@@ -14,8 +15,7 @@ import {
   allTodoUnitCounts,
   computeProgressStatus,
   computeStats,
-  getBeyondDeadlineItems,
-  getUpcomingDeadlineItems,
+  getAllDeadlineItems,
   shortDate,
 } from '@/lib/status';
 import {
@@ -39,7 +39,7 @@ interface StoredProfile {
 
 // Home Base — ported from the live app's #page-home: welcome banner + DUE SOON badge,
 // profile teaser card, "What You're Chasing" (segmented progress + legend + CTA), and
-// "Your Next Moves" (task pills + task progress + upcoming list + "and beyond →").
+// "Your Next Moves" (task pills + task progress + the full tracked list).
 export default function Home() {
   const router = useRouter();
   const { user } = useAuth();
@@ -47,6 +47,10 @@ export default function Home() {
   const [saved, setSaved] = useState<SavedState>({});
   const [profile, setProfile] = useState<string>('');
   const [tasksOpen, setTasksOpen] = useState(false);
+  // Every card below has an empty state that is indistinguishable from "not loaded yet",
+  // so rendering before the first load resolves flashes "Your profile is empty" / "Nothing
+  // here yet" on every tab switch. Hold the shell until the fetch lands.
+  const [loaded, setLoaded] = useState(false);
 
   // Cycle an action item's status (not_started → in_progress → completed → …), persisting
   // to the shared tracker data — ported from cycleActionItemState().
@@ -77,6 +81,7 @@ export default function Home() {
         if (d) setData(d);
         setSaved(s);
         setProfile(p?.synthesized ?? '');
+        setLoaded(true);
       });
       return () => {
         alive = false;
@@ -84,8 +89,13 @@ export default function Home() {
     }, []),
   );
 
+  // On RN-web a nested Pressable's click bubbles to the card wrapping it, so an inner CTA
+  // must swallow the event or both destinations fire.
+  const stop = (e?: { stopPropagation?: () => void }) => e?.stopPropagation?.();
+  const goProfile = () => router.push('/(app)/profile');
+
   const stats = useMemo(() => (data ? computeStats(data, saved) : { total: 0, not_started: 0, in_progress: 0, completed: 0 }), [data, saved]);
-  const upcoming = useMemo(() => (data ? getUpcomingDeadlineItems(data, saved) : []), [data, saved]);
+  const upcoming = useMemo(() => (data ? getAllDeadlineItems(data, saved) : []), [data, saved]);
   const { counts: taskCounts, total: taskTotal } = useMemo(() => allTodoUnitCounts(upcoming), [upcoming]);
   const dueSoon = taskCounts.not_started + taskCounts.in_progress;
 
@@ -102,10 +112,20 @@ export default function Home() {
     ? TASK_ORDER.map((k) => ({ pct: (taskCounts[k] / taskTotal) * 100, color: TASK_COLOR[k] }))
     : [];
 
+  if (!loaded) {
+    return (
+      <Screen scroll={false}>
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator color={colors.navy} />
+        </View>
+      </Screen>
+    );
+  }
+
   return (
     <Screen>
       {/* Welcome banner */}
-      <SoftCard style={styles.banner}>
+      <SoftCard style={styles.banner} hoverTint>
         <View style={styles.bannerLeft}>
           <Logo size={32} />
           <Txt variant="h1" style={styles.greeting}>
@@ -120,27 +140,34 @@ export default function Home() {
 
       {/* Profile teaser */}
       {profile ? (
-        <SoftCard style={{ gap: space.lg }}>
+        <SoftCard style={{ gap: space.lg }} hoverTint onPress={goProfile}>
           <View style={styles.rowBetween}>
             <Txt variant="h2" style={styles.cardTitle}>Your Story So Far</Txt>
-            <PopButton label="View & deepen it →" small square onPress={() => router.push('/(app)/profile')} />
+            <PopButton label="View & deepen it →" small square onPress={(e) => { stop(e); goProfile(); }} />
           </View>
           <Txt style={styles.teaserText} numberOfLines={3}>{profile}</Txt>
         </SoftCard>
       ) : (
-        <View style={[styles.emptyProfile]}>
-          <View style={styles.flex1}>
-            <Txt variant="h3" style={styles.onDark}>Your profile is empty</Txt>
-            <Txt variant="body" style={styles.onDarkSoft}>
-              Every match in the Finder gets better once we know you. Takes 2 minutes — go build it now.
-            </Txt>
-          </View>
-          <PopButton label="Build my profile" variant="secondary" onPress={() => router.push('/(app)/profile')} />
-        </View>
+        <Pressable onPress={goProfile} style={styles.clickable}>
+          <LinearGradient
+            colors={[colors.teal, colors.navy]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.emptyProfile}
+          >
+            <View style={styles.flex1}>
+              <Txt variant="h3" style={styles.onDark}>Your profile is empty</Txt>
+              <Txt variant="body" style={styles.onDarkSoft}>
+                Every match in the Finder gets better once we know you. Takes 2 minutes — go build it now.
+              </Txt>
+            </View>
+            <PopButton label="Build my profile" variant="secondary" onPress={(e) => { stop(e); goProfile(); }} />
+          </LinearGradient>
+        </Pressable>
       )}
 
       {/* What You're Chasing */}
-      <SoftCard style={{ gap: space.lg }}>
+      <SoftCard style={{ gap: space.lg }} hoverTint onPress={() => router.push('/(app)/tracker')}>
         <View style={styles.rowBetween}>
           <Txt variant="h2" style={styles.cardTitle}>What You're Chasing</Txt>
           <View style={styles.trackedPill}>
@@ -161,7 +188,7 @@ export default function Home() {
               small
               square
               textStyle={styles.freshFindsText}
-              onPress={() => router.push('/(app)/finder')}
+              onPress={(e) => { stop(e); router.push('/(app)/finder'); }}
               style={[styles.selfStart, styles.freshFindsBtn]}
             />
           </>
@@ -169,13 +196,13 @@ export default function Home() {
           <>
             <ProgressTrack segments={[]} />
             <Txt variant="small" style={styles.emptyState}>Nothing here yet.</Txt>
-            <PopButton label="Find your first opportunity to track" onPress={() => router.push('/(app)/finder')} style={styles.selfStart} />
+            <PopButton label="Find your first opportunity to track" onPress={(e) => { stop(e); router.push('/(app)/finder'); }} style={styles.selfStart} />
           </>
         )}
       </SoftCard>
 
       {/* Your Next Moves */}
-      <SoftCard style={{ gap: space.lg }}>
+      <SoftCard style={{ gap: space.lg }} hoverTint onPress={upcoming.length ? () => setTasksOpen(true) : undefined}>
         <View style={styles.rowBetween}>
           <Txt variant="h2" style={styles.cardTitle}>Your Next Moves</Txt>
           <View style={styles.pillRow}>
@@ -186,7 +213,7 @@ export default function Home() {
         </View>
         <ProgressTrack segments={taskSegments} />
         {upcoming.length === 0 ? (
-          <Txt variant="small" style={styles.emptyState}>Nothing due this month or next — you're all caught up.</Txt>
+          <Txt variant="small" style={styles.emptyState}>Nothing tracked yet — you're all caught up.</Txt>
         ) : (
           <View>
             {upcoming.map(({ item, nextDate, nextLabel }) => {
@@ -196,7 +223,7 @@ export default function Home() {
                   <View style={styles.flex1}>
                     <Txt style={styles.todoName} numberOfLines={1}>{item.name}</Txt>
                     <Txt style={styles.todoMeta}>
-                      {shortDate(nextDate)} · {nextLabel}
+                      {nextDate ? `${shortDate(nextDate)} · ${nextLabel}` : nextLabel}
                       {taskCount ? ` · ${taskCount} task${taskCount > 1 ? 's' : ''}` : ''}
                     </Txt>
                   </View>
@@ -212,12 +239,11 @@ export default function Home() {
                 square
                 textStyle={styles.freshFindsText}
                 style={styles.freshFindsBtn}
-                onPress={() => setTasksOpen(true)}
+                onPress={(e) => { stop(e); setTasksOpen(true); }}
               />
             </View>
           </View>
         )}
-        <Txt variant="small" style={styles.andBeyond}>and beyond →</Txt>
       </SoftCard>
 
       {/* "All Your Tasks" modal — ported from the live app's #todoModal. */}
@@ -228,13 +254,13 @@ export default function Home() {
               <View style={styles.modalHead}>
                 <View style={styles.flex1}>
                   <Txt variant="h2" style={styles.cardTitle}>All Your Tasks</Txt>
-                  <Text style={styles.modalSub}>Upcoming and beyond - manage everything in one place</Text>
+                  <Text style={styles.modalSub}>Everything you're tracking - manage it all in one place</Text>
                 </View>
                 <Pressable onPress={() => setTasksOpen(false)} hitSlop={10}>
                   <Text style={styles.modalClose}>✕</Text>
                 </Pressable>
               </View>
-              {(data ? [...upcoming, ...getBeyondDeadlineItems(data, saved)] : []).map(({ item, nextDate, nextLabel }) => (
+              {upcoming.map(({ item, nextDate, nextLabel }) => (
                 <View key={item.id} style={styles.taskCard}>
                   <View style={styles.taskCardHead}>
                     <View style={styles.flex1}>
@@ -244,7 +270,7 @@ export default function Home() {
                     <StatusPill status={computeProgressStatus(item)} />
                   </View>
                   <Text style={styles.taskCardDate}>
-                    {shortDate(nextDate)} · {nextLabel}{item.wasEstimated ? ' (est.)' : ''}
+                    {nextDate ? `${shortDate(nextDate)} · ${nextLabel}` : nextLabel}{item.wasEstimated ? ' (est.)' : ''}
                   </Text>
                   {(item.actionItems ?? []).length ? (
                     <View style={styles.taskRows}>
@@ -287,9 +313,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space.lg,
     flexWrap: 'wrap',
-    backgroundColor: colors.teal,
   },
   onDark: { color: colors.white },
+  clickable: { cursor: 'pointer' },
+  loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 64 },
   onDarkSoft: { color: 'rgba(255,255,255,0.9)', maxWidth: 448 },
   flex1: { flex: 1, minWidth: 200 },
 
@@ -311,7 +338,6 @@ const styles = StyleSheet.create({
   todoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.slate100 },
   todoName: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.navy },
   todoMeta: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.inkSoft },
-  andBeyond: { textAlign: 'center', color: colors.muted, paddingTop: 8, fontFamily: fonts.bodyBold, fontSize: 13 },
   seeAllWrap: { paddingTop: 8, alignItems: 'flex-start' },
 
   modalScrim: { flex: 1, backgroundColor: 'rgba(15,23,42,0.55)', alignItems: 'center', paddingTop: 40, paddingHorizontal: 16 },

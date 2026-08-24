@@ -5,7 +5,7 @@ import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { backendUrl, httpClient } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
-import { Logo, RightDrawer } from './components';
+import { Logo, RightDrawer, usePopInteraction } from './components';
 import { CalendarIcon, HomeIcon, PersonIcon, SearchIcon } from './icons';
 import { APP_MAX_WIDTH, colors, fonts, navShadow, popShadow, radius, space } from './theme';
 
@@ -207,8 +207,9 @@ export function NavBar() {
 
 // The drawer's white pop-btn (bg-white text-xs bold px-3 py-2 rounded-lg/xl + ink shadow).
 function SmallBtn({ label, onPress, full }: { label: string; onPress: () => void; full?: boolean }) {
+  const pop = usePopInteraction(3, colors.navy, 1);
   return (
-    <Pressable onPress={onPress} style={[styles.smallBtn, popShadow(3), full && styles.smallBtnFull]}>
+    <Pressable onPress={onPress} {...pop.handlers} style={[styles.smallBtn, pop.shadowStyle, full && styles.smallBtnFull]}>
       <Text style={styles.smallBtnText}>{label}</Text>
     </Pressable>
   );

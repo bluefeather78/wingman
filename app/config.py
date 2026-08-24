@@ -85,7 +85,11 @@ CLAUDE_MAX_TOKENS_CEILING = 8000
 # the table's Row Level Security policy only allows reading is_active=true rows.
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
-OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject_tags,type,price,state,location,intl,season,review_status,review_summary,grade_min,grade_max"
+# `status` is check_deadlines.py's running/not_running/unknown verdict. It ships so the
+# finder can drop discontinued programs from the results — it is NULL on 1195 of the
+# 1239 active rows (never deadline-checked), so any consumer must treat NULL as "no
+# verdict", never as "not running".
+OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject_tags,type,price,state,location,intl,season,review_status,review_summary,grade_min,grade_max,status"
 OPPORTUNITIES_CACHE_TTL = 300  # seconds
 
 

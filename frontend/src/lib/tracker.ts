@@ -125,3 +125,57 @@ Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text af
   const userContent = `Opportunity: ${opp.name} (${opp.org ?? ''})\nURL: ${opp.url ?? ''}\nKnown info: ${opp.summary ?? ''}\n\nFetch this URL (and the base site if needed), and extract current tracking details per the schema. Look carefully for every relevant date — registration open/close, event dates, notifications — not just the final deadline.`;
   return callGeminiJSON<TrackerInfo>(callGemini, system, userContent, true);
 }
+
+// ---------- Intake: add a custom opportunity from a URL, on the Quest Log ----------
+// Ported from the retired SPA's trackerIntakeExtractAndClassify(): the same prompt, and the
+// same extra job — it must also CLASSIFY (pick a bucket), which extractTrackerInfo above
+// never has to do because the finder already knows the kind.
+export interface IntakeInfo extends TrackerInfo {
+  name?: string;
+  section?: string;
+  category?: string | null;
+}
+
+export async function intakeExtractAndClassify(
+  callGemini: GeminiCall,
+  url: string,
+  notes: string,
+): Promise<IntakeInfo> {
+  const today = todayLabel();
+  const root = baseDomain(url);
+  const thisYear = new Date().getFullYear();
+  const nextYear = thisYear + 1;
+  const system = `You classify and extract structured tracking data for a student extracurricular opportunity from a URL, for a high-school tracker. Today's date is ${today}.
+
+First determine 'section': 'conferences' for academic conferences/workshops that review and present papers, 'journals' for academic/student journals with manuscript submission, 'researchCompetitions' for science fairs, app challenges, and project/research-based contests where a project or paper is submitted and judged, 'pureCompetitions' for skills/knowledge tests with no project submitted (olympiads, quiz competitions, exams), 'internships' for hands-on mentored work positions with a lab, company, or organization, 'summerPrograms' for camps, enrichment programs, or coursework.
+
+Search thoroughly with web_search, in order: (1) the given URL; (2) "site:${root} ${nextYear}" / "site:${root} ${thisYear}" for a current/upcoming-cycle page (orgs often publish a year-specific page separate from the evergreen landing page); (3) ALWAYS ALSO search the most recent PAST cycle (e.g. "site:${root} ${thisYear} deadline" and the year before that, computed from ${today}) even if step 2 succeeded — this is your mandatory estimation basis; (4) "site:${root} FAQ"/"key dates"/"timeline" for the base site if still stale or missing. Look for language indicating the program is discontinued/not running this cycle — set status to "not_running" if so, and don't estimate dates for it.
+
+Estimation is expected and encouraged, not a last resort — apply in order: (a) explicit current/upcoming-cycle dates found → use them, was_estimated:false; (b) no current-cycle dates but real prior-cycle dates found and the program looks recurring → roll each forward ~1 year, was_estimated:true, status:"running" (the expected path when a new cycle's page isn't live yet — don't default to "unknown"); (c) only a vague pattern found (e.g. "opens in fall") → construct a concrete estimated date from it, was_estimated:true, explain briefly in note; (d) genuinely nothing current or prior-cycle found after trying step 3 → status:"unknown" (should be rare).
+
+Find EVERY pertinent date — registration opens, early-bird vs. regular deadline, notification date, and event/conference start-end dates — each with a short label and a "type" of "opens", "deadline", "event_start", "event_end", or "other", in chronological order. Pay particular, deliberate attention to the registration/application OPENS date, not just the deadline — this is the field most often missed. Only omit a date category if there's genuinely no basis to find or estimate one (per step d above). Every date you have enough basis to mention in "note" (e.g. "registration typically opens Sept") must ALSO appear as a matching "important_dates" entry (was_estimated:true) — never describe date info in "note" without a corresponding structured entry, and vice versa. Prefer including a reasonably-estimated date over omitting it.
+
+Also think through 3-5 short, concrete action items a student would need to do to meet the nearest deadline (e.g. request a recommendation letter, draft an essay, gather transcripts) — infer these from requirements and what's typical for this type of opportunity. Keep every item tactical and administrative — the logistics of applying, never advice about the student's own project or its substance, since you don't know the specifics of their work and must not assume or invent any. Skip if status is not_running.
+For each action item, also give your best-guess direct URL for where the student would actually go to do it — the specific application/submission portal, payment or fee page, account sign-up/registration page, or test-registration page, as applicable. Use the most specific URL you found during search (not just the homepage) whenever one exists; reuse the general apply/info URL if nothing more specific applies; use null only if you genuinely found no plausible page — never invent a URL path that wasn't actually seen.
+
+Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON: {"name":"program/opportunity name from the page, or organization name if no program name found, under 50 chars","section":"conferences, journals, researchCompetitions, pureCompetitions, internships, or summerPrograms","status":"running, not_running, or unknown","meta":"one short line: dates/location/fee/format","fit":"one sentence, under 25 words","note":"one sentence, under 25 words","noteType":"good, plain, or flag","important_dates":[{"label":"short label","date_iso":"YYYY-MM-DD","type":"opens, deadline, event_start, event_end, or other"}],"deadline_label":"short text like ROLLING, only if important_dates is empty","was_estimated":true or false,"requirements":[{"date":"...","text":"under 12 words"}],"apply_url":"...","apply_label":"short button label","category":"short type label like 'Science fair' or 'Rationality camp', or null","action_items":[{"text":"short concrete task, under 10 words","url":"best-guess direct URL for this specific action, or null"}]}. Stay well within 1000 tokens: at most 4 important_dates, 3 requirements, and 5 action_items.`;
+  const userContent = `URL: ${url}
+${notes ? `Extra context: ${notes}
+` : ''}
+Fetch this URL, classify it, and extract tracking details per the schema.`;
+  return callGeminiJSON<IntakeInfo>(callGemini, system, userContent, true);
+}
+
+// Stable, collision-free id within the target bucket — slugifyTracker(), ported.
+export function slugifyTracker(text: string, usedIds: Iterable<string>): string {
+  let base = (text || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 50);
+  if (!base) base = 'opportunity';
+  const used = new Set(usedIds);
+  let id = base;
+  let n = 2;
+  while (used.has(id)) {
+    id = `${base}-${n}`;
+    n += 1;
+  }
+  return id;
+}

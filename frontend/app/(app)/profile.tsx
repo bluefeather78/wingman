@@ -8,7 +8,7 @@ import { countProfileWords, profileHasTruncatedTail, repairProfileText, synthesi
 import { diffNewProfileSentences, PROFILE_HIGHLIGHT_MS, profileSentenceKey, splitProfileSentences } from '@/lib/profileHighlight';
 import { extractProfileBasics } from '@/lib/ranking';
 import { profileChatNextQuestion, profileChatStarterQuestionsFromAI, profileChatTranscript, type ChatMessage } from '@/lib/profileChat';
-import { PopButton, RightDrawer, Screen, SoftCard, Txt, VibeField } from '@/ui/components';
+import { PopButton, RightDrawer, Screen, SoftCard, Txt, usePopInteraction, VibeField } from '@/ui/components';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
 const callClaude = httpClient.callClaude.bind(httpClient);
@@ -73,6 +73,13 @@ export default function Profile() {
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [clearArmed, setClearArmed] = useState(false);
+  const clearArmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voiceBtnPop = usePopInteraction(3, colors.slate900, 1);
+  const micBtnPop = usePopInteraction(3, colors.slate900, 1);
+  const sendBtnPop = usePopInteraction(3, colors.ink, 1);
+  const resumeSubmitPop = usePopInteraction(3, colors.slate900, 1);
+  const linkedinSubmitPop = usePopInteraction(3, colors.slate900, 1);
 
   // Import modal
   const [importOpen, setImportOpen] = useState(false);
@@ -109,6 +116,10 @@ export default function Profile() {
       .catch(() => {})
       .finally(() => alive && setLoading(false));
     return () => { alive = false; };
+  }, []);
+
+  useEffect(() => () => {
+    if (clearArmTimer.current) clearTimeout(clearArmTimer.current);
   }, []);
 
   async function persist(next: StoredProfile) {
@@ -166,6 +177,28 @@ export default function Profile() {
     } finally {
       setBusy(null);
     }
+  }
+
+  // Double-click-armed since it wipes the whole profile at once — ported from script.js's
+  // clearProfile(). First tap arms a 3s confirm window; a second tap inside it clears.
+  function clearProfile() {
+    if (!clearArmed) {
+      setClearArmed(true);
+      if (clearArmTimer.current) clearTimeout(clearArmTimer.current);
+      clearArmTimer.current = setTimeout(() => setClearArmed(false), 3000);
+      return;
+    }
+    if (clearArmTimer.current) clearTimeout(clearArmTimer.current);
+    setClearArmed(false);
+    void (async () => {
+      await persist({ synthesized: '', updatedAt: null, chatRounds: 0 });
+      setBasics({});
+      setHistory([]);
+      setStarters(null);
+      // Only refresh the chat (and re-spend an API call on fresh starters) if the drawer is
+      // already open — clearing the profile shouldn't be what opens it.
+      if (drawerOpen) void loadStarters(false);
+    })();
   }
 
   async function loadStarters(regenerate: boolean) {
@@ -390,12 +423,17 @@ export default function Profile() {
             <Text style={styles.ctaTitle}>I don't have enough yet to match opportunities</Text>
             <Text style={styles.ctaSub}>Help me help you by building your profile.</Text>
           </View>
-          <PopButton label="Deepen your story" variant="primaryDeep" textStyle={styles.ctaBtnText} style={styles.ctaBtn} shadowColor={colors.ink} onPress={openDrawer} />
+          <View style={styles.ctaBtnCol}>
+            <PopButton label="Deepen your story" variant="primaryDeep" textStyle={styles.ctaBtnText} style={styles.ctaBtn} shadowColor={colors.ink} onPress={openDrawer} />
+            <Pressable onPress={() => router.push('/(app)/finder')}>
+              <Text style={styles.ctaSecondaryLink}>or browse opportunities</Text>
+            </Pressable>
+          </View>
         </LinearGradient>
       )}
 
       {/* Main profile card */}
-      <SoftCard style={styles.mainCard} onLayout={(e) => { cardY.current = e.nativeEvent.layout.y; }}>
+      <SoftCard style={styles.mainCard} hoverTint onLayout={(e) => { cardY.current = e.nativeEvent.layout.y; }}>
         <View style={styles.headRow}>
           <View style={styles.titleWrap}>
             <Txt variant="h2" style={{ color: colors.ink }}>Your Story So Far</Txt>
@@ -407,7 +445,11 @@ export default function Profile() {
           </View>
           <View style={styles.headBtns}>
             <PopButton label="📄 Quick add from resume / LinkedIn" variant="ink" small textStyle={styles.hBtnText} shadowColor={colors.ink} onPress={() => setImportOpen(true)} />
-            <PopButton label="Deepen your story" small textStyle={styles.hBtnText} shadowColor={colors.ink} style={styles.deepenBtn} onPress={openDrawer} />
+            {/* With no profile yet there is nothing to deepen — the card's own "Start
+                chatting" button is the CTA, so both "deepen" affordances stay hidden. */}
+            {hasProfile && (
+              <PopButton label="Deepen your story" small textStyle={styles.hBtnText} shadowColor={colors.ink} style={styles.deepenBtn} onPress={openDrawer} />
+            )}
           </View>
         </View>
 
@@ -491,12 +533,16 @@ export default function Profile() {
         )}
 
         <View style={styles.footRow}>
-          <Pressable onPress={openDrawer}>
-            <Text style={styles.footLink}>or deepen your story</Text>
-          </Pressable>
           {hasProfile && (
-            <Pressable onPress={() => {}}>
-              <Text style={styles.clearLink}>🗑️ Clear profile</Text>
+            <Pressable onPress={openDrawer}>
+              <Text style={styles.footLink}>or deepen your story</Text>
+            </Pressable>
+          )}
+          {hasProfile && (
+            <Pressable onPress={clearProfile}>
+              <Text style={[styles.clearLink, clearArmed && styles.clearLinkArmed]}>
+                {clearArmed ? 'Click again to confirm' : '🗑️ Clear profile'}
+              </Text>
             </Pressable>
           )}
         </View>
@@ -512,7 +558,7 @@ export default function Profile() {
             </View>
             <View style={styles.drawerHeadBtns}>
               {ttsAvailable && (
-                <Pressable style={[styles.voiceBtn, popShadow(3, colors.slate900), voiceOn && styles.voiceBtnOn]} onPress={toggleVoiceOutput}>
+                <Pressable {...voiceBtnPop.handlers} style={[styles.voiceBtn, voiceBtnPop.shadowStyle, voiceOn && styles.voiceBtnOn]} onPress={toggleVoiceOutput}>
                   <Text style={styles.voiceBtnText}>{voiceOn ? '🔊' : '🔇'}</Text>
                 </Pressable>
               )}
@@ -562,11 +608,11 @@ export default function Profile() {
               onSubmitEditing={send}
             />
             {!!SpeechRecognitionCtor && (
-              <Pressable style={[styles.micBtn, popShadow(3, colors.slate900), listening && styles.micListening]} onPress={toggleVoiceInput}>
+              <Pressable {...micBtnPop.handlers} style={[styles.micBtn, micBtnPop.shadowStyle, listening && styles.micListening]} onPress={toggleVoiceInput}>
                 <Text style={styles.voiceBtnText}>{listening ? '⏺' : '🎤'}</Text>
               </Pressable>
             )}
-            <Pressable onPress={send} style={[styles.sendBtn, popShadow(3, colors.ink)]}>
+            <Pressable onPress={send} {...sendBtnPop.handlers} style={[styles.sendBtn, sendBtnPop.shadowStyle]}>
               <Text style={styles.sendText}>Send</Text>
             </Pressable>
           </View>
@@ -602,7 +648,7 @@ export default function Profile() {
                 </Pressable>
                 {!!resumeStatus && <Text style={styles.importStatus}>{resumeStatus}</Text>}
                 {!!resumeFile && (
-                  <Pressable style={[styles.importSubmit, popShadow(3, colors.slate900)]} onPress={submitResume}>
+                  <Pressable {...resumeSubmitPop.handlers} style={[styles.importSubmit, resumeSubmitPop.shadowStyle]} onPress={submitResume}>
                     <Text style={styles.importSubmitText}>Extract from Resume</Text>
                   </Pressable>
                 )}
@@ -620,7 +666,7 @@ export default function Profile() {
                   placeholder="Paste your LinkedIn profile content here..."
                   placeholderTextColor={colors.slate400}
                 />
-                <Pressable style={[styles.importSubmit, popShadow(3, colors.slate900)]} onPress={submitLinkedIn}>
+                <Pressable {...linkedinSubmitPop.handlers} style={[styles.importSubmit, linkedinSubmitPop.shadowStyle]} onPress={submitLinkedIn}>
                   <Text style={styles.importSubmitText}>Extract from LinkedIn Text</Text>
                 </Pressable>
                 {!!linkedinStatus && <Text style={styles.importStatus}>{linkedinStatus}</Text>}
@@ -643,6 +689,8 @@ const styles = StyleSheet.create({
   ctaSub: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 20, color: colors.grayLighter, marginTop: 4 },
   ctaBtn: { borderWidth: 2, borderColor: colors.ink, paddingHorizontal: 26, paddingVertical: 12 },
   ctaBtnText: { fontSize: 14 },
+  ctaBtnCol: { alignItems: 'center', gap: 8 },
+  ctaSecondaryLink: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.grayLighter, textDecorationLine: 'underline' },
 
   mainCard: { padding: 28, gap: 20 },
   headRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.lg, flexWrap: 'wrap' },
@@ -679,6 +727,7 @@ const styles = StyleSheet.create({
   footRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.lg, marginTop: 8, flexWrap: 'wrap' },
   footLink: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.muted, textDecorationLine: 'underline' },
   clearLink: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.red },
+  clearLinkArmed: { color: colors.statusPastFg },
 
   drawer: { borderLeftWidth: 4, borderLeftColor: colors.ink },
   drawerHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, borderBottomWidth: 2, borderBottomColor: colors.lavender },

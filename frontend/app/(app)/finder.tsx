@@ -12,8 +12,9 @@ import { countProfileWords } from '@/lib/profile';
 import { parseGradeFromText } from '@/lib/grade';
 import { extractJSON } from '@/lib/extractJSON';
 import { inferSubjects, preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
-import { findBucketForKind } from '@/lib/tracker';
-import { MiniBadge, PopButton, Screen, SoftCard, Txt } from '@/ui/components';
+import { markNewlyAdded } from '@/lib/newlyAdded';
+import { applyDeadlineCheckToInfo, extractTrackerInfo, findBucketForKind } from '@/lib/tracker';
+import { MiniBadge, PopButton, Screen, SoftCard, Txt, usePopInteraction } from '@/ui/components';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
 interface Result {
@@ -124,6 +125,9 @@ export default function Finder() {
   const [opps, setOpps] = useState<Opportunity[] | null>(null);
   const [oppsError, setOppsError] = useState<string | null>(null);
   const [profileText, setProfileText] = useState('');
+  // "Your profile is empty" is also what an unloaded profile looks like, so the hero flashed
+  // that on every visit before the fetch landed. Gate it on the load actually resolving.
+  const [profileLoaded, setProfileLoaded] = useState(false);
   const [stage, setStage] = useState<Stage>('home');
   const [browseOpen, setBrowseOpen] = useState(false);
   const [quizBranch, setQuizBranch] = useState<string | null>(null);
@@ -141,7 +145,18 @@ export default function Finder() {
   const [note, setNote] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [trackedIds, setTrackedIds] = useState<Set<string>>(new Set());
+  // Hover-lift for result cards (.pop-card:hover in the live app) — one shared id rather
+  // than a hook per card, since the card list is rendered via .map(), not its own component.
+  const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
+  const [hoveredSaveBtnId, setHoveredSaveBtnId] = useState<string | null>(null);
+  const [pressedSaveBtnId, setPressedSaveBtnId] = useState<string | null>(null);
+  const [hoveredQuizOption, setHoveredQuizOption] = useState<number | null>(null);
+  const [pressedQuizOption, setPressedQuizOption] = useState<number | null>(null);
+  const [hoveredFacetKey, setHoveredFacetKey] = useState<string | null>(null);
+  const [pressedFacetKey, setPressedFacetKey] = useState<string | null>(null);
+  const profileFacetPop = usePopInteraction(2, colors.slate900, 1);
   const [adding, setAdding] = useState(false);
+  const [addProgress, setAddProgress] = useState<{ done: number; total: number } | null>(null);
   const [visibleCount, setVisibleCount] = useState(10);
   const [untrackedOnly, setUntrackedOnly] = useState(false);
   const [filters, setFilters] = useState<Record<FilterKey, Set<string>>>({ type: new Set(), price: new Set(), season: new Set(), location: new Set() });
@@ -154,7 +169,14 @@ export default function Finder() {
 
   useEffect(() => {
     let alive = true;
-    httpClient.getOpportunities().then((r) => alive && setOpps(r)).catch((e) => alive && setOppsError((e as Error).message));
+    // Discontinued programs never reach the results, the browse list, or the ranker —
+    // filtered at the source so no path can miss it. The test is `=== 'not_running'`, never
+    // `!== 'running'`: the catalog's `status` is NULL on 1195 of its 1239 active rows (never
+    // deadline-checked), and reading that absence as "not running" would empty Fresh Finds.
+    httpClient
+      .getOpportunities()
+      .then((r) => alive && setOpps(r.filter((o) => o.status !== 'not_running')))
+      .catch((e) => alive && setOppsError((e as Error).message));
     httpClient
       .loadData<{ synthesized?: string; filterTags?: { enrichedTags?: EnrichedTag[] } }>('student-profile')
       .then((p) => {
@@ -163,7 +185,10 @@ export default function Finder() {
         const tags = p?.filterTags?.enrichedTags;
         if (Array.isArray(tags)) setProfileTags(tags.filter((t) => t && typeof t.tag === 'string'));
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setProfileLoaded(true);
+      });
     loadTrackerData().then((d) => alive && setTrackedIds(new Set(flattenItems(d).map((i) => i.id)))).catch(() => {});
     return () => {
       alive = false;
@@ -287,52 +312,109 @@ export default function Finder() {
     await search(profileText, null, buildPrefs());
   }
 
+  // Ported from script.js's bulk-add flow: a full extractTrackerInfo() web-search pass per
+  // opportunity (retried once on failure), then the shared/cached on-demand deadline check
+  // overlaid on top — the same two-step sequence buildTracker() used, dropped somewhere in
+  // the RN port in favor of a bare getDeadlineCheck() call that left status/note/requirements
+  // /action items empty. A total failure falls back to a database-only stub, exactly as before.
   async function addOneToTracker(opp: Opportunity, reason: string) {
     const bucket = findBucketForKind(suggestMode ? kindForOpp(opp) : kind);
-    const meta = [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · ');
-    const item = {
-      id: opp.id,
-      name: opp.name,
-      url: (opp.url as string) ?? null,
-      type: (opp.type as string) ?? null,
-      bucket,
-      progressStatus: 'not_started',
-      status: 'unknown' as const,
-      reviewStatus: (opp.review_status as string) ?? null,
-      reviewSummary: (opp.review_summary as string) ?? null,
-      meta: meta || (opp.summary as string) || '',
-      fit: reason || (opp.summary as string) || '',
-      importantDates: [] as { label: string; dateISO: string; type: string }[],
-      applyUrl: (opp.url as string) ?? null,
-      applyLabel: 'Apply / learn more',
-      actionItems: [],
-    };
+    const url = (opp.url as string) ?? null;
+    const type = (opp.type as string) ?? null;
+    const reviewStatus = (opp.review_status as string) ?? null;
+    const reviewSummary = (opp.review_summary as string) ?? null;
+    const summary = (opp.summary as string) || '';
     try {
-      const info = await httpClient.getDeadlineCheck(opp.id);
-      if (info?.important_dates?.length) {
-        item.importantDates = info.important_dates.map((d) => ({ label: d.label, dateISO: d.date_iso, type: d.type }));
-        if (info.status) item.status = info.status as typeof item.status;
+      let info;
+      try {
+        info = await extractTrackerInfo(callGemini, opp);
+      } catch (firstErr) {
+        console.warn(`Retrying ${opp.name} after error:`, (firstErr as Error).message);
+        info = await extractTrackerInfo(callGemini, opp);
       }
-    } catch {
-      /* dates are best-effort */
+      applyDeadlineCheckToInfo(info, await httpClient.getDeadlineCheck(opp.id));
+      await addTrackerItem(bucket, {
+        id: opp.id,
+        name: opp.name,
+        url,
+        type,
+        bucket,
+        progressStatus: 'not_started',
+        status: ['running', 'not_running', 'unknown'].includes(info.status) ? info.status : 'unknown',
+        reviewStatus,
+        reviewSummary,
+        meta: info.meta || [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · '),
+        fit: info.fit || reason || summary,
+        note: info.note || 'Details from the opportunities database — confirm on the official site.',
+        noteType: info.status === 'not_running' ? 'flag' : (info.noteType || 'plain'),
+        importantDates: Array.isArray(info.important_dates)
+          ? info.important_dates
+              .filter((d) => d && d.date_iso)
+              .map((d) => ({ label: d.label || 'Date', dateISO: d.date_iso, type: d.type || 'deadline' }))
+              .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
+          : [],
+        deadlineLabel: info.deadline_label || 'CHECK SITE',
+        wasEstimated: !!info.was_estimated,
+        applyUrl: info.apply_url || url,
+        applyLabel: info.apply_label || 'Apply / learn more',
+        actionItems: Array.isArray(info.action_items)
+          ? info.action_items.slice(0, 5).map((ai, i) => ({
+              id: `${opp.id}-t${i}`,
+              text: ai.text,
+              url: ai.url ?? null,
+              state: 'not_started',
+            }))
+          : [],
+      });
+    } catch (err) {
+      console.error(`Failed to fetch details for ${opp.name}:`, (err as Error).message);
+      await addTrackerItem(bucket, {
+        id: opp.id,
+        name: opp.name,
+        url,
+        type,
+        bucket,
+        progressStatus: 'not_started',
+        status: 'unknown',
+        reviewStatus,
+        reviewSummary,
+        meta: [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · '),
+        fit: reason || summary,
+        note: "Live details couldn't be fetched — showing database info only. Check the official site directly.",
+        noteType: 'flag',
+        importantDates: [],
+        deadlineLabel: 'CHECK SITE',
+        wasEstimated: false,
+        applyUrl: url,
+        applyLabel: 'Visit site',
+        actionItems: [],
+      });
     }
-    await addTrackerItem(bucket, item);
   }
 
   async function addSelectedToTracker() {
     if (!selected.size || adding) return;
     setAdding(true);
+    const ids = [...selected];
+    setAddProgress({ done: 0, total: ids.length });
     try {
-      for (const id of selected) {
-        const r = results.find((x) => x.opp.id === id);
+      for (let i = 0; i < ids.length; i++) {
+        const r = results.find((x) => x.opp.id === ids[i]);
         if (r) await addOneToTracker(r.opp, r.reason);
+        setAddProgress({ done: i + 1, total: ids.length });
       }
+      // Only this batch carries the NEW treatment in the Quest Log — see markNewlyAdded.
+      markNewlyAdded(selected);
       setTrackedIds((p) => new Set([...p, ...selected]));
       setSelected(new Set());
+      // Adding is the point of departure to the Quest Log — land there instead of leaving
+      // the student on a Fresh Finds page that now just shows the same cards as "tracked".
+      router.push('/(app)/tracker');
     } catch (e) {
       setNote(`Couldn't add: ${(e as Error).message}`);
     } finally {
       setAdding(false);
+      setAddProgress(null);
     }
   }
 
@@ -395,7 +477,14 @@ export default function Finder() {
     return (
       <Screen>
         <SoftCard style={styles.heroCard}>
-          {searching ? (
+          {!profileLoaded ? (
+            <View style={styles.loadingRow}>
+              <ActivityIndicator color={colors.orangeDeep} size="small" />
+              <View style={styles.flex1}>
+                <Text style={styles.heroTitleSm}>Loading your profile…</Text>
+              </View>
+            </View>
+          ) : searching ? (
             <View style={styles.loadingRow}>
               <ActivityIndicator color={colors.orangeDeep} size="small" />
               <View style={styles.flex1}>
@@ -469,7 +558,18 @@ export default function Finder() {
             {(options ?? QUIZ_ROOT).map((o, i) => (
               <Pressable
                 key={i}
-                style={[styles.quizOption, i === 0 && { backgroundColor: '#EDF7FC' }, popShadow(3)]}
+                onHoverIn={() => setHoveredQuizOption(i)}
+                onHoverOut={() => setHoveredQuizOption((cur) => (cur === i ? null : cur))}
+                onPressIn={() => setPressedQuizOption(i)}
+                onPressOut={() => setPressedQuizOption((cur) => (cur === i ? null : cur))}
+                style={[
+                  styles.quizOption,
+                  i === 0 && { backgroundColor: '#EDF7FC' },
+                  popShadow(pressedQuizOption === i ? 1 : hoveredQuizOption === i ? 4 : 3),
+                  pressedQuizOption === i
+                    ? styles.quizOptionPressed
+                    : hoveredQuizOption === i && styles.quizOptionHovered,
+                ]}
                 onPress={() => {
                   const opt = o as { kind?: string; branch?: string };
                   if (opt.kind) openForm(opt.kind);
@@ -571,7 +671,11 @@ export default function Finder() {
         <Text style={styles.filterLabel}>FILTER:</Text>
         {profileTags.length > 0 && (
           <View>
-            <Pressable style={[styles.filterToggle, popShadow(2, colors.slate900)]} onPress={() => setOpenFacet(openFacet === 'profile' ? null : 'profile')}>
+            <Pressable
+              {...profileFacetPop.handlers}
+              style={[styles.filterToggle, profileFacetPop.shadowStyle]}
+              onPress={() => setOpenFacet(openFacet === 'profile' ? null : 'profile')}
+            >
               <Text style={styles.filterToggleText}>▾ Your Profile{selectedTag ? ' (1)' : ''}</Text>
             </Pressable>
             {openFacet === 'profile' && (
@@ -597,7 +701,20 @@ export default function Finder() {
           const active = filters[f.key].size;
           return (
             <View key={f.key}>
-              <Pressable style={[styles.filterToggle, popShadow(2, colors.slate900)]} onPress={() => setOpenFacet(openFacet === f.key ? null : f.key)}>
+              <Pressable
+                onHoverIn={() => setHoveredFacetKey(f.key)}
+                onHoverOut={() => setHoveredFacetKey((cur) => (cur === f.key ? null : cur))}
+                onPressIn={() => setPressedFacetKey(f.key)}
+                onPressOut={() => setPressedFacetKey((cur) => (cur === f.key ? null : cur))}
+                style={[
+                  styles.filterToggle,
+                  popShadow(pressedFacetKey === f.key ? 1 : hoveredFacetKey === f.key ? 3 : 2, colors.slate900),
+                  pressedFacetKey === f.key
+                    ? styles.filterTogglePressed
+                    : hoveredFacetKey === f.key && styles.filterToggleHovered,
+                ]}
+                onPress={() => setOpenFacet(openFacet === f.key ? null : f.key)}
+              >
                 <Text style={styles.filterToggleText}>▾ {f.label}{active ? ` (${active})` : ''}</Text>
               </Pressable>
               {openFacet === f.key && (
@@ -625,8 +742,19 @@ export default function Finder() {
         const mixed = opp.review_status === 'mixed';
         const metaPills = [opp.org, opp.type, opp.price, opp.location, opp.state && opp.state !== 'All States' ? opp.state : null, opp.season]
           .filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+        const cardHovered = hoveredCardId === opp.id;
         return (
-          <View key={opp.id} style={[styles.resultCard, popShadow(4), isSelected && styles.resultCardSelected]}>
+          <Pressable
+            key={opp.id}
+            onHoverIn={() => setHoveredCardId(opp.id)}
+            onHoverOut={() => setHoveredCardId((cur) => (cur === opp.id ? null : cur))}
+            style={[
+              styles.resultCard,
+              popShadow(cardHovered ? 6 : 4),
+              cardHovered && styles.resultCardHovered,
+              isSelected && styles.resultCardSelected,
+            ]}
+          >
             <View style={styles.cardTopRow}>
               <View style={styles.badgeRow}>
                 <MiniBadge label={cat} bg={colors.violet200} fg={colors.violet900} />
@@ -644,7 +772,18 @@ export default function Finder() {
                 </Pressable>
               ) : (
                 <Pressable
-                  style={[styles.saveBtn, popShadow(3), isSelected && styles.saveBtnSelected]}
+                  onHoverIn={() => setHoveredSaveBtnId(opp.id)}
+                  onHoverOut={() => setHoveredSaveBtnId((cur) => (cur === opp.id ? null : cur))}
+                  onPressIn={() => setPressedSaveBtnId(opp.id)}
+                  onPressOut={() => setPressedSaveBtnId((cur) => (cur === opp.id ? null : cur))}
+                  style={[
+                    styles.saveBtn,
+                    popShadow(pressedSaveBtnId === opp.id ? 1 : hoveredSaveBtnId === opp.id ? 4 : 3),
+                    pressedSaveBtnId === opp.id
+                      ? styles.saveBtnPressed
+                      : hoveredSaveBtnId === opp.id && styles.saveBtnHovered,
+                    isSelected && styles.saveBtnSelected,
+                  ]}
                   onPress={() => toggleSelect(opp.id)}
                 >
                   <Text style={styles.saveBtnText}>{isSelected ? '⭐ Saved Match' : '⭐ Save Match'}</Text>
@@ -686,7 +825,7 @@ export default function Finder() {
             {!!opp.summary && (
               <Text style={styles.summary} numberOfLines={3}>{opp.summary as string}</Text>
             )}
-          </View>
+          </Pressable>
         );
       })}
 
@@ -703,7 +842,7 @@ export default function Finder() {
         <View style={styles.selectionBar}>
           <Text style={styles.selectionCount}>{selected.size} selected</Text>
           <PopButton
-            label={adding ? 'Adding…' : 'Add to my tracker →'}
+            label={addProgress ? `Fetching details (${addProgress.done}/${addProgress.total})…` : adding ? 'Adding…' : 'Add to my tracker →'}
             loading={adding}
             disabled={!selected.size}
             onPress={addSelectedToTracker}
@@ -788,6 +927,8 @@ const styles = StyleSheet.create({
 
   quizQuestion: { fontFamily: fonts.display, fontSize: 18, color: colors.ink },
   quizOption: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.navy, borderRadius: radius.md, padding: 16, gap: 2 },
+  quizOptionHovered: { transform: [{ translateX: -1 }, { translateY: -1 }] },
+  quizOptionPressed: { transform: [{ translateX: 2 }, { translateY: 2 }] },
   quizOptTitle: { fontFamily: fonts.display, fontSize: 18, color: colors.navy },
   quizOptDesc: { fontFamily: fonts.bodyMed, fontSize: 14, color: colors.inkSoft },
 
@@ -817,6 +958,8 @@ const styles = StyleSheet.create({
   filterBar: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', zIndex: 20 },
   filterLabel: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.muted, letterSpacing: 0.6 },
   filterToggle: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 8 },
+  filterToggleHovered: { transform: [{ translateX: -1 }, { translateY: -1 }] },
+  filterTogglePressed: { transform: [{ translateX: 2 }, { translateY: 2 }] },
   filterToggleOn: { backgroundColor: colors.lavender },
   filterToggleText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate900 },
   facetPanel: { position: 'absolute', top: '100%', left: 0, marginTop: 8, width: 224, backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.lg, padding: 12, zIndex: 50, gap: 2 },
@@ -825,12 +968,15 @@ const styles = StyleSheet.create({
   facetRowText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: colors.slate900 },
 
   resultCard: { backgroundColor: colors.white, borderWidth: 4, borderColor: colors.slate900, borderRadius: radius.xxl, padding: 24, gap: 16 },
+  resultCardHovered: { transform: [{ translateX: -2 }, { translateY: -2 }] },
   resultCardSelected: { borderColor: '#A3E635', backgroundColor: '#F7FEE7' },
   cardTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' },
   badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 1 },
   trackedTag: { backgroundColor: '#1E293B', borderRadius: radius.pill, paddingHorizontal: 16, paddingVertical: 8 },
   trackedTagText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.white },
   saveBtn: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.pill, paddingHorizontal: 20, paddingVertical: 10 },
+  saveBtnHovered: { transform: [{ translateX: -1 }, { translateY: -1 }] },
+  saveBtnPressed: { transform: [{ translateX: 2 }, { translateY: 2 }] },
   saveBtnSelected: { backgroundColor: '#A3E635' },
   saveBtnText: { fontFamily: fonts.bodyXBold, fontSize: 12, color: colors.slate900 },
   resultName: { fontFamily: fonts.display, fontSize: 30, lineHeight: 36, color: colors.slate900 },

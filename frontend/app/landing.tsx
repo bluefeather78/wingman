@@ -1,12 +1,60 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import React, { useEffect, useRef, useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { backendUrl } from '@/api/httpClient';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Logo, PopButton, PopCard, SoftCard } from '@/ui/components';
+import { Logo, PopButton, PopCard, SoftCard, usePopInteraction } from '@/ui/components';
 import { PersonIcon } from '@/ui/icons';
 import { colors, fonts, LANDING_MAX_WIDTH, navShadow, popShadow, radius, space } from '@/ui/theme';
+
+// Self-contained bundle (its own React runtime + fonts), same shape as the retired SPA's
+// walkthrough.html — served from the repo root by app/main.py's static route. Too heavy to
+// eagerly embed, so it only mounts once someone actually asks to see it (web: inline iframe;
+// native: hands off to the system browser, since there's no in-app webview dependency here).
+const WALKTHROUGH_URL = backendUrl('/walkthrough.html');
+
+// Mounts the walkthrough iframe and best-effort auto-starts its own internal player (it has
+// no autoplay query param or postMessage API of its own, so this reaches in and clicks its
+// "Play/pause" control once the bundle has unpacked). Same-origin in production (the API
+// service serves both the app and this file), so this actually works there; on a local dev
+// setup where Metro (8081) and the API (8000) are different origins it can't reach across
+// the iframe boundary, and silently no-ops — the poster's own play chip is the fallback.
+function WalkthroughFrame({ frameKey }: { frameKey: number }) {
+  const ref = useRef<HTMLIFrameElement | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let attempts = 0;
+    const tryPlay = () => {
+      if (cancelled) return;
+      attempts += 1;
+      try {
+        const doc = ref.current?.contentDocument;
+        const btn = doc?.querySelector<HTMLElement>('button[aria-label*="play" i]');
+        if (btn) {
+          btn.click();
+          return;
+        }
+      } catch {
+        return; // cross-origin (dev) — nothing more we can do from here
+      }
+      if (attempts < 30) setTimeout(tryPlay, 300);
+    };
+    const t = setTimeout(tryPlay, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [frameKey]);
+  return React.createElement('iframe', {
+    ref,
+    src: WALKTHROUGH_URL,
+    title: 'Wingman product walkthrough',
+    style: { width: '100%', height: '100%', border: 'none', display: 'block' },
+    allow: 'autoplay',
+  });
+}
 
 // The signed-out marketing page — ported section-for-section from index.html #page-landing:
 // floating pill header, hero (badge → eyebrow → one-line title → CTAs), the two bordered
@@ -14,10 +62,29 @@ import { colors, fonts, LANDING_MAX_WIDTH, navShadow, popShadow, radius, space }
 // gradient CTA banner, the founder story card, and the footer.
 export default function Landing() {
   const router = useRouter();
+  // 0 = poster showing. >0 = iframe mounted, keyed by this value so every play click forces
+  // a fresh mount (fresh <iframe>, video restarts from 0:00) even if it was already playing.
+  const [filmKey, setFilmKey] = useState(0);
+  const ctaSecondaryPop = usePopInteraction(3, colors.slate900, 1);
+  const scrollRef = useRef<ScrollView>(null);
+  const filmSectionY = useRef(0);
+
+  function playWalkthrough() {
+    if (Platform.OS === 'web') {
+      setFilmKey((k) => k + 1);
+    } else {
+      Linking.openURL(WALKTHROUGH_URL);
+    }
+  }
+
+  function seeHowItWorks() {
+    scrollRef.current?.scrollTo({ y: Math.max(filmSectionY.current - 24, 0), animated: true });
+    playWalkthrough();
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={scrollRef} style={styles.scroll} showsVerticalScrollIndicator={false}>
         {/* Header pill */}
         <View style={styles.headerWrap}>
           <View style={[styles.headerBar, navShadow()]}>
@@ -49,7 +116,7 @@ export default function Landing() {
           </Text>
           <View style={styles.ctaRow}>
             <PopButton label="Get started free" onPress={() => router.push('/login')} style={styles.ctaMain} textStyle={styles.ctaMainText} />
-            <Pressable style={[styles.ctaSecondary, popShadow(3, colors.slate900)]} onPress={() => {}}>
+            <Pressable {...ctaSecondaryPop.handlers} style={[styles.ctaSecondary, ctaSecondaryPop.shadowStyle]} onPress={seeHowItWorks}>
               <Text style={styles.ctaSecondaryText}>See how it works</Text>
             </Pressable>
           </View>
@@ -88,23 +155,30 @@ export default function Landing() {
           </PopCard>
         </View>
 
-        {/* See how it works — film poster */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>See how it works</Text>
-          <Text style={styles.sectionSub}>
-            Thirty-seven seconds, start to finish: a student's story goes in, opportunities that actually fit come back,
-            and every deadline lands on the calendar.
-          </Text>
+        {/* See how it works — film poster, mounts the walkthrough iframe on play */}
+        <View style={styles.section} onLayout={(e) => { filmSectionY.current = e.nativeEvent.layout.y; }}>
+          <Text style={[styles.sectionTitle, styles.sectionTitleTight]}>See how it works</Text>
           <View style={[styles.filmFrame, popShadow(4)]}>
             <View style={styles.filmStage}>
-              <View style={styles.filmTitleRow}>
-                <Logo size={30} />
-                <Text style={styles.filmTitle}>Wingman, in 37 seconds</Text>
-              </View>
-              <View style={styles.playChip}>
-                <Ionicons name="play" size={22} color={colors.white} style={{ marginLeft: 3 }} />
-              </View>
-              <Text style={styles.filmNote}>No sound. Nothing to sign up for.</Text>
+              {filmKey > 0 && Platform.OS === 'web' ? (
+                <WalkthroughFrame key={filmKey} frameKey={filmKey} />
+              ) : (
+                <Pressable
+                  style={styles.filmStagePressable}
+                  onPress={playWalkthrough}
+                  accessibilityRole="button"
+                  accessibilityLabel="Play the Wingman walkthrough"
+                >
+                  <View style={styles.filmTitleRow}>
+                    <Logo size={30} />
+                    <Text style={styles.filmTitle}>Wingman, in 47 seconds</Text>
+                  </View>
+                  <View style={styles.playChip}>
+                    <Ionicons name="play" size={22} color={colors.white} style={{ marginLeft: 3 }} />
+                  </View>
+                  <Text style={styles.filmNote}>No sound. Nothing to sign up for.</Text>
+                </Pressable>
+              )}
             </View>
           </View>
         </View>
@@ -248,9 +322,10 @@ const styles = StyleSheet.create({
   audFootText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.muted },
 
   sectionTitle: { fontFamily: fonts.display, fontSize: 32, color: colors.navy, textAlign: 'center', marginBottom: 8 },
-  sectionSub: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: colors.slate500, textAlign: 'center', maxWidth: 576, alignSelf: 'center', marginBottom: 32 },
+  sectionTitleTight: { marginBottom: 32 },
   filmFrame: { borderWidth: 3, borderColor: colors.navy, borderRadius: radius.lg, overflow: 'hidden' },
-  filmStage: { width: '100%', aspectRatio: 16 / 9, backgroundColor: '#0A0A0A', alignItems: 'center', justifyContent: 'center', gap: 16 },
+  filmStage: { width: '100%', aspectRatio: 16 / 9, backgroundColor: '#0A0A0A' },
+  filmStagePressable: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', gap: 16 },
   filmTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   filmTitle: { fontFamily: fonts.display, fontSize: 20, color: colors.white },
   playChip: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.orangeDeep, alignItems: 'center', justifyContent: 'center' },

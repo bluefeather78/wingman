@@ -23,14 +23,65 @@ export function daysUntil(dateISO: string): number {
   return Math.round((d.getTime() - now.getTime()) / 86400000);
 }
 
-function itemDates(item: TrackerItem): string[] {
+function rawDates(item: TrackerItem): string[] {
   return (item.importantDates ?? [])
     .map((d) => (d as { dateISO?: string; date_iso?: string }).dateISO || (d as { date_iso?: string }).date_iso)
     .filter(Boolean) as string[];
 }
 
-// script.js computeProgressStatus — including the recurring-program rule: a "running"
-// program whose (estimated) dates are all past is a FUTURE event (next cycle coming).
+// Feb 29 does not exist in a non-leap year — clamp to the 28th rather than letting the
+// date roll into March, which would silently move a deadline.
+export function addYearsISO(iso: string, years: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const ny = y + years;
+  const lastDayOfMonth = new Date(Date.UTC(ny, m, 0)).getUTCDate();
+  const nd = Math.min(d, lastDayOfMonth);
+  return `${ny}-${String(m).padStart(2, '0')}-${String(nd).padStart(2, '0')}`;
+}
+
+// ---------- Next-cycle projection ----------
+// A cycle that has entirely passed does NOT mean the opportunity is over: these programs
+// recur annually, and the whole pipeline (check_deadlines, the intake/extract prompts)
+// already treats "roll last cycle forward by a year" as the expected answer rather than a
+// last resort. So when every known date is past, the client projects the same dates onto
+// their next annual occurrence and reports THOSE everywhere — status pill, card dates,
+// calendar, Home's next moves, and the sort order — instead of showing a dead cycle.
+//
+// The one exception is `not_running`: that is the deadline checker saying the program is
+// discontinued, and predicting a next cycle for something that has genuinely ended would
+// be inventing one. Those keep their real dates and still read as a Past Event.
+//
+// The shift is a single whole-year offset applied to EVERY date (the smallest that brings
+// the last one back into the future), never a per-date roll — that preserves the ordering
+// and the intervals between opens/deadline/event, which a per-date roll can distort when a
+// cycle straddles a year boundary.
+export function cycleYearShift(item: TrackerItem): number {
+  if (item.status === 'not_running') return 0;
+  const dates = rawDates(item);
+  if (!dates.length) return 0;
+  const last = [...dates].sort()[dates.length - 1];
+  if (daysUntil(last) >= 0) return 0;
+  let n = Math.max(1, new Date().getFullYear() - Number(last.slice(0, 4)));
+  while (daysUntil(addYearsISO(last, n)) < 0) n += 1;
+  return n;
+}
+
+// True when this item's dates are a prediction rather than something we read off the page.
+export function hasProjectedDates(item: TrackerItem): boolean {
+  return cycleYearShift(item) > 0;
+}
+
+// Every reader of importantDates goes through this, so nothing can disagree about which
+// cycle an item is in.
+function itemDates(item: TrackerItem): string[] {
+  const shift = cycleYearShift(item);
+  const dates = rawDates(item);
+  return shift ? dates.map((d) => addYearsISO(d, shift)) : dates;
+}
+
+// script.js computeProgressStatus — including the recurring-program rule: a program whose
+// cycle has passed is a FUTURE event (next cycle coming), not a past one. Only a
+// discontinued (`not_running`) program is ever completed.
 export function computeProgressStatus(item: TrackerItem): OppStatus {
   if (item.status === 'not_running') return 'completed';
   const dates = itemDates(item);
@@ -39,10 +90,7 @@ export function computeProgressStatus(item: TrackerItem): OppStatus {
   const firstStep = dates[0];
   const lastStep = dates[dates.length - 1];
   if (daysUntil(firstStep) > 0) return 'not_started';
-  if (daysUntil(lastStep) < 0) {
-    if (item.status === 'running' && item.wasEstimated) return 'not_started';
-    return 'completed';
-  }
+  if (daysUntil(lastStep) < 0) return 'completed';
   return 'in_progress';
 }
 
@@ -51,19 +99,29 @@ export interface Milestone {
   label: string;
   type: string;
   isPast: boolean;
+  // The date shown is last cycle's, rolled forward — see cycleYearShift.
+  projected: boolean;
 }
 
 // script.js getDisplayMilestones — dedupe (date,label), sort, flag past.
 export function getDisplayMilestones(item: TrackerItem): Milestone[] {
+  const shift = cycleYearShift(item);
   const seen = new Set<string>();
   const milestones: Milestone[] = [];
   (item.importantDates ?? []).forEach((d) => {
-    const dateISO = (d as { dateISO?: string; date_iso?: string }).dateISO || (d as { date_iso?: string }).date_iso;
-    if (!dateISO) return;
+    const stored = (d as { dateISO?: string; date_iso?: string }).dateISO || (d as { date_iso?: string }).date_iso;
+    if (!stored) return;
+    const dateISO = shift ? addYearsISO(stored, shift) : stored;
     const key = dateISO + '|' + (d.label || '');
     if (seen.has(key)) return;
     seen.add(key);
-    milestones.push({ date: dateISO, label: d.label || 'Date', type: d.type || 'deadline', isPast: false });
+    milestones.push({
+      date: dateISO,
+      label: d.label || 'Date',
+      type: d.type || 'deadline',
+      isPast: false,
+      projected: shift > 0,
+    });
   });
   milestones.sort((a, b) => a.date.localeCompare(b.date));
   milestones.forEach((m) => {
@@ -74,13 +132,17 @@ export function getDisplayMilestones(item: TrackerItem): Milestone[] {
 
 // script.js earliestUpcoming — nearest future date, else the latest past one.
 export function earliestUpcoming(item: TrackerItem): { date: string; label: string; kind: string } | null {
+  const shift = cycleYearShift(item);
   const candidates = (item.importantDates ?? [])
     .filter((d) => (d as { dateISO?: string; date_iso?: string }).dateISO || (d as { date_iso?: string }).date_iso)
-    .map((d) => ({
-      date: ((d as { dateISO?: string; date_iso?: string }).dateISO || (d as { date_iso?: string }).date_iso) as string,
-      label: d.label,
-      kind: d.type || 'deadline',
-    }));
+    .map((d) => {
+      const stored = ((d as { dateISO?: string; date_iso?: string }).dateISO || (d as { date_iso?: string }).date_iso) as string;
+      return {
+        date: shift ? addYearsISO(stored, shift) : stored,
+        label: d.label,
+        kind: d.type || 'deadline',
+      };
+    });
   if (!candidates.length) return null;
   const future = candidates.filter((c) => daysUntil(c.date) >= 0);
   future.sort((a, b) => a.date.localeCompare(b.date));
@@ -162,6 +224,36 @@ export function getBeyondDeadlineItems(data: TrackerData, saved: SavedState): Up
   results.sort((a, b) => {
     const s = order[computeProgressStatus(a.item)] - order[computeProgressStatus(b.item)];
     if (s !== 0) return s;
+    return a.nextDate.localeCompare(b.nextDate);
+  });
+  return results;
+}
+
+// Every actively-tracked opportunity, with no date window at all — what Home Base's task
+// tracker shows. Same exclusions as getUpcomingDeadlineItems (not_running, saved-for-later),
+// but an item with no dates on it is still listed, with an empty nextDate.
+export function getAllDeadlineItems(data: TrackerData, saved: SavedState): UpcomingEntry[] {
+  const results: UpcomingEntry[] = [];
+  ALL_BUCKETS.forEach((bucket) => {
+    data[bucket].forEach((item) => {
+      if (item.status === 'not_running') return;
+      if (saved[item.id]) return;
+      const next = earliestUpcoming(item);
+      results.push({
+        item,
+        bucket,
+        nextDate: next?.date ?? '',
+        nextLabel: next?.label ?? 'No date set',
+        nextKind: next?.kind ?? 'deadline',
+      });
+    });
+  });
+  const order: Record<OppStatus, number> = { in_progress: 0, not_started: 1, completed: 2 };
+  results.sort((a, b) => {
+    const s = order[computeProgressStatus(a.item)] - order[computeProgressStatus(b.item)];
+    if (s !== 0) return s;
+    // Undated items sort last within a status band rather than ahead of every real date.
+    if (!a.nextDate !== !b.nextDate) return a.nextDate ? -1 : 1;
     return a.nextDate.localeCompare(b.nextDate);
   });
   return results;

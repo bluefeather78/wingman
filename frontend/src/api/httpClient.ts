@@ -1,4 +1,4 @@
-import { AuthExpiredError, type ApiClient } from './ApiClient';
+import { AuthExpiredError, type ApiClient, type CalendarSyncResult, type UserOpportunitySubmission } from './ApiClient';
 import { sha256Hex } from './hash';
 import { clearTokens, loadTokens, saveTokens } from './tokenStore';
 import type {
@@ -273,6 +273,20 @@ export const httpClient: ApiClient = {
     return data.extracted_text ?? '';
   },
 
+  // Fire-and-forget by contract: submitUserOpportunityToDatabase() in the retired SPA
+  // swallowed every failure on purpose — the item is already in the student's Quest Log,
+  // and the review-queue row is a background nicety. Log, never surface.
+  async submitUserOpportunity(payload: UserOpportunitySubmission): Promise<void> {
+    try {
+      await request<{ status?: string }>('/api/user-submitted-opportunities', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    } catch (e) {
+      console.warn('Opportunity submission failed:', (e as Error).message);
+    }
+  },
+
   // Subscription (payments deferred; these back the Manage Plan page's status + promo flow).
   async subscriptionStatus(): Promise<Record<string, unknown>> {
     return request<Record<string, unknown>>('/api/subscription/status', { method: 'POST', body: '{}' });
@@ -339,6 +353,46 @@ export const httpClient: ApiClient = {
     });
     // Mock mode returns no stop_reason; a missing one reads as a clean finish.
     return { text: cleanAiText(data), truncated: data.stop_reason === 'max_tokens' };
+  },
+
+  // --- Google Calendar sync ---
+  googleCalendarConnectUrl(appRedirect?: string): string | null {
+    if (!_access) return null;
+    const params = new URLSearchParams({ token: _access });
+    if (appRedirect) params.set('app_redirect', appRedirect);
+    return `${API_BASE}/api/auth/google/calendar/start?${params.toString()}`;
+  },
+
+  async syncCalendar(events, sweep = false): Promise<CalendarSyncResult> {
+    // Deliberately NOT routed through request(): that throws on any non-2xx, and a 409
+    // here means "calendar not connected yet", which the caller answers with a connect
+    // prompt rather than an error message. The 401 refresh-once flow is reproduced.
+    const init: RequestInit = {
+      method: 'POST',
+      body: JSON.stringify({ events, sweep }),
+    };
+    let res = await rawFetch('/api/calendar/sync', init);
+    if (res.status === 401) {
+      const refreshed = await refreshOnce();
+      if (refreshed) res = await rawFetch('/api/calendar/sync', init);
+      if (res.status === 401) {
+        await forgetSession();
+        throw new AuthExpiredError();
+      }
+    }
+    if (res.status === 409) return { ok: false, notConnected: true };
+    if (!res.ok) return { ok: false, error: await errorMessage(res) };
+    const data = (await res.json()) as {
+      results?: { id: string; status: string; googleEventId?: string }[];
+      deleted?: number;
+      sweepErrors?: string[];
+    };
+    return {
+      ok: true,
+      results: data.results ?? [],
+      deleted: data.deleted ?? 0,
+      sweepErrors: data.sweepErrors ?? [],
+    };
   },
 };
 

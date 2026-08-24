@@ -70,22 +70,72 @@ export function Screen({
 }
 
 // ---------- SoftCard (card-soft: white, 22px radius, soft ambient shadow, no border) ----------
+// `hoverTint`: Home base and My Vibe treat every card-soft as a hover-highlighted container
+// (#page-home/#page-profile .card-soft:hover { background-color: #FBF3E9 } in the live app) —
+// other pages' cards stay plain, so this is opt-in per instance rather than baked into the
+// base style.
+// `onPress` makes the whole card the same affordance as its own CTA (Home Base's cards each
+// open the thing they summarise). Inner buttons must stopPropagation() — on RN-web a nested
+// Pressable's click bubbles to this one, which would fire both destinations.
 export function SoftCard({
   children,
   style,
   color = colors.card,
   onLayout,
+  hoverTint,
+  onPress,
 }: {
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
   color?: string;
   onLayout?: React.ComponentProps<typeof View>['onLayout'];
+  hoverTint?: boolean;
+  onPress?: PressableProps['onPress'];
 }) {
+  const [hovered, setHovered] = useState(false);
   return (
-    <View style={[styles.softCard, { backgroundColor: color }, softShadow(), style]} onLayout={onLayout}>
+    <Pressable
+      onHoverIn={hoverTint ? () => setHovered(true) : undefined}
+      onHoverOut={hoverTint ? () => setHovered(false) : undefined}
+      onPress={onPress}
+      style={[
+        styles.softCard,
+        { backgroundColor: hoverTint && hovered ? '#FBF3E9' : color },
+        softShadow(),
+        onPress ? styles.clickable : null,
+        style,
+      ]}
+      onLayout={onLayout}
+    >
       {children}
-    </View>
+    </Pressable>
   );
+}
+
+// ---------- Hover/press "pop" interaction ----------
+// Every bordered, hard-offset-shadow surface lifts on hover and depresses on press in the
+// live app (styles.css .pop-card:hover / .pop-btn:hover+:active) — Pressable's
+// onHoverIn/onHoverOut only fire on web (mouse), so `hovered` simply never turns true on
+// native, which is correct: touch has no hover equivalent there.
+export function usePopInteraction(baseOffset: number, color: string, lift: number) {
+  const [hovered, setHovered] = useState(false);
+  const [pressed, setPressed] = useState(false);
+  const offset = pressed ? Math.max(baseOffset - lift * 2, 1) : hovered ? baseOffset + lift : baseOffset;
+  const shift = pressed ? lift * 2 : hovered ? -lift : 0;
+  return {
+    hovered,
+    pressed,
+    handlers: {
+      onHoverIn: () => setHovered(true),
+      onHoverOut: () => { setHovered(false); setPressed(false); },
+      onPressIn: () => setPressed(true),
+      onPressOut: () => setPressed(false),
+    },
+    shadowStyle: [
+      popShadow(offset, color),
+      shift ? { transform: [{ translateX: shift }, { translateY: shift }] } : null,
+    ] as StyleProp<ViewStyle>,
+  };
 }
 
 // ---------- PopCard (pop-card: 3px navy border + 4px hard offset shadow) ----------
@@ -104,17 +154,19 @@ export function PopCard({
   borderColor?: string;
   borderWidth?: number;
 }) {
+  const { handlers, shadowStyle } = usePopInteraction(offset, borderColor, 2);
   return (
-    <View
+    <Pressable
+      {...handlers}
       style={[
         styles.popCard,
         { backgroundColor: color, borderColor, borderWidth },
-        popShadow(offset, borderColor),
+        shadowStyle,
         style,
       ]}
     >
       {children}
-    </View>
+    </Pressable>
   );
 }
 
@@ -176,17 +228,16 @@ export function PopButton({
   square?: boolean; // rounded-xl (12px) instead of pill
   shadowColor?: string;
 }) {
-  const [pressed, setPressed] = useState(false);
   const off = disabled || loading;
   const ghost = variant === 'ghost';
+  const { handlers, shadowStyle } = usePopInteraction(3, shadowColor ?? colors.navy, 1);
   // The live app's rule: pill CTAs set `border: none` inline, but square (rounded-xl)
   // orange buttons keep .pop-btn's 2px navy border. Measured via computed-style diff.
   const border = BORDER[variant] ?? (square && (variant === 'primary' || variant === 'primaryDeep') ? colors.navy : null);
   return (
     <Pressable
       onPress={onPress}
-      onPressIn={() => setPressed(true)}
-      onPressOut={() => setPressed(false)}
+      {...(off ? null : handlers)}
       disabled={off}
       style={[
         styles.btn,
@@ -194,8 +245,7 @@ export function PopButton({
         square && styles.btnSquare,
         { backgroundColor: BG[variant] },
         border ? { borderWidth: 2, borderColor: border } : null,
-        ghost ? null : popShadow(pressed ? 1 : 3, shadowColor ?? colors.navy),
-        pressed && !ghost ? { transform: [{ translateX: 2 }, { translateY: 2 }] } : null,
+        ghost ? null : shadowStyle,
         full && styles.btnFull,
         off && styles.btnOff,
         style,
@@ -245,13 +295,43 @@ const TASK_PILL: Record<OppStatus, { bg: string; fg: string }> = {
 export function StatusPill({ status, kind = 'opp', label, onPress }: { status: OppStatus; kind?: 'opp' | 'task'; label?: string; onPress?: () => void }) {
   const c = (kind === 'opp' ? OPP_PILL : TASK_PILL)[status];
   const text = label ?? (kind === 'opp' ? PROGRESS_STATUS_LABEL[status] : ACTION_ITEM_STATUS_LABEL[status]);
-  const pill = (
-    <View style={[styles.statusPill, { backgroundColor: c.bg }]}>
+  const [hovered, setHovered] = useState(false);
+  const [pressed, setPressed] = useState(false);
+  if (!onPress) {
+    return (
+      <View style={[styles.statusPill, { backgroundColor: c.bg }]}>
+        <Text style={[styles.statusPillText, { color: c.fg }]}>{text}</Text>
+      </View>
+    );
+  }
+  // A tappable pill cycles the task's state, so it has to read as a control rather than a
+  // label: it carries a small pop shadow at rest, lifts on hover and depresses on press —
+  // the same language PopButton uses, scaled down to pill size.
+  const offset = pressed ? 0 : hovered ? 3 : 2;
+  const shift = pressed ? 2 : hovered ? -1 : 0;
+  return (
+    <Pressable
+      onPress={onPress}
+      onHoverIn={() => setHovered(true)}
+      onHoverOut={() => {
+        setHovered(false);
+        setPressed(false);
+      }}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
+      accessibilityRole="button"
+      accessibilityHint="Cycles this task between not started, in progress and completed"
+      style={[
+        styles.statusPill,
+        styles.statusPillPressable,
+        { backgroundColor: c.bg },
+        popShadow(offset, colors.navy),
+        shift ? { transform: [{ translateX: shift }, { translateY: shift }] } : null,
+      ]}
+    >
       <Text style={[styles.statusPillText, { color: c.fg }]}>{text}</Text>
-    </View>
+    </Pressable>
   );
-  if (!onPress) return pill;
-  return <Pressable onPress={onPress}>{pill}</Pressable>;
 }
 
 // Legacy Badge kept for compatibility with screens not yet reworked.
@@ -462,6 +542,8 @@ const styles = StyleSheet.create({
   miniBadgeText: { fontFamily: fonts.bodyXBold, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase' },
 
   statusPill: { borderWidth: 2, borderColor: colors.navy, borderRadius: radius.pill, paddingVertical: 3, paddingHorizontal: 10, alignSelf: 'flex-start' },
+  statusPillPressable: { cursor: 'pointer' },
+  clickable: { cursor: 'pointer' },
   statusPillText: { fontFamily: fonts.bodyXBold, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.2 },
 
   badge: { borderRadius: radius.pill, paddingVertical: 3, paddingHorizontal: 10, alignSelf: 'flex-start' },

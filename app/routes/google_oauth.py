@@ -43,6 +43,29 @@ def _redirect_uri(request, path):
     return f"{scheme}://{host}{path}"
 
 
+# Google treats 127.0.0.1 and localhost as DIFFERENT redirect URIs and matches them exactly,
+# so a client registered with http://localhost:8000/... rejects the same server reached as
+# 127.0.0.1 with Error 400: redirect_uri_mismatch. The dev command in CLAUDE.md sets
+# EXPO_PUBLIC_API_BASE=http://127.0.0.1:8000, which is precisely that case.
+#
+# Rewriting only the redirect_uri would not work: the state cookie is host-scoped, so the
+# callback would arrive on localhost with no cookie and fail the CSRF check. Instead the
+# whole handshake is moved onto the canonical host BEFORE it starts — one 302, after which
+# the cookie, Google's redirect and the callback all share an origin.
+_LOOPBACK_ALIASES = ("127.0.0.1", "[::1]", "::1")
+
+
+def _canonicalize_loopback(request):
+    """Returns a redirect onto localhost when reached via a loopback IP, else None."""
+    host = _host(request)
+    hostname = host.split(":")[0] if not host.startswith("[") else host.rsplit(":", 1)[0]
+    if hostname not in _LOOPBACK_ALIASES:
+        return None
+    port = host.rsplit(":", 1)[-1] if ":" in host and not host.endswith("]") else str(PORT)
+    target = str(request.url.replace(netloc=f"localhost:{port}"))
+    return RedirectResponse(target, status_code=302)
+
+
 def _redirect_home(query_suffix=""):
     return RedirectResponse(f"/{query_suffix}", status_code=302)
 
@@ -72,6 +95,9 @@ def handle_google_start(request: Request):
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         return json_error(503, "Google Sign-In is not configured: set "
                                "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env.")
+    canonical = _canonicalize_loopback(request)
+    if canonical:
+        return canonical
     state = secrets.token_urlsafe(24)
     params = {
         "client_id": GOOGLE_CLIENT_ID,
@@ -263,6 +289,9 @@ def handle_google_calendar_start(request: Request):
     # Authorization header — the access token rides in the query string instead, and the
     # userid is derived from it, never taken from the URL directly. Same trust model as the
     # rest of the app: identity comes from the signed token.
+    canonical = _canonicalize_loopback(request)
+    if canonical:
+        return canonical
     token = request.query_params.get("token") or ""
     try:
         userid = verify_access_token(token)
@@ -278,7 +307,15 @@ def handle_google_calendar_start(request: Request):
 
     g._prune_google_calendar_states()
     state = secrets.token_urlsafe(24)
-    g._google_calendar_states[state] = {"userid": userid, "expires_at": time.time() + GOOGLE_TOKEN_TTL_SECONDS}
+    # In dev the app and the API are two origins (Metro :8081 -> API :8000), so returning to
+    # the API's own root would land the student on a 404 rather than back in the Quest Log.
+    # Same allowlist Google Sign-In already uses, so this can't become an open redirect.
+    app_redirect = request.query_params.get("app_redirect") or ""
+    g._google_calendar_states[state] = {
+        "userid": userid,
+        "app_redirect": app_redirect if _is_allowed_app_redirect(app_redirect) else "",
+        "expires_at": time.time() + GOOGLE_TOKEN_TTL_SECONDS,
+    }
 
     params = {
         "client_id": GOOGLE_CLIENT_ID,
@@ -355,7 +392,90 @@ def handle_google_calendar_callback(request: Request):
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
 
-    return _redirect_home("?calendar_connected=1")
+    # Back to the Quest Log, where the Sync to Calendar button lives — the student pressed
+    # it there, so landing on Home Base would leave them to find their way back. In
+    # production the app and API share an origin, so the relative path is the right default.
+    app_redirect = (entry or {}).get("app_redirect") or ""
+    if app_redirect:
+        sep = "&" if "?" in app_redirect else "?"
+        return RedirectResponse(f"{app_redirect}{sep}calendar_connected=1", status_code=302)
+    return RedirectResponse("/tracker?calendar_connected=1", status_code=302)
+
+
+# Marks an event as written by this app. The sweep (see _sweep_stale_events) only ever
+# deletes events carrying it, so a Wingman calendar the student has also added their own
+# entries to survives a sync intact.
+WINGMAN_EVENT_PROP = "wingmanId"
+
+
+def _calendar_request(method, url, access_token, payload=None):
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode() if payload is not None else None,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = resp.read()
+    return json.loads(body) if body else {}
+
+
+def _sweep_stale_events(access_token, calendar_path, keep_ids):
+    """Delete every event WE wrote to the Wingman calendar whose wingmanId is no longer
+    tracked. This is what removes a deadline from the calendar after the student takes the
+    opportunity out of the Quest Log: nothing client-side has to remember the Google event
+    id, and it self-heals across devices and across removals made while offline.
+
+    Returns (deleted_count, errors). Errors never fail the sync — the upserts already
+    landed, and a half-swept calendar is better than a sync that reports failure."""
+    deleted = 0
+    errors = []
+    page_token = None
+    stale = []
+    while True:
+        params = {"maxResults": "2500", "showDeleted": "false"}
+        if page_token:
+            params["pageToken"] = page_token
+        try:
+            page = _calendar_request(
+                "GET",
+                f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events?{urllib.parse.urlencode(params)}",
+                access_token,
+            )
+        except Exception as e:
+            return deleted, [f"Could not list calendar events: {e}"]
+        for ev in page.get("items") or []:
+            props = ((ev.get("extendedProperties") or {}).get("private") or {})
+            marker = props.get(WINGMAN_EVENT_PROP)
+            if not marker or marker in keep_ids:
+                continue
+            stale.append(ev.get("id"))
+        page_token = page.get("nextPageToken")
+        if not page_token:
+            break
+
+    for event_id in stale:
+        if not event_id:
+            continue
+        try:
+            _calendar_request(
+                "DELETE",
+                f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events/{urllib.parse.quote(event_id)}",
+                access_token,
+            )
+            deleted += 1
+        except urllib.error.HTTPError as e:
+            # Already gone on Google's side is the outcome we wanted anyway.
+            if e.code in (404, 410):
+                deleted += 1
+            else:
+                errors.append(f"Google API error {e.code} deleting an event")
+        except Exception as e:
+            errors.append(str(e))
+    return deleted, errors
 
 
 @router.post("/api/calendar/sync")
@@ -363,7 +483,11 @@ async def handle_calendar_sync(request: Request, user: AuthedUser = Depends(get_
     body = await read_json_body(request)
     userid = user.id
     events = body.get("events") or []
-    if not isinstance(events, list) or not events:
+    # `sweep` asks the server to also remove events for deadlines that are no longer
+    # tracked. That makes an EMPTY list meaningful — "nothing is tracked any more, clear
+    # the calendar" — so the not-empty guard only applies when no sweep was requested.
+    sweep = bool(body.get("sweep"))
+    if not isinstance(events, list) or (not events and not sweep):
         return json_error(400, "No events to sync.")
 
     try:
@@ -403,6 +527,10 @@ async def handle_calendar_sync(request: Request, user: AuthedUser = Depends(get_
             "description": description,
             "start": {"date": date_iso},
             "end": {"date": end_obj.isoformat()},
+            # Stamped so the sweep below can tell an event WE wrote from one the student
+            # added to this calendar by hand. Without it a sweep is "delete everything
+            # not currently tracked", which would eat their own entries.
+            "extendedProperties": {"private": {WINGMAN_EVENT_PROP: item_id}},
         }
         try:
             calendar_path = f"calendars/{urllib.parse.quote(calendar_id)}"
@@ -449,4 +577,24 @@ async def handle_calendar_sync(request: Request, user: AuthedUser = Depends(get_
         except Exception as e:
             results.append({"id": item_id, "status": "error", "error": str(e)})
 
-    return json_response(200, {"ok": True, "results": results})
+    deleted = 0
+    sweep_errors = []
+    if sweep:
+        # Keep only what the client just told us is tracked. An event whose upsert errored
+        # is kept too — its marker is still what the client sent, and deleting a deadline
+        # because a transient write failed is the wrong direction to fail in.
+        keep_ids = {
+            (e.get("id") or "").strip()
+            for e in events
+            if isinstance(e, dict) and (e.get("id") or "").strip()
+        }
+        deleted, sweep_errors = _sweep_stale_events(
+            access_token, f"calendars/{urllib.parse.quote(calendar_id)}", keep_ids
+        )
+
+    return json_response(200, {
+        "ok": True,
+        "results": results,
+        "deleted": deleted,
+        "sweepErrors": sweep_errors,
+    })

@@ -12,6 +12,9 @@ export interface ImportantDate {
   label: string;
   dateISO: string;
   type: string; // opens | deadline | event_start | event_end | other
+  // Written back by the Google Calendar sync so the next run PATCHes the same event
+  // instead of creating a duplicate. Same field, same meaning as the retired SPA's.
+  googleEventId?: string | null;
 }
 
 export interface ActionItem {
@@ -53,13 +56,22 @@ function emptyData(): TrackerData {
 }
 
 export async function loadTrackerData(): Promise<TrackerData> {
+  return (await loadTrackerDataChecked()).data;
+}
+
+// Same load, but says whether the stored value was UNREADABLE rather than merely absent.
+// loadTrackerData() collapses those two into an empty tracker, which is right for rendering
+// (an empty Quest Log either way) and wrong for the calendar sweep: sweeping on a corrupt
+// payload would delete a student's synced deadlines because we could not parse our own data.
+// A server/network failure needs no flag — httpClient.loadData throws and never reaches here.
+export async function loadTrackerDataChecked(): Promise<{ data: TrackerData; unreadable: boolean }> {
   const raw = await httpClient.loadData<string | Record<string, unknown>>(TRACKER_KEY);
-  if (!raw) return emptyData();
+  if (!raw) return { data: emptyData(), unreadable: false };
   let parsed: Record<string, unknown>;
   try {
     parsed = typeof raw === 'string' ? JSON.parse(raw) : (raw as Record<string, unknown>);
   } catch {
-    return emptyData();
+    return { data: emptyData(), unreadable: true };
   }
   const data = emptyData();
   // Legacy 4-bucket migration mirror (old app did the same).
@@ -77,7 +89,7 @@ export async function loadTrackerData(): Promise<TrackerData> {
       }));
     }
   });
-  return data;
+  return { data, unreadable: false };
 }
 
 export async function saveTrackerData(data: TrackerData): Promise<void> {
@@ -106,6 +118,55 @@ export async function saveTrackerSaved(state: SavedState): Promise<void> {
 
 export function flattenItems(data: TrackerData): TrackerItem[] {
   return ALL_BUCKETS.flatMap((b) => data[b]);
+}
+
+export interface DeadlineRefreshResult {
+  data: TrackerData;
+  checked: number;
+  updated: number;
+  failed: number;
+}
+
+// Quest Log's "Check for updates" button — ported from script.js's refreshTracker(), minus
+// the extractTrackerInfo() re-classification pass (a separate, heavier AI call this RN port
+// never wired up elsewhere). This overlays the same shared/cached on-demand deadline check
+// buildTracker() already uses (getDeadlineCheck -> GET /api/opportunities/<id>/deadline),
+// which no-ops into a cheap cache hit for anything checked by any user in the last 7 days.
+export async function refreshTrackerDeadlines(
+  onProgress?: (checked: number, total: number) => void,
+): Promise<DeadlineRefreshResult> {
+  const data = await loadTrackerData();
+  const items = flattenItems(data);
+  let updated = 0;
+  let failed = 0;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    onProgress?.(i, items.length);
+    try {
+      const info = await httpClient.getDeadlineCheck(item.id);
+      if (!info) continue;
+      let changed = false;
+      if (info.status && ['running', 'not_running', 'unknown'].includes(info.status) && info.status !== item.status) {
+        item.status = info.status;
+        changed = true;
+      }
+      if (Array.isArray(info.important_dates) && info.important_dates.length) {
+        const mapped = info.important_dates
+          .filter((d) => d && d.date_iso)
+          .map((d) => ({ label: d.label || 'Date', dateISO: d.date_iso, type: d.type || 'deadline' }));
+        if (JSON.stringify(mapped) !== JSON.stringify(item.importantDates ?? [])) changed = true;
+        item.importantDates = mapped;
+      }
+      if (typeof info.was_estimated === 'boolean') item.wasEstimated = info.was_estimated;
+      if (info.important_date_note) item.note = info.important_date_note;
+      if (changed) updated++;
+    } catch {
+      failed++;
+    }
+  }
+  onProgress?.(items.length, items.length);
+  await saveTrackerData(data);
+  return { data, checked: items.length, updated, failed };
 }
 
 export function countItems(data: TrackerData): number {

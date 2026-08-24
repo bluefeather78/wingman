@@ -17,6 +17,16 @@ export function googleRedirectUri(): string {
   return Linking.createURL('google-auth');
 }
 
+// Where the Google *Calendar* connect flow should return to. Separate grant, separate
+// landing: the student pressed Sync in the Quest Log, so that is where they come back to.
+// Must stay covered by the backend's GOOGLE_APP_REDIRECTS allowlist.
+export function googleCalendarReturnUri(): string {
+  if (Platform.OS === 'web') {
+    return `${globalThis.location.origin}/tracker`;
+  }
+  return Linking.createURL('tracker');
+}
+
 // On web: navigates away and never returns (the /google-auth route resumes the flow).
 // On native: returns the one-time handoff token, or null if the user cancelled.
 export async function beginGoogleSignIn(): Promise<string | null> {

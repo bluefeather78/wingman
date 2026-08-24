@@ -86,6 +86,40 @@ function name in its new home.
 
 ## Architecture
 
+### Repo map — where to look first
+
+Read this before grepping; it is the whole layout in one screen.
+
+```
+frontend/                 THE web+native app (Expo, expo-router). See "Frontend" below.
+  app/                    routes: landing, login, google-auth, +html.tsx, (app)/{index,
+                          finder,tracker,profile,subscription}.tsx + (app)/_layout.tsx
+  src/api/                ApiClient seam: httpClient (bearer+refresh), tokenStore,
+                          trackerStore, hash, types
+  src/lib/                ported pure logic: ranking, profile, profileChat, profileHighlight,
+                          tracker, status, kinds, grade, constants, extractJSON, aiJson
+  src/ui/                 design system: theme, components, NavBar, icons
+  src/auth/               AuthContext, googleSignIn
+app/                      FastAPI service (the only Python thing deployed)
+  main.py                 app + CORS + static/dist serving       routes/*.py  one per domain
+  core.py                 Supabase plumbing, accounts, cost/activity, subscription_state
+  config.py               env + model pins                       services/*.py  domain logic
+  auth/                   JWT tokens, argon2 passwords, deps, ratelimit
+ops/                      LOCAL-ONLY console (WINGMAN_ENABLE_OPS): core.py, admin.py,
+                          admin_console.html — never mounted on Render
+*.py (repo root)          the 6 offline agents + their shared libs (stdlib-only; app/
+                          imports check_deadlines). See the agents section below.
+legal/*.md                source of record -> build_legal.py -> terms.html/privacy.html
+*.sql (repo root)         one-time manual DDL, run by hand in the Supabase SQL editor
+tests/                    pytest suite for the backend (829 tests, all green)
+walkthrough.html          the landing film (vendored ~1.5MB bundle) — see its section below
+styles.css, favicon.svg   kept ONLY for the legal/about pages the RN app links to
+```
+
+Retired at tag `workingwithauth`: `index.html`, `script.js`, the old icon SVGs. Every
+`script.js` / `index.html` reference below is **historical** — the reasoning was ported
+into `frontend/src/lib/*` and still holds; the DOM mechanics described do not exist.
+
 **Frontend: the Expo app in `frontend/`** (see `PLAN_3_rn.md` for the full build log).
 Routes in `frontend/app/` (expo-router: landing, login, google-auth, and the authed
 `(app)/` group — Home Base / My Vibe / Fresh Finds / Quest Log / subscription); ported
@@ -99,11 +133,22 @@ the retired SPA was verified against tag `workingwithauth` via computed-style di
 design source of truth is styles.css (kept for legal pages) plus the Claude Design
 "Wingman Design System" project.
 
+**How the two halves are served.** In dev they are two origins (Metro `:8081` -> API
+`:8000`, which is why `app/main.py` carries CORS). In production they are ONE: the Render
+web service's build runs `expo export -p web` and `SERVE_WEB_DIST=1` makes `app/main.py`
+serve `frontend/dist` at the root, so `highschoolwingman.com` is app + API together — no
+prod CORS, and the Google OAuth callback host never moves. Resolution order in
+`serve_static()` is **dist file -> exported route html -> repo-root page -> dist
+index.html fallback**; the repo-root step sits before the fallback deliberately, so
+`/terms.html` can never be shadowed by the app shell. `render.yaml` also still defines a
+standalone `wingman-web` static site as an alternative path; it is not what the domain
+uses today.
+
 **Opportunity data**: the opportunity catalog (1200+ rows) lives in a Supabase (hosted
-Postgres) `opportunities` table, not a static file — `server.py`'s `/api/opportunities`
+Postgres) `opportunities` table, not a static file — `/api/opportunities`
 proxies to it (PostgREST, anon key, RLS-restricted to `is_active=true` rows, paginated past
 PostgREST's 1000-row cap, cached in-process for `OPPORTUNITIES_CACHE_TTL` seconds) and
-`script.js` fetches that endpoint into the global `OPPORTUNITIES` array on load.
+the client fetches that endpoint once on load.
 [opportunities.json](opportunities.json) still exists git-tracked as a diffable backup
 snapshot only — regenerate it with `export_json.py` after editing the DB, it is **not**
 fetched at runtime anymore. `migrate_to_supabase.py` was the one-off script that populated the
@@ -1200,11 +1245,12 @@ in `server.py`.
   That is every account predating the migration. `ensure_trial_started()` stamps a real
   window on first sign-in. Reading NULL as expired — which `is_trial_expired(None)` does if
   you take it literally — would paywall every existing user the moment the migration lands.
-- Enforcement is deliberately in **both** halves. `showApp()` checks before the app shell is
-  unhidden (no flash of a usable app), and `Handler._subscription_blocks()` returns **402**
-  from the four endpoints that cost money per call. The client lock is a screen; the 402 is
-  the control. Calls with no `userid` are not blocked — unidentifiable, same residual the
-  cost attribution reports as unattributed.
+- Enforcement was deliberately in **both** halves: the old client checked before unhiding
+  the app shell (no flash of a usable app), and server-side `subscription_block_reason()`
+  returns **402** from the four endpoints that cost money per call. The 402 is the real
+  control and is still live; **the RN app has no paywall screen** (payments deferred by
+  PLAN_3), so today the server gate is the only one. Calls with no identified user are not
+  blocked — unidentifiable, the same residual the cost attribution reports as unattributed.
 - **Both `userid` and `email` must be unique across all accounts**, case-insensitively.
   `users` has no is_active/deleted column, so every row is a live account and any match is
   a real conflict. `handle_register()` checks both up front and names the field that
@@ -1229,34 +1275,36 @@ in `server.py`.
   `legal/`. Note Terms §3 still states the beta is free of charge, which the $9.99 plan
   contradicts.
 - Stripe is **not configured**: `STRIPE_API_KEY`/`STRIPE_PRICE_ID` are absent from `.env`,
-  so `upgradeSubscription()` fails at checkout. Everything upstream of the payment itself
-  (trial, gating, promo validation, cancel bookkeeping) works without it.
+  so `/api/subscription/checkout` errors and the subscription screen's Upgrade button
+  surfaces that answer rather than redirecting. Everything upstream of the payment itself
+  (trial, gating, promo validation + redemption, cancel bookkeeping) works without it.
 
 **Two persistence layers on the client**, easy to conflate:
-1. `window.storage` (get/set, async) — used for `currentUser` session cache, `studentProfile`,
-   `trackerData`, `trackerSavedState`. This API is **not defined anywhere in this repo**; it's
-   presumably injected by whatever runtime hosts the live preview, and calls are always
-   guarded with `if(window.storage){...}` + try/catch. Running `python server.py` and opening
-   a plain browser tab means these silently no-op — data won't persist across reloads in that
-   environment.
-2. The Supabase `users` table via `/api/register`/`/api/login`/`/api/data/save`/`/api/data/load`
-   — this is the only storage that actually persists accounts and per-user data (profile,
-   tracker) across server restarts and different browsers/devices.
+1. **Tokens only** — `frontend/src/api/tokenStore.ts`: `expo-secure-store` on native,
+   `localStorage` on web, under `wingman.access_token` / `wingman.refresh_token`. Nothing
+   else is cached client-side. (The old app's `window.storage` shim is gone; it was never
+   defined in this repo and silently no-opped outside its host runtime.)
+2. **Everything else is server state** — the Supabase `users` table via `/api/register`,
+   `/api/login`, `/api/data/save`, `/api/data/load`. Three keys carry the whole app:
+   `student-profile` (`{synthesized, updatedAt, chatRounds, basics, filterTags,
+   starterPool, filterValues}`), `hs-tracker-data` (a JSON **string** of the 6-bucket
+   object), `hs-tracker-saved` (`{id: bool}` saved-for-later flags). These key names and
+   shapes were kept byte-identical through the RN rewrite so a student's data survived the
+   cutover — do not "clean them up".
 
-**AI call flow**: most AI features funnel through `callGemini(system, userContent, useWebSearch)`
-in script.js, which POSTs to `/api/messages` and returns cleaned text; `extractJSON()` then
-pulls a JSON value out of that text via brace/bracket-depth scanning (handles trailing
-commentary and attempts best-effort repair of truncated/token-limited responses). Callers:
-`inferSubjects`, `rankCandidates`, `findVenuesViaWeb`, `synthesizeProfile`,
-`assessProfileReadiness`, `extractTrackerInfo`/tracker classification. `findVenuesViaWeb`
-(live `useWebSearch: true` search, bypassing local ranking) is currently unused by any
-`KIND_CONFIG` kind — Conference/Journal Venue used it until the Supabase `opportunities`
-table gained real `Conference`/`Journal`-typed rows and moved to the local-database path
-like every other kind; it's kept as a fallback for a future kind whose type is too sparse
-locally. The profile chat's `profileChatNextQuestion`/`profileChatStarterQuestionsFromAI`/
-`starterQuestionPoolFromAI` are the one exception — they call `callClaude(system,
-userContent, useWebSearch)` instead, POSTing to `/api/messages-claude` (Anthropic,
-`claude-haiku-4-5-20251001`), same response parsing either way.
+**AI call flow**: `httpClient.callGemini(system, userContent, useWebSearch)` POSTs to
+`/api/messages` and returns cleaned text; `extractJSON()` (`src/lib/extractJSON.ts`) pulls a
+JSON value out of it by brace/bracket-depth scanning (tolerates trailing commentary, repairs
+truncated responses), and `callGeminiJSON` (`src/lib/aiJson.ts`) retries the whole call once
+on a parse failure. Every model-touching module takes the call function as a **parameter**
+rather than importing the client — that is what keeps `src/lib/*` pure and testable, so pass
+`httpClient.callGemini` at the call site. Callers: `inferSubjects`, `rankCandidates`,
+`extractProfileBasics` (ranking.ts), `extractTrackerInfo` (tracker.ts), and the finder's
+profile-tag scorer. The profile chat is the one Anthropic holdout —
+`profileChatNextQuestion` / `profileChatStarterQuestionsFromAI` / `synthesizeProfile` /
+`repairProfileText` use `callClaude`/`callClaudeDetailed` against `/api/messages-claude`
+(`claude-haiku-4-5-20251001`); `callClaudeDetailed` additionally surfaces `stop_reason` so
+synthesis can detect truncation and retry at the higher ceiling.
 
 **The profile chat's two halves are cached asymmetrically, and the asymmetry is the point.**
 Openers are cached; follow-ups are deliberately not. Both are `callClaude()`, so the
@@ -1300,20 +1348,49 @@ difference is not visible from the call sites — only from what each one depend
   student read but never answered stayed in `profileChatHistory`, and reopening rendered that
   stale bubble instead of a fresh set of starters.
 
-**App pages** (single-page, no router — `showPage(name)` toggles `#page-*` sections).
-Note two sections that live *outside* `#appShell` and are therefore not `showPage()`
-targets: `#page-login` (the sign-in/registration gate) and `#page-locked` (the paywall) —
-both replace the app wholesale rather than rendering inside it.
-Home/Dashboard (progress bars, todo counts), Wizard/Finder (quiz or free-text profile →
-`runSearch()`/`runProfileSuggestSearch()` → ranked results → `buildTracker()`), Tracker
-(calendar + list views across buckets in `ALL_BUCKETS`: summerPrograms, internships,
-researchCompetitions, pureCompetitions, conferences, journals).
+**App screens** (expo-router; the file path IS the route). Outside the authed group:
+`landing.tsx` (signed-out marketing page), `login.tsx` (sign-in + register + consent),
+`google-auth.tsx` (OAuth handoff completion), `index.tsx` (the auth gate — redirects to
+`/(app)` or `/landing`), `+html.tsx` (the web document shell; it exists so the favicon
+`<link>` is present in dev, which `expo export` otherwise injects only at build time).
+Inside `(app)/` (guarded by `_layout.tsx`, which renders `NavBar` + `<Slot>` and bounces
+signed-out users to `/login`): `index.tsx` Home Base, `finder.tsx` Fresh Finds,
+`tracker.tsx` Quest Log, `profile.tsx` My Vibe, `subscription.tsx` Manage Plan.
 
-**The landing page's walkthrough film** (`walkthrough.html`, a vendored ~1.5MB
-self-extracting bundle with lazy IntersectionObserver mounting) was **retired with the old
-SPA** — recover it from tag `workingwithauth` if ever needed. The RN landing renders the
-film section as a static poster frame; the user is producing a replacement video to embed
-there, so don't rebuild the old film.
+**The branded tab names are load-bearing** — Home Base / My Vibe / Fresh Finds / Quest Log,
+never Home/Profile/Search/Tracker. The finder is a staged single screen (`home` →
+`quiz` | `form` → `results`), not four routes. The tracker's six buckets are `ALL_BUCKETS`
+in `src/lib/constants.ts`: summerPrograms, internships, researchCompetitions,
+pureCompetitions, conferences, journals.
+
+**Known gaps in the RN port** (deliberate or unfinished, so nobody re-derives them):
+`starterQuestionPoolFromAI`/`drawStarterWindow` are ported in `src/lib/profileChat.ts` but
+**not wired** — the drawer calls the live 3-question path on every open, so the old
+`starterPool` cache is currently unused. The finder **reads** `filterTags.enrichedTags`
+off the stored profile but never regenerates them (no writer for that slot in RN).
+Clear-profile is a visual stub. Payments are deferred by the plan: the subscription screen
+shows status and runs the promo flow, and Upgrade surfaces whatever the unconfigured
+Stripe backend answers.
+
+**The landing page's walkthrough film** is [walkthrough.html](walkthrough.html) at the repo
+root — a **vendored, self-extracting ~1.5MB bundle** exported from a design canvas, carrying
+its own React runtime, the composition source and every webfont in one file. **Do not
+hand-edit it**: the real source is a `<script type="__bundler/manifest">` block of gzipped,
+base64'd assets, so every apparent line is machine-written. Re-export and replace the whole
+file to change the film.
+
+It is served by `app/main.py`'s repo-root static route (NOT from `frontend/dist`), and
+`frontend/app/landing.tsx` points at it via `backendUrl('/walkthrough.html')`. Because it is
+heavy and autoplays once, it is **not** embedded eagerly: the poster frame mounts the iframe
+only when someone presses play (or "See how it works", which scrolls to the section and
+starts it). On native there is no webview dependency, so the same press hands off to the
+system browser.
+
+**It must stay git-tracked or production breaks silently.** The file lives at the repo root,
+which is mostly gitignored build/log noise, and it was untracked at one point after the SPA
+cutover — the landing page then iframes a URL that 404s on Render while working perfectly
+against a local checkout. If you touch the film, confirm `git ls-files walkthrough.html`
+prints it.
 
 ## Security notes for this repo
 

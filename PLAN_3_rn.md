@@ -384,11 +384,24 @@ scores visible results with the same batch-scoring Gemini prompt (cached per tag
 renders "PROFILE MATCH • RANK #N" with the indigo bar (WHY IT FITS bar is yellow); and both
 drawers **slide in from the right** via the new `RightDrawer` (account 300ms, story 250ms).
 
-Remaining, still open: profile Quick-add (resume/LinkedIn import modal) and Clear-profile
-are visual stubs; "Manage Plan" in the account drawer is a stub (payments deferred);
-landing "See how it works" doesn't scroll to the film section; the walkthrough film itself
-stays a poster (user is producing the video). Google button visually mirrors the live
-app's COMING SOON treatment but stays functional.
+**Round 4 (same day, commit 9dc18a1)** — Manage Plan opens a real `/(app)/subscription`
+page (status + promo flow work; Upgrade surfaces the Stripe-unconfigured answer);
+resume/LinkedIn Quick-add works end-to-end against the real extract endpoints; merges
+highlight newly-added sentences for 5s and auto-scroll to them (`src/lib/profileHighlight.ts`,
+a verbatim port of flagNewProfileText's sentence diff); the chat drawer gained
+🔄 Regenerate + 🎤 dictation + 🔇/🔊 spoken questions (feature-detected like the live app);
+the Fresh Finds selection bar is pinned (position:fixed doesn't hold inside RN-web's
+ScrollView — the bar is an absolute SIBLING of the scroller); ranking retries once with
+backoff before the keyword fallback; landing's "Read our full story" opens about.html;
+register's name columns flex. NOT a bug: the Quest Log "dates are from the last cycle"
+banner — the old app renders the identical banner on the same card (verified live).
+**Ops gotcha:** never start Metro with `CI=1` — CI mode disables the file watcher and
+edits silently never rebundle (cost a whole verification round).
+
+Remaining, still open: Clear-profile is a visual stub; landing "See how it works" doesn't
+scroll to the film section; the walkthrough film itself stays a poster (user is producing
+the video). Google button visually mirrors the live app's COMING SOON treatment but stays
+functional.
 
 ### Other live notes
 - Deadline endpoint `GET /api/opportunities/<id>/deadline` returns **502** server-side

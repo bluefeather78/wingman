@@ -359,11 +359,25 @@ misclassified).
 (the real column is `dates_last_checked_at` — check_deadlines.py and script.js both use it).
 Fixed in `app/services/deadlines.py` + `app/routes/opportunities.py`; verified 200.
 
+**Round 2 (same day, commit 150d11d)** — moved from screenshot eyeballing to a Playwright
+**computed-style diff** (`compare/cssdiff.js` in the session scratchpad: matched elements
+in both DOMs, getComputedStyle side-by-side; note the noise classes — RN reports
+fontWeight 400 because weight is baked into the font file, and 9999px vs 999px radii are
+identical). It caught: buttons are 16px/24 weight-700 (48px tall), square orange buttons
+KEEP the 2px navy border (only pill CTAs set border:none inline), card h2s are slate-900
+(the body tag's Tailwind class beats styles.css's navy), and several missing line-heights.
+Also: the account drawer is now the full #profilePanel port (location save via new
+`ApiClient.saveLocation`, live subscription line, Legal/Contact/About), logout lands on
+/landing (navigate BEFORE clearing the session or the (app) guard's /login redirect wins),
+the tab is titled "Wingman" with the real favicon (expo-router Head + favicon.png rendered
+from favicon.svg), and Home gained the See-all-tasks modal with persisted status cycling.
+
 Remaining, still open: the finder's "Your Profile" AI tag facet; profile Quick-add
-(resume/LinkedIn import modal) and Clear-profile are visual stubs; landing "See how it
-works" doesn't scroll to the film section; the walkthrough film itself stays a poster
-(user is producing the video). Google button visually mirrors the live app's COMING SOON
-treatment but stays functional.
+(resume/LinkedIn import modal) and Clear-profile are visual stubs; "Manage Plan" in the
+account drawer is a stub (payments deferred); landing "See how it works" doesn't scroll
+to the film section; the walkthrough film itself stays a poster (user is producing the
+video). Google button visually mirrors the live app's COMING SOON treatment but stays
+functional.
 
 ### Other live notes
 - Deadline endpoint `GET /api/opportunities/<id>/deadline` returns **502** server-side

@@ -1,10 +1,11 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import { countProfileWords, profileHasTruncatedTail, repairProfileText, synthesizeProfile, transcriptStudentLines } from '@/lib/profile';
+import { diffNewProfileSentences, PROFILE_HIGHLIGHT_MS, profileSentenceKey, splitProfileSentences } from '@/lib/profileHighlight';
 import { extractProfileBasics } from '@/lib/ranking';
 import { profileChatNextQuestion, profileChatStarterQuestionsFromAI, profileChatTranscript, type ChatMessage } from '@/lib/profileChat';
 import { PopButton, RightDrawer, Screen, SoftCard, Txt, VibeField } from '@/ui/components';
@@ -42,9 +43,25 @@ function splitProfile(text: string) {
   return { general, passion, research };
 }
 
+// Web Speech API feature detection (web only; each control hides independently, like the
+// live app's initProfileChatVoiceUI).
+type SpeechRecognitionLike = {
+  lang: string; interimResults: boolean; maxAlternatives: number;
+  onresult: ((e: { results: { 0: { transcript: string } }[] }) => void) | null;
+  onend: (() => void) | null; onerror: ((e: unknown) => void) | null;
+  start: () => void; stop: () => void;
+};
+const SpeechRecognitionCtor: (new () => SpeechRecognitionLike) | null =
+  Platform.OS === 'web'
+    ? (((globalThis as Record<string, unknown>).SpeechRecognition ??
+        (globalThis as Record<string, unknown>).webkitSpeechRecognition) as (new () => SpeechRecognitionLike) | null) ?? null
+    : null;
+const ttsAvailable = Platform.OS === 'web' && typeof globalThis !== 'undefined' && 'speechSynthesis' in globalThis;
+
 // My Vibe — ported from the live app's #page-profile: gradient CTA banner, the "Your Story
-// So Far" card (updated pill, quick-add + deepen buttons, basics grid, vibe-field sections),
-// and the right-hand "Deepen your story" chat drawer.
+// So Far" card (updated pill, quick-add + deepen buttons, basics grid, vibe-field sections
+// with 5s new-text highlights + auto-scroll), the resume/LinkedIn quick-add modal, and the
+// right-hand "Deepen your story" chat drawer (starters + regenerate, mic, spoken questions).
 export default function Profile() {
   const router = useRouter();
   const [profile, setProfile] = useState<StoredProfile>({ synthesized: '', updatedAt: null, chatRounds: 0 });
@@ -52,9 +69,32 @@ export default function Profile() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [starters, setStarters] = useState<string[] | null>(null);
+  const [startersLoading, setStartersLoading] = useState(false);
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Import modal
+  const [importOpen, setImportOpen] = useState(false);
+  const [importTab, setImportTab] = useState<'resume' | 'linkedin'>('resume');
+  const [resumeFile, setResumeFile] = useState<File | null>(null);
+  const [resumeStatus, setResumeStatus] = useState('');
+  const [linkedinText, setLinkedinText] = useState('');
+  const [linkedinStatus, setLinkedinStatus] = useState('');
+
+  // New-text highlight + auto-scroll
+  const [highlightSet, setHighlightSet] = useState<Set<string> | null>(null);
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const cardY = useRef(0);
+  const sectionsY = useRef(0);
+  const fieldY = useRef<Record<string, number>>({});
+
+  // Voice
+  const [voiceOn, setVoiceOn] = useState(false);
+  const [listening, setListening] = useState(false);
+  const recognition = useRef<SpeechRecognitionLike | null>(null);
+  const voiceOnRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -75,46 +115,234 @@ export default function Profile() {
     setProfile(next);
     await httpClient.saveData(PROFILE_KEY, next);
   }
+
+  // Highlight what a merge added, fade it after PROFILE_HIGHLIGHT_MS, and scroll the page
+  // to the first section that contains a new sentence (flagNewProfileText behavior).
+  function showMergeHighlights(before: string, after: string) {
+    const added = diffNewProfileSentences(before, after);
+    if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    if (!added.size) {
+      setHighlightSet(null);
+      return;
+    }
+    setHighlightSet(added);
+    highlightTimer.current = setTimeout(() => setHighlightSet(null), PROFILE_HIGHLIGHT_MS);
+    // Scroll after the re-render has laid the sections out.
+    setTimeout(() => {
+      const { general, passion, research } = splitProfile(after);
+      const contains = (paras: string[]) =>
+        paras.some((p) => splitProfileSentences(p).some((s) => added.has(profileSentenceKey(s))));
+      let key: string = 'interests';
+      if (!contains(general)) {
+        if (contains(passion)) key = 'passion';
+        else if (contains(research)) key = 'research';
+      }
+      const y = cardY.current + sectionsY.current + (fieldY.current[key] ?? 0);
+      scrollRef.current?.scrollTo({ y: Math.max(0, y - 90), animated: true });
+    }, 350);
+  }
+
+  // The one merge path every entry point uses (chat close, resume, LinkedIn) — old
+  // mergeIntoProfile. Returns true when the profile actually changed.
+  async function mergeIntoProfile(newText: string, isTranscript: boolean): Promise<boolean> {
+    const before = profile.synthesized;
+    setBusy('saving');
+    try {
+      let merged: string;
+      try {
+        merged = await synthesizeProfile(callClaudeDetailed, before, newText, isTranscript);
+      } catch {
+        const fb = isTranscript ? transcriptStudentLines(newText) : newText;
+        merged = fb ? (before ? `${before} ${fb}` : fb) : before;
+      }
+      await persist({
+        synthesized: merged,
+        updatedAt: new Date().toISOString(),
+        chatRounds: profile.chatRounds + (isTranscript ? 1 : 0),
+      });
+      showMergeHighlights(before, merged);
+      extractProfileBasics(callGemini, merged).then(setBasics).catch(() => {});
+      return merged !== before;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function loadStarters(regenerate: boolean) {
+    setStartersLoading(true);
+    try {
+      setStarters(await profileChatStarterQuestionsFromAI(callClaude, profile.synthesized, profile.chatRounds, regenerate));
+    } catch {
+      if (!regenerate) setStarters(["What's something you're weirdly good at that has nothing to do with school?"]);
+    } finally {
+      setStartersLoading(false);
+    }
+  }
   async function openDrawer() {
     setDrawerOpen(true); setHistory([]); setStarters(null);
-    try { setStarters(await profileChatStarterQuestionsFromAI(callClaude, profile.synthesized, profile.chatRounds, false)); }
-    catch { setStarters(["What's something you're weirdly good at that has nothing to do with school?"]); }
+    void loadStarters(false);
   }
-  function pickStarter(q: string) { setHistory([{ role: 'bot', text: q }]); setStarters(null); }
-  async function send() {
-    const text = draft.trim();
+  function pickStarter(q: string) {
+    setHistory([{ role: 'bot', text: q }]);
+    setStarters(null);
+    speak(q);
+  }
+  function speak(text: string) {
+    if (!voiceOnRef.current || !ttsAvailable || !text) return;
+    const synth = (globalThis as { speechSynthesis?: { cancel: () => void; speak: (u: unknown) => void } }).speechSynthesis;
+    synth?.cancel();
+    const Utter = (globalThis as Record<string, unknown>).SpeechSynthesisUtterance as new (t: string) => unknown;
+    if (Utter) synth?.speak(new Utter(text));
+  }
+  function toggleVoiceOutput() {
+    const next = !voiceOn;
+    setVoiceOn(next);
+    voiceOnRef.current = next;
+    if (next) {
+      const lastBot = [...history].reverse().find((m) => m.role === 'bot');
+      if (lastBot) speak(lastBot.text);
+    } else if (ttsAvailable) {
+      (globalThis as { speechSynthesis?: { cancel: () => void } }).speechSynthesis?.cancel();
+    }
+  }
+  function toggleVoiceInput() {
+    if (!SpeechRecognitionCtor) return;
+    if (listening) {
+      recognition.current?.stop();
+      return;
+    }
+    if (!recognition.current) {
+      const rec = new SpeechRecognitionCtor();
+      rec.lang = 'en-US';
+      rec.interimResults = true;
+      rec.maxAlternatives = 1;
+      rec.onresult = (e) => {
+        let transcript = '';
+        for (let i = 0; i < (e.results as unknown as { length: number }).length; i++) transcript += e.results[i][0].transcript;
+        setDraft(transcript);
+      };
+      rec.onend = () => {
+        setListening(false);
+        setDraft((current) => {
+          if (current.trim()) void sendText(current.trim());
+          return current;
+        });
+      };
+      rec.onerror = () => setListening(false);
+      recognition.current = rec;
+    }
+    try {
+      recognition.current.start();
+      setListening(true);
+    } catch { /* already started */ }
+  }
+
+  async function sendText(text: string) {
     if (!text || busy) return;
     setDraft('');
-    const next: ChatMessage[] = [...history, { role: 'user', text }];
-    setHistory(next); setBusy('thinking');
-    try {
-      const q = await profileChatNextQuestion(callClaude, profile.synthesized, next, profile.chatRounds);
-      setHistory([...next, { role: 'bot', text: q || 'Tell me something else about yourself.' }]);
-    } catch {
-      setHistory([...next, { role: 'bot', text: "Couldn't think of a question — tell me something about yourself." }]);
-    } finally { setBusy(null); }
+    setHistory((prev) => {
+      const next: ChatMessage[] = [...prev, { role: 'user', text }];
+      setBusy('thinking');
+      profileChatNextQuestion(callClaude, profile.synthesized, next, profile.chatRounds)
+        .then((q) => {
+          const bot = q || 'Tell me something else about yourself.';
+          setHistory([...next, { role: 'bot', text: bot }]);
+          speak(bot);
+        })
+        .catch(() => setHistory([...next, { role: 'bot', text: "Couldn't think of a question — tell me something about yourself." }]))
+        .finally(() => setBusy(null));
+      return next;
+    });
   }
+  async function send() {
+    await sendText(draft.trim());
+  }
+
   // Closing IS the save (matches the live app's closeStoryDrawer).
   async function closeDrawer() {
     setDrawerOpen(false);
+    if (recognition.current && listening) recognition.current.stop();
     if (!history.some((m) => m.role === 'user')) { setHistory([]); setStarters(null); setDraft(''); return; }
-    setBusy('saving');
     const transcript = profileChatTranscript(history);
-    try {
-      const merged = await synthesizeProfile(callClaudeDetailed, profile.synthesized, transcript, true);
-      await persist({ synthesized: merged, updatedAt: new Date().toISOString(), chatRounds: profile.chatRounds + 1 });
-    } catch {
-      const fb = transcriptStudentLines(transcript);
-      const merged = fb ? (profile.synthesized ? `${profile.synthesized} ${fb}` : fb) : profile.synthesized;
-      await persist({ synthesized: merged, updatedAt: new Date().toISOString(), chatRounds: profile.chatRounds + 1 });
-    } finally { setBusy(null); setHistory([]); setStarters(null); setDraft(''); }
+    setHistory([]); setStarters(null); setDraft('');
+    await mergeIntoProfile(transcript, true);
   }
+
   async function tidyUp() {
     setBusy('tidying');
     try {
       const repaired = await repairProfileText(callClaudeDetailed, profile.synthesized);
       await persist({ ...profile, synthesized: repaired, updatedAt: new Date().toISOString() });
     } catch { /* keep */ } finally { setBusy(null); }
+  }
+
+  // ---------- Resume / LinkedIn import ----------
+  function pickResumeFile() {
+    if (Platform.OS !== 'web') {
+      setResumeStatus('Resume upload is available on the web app.');
+      return;
+    }
+    const doc = (globalThis as { document?: Document }).document;
+    if (!doc) return;
+    const input = doc.createElement('input');
+    input.type = 'file';
+    input.accept = '.pdf,.docx';
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const validTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+      if (!validTypes.includes(file.type)) {
+        setResumeStatus('❌ Please upload a PDF or Word document');
+        setResumeFile(null);
+        return;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        setResumeStatus('❌ File is too large (max 5MB)');
+        setResumeFile(null);
+        return;
+      }
+      setResumeFile(file);
+      setResumeStatus(`✓ ${file.name} ready to extract`);
+    };
+    input.click();
+  }
+  async function submitResume() {
+    if (!resumeFile) return;
+    setResumeStatus('Extracting from your resume…');
+    try {
+      const extracted = await httpClient.extractFromResume(resumeFile, resumeFile.name);
+      if (!extracted.trim()) {
+        setResumeStatus('⚠️ No relevant information found in resume');
+        return;
+      }
+      setImportOpen(false);
+      setResumeFile(null);
+      setResumeStatus('');
+      await mergeIntoProfile(extracted, false);
+    } catch (e) {
+      setResumeStatus(`❌ ${(e as Error).message || 'Extraction failed'}`);
+    }
+  }
+  async function submitLinkedIn() {
+    const text = linkedinText.trim();
+    if (!text) {
+      setLinkedinStatus('⚠️ Please paste your LinkedIn profile text');
+      return;
+    }
+    setLinkedinStatus('Extracting from LinkedIn…');
+    try {
+      const extracted = await httpClient.extractFromLinkedIn(text);
+      if (!extracted.trim()) {
+        setLinkedinStatus('⚠️ No relevant information found in LinkedIn profile');
+        return;
+      }
+      setImportOpen(false);
+      setLinkedinText('');
+      setLinkedinStatus('');
+      await mergeIntoProfile(extracted, false);
+    } catch (e) {
+      setLinkedinStatus(`❌ ${(e as Error).message || 'Extraction failed'}`);
+    }
   }
 
   if (loading) {
@@ -129,8 +357,24 @@ export default function Profile() {
   const isStale = hasProfile && days !== null && days >= 30;
   const { general, passion, research } = splitProfile(profile.synthesized);
 
+  // A paragraph with any newly-merged sentences rendered highlighted (profileTextHTML).
+  const renderProse = (p: string, style: object, extra?: object) => {
+    if (!highlightSet || !highlightSet.size) return <Text style={[style, extra]}>{p}</Text>;
+    const parts = splitProfileSentences(p);
+    return (
+      <Text style={[style, extra]}>
+        {parts.map((s, i) => (
+          <Text key={i} style={highlightSet.has(profileSentenceKey(s)) ? styles.newText : undefined}>
+            {s}
+            {i < parts.length - 1 ? ' ' : ''}
+          </Text>
+        ))}
+      </Text>
+    );
+  };
+
   return (
-    <Screen>
+    <Screen scrollRef={scrollRef}>
       {/* CTA banner — the product's one gradient treatment */}
       {isSufficient ? (
         <LinearGradient colors={[colors.bannerFrom, colors.bannerTo]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.ctaBanner}>
@@ -151,7 +395,7 @@ export default function Profile() {
       )}
 
       {/* Main profile card */}
-      <SoftCard style={styles.mainCard}>
+      <SoftCard style={styles.mainCard} onLayout={(e) => { cardY.current = e.nativeEvent.layout.y; }}>
         <View style={styles.headRow}>
           <View style={styles.titleWrap}>
             <Txt variant="h2" style={{ color: colors.ink }}>Your Story So Far</Txt>
@@ -162,7 +406,7 @@ export default function Profile() {
             )}
           </View>
           <View style={styles.headBtns}>
-            <PopButton label="📄 Quick add from resume / LinkedIn" variant="ink" small textStyle={styles.hBtnText} shadowColor={colors.ink} onPress={() => {}} />
+            <PopButton label="📄 Quick add from resume / LinkedIn" variant="ink" small textStyle={styles.hBtnText} shadowColor={colors.ink} onPress={() => setImportOpen(true)} />
             <PopButton label="Deepen your story" small textStyle={styles.hBtnText} shadowColor={colors.ink} style={styles.deepenBtn} onPress={openDrawer} />
           </View>
         </View>
@@ -189,37 +433,45 @@ export default function Profile() {
         )}
 
         {hasProfile ? (
-          <View style={{ gap: 12 }}>
+          <View style={{ gap: 12 }} onLayout={(e) => { sectionsY.current = e.nativeEvent.layout.y; }}>
             {general.length > 0 && (
-              <VibeField label="Interests & experience">
-                {general.map((p, i) => (
-                  <Text key={i} style={[styles.prose, i < general.length - 1 && { marginBottom: 20 }]}>{p}</Text>
-                ))}
-              </VibeField>
+              <View onLayout={(e) => { fieldY.current.interests = e.nativeEvent.layout.y; }}>
+                <VibeField label="Interests & experience">
+                  {general.map((p, i) => (
+                    <View key={i} style={i < general.length - 1 ? { marginBottom: 20 } : undefined}>
+                      {renderProse(p, styles.prose)}
+                    </View>
+                  ))}
+                </VibeField>
+              </View>
             )}
             {passion.length > 0 && (
-              <VibeField label="Passion projects">
-                <View style={styles.list}>
-                  {passion.map((p, i) => (
-                    <View key={i} style={styles.listRow}>
-                      <Text style={styles.listNum}>{i + 1}.</Text>
-                      <Text style={styles.listText}>{p}</Text>
-                    </View>
-                  ))}
-                </View>
-              </VibeField>
+              <View onLayout={(e) => { fieldY.current.passion = e.nativeEvent.layout.y; }}>
+                <VibeField label="Passion projects">
+                  <View style={styles.list}>
+                    {passion.map((p, i) => (
+                      <View key={i} style={styles.listRow}>
+                        <Text style={styles.listNum}>{i + 1}.</Text>
+                        <View style={styles.flex1}>{renderProse(p, styles.listText)}</View>
+                      </View>
+                    ))}
+                  </View>
+                </VibeField>
+              </View>
             )}
             {research.length > 0 && (
-              <VibeField label="Research projects">
-                <View style={styles.list}>
-                  {research.map((p, i) => (
-                    <View key={i} style={styles.listRow}>
-                      <Text style={styles.listNum}>{i + 1}.</Text>
-                      <Text style={styles.listText}>{p}</Text>
-                    </View>
-                  ))}
-                </View>
-              </VibeField>
+              <View onLayout={(e) => { fieldY.current.research = e.nativeEvent.layout.y; }}>
+                <VibeField label="Research projects">
+                  <View style={styles.list}>
+                    {research.map((p, i) => (
+                      <View key={i} style={styles.listRow}>
+                        <Text style={styles.listNum}>{i + 1}.</Text>
+                        <View style={styles.flex1}>{renderProse(p, styles.listText)}</View>
+                      </View>
+                    ))}
+                  </View>
+                </VibeField>
+              </View>
             )}
             {truncated && (
               <View style={styles.truncatedBox}>
@@ -253,44 +505,130 @@ export default function Profile() {
       {/* "Deepen your story" drawer — slides in from the right like .story-drawer */}
       <RightDrawer open={drawerOpen} onClose={closeDrawer} width={440} duration={250} panelStyle={styles.drawer}>
         <>
-            <View style={styles.drawerHead}>
-              <View style={styles.flex1}>
-                <Text style={styles.drawerTitle}>Deepen your story</Text>
-                <Text style={styles.drawerSub}>Chat with the bot to add more detail. Close this and I'll fold it into your profile.</Text>
-              </View>
+          <View style={styles.drawerHead}>
+            <View style={styles.flex1}>
+              <Text style={styles.drawerTitle}>Deepen your story</Text>
+              <Text style={styles.drawerSub}>Chat with the bot to add more detail. Close this and I'll fold it into your profile.</Text>
+            </View>
+            <View style={styles.drawerHeadBtns}>
+              {ttsAvailable && (
+                <Pressable style={[styles.voiceBtn, popShadow(3, colors.slate900), voiceOn && styles.voiceBtnOn]} onPress={toggleVoiceOutput}>
+                  <Text style={styles.voiceBtnText}>{voiceOn ? '🔊' : '🔇'}</Text>
+                </Pressable>
+              )}
               <Pressable onPress={closeDrawer} hitSlop={10}>
                 <Text style={styles.drawerClose}>✕</Text>
               </Pressable>
             </View>
-            <ScrollView style={styles.drawerBody} contentContainerStyle={styles.drawerBodyContent}>
-              {!starters && history.length === 0 && <ActivityIndicator color={colors.navy} />}
-              {starters?.map((q, i) => (
-                <Pressable key={i} style={styles.starterBtn} onPress={() => pickStarter(q)}>
-                  <Text style={styles.bubbleText}>{q}</Text>
-                </Pressable>
-              ))}
-              {history.map((m, i) => (
-                <View key={i} style={[styles.bubble, m.role === 'bot' ? styles.bubbleBot : styles.bubbleUser]}>
-                  <Text style={styles.bubbleText}>{m.text}</Text>
+          </View>
+          <ScrollView style={styles.drawerBody} contentContainerStyle={styles.drawerBodyContent}>
+            {!starters && history.length === 0 && !startersLoading && <Text style={styles.emptyState}>Cooking up a few conversation starters…</Text>}
+            {startersLoading && !starters && <ActivityIndicator color={colors.navy} />}
+            {starters && history.length === 0 && (
+              <>
+                <View style={styles.starterHead}>
+                  <Text style={styles.starterHeadText}>Pick a place to start:</Text>
+                  <Pressable onPress={() => !startersLoading && loadStarters(true)} disabled={startersLoading}>
+                    <Text style={[styles.regenLink, startersLoading && styles.regenDisabled]}>
+                      {startersLoading ? 'Regenerating…' : '🔄 Regenerate'}
+                    </Text>
+                  </Pressable>
                 </View>
-              ))}
-              {busy === 'thinking' && <ActivityIndicator color={colors.navy} />}
-            </ScrollView>
-            <View style={styles.drawerFoot}>
-              <TextInput
-                style={styles.chatInput}
-                placeholder="Type your answer..."
-                placeholderTextColor={colors.slate400}
-                value={draft}
-                onChangeText={setDraft}
-                onSubmitEditing={send}
-              />
-              <Pressable onPress={send} style={[styles.sendBtn, popShadow(3, colors.ink)]}>
-                <Text style={styles.sendText}>Send</Text>
+                {starters.map((q, i) => (
+                  <Pressable key={i} style={[styles.starterBtn, startersLoading && styles.regenDisabled]} onPress={() => !startersLoading && pickStarter(q)}>
+                    <Text style={styles.bubbleText}>{q}</Text>
+                  </Pressable>
+                ))}
+              </>
+            )}
+            {history.map((m, i) => (
+              <View key={i} style={[styles.bubble, m.role === 'bot' ? styles.bubbleBot : styles.bubbleUser]}>
+                <Text style={styles.bubbleText}>{m.text}</Text>
+              </View>
+            ))}
+            {busy === 'thinking' && (
+              <View style={[styles.bubble, styles.bubbleBot]}>
+                <Text style={[styles.bubbleText, { color: colors.slate400 }]}>…</Text>
+              </View>
+            )}
+          </ScrollView>
+          <View style={styles.drawerFoot}>
+            <TextInput
+              style={styles.chatInput}
+              placeholder="Type your answer..."
+              placeholderTextColor={colors.slate400}
+              value={draft}
+              onChangeText={setDraft}
+              onSubmitEditing={send}
+            />
+            {!!SpeechRecognitionCtor && (
+              <Pressable style={[styles.micBtn, popShadow(3, colors.slate900), listening && styles.micListening]} onPress={toggleVoiceInput}>
+                <Text style={styles.voiceBtnText}>{listening ? '⏺' : '🎤'}</Text>
               </Pressable>
-            </View>
+            )}
+            <Pressable onPress={send} style={[styles.sendBtn, popShadow(3, colors.ink)]}>
+              <Text style={styles.sendText}>Send</Text>
+            </Pressable>
+          </View>
         </>
       </RightDrawer>
+
+      {/* Resume / LinkedIn quick-add modal (#importModal) */}
+      <Modal visible={importOpen} transparent animationType="fade" onRequestClose={() => setImportOpen(false)}>
+        <Pressable style={styles.importScrim} onPress={() => setImportOpen(false)}>
+          <Pressable style={styles.importCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.importHead}>
+              <Text style={styles.importTitle}>Quick add</Text>
+              <Pressable onPress={() => setImportOpen(false)} hitSlop={10}>
+                <Text style={styles.drawerClose}>✕</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.importSub}>
+              Upload your resume or share your LinkedIn profile to automatically extract relevant skills, experience, and education.
+            </Text>
+            <View style={styles.importTabs}>
+              <Pressable onPress={() => setImportTab('resume')}>
+                <Text style={[styles.importTab, importTab === 'resume' && styles.importTabActive]}>📄 Upload Resume</Text>
+              </Pressable>
+              <Pressable onPress={() => setImportTab('linkedin')}>
+                <Text style={[styles.importTab, importTab === 'linkedin' && styles.importTabActive]}>🔗 LinkedIn Profile</Text>
+              </Pressable>
+            </View>
+            {importTab === 'resume' ? (
+              <View style={{ gap: 12 }}>
+                <Pressable style={styles.dropZone} onPress={pickResumeFile}>
+                  <Text style={styles.dropZoneTitle}>Drop your resume here, or click to browse</Text>
+                  <Text style={styles.dropZoneSub}>PDF or Word document (max 5MB)</Text>
+                </Pressable>
+                {!!resumeStatus && <Text style={styles.importStatus}>{resumeStatus}</Text>}
+                {!!resumeFile && (
+                  <Pressable style={[styles.importSubmit, popShadow(3, colors.slate900)]} onPress={submitResume}>
+                    <Text style={styles.importSubmitText}>Extract from Resume</Text>
+                  </Pressable>
+                )}
+              </View>
+            ) : (
+              <View style={{ gap: 12 }}>
+                <Text style={styles.importStatus}>
+                  Copy and paste your LinkedIn profile text here (LinkedIn blocks direct URL access, so text paste is the only method)
+                </Text>
+                <TextInput
+                  style={styles.linkedinInput}
+                  multiline
+                  value={linkedinText}
+                  onChangeText={setLinkedinText}
+                  placeholder="Paste your LinkedIn profile content here..."
+                  placeholderTextColor={colors.slate400}
+                />
+                <Pressable style={[styles.importSubmit, popShadow(3, colors.slate900)]} onPress={submitLinkedIn}>
+                  <Text style={styles.importSubmitText}>Extract from LinkedIn Text</Text>
+                </Pressable>
+                {!!linkedinStatus && <Text style={styles.importStatus}>{linkedinStatus}</Text>}
+              </View>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </Screen>
   );
 }
@@ -310,11 +648,11 @@ const styles = StyleSheet.create({
   headRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.lg, flexWrap: 'wrap' },
   titleWrap: { flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
   updatedPill: { backgroundColor: colors.lime100, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6 },
-  updatedText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.lime700 },
+  updatedText: { fontFamily: fonts.bodyBold, fontSize: 12, lineHeight: 16, color: colors.lime700 },
   updatedStale: { backgroundColor: '#FFE4E6' },
   updatedStaleText: { color: '#BE123C' },
   headBtns: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
-  hBtnText: { fontSize: 13, fontFamily: fonts.bodyBold },
+  hBtnText: { fontSize: 13, lineHeight: 18, fontFamily: fonts.bodyBold },
   deepenBtn: { borderWidth: 2, borderColor: colors.ink, paddingHorizontal: 20 },
 
   synthStatus: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 2, borderColor: '#F7D9BD', borderRadius: radius.md, backgroundColor: '#FFFAF5', paddingVertical: 10, paddingHorizontal: 14 },
@@ -326,10 +664,12 @@ const styles = StyleSheet.create({
 
   // profileContent renders as .vibe-value.vibe-body: 16px / 1.8 line-height, weight 600.
   prose: { fontFamily: fonts.bodySemi, fontSize: 16, lineHeight: 28.8, color: colors.ink },
+  // The freshly-merged-sentence mark (.profile-new's warm gradient, flattened).
+  newText: { backgroundColor: '#FFD17D', borderRadius: 4 },
   list: { gap: 6, paddingLeft: 2 },
   listRow: { flexDirection: 'row', gap: 6 },
   listNum: { fontFamily: fonts.bodySemi, fontSize: 14, lineHeight: 21, color: colors.ink },
-  listText: { fontFamily: fonts.bodySemi, fontSize: 14, lineHeight: 21, color: colors.ink, flex: 1 },
+  listText: { fontFamily: fonts.bodySemi, fontSize: 14, lineHeight: 21, color: colors.ink },
 
   truncatedBox: { borderWidth: 2, borderColor: '#E6D5F5', backgroundColor: '#FBF7FF', borderRadius: radius.lg, padding: 16, gap: 8 },
   truncatedLabel: { fontFamily: fonts.bodyXBold, fontSize: 10, color: '#7C5CAD', letterSpacing: 0.3 },
@@ -342,11 +682,16 @@ const styles = StyleSheet.create({
 
   drawer: { borderLeftWidth: 4, borderLeftColor: colors.ink },
   drawerHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, borderBottomWidth: 2, borderBottomColor: colors.lavender },
+  drawerHeadBtns: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   drawerTitle: { fontFamily: fonts.display, fontSize: 18, color: colors.ink },
   drawerSub: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.muted, marginTop: 4 },
   drawerClose: { fontFamily: fonts.bodyXBold, fontSize: 20, color: colors.muted },
   drawerBody: { flex: 1, backgroundColor: colors.cream },
   drawerBodyContent: { padding: 20, gap: 10 },
+  starterHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 2 },
+  starterHeadText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate500 },
+  regenLink: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.indigo600 },
+  regenDisabled: { opacity: 0.5 },
   starterBtn: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: 14, paddingVertical: 10, paddingHorizontal: 14 },
   bubble: { borderWidth: 2, borderColor: colors.slate900, paddingVertical: 10, paddingHorizontal: 14, maxWidth: '85%' },
   bubbleBot: { backgroundColor: colors.white, alignSelf: 'flex-start', borderTopLeftRadius: 14, borderTopRightRadius: 14, borderBottomRightRadius: 14, borderBottomLeftRadius: 2 },
@@ -354,6 +699,27 @@ const styles = StyleSheet.create({
   bubbleText: { fontFamily: fonts.bodySemi, fontSize: 13, lineHeight: 18, color: colors.slate900 },
   drawerFoot: { padding: 20, paddingTop: 14, borderTopWidth: 2, borderTopColor: colors.lavender, flexDirection: 'row', gap: 8 },
   chatInput: { flex: 1, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, paddingVertical: 12, paddingHorizontal: 12, fontFamily: fonts.bodyMed, fontSize: 13, color: colors.slate900, backgroundColor: colors.white },
+  voiceBtn: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  voiceBtnOn: { backgroundColor: '#E0E7FF' },
+  voiceBtnText: { fontSize: 15 },
+  micBtn: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, width: 48, alignItems: 'center', justifyContent: 'center' },
+  micListening: { backgroundColor: colors.rose600 },
   sendBtn: { backgroundColor: colors.orange, borderWidth: 2, borderColor: colors.ink, borderRadius: radius.md, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center' },
   sendText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.white },
+
+  importScrim: { flex: 1, backgroundColor: 'rgba(15,23,42,0.55)', alignItems: 'center', justifyContent: 'center', padding: 16 },
+  importCard: { backgroundColor: colors.white, borderRadius: radius.xl, width: '100%', maxWidth: 440, padding: 26, gap: 6 },
+  importHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  importTitle: { fontFamily: fonts.display, fontSize: 18, color: colors.ink },
+  importSub: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 18, color: colors.muted, marginBottom: 10 },
+  importTabs: { flexDirection: 'row', gap: 16, borderBottomWidth: 2, borderBottomColor: colors.slate200, marginBottom: 12 },
+  importTab: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.muted, paddingBottom: 8 },
+  importTabActive: { color: colors.teal, borderBottomWidth: 2, borderBottomColor: colors.teal, marginBottom: -2 },
+  dropZone: { borderWidth: 2, borderColor: '#CBD5E1', borderStyle: 'dashed', borderRadius: radius.lg, padding: 24, alignItems: 'center', gap: 4 },
+  dropZoneTitle: { fontFamily: fonts.bodyBold, fontSize: 14, color: '#5B6785' },
+  dropZoneSub: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate400 },
+  importStatus: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 17, color: colors.muted },
+  importSubmit: { backgroundColor: colors.slate900, borderRadius: radius.md, paddingVertical: 12, alignItems: 'center' },
+  importSubmitText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.white },
+  linkedinInput: { borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.lg, padding: 12, minHeight: 110, fontFamily: fonts.bodyMed, fontSize: 13, color: colors.slate900, textAlignVertical: 'top' },
 });

@@ -151,7 +151,14 @@ export function NavBar() {
               <View style={styles.subBox}>
                 <Text style={styles.subTitle}>📋 Subscription</Text>
                 {!!subLabel && <Text style={styles.subStatus}>{subLabel}</Text>}
-                <SmallBtn label="Manage Plan" full onPress={() => {}} />
+                <SmallBtn
+                  label="Manage Plan"
+                  full
+                  onPress={() => {
+                    setDrawerOpen(false);
+                    router.push('/(app)/subscription' as never);
+                  }}
+                />
               </View>
 
               {/* Beta notice */}

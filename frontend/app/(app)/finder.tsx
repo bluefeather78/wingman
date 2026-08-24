@@ -251,13 +251,24 @@ export default function Finder() {
       const pool = preFilter(opps, desc, subjectHints, cfg?.dbTypes ?? null, strict, gradeNum);
       const byId = new Map(pool.map((o) => [o.id, o]));
       try {
-        const ranked: RankedPick[] = await rankCandidates(callGemini, desc, pool, prefs || null, strict);
+        // rankCandidates already retries one parse failure internally; add one more full
+        // attempt after a short backoff so a transient rate-limit/truncation doesn't drop
+        // the student to the keyword fallback.
+        let ranked: RankedPick[];
+        try {
+          ranked = await rankCandidates(callGemini, desc, pool, prefs || null, strict);
+        } catch (err) {
+          console.warn('rankCandidates failed once, retrying after backoff:', (err as Error).message);
+          await new Promise((r) => setTimeout(r, 1500));
+          ranked = await rankCandidates(callGemini, desc, pool, prefs || null, strict);
+        }
         const mapped = ranked
           .map((r) => (byId.get(r.id) ? { opp: byId.get(r.id) as Opportunity, reason: r.reason, tier: r.tier } : null))
           .filter((x): x is Result => x !== null);
-        if (!mapped.length) throw new Error('empty');
+        if (!mapped.length) throw new Error('AI ranking returned no usable matches');
         setResults(mapped);
-      } catch {
+      } catch (err) {
+        console.error('AI ranking unavailable, falling back to keyword order:', (err as Error).message);
         setNote('Showing keyword matches — AI ranking is unavailable right now.');
         setResults(pool.slice(0, 12).map((opp) => ({ opp, reason: '', tier: 'look' as const })));
       }
@@ -533,7 +544,11 @@ export default function Finder() {
   }
 
   // ---------- Results stage ----------
+  // The selection bar must live OUTSIDE the Screen's ScrollView: position:fixed doesn't
+  // hold inside RN-web's scroll container, so the bar is an absolute sibling instead
+  // (matching the old app's sticky-bottom behavior).
   return (
+    <View style={styles.resultsWrap}>
     <Screen contentStyle={{ paddingBottom: 90 }}>
       {/* Deepen story banner */}
       <LinearGradient colors={[colors.bannerFrom, colors.bannerTo]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.deepenBanner}>
@@ -681,7 +696,9 @@ export default function Finder() {
         </View>
       )}
 
-      {/* Selection bar */}
+    </Screen>
+
+      {/* Selection bar — absolute sibling of the scroller so it stays pinned to the viewport bottom. */}
       {results.length > 0 && (
         <View style={styles.selectionBar}>
           <Text style={styles.selectionCount}>{selected.size} selected</Text>
@@ -693,7 +710,7 @@ export default function Finder() {
           />
         </View>
       )}
-    </Screen>
+    </View>
   );
 }
 
@@ -829,8 +846,9 @@ const styles = StyleSheet.create({
   metaPillText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate900 },
   summary: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: colors.slate500 },
 
+  resultsWrap: { flex: 1 },
   selectionBar: {
-    position: Platform.OS === 'web' ? ('fixed' as 'absolute') : 'absolute',
+    position: 'absolute',
     bottom: 16,
     left: 16,
     right: 16,

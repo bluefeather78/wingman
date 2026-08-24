@@ -243,6 +243,60 @@ export const httpClient: ApiClient = {
     });
   },
 
+  // Resume upload is multipart — send FormData and let the browser set the boundary
+  // (rawFetch's JSON Content-Type default would break the parse server-side).
+  async extractFromResume(file: Blob, filename: string): Promise<string> {
+    const form = new FormData();
+    form.append('file', file, filename);
+    let res = await fetch(`${API_BASE}/api/extract-from-resume`, {
+      method: 'POST',
+      headers: _access ? { Authorization: `Bearer ${_access}` } : undefined,
+      body: form,
+    });
+    if (res.status === 401 && (await refreshOnce())) {
+      res = await fetch(`${API_BASE}/api/extract-from-resume`, {
+        method: 'POST',
+        headers: _access ? { Authorization: `Bearer ${_access}` } : undefined,
+        body: form,
+      });
+    }
+    if (!res.ok) throw new Error(await errorMessage(res));
+    const data = (await res.json()) as { extracted_text?: string };
+    return data.extracted_text ?? '';
+  },
+
+  async extractFromLinkedIn(text: string): Promise<string> {
+    const data = await request<{ extracted_text?: string }>('/api/extract-from-linkedin', {
+      method: 'POST',
+      body: JSON.stringify({ linkedin_text: text }),
+    });
+    return data.extracted_text ?? '';
+  },
+
+  // Subscription (payments deferred; these back the Manage Plan page's status + promo flow).
+  async subscriptionStatus(): Promise<Record<string, unknown>> {
+    return request<Record<string, unknown>>('/api/subscription/status', { method: 'POST', body: '{}' });
+  },
+  async validatePromo(code: string): Promise<{ valid?: boolean; kind?: string; description?: string; error?: string }> {
+    return request('/api/subscription/validate-promo', { method: 'POST', body: JSON.stringify({ promo_code: code }) });
+  },
+  async redeemPromo(code: string): Promise<Record<string, unknown>> {
+    return request('/api/subscription/redeem-promo', { method: 'POST', body: JSON.stringify({ promo_code: code }) });
+  },
+  async subscriptionCheckout(promoCode: string): Promise<string | null> {
+    const origin = (globalThis as { location?: { origin?: string } }).location?.origin ?? '';
+    const data = await request<{ checkout_url?: string }>('/api/subscription/checkout', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: _currentUser?.email ?? '',
+        promo_code: promoCode,
+        success_url: origin ? `${origin}/subscription` : '',
+        cancel_url: origin ? `${origin}/subscription` : '',
+      }),
+    });
+    return data.checkout_url ?? null;
+  },
+
   // --- Stable since Phase 1 (soft/public; bearer attached if present, for attribution) ---
   async getOpportunities(): Promise<Opportunity[]> {
     const data = await request<Opportunity[] | { opportunities?: Opportunity[] }>(

@@ -46,16 +46,19 @@ export function Screen({
   scroll = true,
   contentStyle,
   maxWidth = APP_MAX_WIDTH,
+  scrollRef,
 }: {
   children: ReactNode;
   scroll?: boolean;
   contentStyle?: StyleProp<ViewStyle>;
   maxWidth?: number;
+  scrollRef?: React.Ref<ScrollView>;
 }) {
   const inner = <View style={[styles.inner, { maxWidth }, contentStyle]}>{children}</View>;
   if (!scroll) return <View style={styles.screen}>{inner}</View>;
   return (
     <ScrollView
+      ref={scrollRef}
       style={styles.screen}
       contentContainerStyle={styles.scrollContent}
       keyboardShouldPersistTaps="handled"
@@ -71,12 +74,18 @@ export function SoftCard({
   children,
   style,
   color = colors.card,
+  onLayout,
 }: {
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
   color?: string;
+  onLayout?: React.ComponentProps<typeof View>['onLayout'];
 }) {
-  return <View style={[styles.softCard, { backgroundColor: color }, softShadow(), style]}>{children}</View>;
+  return (
+    <View style={[styles.softCard, { backgroundColor: color }, softShadow(), style]} onLayout={onLayout}>
+      {children}
+    </View>
+  );
 }
 
 // ---------- PopCard (pop-card: 3px navy border + 4px hard offset shadow) ----------

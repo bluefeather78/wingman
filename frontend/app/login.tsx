@@ -107,8 +107,12 @@ export default function Login() {
             {isRegister && (
               <>
                 <View style={styles.twoCol}>
-                  <Field label="First name" value={firstName} onChangeText={setFirstName} style={styles.input} />
-                  <Field label="Last name" value={lastName} onChangeText={setLastName} style={styles.input} />
+                  <View style={styles.col}>
+                    <Field label="First name" value={firstName} onChangeText={setFirstName} />
+                  </View>
+                  <View style={styles.col}>
+                    <Field label="Last name" value={lastName} onChangeText={setLastName} />
+                  </View>
                 </View>
                 <Field label="Email" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" />
                 <Field label="User ID" value={userid} onChangeText={setUserid} autoCapitalize="none" placeholder="Pick a user ID" />
@@ -210,8 +214,9 @@ const styles = StyleSheet.create({
   rule: { flex: 1, height: 1, backgroundColor: colors.slate200 },
   orText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate400 },
 
+  // Each column must flex — a bare Field keeps its intrinsic width and overflows the card.
   twoCol: { flexDirection: 'row', gap: 12 },
-  input: {},
+  col: { flex: 1, minWidth: 0 },
   consentBox: { borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, padding: 12, gap: 10, backgroundColor: colors.slate50 },
   consentRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   switch: Platform.OS === 'web' ? ({ transform: [{ scale: 0.8 }] } as object) : {},

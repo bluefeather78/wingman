@@ -59,6 +59,15 @@ export interface ApiClient {
   saveData(key: string, value: unknown): Promise<void>;
   // Update the account's location (POST /api/account/location, hard-gated).
   saveLocation(location: string): Promise<void>;
+  // Resume / LinkedIn quick-add extraction (both hard-gated; return the extracted text).
+  extractFromResume(file: Blob, filename: string): Promise<string>;
+  extractFromLinkedIn(text: string): Promise<string>;
+  // Subscription status + promo flow (payments themselves stay deferred).
+  subscriptionStatus(): Promise<Record<string, unknown>>;
+  validatePromo(code: string): Promise<{ valid?: boolean; kind?: string; description?: string; error?: string }>;
+  redeemPromo(code: string): Promise<Record<string, unknown>>;
+  // Returns the Stripe checkout URL, or throws when payments aren't configured.
+  subscriptionCheckout(promoCode: string): Promise<string | null>;
 }
 
 // Thrown when a request needs auth but the session is gone/unrecoverable (refresh failed).

@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { backendUrl } from '@/api/httpClient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Logo, PopButton, PopCard, SoftCard } from '@/ui/components';
 import { PersonIcon } from '@/ui/icons';
@@ -157,7 +158,9 @@ export default function Landing() {
               believe this process shouldn't require endless Google searches, spreadsheets, bookmarks, and calendar
               reminders.
             </Text>
-            <Text style={styles.founderLink}>Read our full story →</Text>
+            <Pressable onPress={() => Linking.openURL(backendUrl('/about.html'))}>
+              <Text style={styles.founderLink}>Read our full story →</Text>
+            </Pressable>
           </SoftCard>
         </View>
 

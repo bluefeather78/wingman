@@ -1,16 +1,15 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
 import { beginGoogleSignIn } from '@/auth/googleSignIn';
-import { Field, PopButton, Txt } from '@/ui/components';
-import { colors, radius, softShadow, space } from '@/ui/theme';
+import { Field, Logo, PopButton, Txt } from '@/ui/components';
+import { colors, fonts, radius, softShadow, space } from '@/ui/theme';
 
-// Login / Register — a centered card matching the live app: orange bar-chart mark, BETA
-// badge, beta notice, Google, and the password form. Register adds name/email/location +
-// the three consent switches the server re-checks.
+// Login / Register — ported from the live app's #page-login: centered card-soft (max-w-sm),
+// favicon + Wingman + BETA, tagline, beta notice, back-to-home, Google row (with the
+// live app's COMING SOON treatment) above the form, then the form and the register link.
 export default function Login() {
   const router = useRouter();
   const { login, register } = useAuth();
@@ -20,6 +19,7 @@ export default function Login() {
 
   const [userid, setUserid] = useState('');
   const [password, setPassword] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
@@ -32,6 +32,10 @@ export default function Login() {
 
   async function submit() {
     setError(null);
+    if (isRegister && password !== passwordConfirm) {
+      setError('Passwords do not match.');
+      return;
+    }
     setBusy(true);
     try {
       if (isRegister) {
@@ -62,94 +66,160 @@ export default function Login() {
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <View style={[styles.card, softShadow()]}>
           <View style={styles.brand}>
-            <Ionicons name="stats-chart" size={30} color={colors.orange} />
+            <View style={styles.logoBox}>
+              <Logo size={56} />
+            </View>
             <View style={styles.brandRow}>
-              <Txt variant="h1" style={{ color: colors.navy }}>Wingman</Txt>
-              <View style={styles.beta}><Txt style={styles.betaText}>BETA</Txt></View>
-            </View>
-            <Txt variant="h3" style={styles.tagline}>Find opportunities. Never miss a deadline.</Txt>
-            <Txt variant="small" style={styles.center}>Discover research, programs, internships, and more matched to what you love.</Txt>
-          </View>
-
-          <View style={styles.notice}>
-            <Txt variant="small" style={styles.noticeText}>
-              🚧 This app is in beta — features are actively evolving and results may occasionally be incomplete or inaccurate.
-            </Txt>
-          </View>
-
-          {isRegister && (
-            <>
-              <View style={styles.twoCol}>
-                <Field label="FIRST NAME" value={firstName} onChangeText={setFirstName} style={styles.flex1} />
-                <Field label="LAST NAME" value={lastName} onChangeText={setLastName} style={styles.flex1} />
+              <Text style={styles.title}>Wingman</Text>
+              <View style={styles.beta}>
+                <Text style={styles.betaText}>BETA</Text>
               </View>
-              <Field label="EMAIL" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" />
-              <Field label="LOCATION" value={location} onChangeText={setLocation} placeholder="e.g. Seattle, WA" />
-            </>
-          )}
-
-          <Field label="USER ID" value={userid} onChangeText={setUserid} autoCapitalize="none" placeholder="e.g. sid2028" />
-          <Field label="PASSWORD" value={password} onChangeText={setPassword} secureTextEntry placeholder="••••••••" />
-
-          {isRegister && (
-            <View style={styles.consent}>
-              <ConsentRow label="I'm 18 or older" value={isAdult} onValueChange={setIsAdult} />
-              <ConsentRow label="If under 18, I have a parent/guardian's permission (Terms §2)" value={parentalConsent} onValueChange={setParentalConsent} />
-              <ConsentRow label="I accept the Terms and Privacy Policy" value={acceptedTerms} onValueChange={setAcceptedTerms} />
             </View>
-          )}
-
-          {!!error && <Txt style={styles.error}>{error}</Txt>}
-
-          <PopButton label={isRegister ? 'Create account' : 'Sign In'} onPress={submit} loading={busy} full />
-
-          <View style={styles.dividerRow}>
-            <View style={styles.rule} />
-            <Txt variant="small">OR</Txt>
-            <View style={styles.rule} />
+            <Text style={styles.tagline}>Find opportunities. Never miss a deadline.</Text>
+            <Text style={styles.sub}>Discover research, programs, internships, and more matched to what you love.</Text>
+            <View style={styles.notice}>
+              <Text style={styles.noticeText}>
+                🚧 This app is in beta - features are actively evolving and results may occasionally be incomplete or inaccurate.
+              </Text>
+            </View>
+            <Pressable onPress={() => router.push('/landing')}>
+              <Text style={styles.backLink}>← Back to home</Text>
+            </Pressable>
           </View>
 
-          <PopButton label="Continue with Google" variant="secondary" onPress={google} disabled={busy} full />
+          {/* Google sign-in row — visually matches the live app's coming-soon button. */}
+          <View style={{ gap: 12 }}>
+            <Pressable onPress={google} style={styles.googleBtn} disabled={busy}>
+              <GoogleG />
+              <Text style={styles.googleText}>Continue with Google</Text>
+              <View style={styles.comingSoon}>
+                <Text style={styles.comingSoonText}>COMING SOON</Text>
+              </View>
+            </Pressable>
+            <View style={styles.orRow}>
+              <View style={styles.rule} />
+              <Text style={styles.orText}>OR</Text>
+              <View style={styles.rule} />
+            </View>
+          </View>
 
-          <Pressable onPress={() => { setError(null); setMode(isRegister ? 'login' : 'register'); }} style={styles.center}>
-            <Txt variant="small">
-              {isRegister ? 'Have an account? ' : "Don't have an account? "}
-              <Txt variant="small" style={styles.link}>{isRegister ? 'Sign in' : 'Register'}</Txt>
-            </Txt>
-          </Pressable>
+          <View style={{ gap: 16 }}>
+            {isRegister && (
+              <>
+                <View style={styles.twoCol}>
+                  <Field label="First name" value={firstName} onChangeText={setFirstName} style={styles.input} />
+                  <Field label="Last name" value={lastName} onChangeText={setLastName} style={styles.input} />
+                </View>
+                <Field label="Email" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" />
+                <Field label="User ID" value={userid} onChangeText={setUserid} autoCapitalize="none" placeholder="Pick a user ID" />
+                <Field label="Location" value={location} onChangeText={setLocation} placeholder="e.g. Seattle, WA" />
+                <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="At least 8 characters" />
+                <Field label="Confirm password" value={passwordConfirm} onChangeText={setPasswordConfirm} secureTextEntry placeholder="••••••••" />
+                <View style={styles.consentBox}>
+                  <ConsentRow label="I am 18 years of age or older." value={isAdult} onValueChange={setIsAdult} />
+                  {!isAdult && (
+                    <ConsentRow
+                      label="I am at least 13, and my parent or legal guardian has given me permission to use Wingman and agrees to the Terms of Use on my behalf."
+                      value={parentalConsent}
+                      onValueChange={setParentalConsent}
+                    />
+                  )}
+                  <ConsentRow label="I have read and agree to the Terms of Use and the Privacy Policy." value={acceptedTerms} onValueChange={setAcceptedTerms} />
+                </View>
+                <Text style={styles.trialNote}>
+                  Every new account starts with a <Text style={styles.bold}>3-day free trial</Text>. No card required to start.
+                </Text>
+              </>
+            )}
+
+            {!isRegister && (
+              <>
+                <Field label="User ID" value={userid} onChangeText={setUserid} autoCapitalize="none" placeholder="e.g. sid2028" />
+                <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="••••••••" />
+              </>
+            )}
+
+            {!!error && <Text style={styles.error}>{error}</Text>}
+
+            <PopButton label={isRegister ? 'Create Account' : 'Sign In'} onPress={submit} loading={busy} full />
+
+            <Text style={styles.switchText}>
+              {isRegister ? 'Already have an account? ' : "Don't have an account? "}
+              <Text style={styles.switchLink} onPress={() => { setError(null); setMode(isRegister ? 'login' : 'register'); }}>
+                {isRegister ? 'Sign In' : 'Register'}
+              </Text>
+            </Text>
+          </View>
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+// The four-color Google "G", drawn with simple views (good enough at 20px).
+function GoogleG() {
+  return (
+    <View style={styles.gWrap}>
+      <Text style={styles.gText}>G</Text>
+    </View>
+  );
+}
+
 function ConsentRow({ label, value, onValueChange }: { label: string; value: boolean; onValueChange: (v: boolean) => void }) {
   return (
-    <View style={styles.consentRow}>
-      <Switch value={value} onValueChange={onValueChange} trackColor={{ true: colors.orange, false: colors.hairline }} thumbColor={colors.white} />
-      <Txt variant="small" style={styles.flex1}>{label}</Txt>
-    </View>
+    <Pressable style={styles.consentRow} onPress={() => onValueChange(!value)}>
+      <Switch value={value} onValueChange={onValueChange} trackColor={{ true: colors.indigo600, false: colors.slate200 }} thumbColor={colors.white} style={styles.switch} />
+      <Text style={styles.consentText}>{label}</Text>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.cream },
-  scroll: { flexGrow: 1, justifyContent: 'center', padding: space.lg },
-  card: { backgroundColor: colors.white, borderRadius: radius.xl, padding: space.xl, gap: space.md, width: '100%', maxWidth: 440, alignSelf: 'center' },
-  brand: { alignItems: 'center', gap: 6 },
+  scroll: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: space.lg },
+  card: { backgroundColor: colors.white, borderRadius: radius.xl, padding: 40, gap: 24, width: '100%', maxWidth: 384, alignSelf: 'center' },
+  brand: { alignItems: 'center' },
+  logoBox: { width: 64, height: 64, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  beta: { backgroundColor: colors.yellow, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 2 },
-  betaText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 10, color: colors.navyDeep, letterSpacing: 0.5 },
-  tagline: { textAlign: 'center', color: colors.ink, marginTop: 4 },
-  center: { textAlign: 'center', alignItems: 'center' },
-  notice: { backgroundColor: '#FFF7E6', borderRadius: radius.md, padding: space.md },
-  noticeText: { color: '#8A6D1A', textAlign: 'center' },
-  twoCol: { flexDirection: 'row', gap: space.md },
-  flex1: { flex: 1 },
-  consent: { gap: space.sm },
-  consentRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
-  error: { color: colors.red, fontFamily: 'PlusJakartaSans_700Bold', textAlign: 'center' },
-  dividerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
-  rule: { flex: 1, height: 1, backgroundColor: colors.hairline },
-  link: { color: colors.orangeDeep, fontFamily: 'PlusJakartaSans_700Bold' },
+  title: { fontFamily: fonts.display, fontSize: 24, color: colors.slate900 },
+  beta: { backgroundColor: colors.amber300, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 2 },
+  betaText: { fontFamily: fonts.bodyXBold, fontSize: 10, color: colors.slate900, letterSpacing: 0.5 },
+  tagline: { fontFamily: fonts.display, fontSize: 18, lineHeight: 24, color: colors.slate900, textAlign: 'center', marginTop: 12 },
+  sub: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 20, color: colors.slate500, textAlign: 'center', marginTop: 4 },
+  notice: { backgroundColor: colors.amber50, borderWidth: 1, borderColor: colors.amber200, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 8, marginTop: 12 },
+  noticeText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 17, color: colors.amber700, textAlign: 'center' },
+  backLink: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate500, marginTop: 8 },
+
+  googleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderWidth: 2,
+    borderColor: '#CBD5E1',
+    borderRadius: radius.md,
+    padding: 12,
+    backgroundColor: colors.slate100,
+  },
+  googleText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.slate400 },
+  gWrap: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center', opacity: 0.5 },
+  gText: { fontFamily: fonts.bodyXBold, fontSize: 13, color: '#4285F4' },
+  comingSoon: { position: 'absolute', top: -8, right: -8, backgroundColor: colors.orange, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 2 },
+  comingSoonText: { fontFamily: fonts.bodyXBold, fontSize: 9, color: colors.white, letterSpacing: 0.5 },
+  orRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  rule: { flex: 1, height: 1, backgroundColor: colors.slate200 },
+  orText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate400 },
+
+  twoCol: { flexDirection: 'row', gap: 12 },
+  input: {},
+  consentBox: { borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, padding: 12, gap: 10, backgroundColor: colors.slate50 },
+  consentRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  switch: Platform.OS === 'web' ? ({ transform: [{ scale: 0.8 }] } as object) : {},
+  consentText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 17, color: colors.slate900, flex: 1 },
+  trialNote: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500, textAlign: 'center' },
+  bold: { fontFamily: fonts.bodyBold },
+
+  error: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.rose600 },
+  switchText: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500, textAlign: 'center' },
+  switchLink: { fontFamily: fonts.bodyBold, color: colors.indigo600 },
 });

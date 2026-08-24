@@ -1,36 +1,61 @@
-import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
-import { flattenItems, loadTrackerData, type TrackerItem } from '@/api/trackerStore';
+import {
+  loadTrackerData,
+  loadTrackerSaved,
+  type SavedState,
+  type TrackerData,
+} from '@/api/trackerStore';
 import { useAuth } from '@/auth/AuthContext';
-import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
-import { countProfileWords } from '@/lib/profile';
-import { Badge, PopButton, ProgressBar, Screen, SoftCard, Txt } from '@/ui/components';
-import { colors, radius, space } from '@/ui/theme';
+import {
+  allTodoUnitCounts,
+  computeProgressStatus,
+  computeStats,
+  getUpcomingDeadlineItems,
+  shortDate,
+} from '@/lib/status';
+import {
+  ACTION_ITEM_STATUS_LABEL,
+  LegendItem,
+  Logo,
+  PopButton,
+  ProgressTrack,
+  PROGRESS_STATUS_LABEL,
+  Screen,
+  SoftCard,
+  StatusPill,
+  Txt,
+  type OppStatus,
+} from '@/ui/components';
+import { colors, fonts, radius, space } from '@/ui/theme';
 
 interface StoredProfile {
   synthesized?: string;
 }
 
-// Home Base — the dashboard. Welcome + Due Soon, the story card (or empty nudge), "What
-// You're Chasing" (tracker progress + legend), and "Your Next Moves" (task status).
+// Home Base — ported from the live app's #page-home: welcome banner + DUE SOON badge,
+// profile teaser card, "What You're Chasing" (segmented progress + legend + CTA), and
+// "Your Next Moves" (task pills + task progress + upcoming list + "and beyond →").
 export default function Home() {
   const router = useRouter();
   const { user } = useAuth();
-  const [items, setItems] = useState<TrackerItem[]>([]);
+  const [data, setData] = useState<TrackerData | null>(null);
+  const [saved, setSaved] = useState<SavedState>({});
   const [profile, setProfile] = useState<string>('');
 
   useFocusEffect(
     useCallback(() => {
       let alive = true;
       Promise.all([
-        loadTrackerData().then(flattenItems).catch(() => [] as TrackerItem[]),
+        loadTrackerData().catch(() => null),
+        loadTrackerSaved().catch(() => ({}) as SavedState),
         httpClient.loadData<StoredProfile>('student-profile').catch(() => null),
-      ]).then(([tracked, p]) => {
+      ]).then(([d, s, p]) => {
         if (!alive) return;
-        setItems(tracked);
+        if (d) setData(d);
+        setSaved(s);
         setProfile(p?.synthesized ?? '');
       });
       return () => {
@@ -39,140 +64,169 @@ export default function Home() {
     }, []),
   );
 
-  const hasProfile = countProfileWords(profile) >= PROFILE_SUFFICIENT_LENGTH;
+  const stats = useMemo(() => (data ? computeStats(data, saved) : { total: 0, not_started: 0, in_progress: 0, completed: 0 }), [data, saved]);
+  const upcoming = useMemo(() => (data ? getUpcomingDeadlineItems(data, saved) : []), [data, saved]);
+  const { counts: taskCounts, total: taskTotal } = useMemo(() => allTodoUnitCounts(upcoming), [upcoming]);
+  const dueSoon = taskCounts.not_started + taskCounts.in_progress;
 
-  const { dueSoon, happeningNow, future } = useMemo(() => {
-    const now = Date.now();
-    const soon = now + 45 * 24 * 3600 * 1000;
-    let due = 0;
-    let nowCount = 0;
-    let futureCount = 0;
-    items.forEach((it) => {
-      const dates = it.importantDates ?? [];
-      const hasFuture = dates.some((d) => {
-        const t = Date.parse(d.dateISO);
-        return !Number.isNaN(t) && t >= now;
-      });
-      const hasDueSoon = dates.some((d) => {
-        const t = Date.parse(d.dateISO);
-        return !Number.isNaN(t) && t >= now && t <= soon;
-      });
-      if (hasDueSoon) due += 1;
-      // A future-dated item is an upcoming event; only items with no upcoming date but a
-      // running status count as "happening now".
-      if (hasFuture) futureCount += 1;
-      else if (it.status === 'running') nowCount += 1;
-    });
-    return { dueSoon: due, happeningNow: nowCount, future: futureCount };
-  }, [items]);
+  // Home progress bar shows in_progress + not_started segments only (script.js renderStats).
+  const OPP_ORDER: OppStatus[] = ['in_progress', 'not_started'];
+  const OPP_COLOR: Record<OppStatus, string> = { in_progress: colors.teal, not_started: colors.mint, completed: colors.peach };
+  const oppSegments = stats.total
+    ? OPP_ORDER.map((k) => ({ pct: (stats[k] / stats.total) * 100, color: OPP_COLOR[k] }))
+    : [];
+
+  const TASK_ORDER: OppStatus[] = ['not_started', 'in_progress', 'completed'];
+  const TASK_COLOR: Record<OppStatus, string> = { not_started: colors.orange, in_progress: colors.teal, completed: colors.mint };
+  const taskSegments = taskTotal
+    ? TASK_ORDER.map((k) => ({ pct: (taskCounts[k] / taskTotal) * 100, color: TASK_COLOR[k] }))
+    : [];
 
   return (
     <Screen>
       {/* Welcome banner */}
       <SoftCard style={styles.banner}>
         <View style={styles.bannerLeft}>
-          <Ionicons name="stats-chart" size={24} color={colors.orange} />
-          <Txt variant="h1">
+          <Logo size={32} />
+          <Txt variant="h1" style={styles.greeting}>
             Hey <Txt variant="h1" style={{ color: colors.orange }}>{user?.firstName || 'there'}</Txt>, ready?
           </Txt>
         </View>
         <View style={styles.dueBadge}>
-          <Txt variant="h2" style={styles.dueNum}>{dueSoon}</Txt>
+          <Txt style={styles.dueNum}>{dueSoon}</Txt>
           <Txt style={styles.dueLabel}>DUE SOON</Txt>
         </View>
       </SoftCard>
 
-      {/* Story card / empty nudge */}
-      {hasProfile ? (
-        <SoftCard style={{ gap: space.sm }}>
+      {/* Profile teaser */}
+      {profile ? (
+        <SoftCard style={{ gap: space.lg }}>
           <View style={styles.rowBetween}>
-            <Txt variant="h2">Your Story So Far</Txt>
-            <PopButton label="View & deepen it →" small onPress={() => router.push('/(app)/profile')} />
+            <Txt variant="h2" style={styles.cardTitle}>Your Story So Far</Txt>
+            <PopButton label="View & deepen it →" small square onPress={() => router.push('/(app)/profile')} />
           </View>
-          <Txt variant="body" numberOfLines={3}>{profile}</Txt>
+          <Txt style={styles.teaserText} numberOfLines={3}>{profile}</Txt>
         </SoftCard>
       ) : (
-        <SoftCard color={colors.navy} style={styles.promo}>
+        <View style={[styles.emptyProfile]}>
           <View style={styles.flex1}>
-            <Txt variant="h2" style={styles.onDark}>Your profile is empty</Txt>
+            <Txt variant="h3" style={styles.onDark}>Your profile is empty</Txt>
             <Txt variant="body" style={styles.onDarkSoft}>
               Every match in the Finder gets better once we know you. Takes 2 minutes — go build it now.
             </Txt>
           </View>
           <PopButton label="Build my profile" variant="secondary" onPress={() => router.push('/(app)/profile')} />
-        </SoftCard>
+        </View>
       )}
 
       {/* What You're Chasing */}
-      <SoftCard style={{ gap: space.md }}>
+      <SoftCard style={{ gap: space.lg }}>
         <View style={styles.rowBetween}>
-          <Txt variant="h2">What You're Chasing</Txt>
+          <Txt variant="h2" style={styles.cardTitle}>What You're Chasing</Txt>
           <View style={styles.trackedPill}>
-            <Txt style={styles.trackedText}>{items.length} tracked</Txt>
+            <Txt style={styles.trackedText}>{stats.total} tracked</Txt>
           </View>
         </View>
-        <ProgressBar value={items.length ? 1 : 0} color={colors.teal} />
-        {items.length === 0 ? (
+        {stats.total > 0 ? (
           <>
-            <Txt variant="body" style={styles.italic}>Nothing here yet.</Txt>
-            <PopButton label="Find your first opportunity to track" onPress={() => router.push('/(app)/finder')} style={styles.selfStart} />
+            <ProgressTrack segments={oppSegments} />
+            <View style={styles.legend}>
+              {OPP_ORDER.map((k) => (
+                <LegendItem key={k} color={OPP_COLOR[k]} label={`${PROGRESS_STATUS_LABEL[k]} (${stats[k]})`} />
+              ))}
+            </View>
+            <PopButton
+              label="Look for Fresh Finds"
+              variant="secondary"
+              small
+              square
+              textStyle={styles.freshFindsText}
+              onPress={() => router.push('/(app)/finder')}
+              style={styles.selfStart}
+            />
           </>
         ) : (
           <>
-            <View style={styles.legend}>
-              <LegendDot color={colors.teal} label={`Happening Now (${happeningNow})`} />
-              <LegendDot color={colors.green} label={`Future Event (${future})`} />
-            </View>
-            <PopButton label="Look for Fresh Finds" variant="secondary" small onPress={() => router.push('/(app)/finder')} style={styles.selfStart} />
+            <ProgressTrack segments={[]} />
+            <Txt variant="small" style={styles.emptyState}>Nothing here yet.</Txt>
+            <PopButton label="Find your first opportunity to track" onPress={() => router.push('/(app)/finder')} style={styles.selfStart} />
           </>
         )}
       </SoftCard>
 
       {/* Your Next Moves */}
-      <SoftCard style={{ gap: space.md }}>
+      <SoftCard style={{ gap: space.lg }}>
         <View style={styles.rowBetween}>
-          <Txt variant="h2">Your Next Moves</Txt>
+          <Txt variant="h2" style={styles.cardTitle}>Your Next Moves</Txt>
           <View style={styles.pillRow}>
-            <Badge label="0 NOT STARTED" bg="transparent" fg={colors.orange} outline />
-            <Badge label="0 IN PROGRESS" bg="transparent" fg={colors.navy} outline />
-            <Badge label="0 COMPLETED" bg="transparent" fg={colors.teal} outline />
+            {(['not_started', 'in_progress', 'completed'] as OppStatus[]).map((k) => (
+              <StatusPill key={k} status={k} kind="task" label={`${taskCounts[k]} ${ACTION_ITEM_STATUS_LABEL[k]}`} />
+            ))}
           </View>
         </View>
-        <ProgressBar value={0} />
-        <Txt variant="body" style={styles.italic}>Nothing due this month or next — you're all caught up.</Txt>
+        <ProgressTrack segments={taskSegments} />
+        {upcoming.length === 0 ? (
+          <Txt variant="small" style={styles.emptyState}>Nothing due this month or next — you're all caught up.</Txt>
+        ) : (
+          <View>
+            {upcoming.map(({ item, nextDate, nextLabel }) => {
+              const taskCount = (item.actionItems ?? []).length;
+              return (
+                <View key={item.id} style={styles.todoRow}>
+                  <View style={styles.flex1}>
+                    <Txt style={styles.todoName} numberOfLines={1}>{item.name}</Txt>
+                    <Txt style={styles.todoMeta}>
+                      {shortDate(nextDate)} · {nextLabel}
+                      {taskCount ? ` · ${taskCount} task${taskCount > 1 ? 's' : ''}` : ''}
+                    </Txt>
+                  </View>
+                  <StatusPill status={computeProgressStatus(item)} />
+                </View>
+              );
+            })}
+          </View>
+        )}
         <Txt variant="small" style={styles.andBeyond}>and beyond →</Txt>
       </SoftCard>
     </Screen>
   );
 }
 
-function LegendDot({ color, label }: { color: string; label: string }) {
-  return (
-    <View style={styles.legendItem}>
-      <View style={[styles.dot, { backgroundColor: color }]} />
-      <Txt variant="small" style={{ color: colors.ink }}>{label}</Txt>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  banner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md },
-  bannerLeft: { flexDirection: 'row', alignItems: 'center', gap: space.sm, flex: 1, flexWrap: 'wrap' },
-  dueBadge: { backgroundColor: colors.navy, borderRadius: radius.lg, paddingHorizontal: space.md, paddingVertical: 6, alignItems: 'center' },
-  dueNum: { color: colors.white },
-  dueLabel: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 8, color: colors.orange, letterSpacing: 0.8 },
-  promo: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  banner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.lg, paddingVertical: space.xl },
+  bannerLeft: { flexDirection: 'row', alignItems: 'center', gap: space.md, flex: 1, flexWrap: 'wrap' },
+  greeting: { color: colors.navy },
+  dueBadge: { backgroundColor: colors.navy, borderRadius: radius.lg, paddingHorizontal: 16, paddingVertical: 8, alignItems: 'center' },
+  dueNum: { fontFamily: fonts.display, fontSize: 18, lineHeight: 20, color: colors.white },
+  dueLabel: { fontFamily: fonts.bodyBold, fontSize: 9, color: colors.orange, letterSpacing: 1, marginTop: 2 },
+
+  emptyProfile: {
+    borderRadius: radius.xl,
+    padding: space.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.lg,
+    flexWrap: 'wrap',
+    backgroundColor: colors.teal,
+  },
   onDark: { color: colors.white },
-  onDarkSoft: { color: '#D6E4F5' },
-  flex1: { flex: 1 },
+  onDarkSoft: { color: 'rgba(255,255,255,0.9)', maxWidth: 448 },
+  flex1: { flex: 1, minWidth: 200 },
+
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.sm, flexWrap: 'wrap' },
-  trackedPill: { backgroundColor: colors.navy, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 5 },
-  trackedText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12, color: colors.white },
-  italic: { fontStyle: 'italic' },
-  selfStart: { alignSelf: 'flex-start' },
+  cardTitle: { color: colors.navy },
+  teaserText: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 21, color: colors.inkSoft },
+
+  trackedPill: { backgroundColor: colors.navy, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6 },
+  trackedText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.white },
   legend: { flexDirection: 'row', gap: space.lg, flexWrap: 'wrap' },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dot: { width: 9, height: 9, borderRadius: 5 },
-  pillRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
-  andBeyond: { textAlign: 'center', color: colors.muted },
+  selfStart: { alignSelf: 'flex-start' },
+  freshFindsText: { fontSize: 12, color: colors.navy },
+  emptyState: { color: '#9AA9B8', fontStyle: 'italic', fontSize: 13 },
+
+  pillRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  todoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.slate100 },
+  todoName: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.navy },
+  todoMeta: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.inkSoft },
+  andBeyond: { textAlign: 'center', color: colors.muted, paddingTop: 8, fontFamily: fonts.bodyBold, fontSize: 13 },
 });

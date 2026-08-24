@@ -84,6 +84,26 @@ export async function saveTrackerData(data: TrackerData): Promise<void> {
   await httpClient.saveData(TRACKER_KEY, JSON.stringify(data));
 }
 
+// Saved-for-later flags — same key/shape as the old app (`hs-tracker-saved`, a JSON string
+// of { [itemId]: boolean }). Saved items are NOT "actively tracked" anywhere counts appear.
+const SAVED_KEY = 'hs-tracker-saved';
+export type SavedState = Record<string, boolean>;
+
+export async function loadTrackerSaved(): Promise<SavedState> {
+  try {
+    const raw = await httpClient.loadData<string | SavedState>(SAVED_KEY);
+    if (!raw) return {};
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return parsed && typeof parsed === 'object' ? (parsed as SavedState) : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function saveTrackerSaved(state: SavedState): Promise<void> {
+  await httpClient.saveData(SAVED_KEY, JSON.stringify(state));
+}
+
 export function flattenItems(data: TrackerData): TrackerItem[] {
   return ALL_BUCKETS.flatMap((b) => data[b]);
 }

@@ -1,14 +1,14 @@
+import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
-import { useAuth } from '@/auth/AuthContext';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import { countProfileWords, profileHasTruncatedTail, repairProfileText, synthesizeProfile, transcriptStudentLines } from '@/lib/profile';
 import { extractProfileBasics } from '@/lib/ranking';
 import { profileChatNextQuestion, profileChatStarterQuestionsFromAI, profileChatTranscript, type ChatMessage } from '@/lib/profileChat';
-import { Badge, PopButton, Screen, SoftCard, Txt } from '@/ui/components';
-import { colors, radius, space } from '@/ui/theme';
+import { PopButton, Screen, SoftCard, Txt, VibeField } from '@/ui/components';
+import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
 const callClaude = httpClient.callClaude.bind(httpClient);
 const callClaudeDetailed = httpClient.callClaudeDetailed.bind(httpClient);
@@ -21,20 +21,32 @@ interface StoredProfile {
   chatRounds: number;
 }
 
-function relativeUpdated(iso: string | null): string {
-  if (!iso) return '';
+function daysSince(iso: string): number | null {
   const t = Date.parse(iso);
-  if (Number.isNaN(t)) return '';
-  const days = Math.floor((Date.now() - t) / (24 * 3600 * 1000));
-  if (days <= 0) return 'Updated today';
-  if (days === 1) return 'Updated yesterday';
-  if (days < 30) return `Updated ${days} days ago`;
-  return 'Updated a while ago';
+  if (Number.isNaN(t)) return null;
+  return Math.floor((Date.now() - t) / (24 * 3600 * 1000));
 }
 
+// Splits the synthesized profile into general paragraphs + numbered passion/research
+// project lists — ported from script.js renderProfileFit.
+function splitProfile(text: string) {
+  const all = (text || '').split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const passion: string[] = [];
+  const research: string[] = [];
+  const general: string[] = [];
+  all.forEach((p) => {
+    if (/^passion projects?:/i.test(p)) passion.push(p.replace(/^passion projects?:\s*/i, ''));
+    else if (/^research projects?:/i.test(p)) research.push(p.replace(/^research projects?:\s*/i, ''));
+    else general.push(p);
+  });
+  return { general, passion, research };
+}
+
+// My Vibe — ported from the live app's #page-profile: gradient CTA banner, the "Your Story
+// So Far" card (updated pill, quick-add + deepen buttons, basics grid, vibe-field sections),
+// and the right-hand "Deepen your story" chat drawer.
 export default function Profile() {
   const router = useRouter();
-  const { logout } = useAuth();
   const [profile, setProfile] = useState<StoredProfile>({ synthesized: '', updatedAt: null, chatRounds: 0 });
   const [basics, setBasics] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
@@ -42,7 +54,7 @@ export default function Profile() {
   const [starters, setStarters] = useState<string[] | null>(null);
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
-  const [chatOpen, setChatOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -63,8 +75,8 @@ export default function Profile() {
     setProfile(next);
     await httpClient.saveData(PROFILE_KEY, next);
   }
-  async function openChat() {
-    setChatOpen(true); setHistory([]); setStarters(null);
+  async function openDrawer() {
+    setDrawerOpen(true); setHistory([]); setStarters(null);
     try { setStarters(await profileChatStarterQuestionsFromAI(callClaude, profile.synthesized, profile.chatRounds, false)); }
     catch { setStarters(["What's something you're weirdly good at that has nothing to do with school?"]); }
   }
@@ -82,8 +94,10 @@ export default function Profile() {
       setHistory([...next, { role: 'bot', text: "Couldn't think of a question — tell me something about yourself." }]);
     } finally { setBusy(null); }
   }
-  async function finishChat() {
-    if (!history.some((m) => m.role === 'user')) { setChatOpen(false); setHistory([]); setStarters(null); return; }
+  // Closing IS the save (matches the live app's closeStoryDrawer).
+  async function closeDrawer() {
+    setDrawerOpen(false);
+    if (!history.some((m) => m.role === 'user')) { setHistory([]); setStarters(null); setDraft(''); return; }
     setBusy('saving');
     const transcript = profileChatTranscript(history);
     try {
@@ -93,7 +107,7 @@ export default function Profile() {
       const fb = transcriptStudentLines(transcript);
       const merged = fb ? (profile.synthesized ? `${profile.synthesized} ${fb}` : fb) : profile.synthesized;
       await persist({ synthesized: merged, updatedAt: new Date().toISOString(), chatRounds: profile.chatRounds + 1 });
-    } finally { setBusy(null); setChatOpen(false); setHistory([]); setStarters(null); }
+    } finally { setBusy(null); setHistory([]); setStarters(null); setDraft(''); }
   }
   async function tidyUp() {
     setBusy('tidying');
@@ -102,121 +116,246 @@ export default function Profile() {
       await persist({ ...profile, synthesized: repaired, updatedAt: new Date().toISOString() });
     } catch { /* keep */ } finally { setBusy(null); }
   }
-  async function handleLogout() { await logout(); router.replace('/login'); }
 
   if (loading) {
     return <Screen scroll={false}><View style={styles.center}><ActivityIndicator color={colors.navy} /></View></Screen>;
   }
 
-  const hasProfile = countProfileWords(profile.synthesized) >= PROFILE_SUFFICIENT_LENGTH;
+  const hasProfile = !!profile.synthesized;
+  const isSufficient = countProfileWords(profile.synthesized) >= PROFILE_SUFFICIENT_LENGTH;
   const truncated = profileHasTruncatedTail(profile.synthesized);
+  const days = profile.updatedAt ? daysSince(profile.updatedAt) : null;
+  const updatedLabel = days === null ? '' : days === 0 ? 'Updated today' : days === 1 ? 'Updated yesterday' : `Updated ${days} days ago`;
+  const isStale = hasProfile && days !== null && days >= 30;
+  const { general, passion, research } = splitProfile(profile.synthesized);
 
   return (
     <Screen>
-      {hasProfile && (
-        <SoftCard color={colors.navy} style={styles.banner}>
+      {/* CTA banner — the product's one gradient treatment */}
+      {isSufficient ? (
+        <LinearGradient colors={[colors.bannerFrom, colors.bannerTo]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.ctaBanner}>
           <View style={styles.flex1}>
-            <Txt variant="h2" style={styles.onDark}>Your story is ready to work for you.</Txt>
-            <Txt variant="body" style={styles.onDarkSoft}>Head to Fresh Finds to see opportunities matched to what you just told us.</Txt>
+            <Text style={styles.ctaTitle}>Your story is ready to work for you.</Text>
+            <Text style={styles.ctaSub}>Head to Fresh Finds to see opportunities matched to what you just told us.</Text>
           </View>
-          <PopButton label="Find your matches" onPress={() => router.push('/(app)/finder')} />
-        </SoftCard>
+          <PopButton label="Find your matches" variant="primaryDeep" textStyle={styles.ctaBtnText} style={styles.ctaBtn} shadowColor={colors.ink} onPress={() => router.push('/(app)/finder')} />
+        </LinearGradient>
+      ) : (
+        <LinearGradient colors={[colors.bannerFrom, colors.bannerTo]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.ctaBanner}>
+          <View style={styles.flex1}>
+            <Text style={styles.ctaTitle}>I don't have enough yet to match opportunities</Text>
+            <Text style={styles.ctaSub}>Help me help you by building your profile.</Text>
+          </View>
+          <PopButton label="Deepen your story" variant="primaryDeep" textStyle={styles.ctaBtnText} style={styles.ctaBtn} shadowColor={colors.ink} onPress={openDrawer} />
+        </LinearGradient>
       )}
 
-      <SoftCard style={{ gap: space.md }}>
+      {/* Main profile card */}
+      <SoftCard style={styles.mainCard}>
         <View style={styles.headRow}>
           <View style={styles.titleWrap}>
-            <Txt variant="h2">Your Story So Far</Txt>
-            {hasProfile && !!profile.updatedAt && <Badge label={relativeUpdated(profile.updatedAt).toUpperCase()} bg={colors.greenSoft} fg={colors.green} />}
+            <Txt variant="h2" style={{ color: colors.ink }}>Your Story So Far</Txt>
+            {hasProfile && !!updatedLabel && (
+              <View style={[styles.updatedPill, isStale && styles.updatedStale]}>
+                <Text style={[styles.updatedText, isStale && styles.updatedStaleText]}>{updatedLabel}</Text>
+              </View>
+            )}
           </View>
           <View style={styles.headBtns}>
-            <PopButton label="Quick add from resume / LinkedIn" variant="secondary" small onPress={() => router.push('/(app)/profile')} />
-            {!chatOpen && <PopButton label="Deepen your story" small onPress={openChat} />}
+            <PopButton label="📄 Quick add from resume / LinkedIn" variant="ink" small textStyle={styles.hBtnText} shadowColor={colors.ink} onPress={() => {}} />
+            <PopButton label="Deepen your story" small textStyle={styles.hBtnText} shadowColor={colors.ink} style={styles.deepenBtn} onPress={openDrawer} />
           </View>
         </View>
 
-        {hasProfile && (
-          <View style={styles.basicsRow}>
-            <BasicTile label="GRADE LEVEL" value={basics.grade} />
-            <BasicTile label="HOME STATE" value={basics.state} />
-            <BasicTile label="GENDER" value={basics.gender} />
+        {busy === 'saving' && (
+          <View style={styles.synthStatus}>
+            <ActivityIndicator size="small" color="#C2743A" />
+            <Text style={styles.synthText}>Synthesis into profile in progress…</Text>
           </View>
         )}
 
-        {profile.synthesized ? (
-          <View style={{ gap: 6 }}>
-            <Txt variant="label">INTERESTS & EXPERIENCE</Txt>
-            <Txt variant="body" style={styles.story}>{profile.synthesized}</Txt>
+        {hasProfile && (
+          <View style={styles.basicsGrid}>
+            <VibeField label="Grade level" style={styles.flex1}>
+              <Text style={basics.grade ? styles.vibeValue : styles.vibeEmpty}>{basics.grade || 'No info'}</Text>
+            </VibeField>
+            <VibeField label="Home state" style={styles.flex1}>
+              <Text style={basics.state ? styles.vibeValue : styles.vibeEmpty}>{basics.state || 'No info'}</Text>
+            </VibeField>
+            <VibeField label="Gender" style={styles.flex1}>
+              <Text style={basics.gender ? styles.vibeValue : styles.vibeEmpty}>{basics.gender || 'No info'}</Text>
+            </VibeField>
+          </View>
+        )}
+
+        {hasProfile ? (
+          <View style={{ gap: 12 }}>
+            {general.length > 0 && (
+              <VibeField label="Interests & experience">
+                {general.map((p, i) => (
+                  <Text key={i} style={[styles.prose, i < general.length - 1 && { marginBottom: 20 }]}>{p}</Text>
+                ))}
+              </VibeField>
+            )}
+            {passion.length > 0 && (
+              <VibeField label="Passion projects">
+                <View style={styles.list}>
+                  {passion.map((p, i) => (
+                    <View key={i} style={styles.listRow}>
+                      <Text style={styles.listNum}>{i + 1}.</Text>
+                      <Text style={styles.listText}>{p}</Text>
+                    </View>
+                  ))}
+                </View>
+              </VibeField>
+            )}
+            {research.length > 0 && (
+              <VibeField label="Research projects">
+                <View style={styles.list}>
+                  {research.map((p, i) => (
+                    <View key={i} style={styles.listRow}>
+                      <Text style={styles.listNum}>{i + 1}.</Text>
+                      <Text style={styles.listText}>{p}</Text>
+                    </View>
+                  ))}
+                </View>
+              </VibeField>
+            )}
+            {truncated && (
+              <View style={styles.truncatedBox}>
+                <Text style={styles.truncatedLabel}>THIS LOOKS CUT OFF</Text>
+                <Text style={styles.truncatedText}>
+                  The end of your profile was trimmed by an earlier save. Tidying up finishes or removes the incomplete bit — it won't change anything else, and it won't make anything up.
+                </Text>
+                <PopButton label={busy === 'tidying' ? 'Tidying…' : 'Tidy it up'} variant="ink" small loading={busy === 'tidying'} shadowColor={colors.ink} onPress={tidyUp} style={styles.selfStart} />
+              </View>
+            )}
           </View>
         ) : (
-          <Txt variant="body" style={styles.italic}>Nothing here yet — chat with the bot to build your profile.</Txt>
+          <View style={{ gap: space.lg }}>
+            <Text style={styles.emptyState}>Nothing here yet — chat with the bot to build your profile.</Text>
+            <PopButton label="Start chatting" style={styles.selfStart} shadowColor={colors.ink} onPress={openDrawer} />
+          </View>
         )}
 
-        {truncated && <PopButton label={busy === 'tidying' ? 'Tidying…' : 'Tidy it up'} variant="secondary" small loading={busy === 'tidying'} onPress={tidyUp} />}
-        {!chatOpen && !hasProfile && <PopButton label="Start chatting" onPress={openChat} style={styles.selfStart} />}
+        <View style={styles.footRow}>
+          <Pressable onPress={openDrawer}>
+            <Text style={styles.footLink}>or deepen your story</Text>
+          </Pressable>
+          {hasProfile && (
+            <Pressable onPress={() => {}}>
+              <Text style={styles.clearLink}>🗑️ Clear profile</Text>
+            </Pressable>
+          )}
+        </View>
       </SoftCard>
 
-      {chatOpen && (
-        <SoftCard style={{ gap: space.md }}>
-          {!starters && history.length === 0 && <ActivityIndicator color={colors.navy} />}
-          {starters && (
-            <View style={{ gap: space.sm }}>
-              <Txt variant="label">PICK A QUESTION TO START</Txt>
-              {starters.map((q, i) => (
-                <Pressable key={i} style={styles.starter} onPress={() => pickStarter(q)}>
-                  <Txt variant="bodyStrong">{q}</Txt>
+      {/* "Deepen your story" drawer */}
+      <Modal visible={drawerOpen} transparent animationType="fade" onRequestClose={closeDrawer}>
+        <Pressable style={styles.scrim} onPress={closeDrawer}>
+          <Pressable style={styles.drawer} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.drawerHead}>
+              <View style={styles.flex1}>
+                <Text style={styles.drawerTitle}>Deepen your story</Text>
+                <Text style={styles.drawerSub}>Chat with the bot to add more detail. Close this and I'll fold it into your profile.</Text>
+              </View>
+              <Pressable onPress={closeDrawer} hitSlop={10}>
+                <Text style={styles.drawerClose}>✕</Text>
+              </Pressable>
+            </View>
+            <ScrollView style={styles.drawerBody} contentContainerStyle={styles.drawerBodyContent}>
+              {!starters && history.length === 0 && <ActivityIndicator color={colors.navy} />}
+              {starters?.map((q, i) => (
+                <Pressable key={i} style={styles.starterBtn} onPress={() => pickStarter(q)}>
+                  <Text style={styles.bubbleText}>{q}</Text>
                 </Pressable>
               ))}
+              {history.map((m, i) => (
+                <View key={i} style={[styles.bubble, m.role === 'bot' ? styles.bubbleBot : styles.bubbleUser]}>
+                  <Text style={styles.bubbleText}>{m.text}</Text>
+                </View>
+              ))}
+              {busy === 'thinking' && <ActivityIndicator color={colors.navy} />}
+            </ScrollView>
+            <View style={styles.drawerFoot}>
+              <TextInput
+                style={styles.chatInput}
+                placeholder="Type your answer..."
+                placeholderTextColor={colors.slate400}
+                value={draft}
+                onChangeText={setDraft}
+                onSubmitEditing={send}
+              />
+              <Pressable onPress={send} style={[styles.sendBtn, popShadow(3, colors.ink)]}>
+                <Text style={styles.sendText}>Send</Text>
+              </Pressable>
             </View>
-          )}
-          {history.map((m, i) => (
-            <View key={i} style={[styles.bubble, m.role === 'bot' ? styles.bot : styles.userB]}>
-              <Txt variant="body" style={{ color: m.role === 'bot' ? colors.ink : colors.white }}>{m.text}</Txt>
-            </View>
-          ))}
-          {busy === 'thinking' && <ActivityIndicator color={colors.navy} />}
-          {history.length > 0 && (
-            <View style={{ gap: space.sm }}>
-              <TextInput style={styles.chatInput} placeholder="Type your answer…" placeholderTextColor={colors.muted} value={draft} onChangeText={setDraft} multiline />
-              <PopButton label="Send" onPress={send} disabled={!!busy || !draft.trim()} />
-            </View>
-          )}
-          <PopButton label={busy === 'saving' ? 'Saving…' : 'Finish & save'} variant="secondary" loading={busy === 'saving'} onPress={finishChat} full />
-        </SoftCard>
-      )}
-
-      <PopButton label="Log out" variant="ghost" onPress={handleLogout} />
+          </Pressable>
+        </Pressable>
+      </Modal>
     </Screen>
-  );
-}
-
-function BasicTile({ label, value }: { label: string; value: string | null | undefined }) {
-  return (
-    <View style={styles.tile}>
-      <Txt variant="label">{label}</Txt>
-      <Txt variant="bodyStrong" style={value ? undefined : styles.noInfo}>{value || 'No info'}</Txt>
-    </View>
   );
 }
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  banner: { flexDirection: 'row', alignItems: 'center', gap: space.md },
-  onDark: { color: colors.white },
-  onDarkSoft: { color: '#D6E4F5' },
-  flex1: { flex: 1 },
-  headRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.md, flexWrap: 'wrap' },
-  titleWrap: { flexDirection: 'row', alignItems: 'center', gap: space.sm, flexWrap: 'wrap' },
-  headBtns: { flexDirection: 'row', gap: space.sm, flexWrap: 'wrap' },
-  basicsRow: { flexDirection: 'row', gap: space.md, flexWrap: 'wrap' },
-  tile: { flexGrow: 1, flexBasis: 140, borderWidth: 1, borderColor: colors.borderSoft, borderRadius: radius.md, padding: space.md, gap: 4, backgroundColor: colors.card },
-  noInfo: { color: colors.muted, fontStyle: 'italic' },
-  story: { color: colors.ink, fontSize: 15, lineHeight: 24 },
-  italic: { fontStyle: 'italic' },
+  flex1: { flex: 1, minWidth: 180 },
   selfStart: { alignSelf: 'flex-start' },
-  starter: { backgroundColor: colors.lavender, borderRadius: radius.md, padding: space.md },
-  bubble: { borderRadius: radius.md, padding: space.md, maxWidth: '92%' },
-  bot: { backgroundColor: colors.lavender, alignSelf: 'flex-start' },
-  userB: { backgroundColor: colors.orange, alignSelf: 'flex-end' },
-  chatInput: { borderWidth: 1, borderColor: colors.borderSoft, borderRadius: radius.md, padding: space.md, fontFamily: 'PlusJakartaSans_400Regular', fontSize: 15, color: colors.ink, backgroundColor: colors.lavender, minHeight: 56, textAlignVertical: 'top' },
+
+  ctaBanner: { borderRadius: radius.lg, paddingHorizontal: 28, paddingVertical: 24, flexDirection: 'row', alignItems: 'center', gap: 20, flexWrap: 'wrap' },
+  ctaTitle: { fontFamily: fonts.display, fontSize: 18, lineHeight: 24, color: colors.white },
+  ctaSub: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 20, color: colors.grayLighter, marginTop: 4 },
+  ctaBtn: { borderWidth: 2, borderColor: colors.ink, paddingHorizontal: 26, paddingVertical: 12 },
+  ctaBtnText: { fontSize: 14 },
+
+  mainCard: { padding: 28, gap: 20 },
+  headRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.lg, flexWrap: 'wrap' },
+  titleWrap: { flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
+  updatedPill: { backgroundColor: colors.lime100, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6 },
+  updatedText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.lime700 },
+  updatedStale: { backgroundColor: '#FFE4E6' },
+  updatedStaleText: { color: '#BE123C' },
+  headBtns: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  hBtnText: { fontSize: 13, fontFamily: fonts.bodyBold },
+  deepenBtn: { borderWidth: 2, borderColor: colors.ink, paddingHorizontal: 20 },
+
+  synthStatus: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 2, borderColor: '#F7D9BD', borderRadius: radius.md, backgroundColor: '#FFFAF5', paddingVertical: 10, paddingHorizontal: 14 },
+  synthText: { fontFamily: fonts.bodyBold, fontSize: 13, color: '#C2743A' },
+
+  basicsGrid: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
+  vibeValue: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 22, color: colors.ink },
+  vibeEmpty: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: '#B8BFCD', fontStyle: 'italic' },
+
+  prose: { fontFamily: fonts.bodyMed, fontSize: 16, lineHeight: 28.8, color: colors.ink },
+  list: { gap: 6, paddingLeft: 2 },
+  listRow: { flexDirection: 'row', gap: 6 },
+  listNum: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 21, color: colors.ink },
+  listText: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 21, color: colors.ink, flex: 1, fontWeight: '600' as const },
+
+  truncatedBox: { borderWidth: 2, borderColor: '#E6D5F5', backgroundColor: '#FBF7FF', borderRadius: radius.lg, padding: 16, gap: 8 },
+  truncatedLabel: { fontFamily: fonts.bodyXBold, fontSize: 10, color: '#7C5CAD', letterSpacing: 0.3 },
+  truncatedText: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: '#57407D' },
+
+  emptyState: { color: '#9AA9B8', fontStyle: 'italic', fontSize: 14, fontFamily: fonts.bodyMed },
+  footRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.lg, marginTop: 8, flexWrap: 'wrap' },
+  footLink: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.muted, textDecorationLine: 'underline' },
+  clearLink: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.red },
+
+  scrim: { flex: 1, backgroundColor: 'rgba(15,23,42,0.4)', flexDirection: 'row', justifyContent: 'flex-end' },
+  drawer: { width: 440, maxWidth: '100%', backgroundColor: colors.white, borderLeftWidth: 4, borderLeftColor: colors.ink, height: '100%' },
+  drawerHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, borderBottomWidth: 2, borderBottomColor: colors.lavender },
+  drawerTitle: { fontFamily: fonts.display, fontSize: 18, color: colors.ink },
+  drawerSub: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.muted, marginTop: 4 },
+  drawerClose: { fontFamily: fonts.bodyXBold, fontSize: 20, color: colors.muted },
+  drawerBody: { flex: 1, backgroundColor: colors.cream },
+  drawerBodyContent: { padding: 20, gap: 10 },
+  starterBtn: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: 14, paddingVertical: 10, paddingHorizontal: 14 },
+  bubble: { borderWidth: 2, borderColor: colors.slate900, paddingVertical: 10, paddingHorizontal: 14, maxWidth: '85%' },
+  bubbleBot: { backgroundColor: colors.white, alignSelf: 'flex-start', borderTopLeftRadius: 14, borderTopRightRadius: 14, borderBottomRightRadius: 14, borderBottomLeftRadius: 2 },
+  bubbleUser: { backgroundColor: '#E0E7FF', alignSelf: 'flex-end', borderTopLeftRadius: 14, borderTopRightRadius: 14, borderBottomRightRadius: 2, borderBottomLeftRadius: 14 },
+  bubbleText: { fontFamily: fonts.bodyMed, fontSize: 13, lineHeight: 18, color: colors.slate900, fontWeight: '600' as const },
+  drawerFoot: { padding: 20, paddingTop: 14, borderTopWidth: 2, borderTopColor: colors.lavender, flexDirection: 'row', gap: 8 },
+  chatInput: { flex: 1, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, paddingVertical: 12, paddingHorizontal: 12, fontFamily: fonts.bodyMed, fontSize: 13, color: colors.slate900, backgroundColor: colors.white },
+  sendBtn: { backgroundColor: colors.orange, borderWidth: 2, borderColor: colors.ink, borderRadius: radius.md, paddingHorizontal: 20, alignItems: 'center', justifyContent: 'center' },
+  sendText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.white },
 });

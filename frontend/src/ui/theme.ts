@@ -61,14 +61,32 @@ export const colors = {
   bannerTo: '#182750',
 } as const;
 
+// Each weight is its OWN family — that is how @expo-google-fonts/expo-font register them
+// (one @font-face per weight, no font-weight descriptor), so these names are not
+// interchangeable with a fontWeight prop.
+//
+// On web every name carries a system-sans fallback, and that stack is load-bearing rather
+// than decorative. RN-web writes `fontFamily` into CSS verbatim, so a bare
+// `font-family: SpaceGrotesk_700Bold` has NOTHING to fall back to while the .ttf is in
+// flight — the browser reaches for its default serif and paints the app in Times New Roman
+// before snapping over. That was the visible half of the load flash (the cause was
+// app/main.py serving the hashed fonts `no-store`, which made expo's preloads unusable;
+// this stack is what keeps the residual case unremarkable instead of glaring).
+//
+// Native takes the bare name: a comma-separated stack is not a valid fontFamily there.
+const webStack = (family: string) =>
+  Platform.OS === 'web'
+    ? `${family}, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`
+    : family;
+
 export const fonts = {
-  display: 'SpaceGrotesk_700Bold',
-  displayMed: 'SpaceGrotesk_500Medium',
-  body: 'PlusJakartaSans_400Regular',
-  bodyMed: 'PlusJakartaSans_500Medium',
-  bodySemi: 'PlusJakartaSans_600SemiBold',
-  bodyBold: 'PlusJakartaSans_700Bold',
-  bodyXBold: 'PlusJakartaSans_800ExtraBold',
+  display: webStack('SpaceGrotesk_700Bold'),
+  displayMed: webStack('SpaceGrotesk_500Medium'),
+  body: webStack('PlusJakartaSans_400Regular'),
+  bodyMed: webStack('PlusJakartaSans_500Medium'),
+  bodySemi: webStack('PlusJakartaSans_600SemiBold'),
+  bodyBold: webStack('PlusJakartaSans_700Bold'),
+  bodyXBold: webStack('PlusJakartaSans_800ExtraBold'),
 } as const;
 
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;

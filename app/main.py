@@ -11,6 +11,7 @@ is mounted only when WINGMAN_ENABLE_OPS is set (local dev), so the shipped servi
 exposes no agent/seed/admin route. Importing app.config (via the routers) loads .env.
 """
 import os
+import re
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,14 +47,43 @@ app.add_middleware(
 )
 
 
+# `expo export -p web` content-hashes every file it writes under these two prefixes
+# (`SpaceGrotesk_700Bold.52e5e29a....ttf`, `entry-<hash>.js`), so their URL changes
+# whenever their bytes do and they can be cached forever. The hash is required, not
+# assumed: `_expo/.routes.json` lives under the same root without one, and handing a
+# year-long cache to an unhashed file is unrecoverable. Both separators are real — assets
+# use `.<hash>.` and the JS bundle uses `-<hash>.` — and the trailing class admits `@2x`.
+_IMMUTABLE_PREFIXES = ("/assets/", "/_expo/static/")
+_CONTENT_HASH = re.compile(r"[.\-][0-9a-f]{32}[.@]")
+
+
+def _is_immutable_asset(path: str) -> bool:
+    return path.startswith(_IMMUTABLE_PREFIXES) and bool(_CONTENT_HASH.search(path))
+
+
 @app.middleware("http")
 async def no_cache(request: Request, call_next):
-    """Disable HTTP caching on every response (static files AND API JSON), matching the
-    old Handler.end_headers. Without this Chrome can silently serve a stale script.js."""
+    """No HTTP caching on API JSON or on any HTML shell, matching the old
+    Handler.end_headers — without it Chrome can silently serve a stale app shell, and
+    the shell is what names the current bundle hash.
+
+    Content-hashed build output is the deliberate exception, and it is not merely an
+    optimisation: `no-store` forbids the browser from KEEPING the response, so the
+    `<link rel="preload">` tags expo writes for the seven webfonts were paying for a
+    full download that could not be reused — the @font-face fetch started over from
+    scratch once the 1.9MB bundle had evaluated. Measured on production 2026-08-24:
+    fonts preloaded by 566ms, re-downloaded 1234ms->1466ms, i.e. the app painted its
+    first text in a fallback face and swapped ~400ms later, on EVERY visit, because
+    nothing was ever cached across loads either. That flash is what this fixes."""
     response = await call_next(request)
-    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
+    if _is_immutable_asset(request.url.path):
+        # Only Cache-Control is set here: nothing downstream emits Pragma/Expires, and
+        # Starlette's MutableHeaders has no .pop, so there is nothing to unset either.
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    else:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     return response
 
 

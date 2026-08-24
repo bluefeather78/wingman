@@ -1498,6 +1498,58 @@ Measured end to end on `:8000` (warm, exported bundle): first paint of Home Base
 than blocking). The remaining fixed cost is the 1.9MB unsplit `entry-*.js`, which is a
 separate problem.
 
+**The load-time font flash: `no-store` on content-hashed assets, and a gate that never
+gated.** The app painted its first text in Times New Roman and snapped to Space Grotesk /
+Plus Jakarta Sans a beat later, on every visit. Three things had to be true at once, and
+two of them looked correct:
+
+- **`app/main.py`'s `no_cache` middleware applied `no-store` to EVERYTHING**, inherited from
+  the SPA days when `script.js` carried no content hash. `expo export -p web` writes seven
+  `<link rel="preload" as="font" crossorigin>` tags into the document head and inlines the
+  matching `@font-face` rules — that part was already right — but **`no-store` forbids the
+  browser from KEEPING the response**, so the preload could not be reused and the real
+  @font-face fetch started over from scratch once the 1.9MB bundle had evaluated. Measured
+  on production 2026-08-24: preloads complete by 566ms, the same four files re-downloaded
+  1234ms->1466ms at ~43KB each, i.e. ~600KB of font paid for twice and the fonts arriving
+  *after* the text they were for. And because nothing was cached across loads either, it
+  reproduced on every single visit rather than only the first.
+  `_is_immutable_asset()` now exempts `/assets/` + `/_expo/static/` — but **only with a
+  content hash present** (`.<hash>.` for assets, `-<hash>.` for the bundle, `@2x` allowed
+  after): `_expo/.routes.json` sits under the same root without one, and a year-long
+  `immutable` on a reusable URL is not recoverable server-side. HTML shells stay `no-store`
+  — the shell is what names the current bundle hash, so a stale shell pins a stale
+  everything. `test_cache_headers.py` pins the split.
+- **`useFonts` is not a load gate on web**, so the root layout's spinner never did what its
+  comment claimed. expo-font's web `isLoaded()` asks only whether the @font-face RULE
+  exists (`build/ExpoFontLoader.web.js` -> `getFontFaceRulesMatchingResource`), and
+  `output: "static"` ships all seven rules inline in the head — so expo-font's own
+  `useState(isMapLoaded(map))` is already `true` on the first client render, before a byte
+  of any .ttf is fetched. A font file is fetched only when rendered text matches it, so the
+  fetch does not even *start* until after that first paint.
+  - **Holding the render on `document.fonts.load()` was tried and reverted.** It works, and
+    it costs a hydration mismatch: static pre-rendering emits the app (or the auth-gate
+    spinner) into the HTML, while a font-gated client would render the root spinner —
+    different trees. Verified 2026-08-24 by building both ways: the gated bundle logs
+    **React error #418** on every cold load and React discards the server HTML, which on a
+    pre-rendered route like `/landing` is a worse flash than the one being fixed. Seeding
+    the state from `document.fonts.check()` does not save it — a preloaded font is in the
+    HTTP cache but its FontFace is still `unloaded`, so `check()` is false exactly when the
+    gate would fire. **Do not re-add a font gate to `app/_layout.tsx`.**
+- **RN-web writes `fontFamily` into CSS verbatim, and the names had no fallback stack** —
+  `font-family: SpaceGrotesk_700Bold` alone, so unresolved text fell to the browser's
+  default *serif*. That is why the flash was Times New Roman rather than merely a different
+  sans, and it is the half that made it obvious. `fonts` in `src/ui/theme.ts` now appends
+  `system-ui, -apple-system, "Segoe UI", Roboto, sans-serif` **on web only** (a
+  comma-separated stack is not a valid native `fontFamily`). Each weight is its own family
+  here, so every one of the seven needs its own stack.
+
+Measured after, on a warm load: **all seven fonts serve from cache at 0 bytes / 0ms and the
+CSS-initiated re-fetch is gone entirely**; every visible text node under `#root` computes to
+a brand family (the residual Times New Roman on `<html>`/`<head>`/`<title>` is the UA default
+on elements that render no text). Do not "simplify" the theme stacks away on the grounds
+that the caching fix already closes the window — the stack is what keeps a slow-network
+residual unremarkable instead of glaring.
+
 **AI call flow**: `httpClient.callGemini(system, userContent, useWebSearch)` POSTs to
 `/api/messages` and returns cleaned text; `extractJSON()` (`src/lib/extractJSON.ts`) pulls a
 JSON value out of it by brace/bracket-depth scanning (tolerates trailing commentary, repairs

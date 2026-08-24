@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Switch, View } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
 import { Field, PopButton, PopCard, Screen, Txt } from '@/ui/components';
-import { colors, space } from '@/ui/theme';
+import { colors, fonts, space } from '@/ui/theme';
 
 // Resumes the Google redirect flow: reads the one-time google_token, resolves it, then either
 // enters the app (existing/linked account) or collects consent + location for a new account.
@@ -133,5 +133,5 @@ const styles = StyleSheet.create({
   head: { gap: space.xs, marginBottom: space.xs },
   row: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   rowLabel: { flex: 1 },
-  error: { color: colors.red, fontFamily: 'PlusJakartaSans_700Bold' },
+  error: { color: colors.red, fontFamily: fonts.bodyBold },
 });

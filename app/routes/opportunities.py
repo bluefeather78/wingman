@@ -74,7 +74,16 @@ def handle_deadline_check(opp_id: str, request: Request,
     if not opp:
         return json_error(404, "Opportunity not found.")
 
-    if deadlines.deadline_cache_is_fresh(opp.get("dates_last_checked_at")):
+    # `refresh=1` (the Quest Log's "Check for updates" button) forces a real, paid check
+    # even when the 7-day cache is still fresh — an explicit user action meaning "look again
+    # now". A successful check re-stamps dates_last_checked_at below, so the answer is then
+    # cached for another 7 days exactly like any other. Passive loads (opening a card, a
+    # Fresh Finds add) do NOT pass it, so they still ride the free cross-user cache. Note this
+    # bypasses only the STALENESS check, not the paywall (require_subscription already ran)
+    # nor the write guards: a forced check that comes back silent/unparsed/empty still writes
+    # nothing and does not stamp, so it cannot cache a hole for 7 days.
+    force = str(request.query_params.get("refresh", "")).strip().lower() in ("1", "true", "yes")
+    if not force and deadlines.deadline_cache_is_fresh(opp.get("dates_last_checked_at")):
         payload = deadlines.cached_deadline_payload(opp, "cached")
         deadlines.log_deadline_check(opp_id, "cached", opp.get("status"), None, None,
                                      opp.get("was_estimated"))

@@ -42,15 +42,16 @@ export interface ApiClient {
   // --- Stable since Phase 1 (work today, incl. backend mock mode) ---
   getOpportunities(): Promise<Opportunity[]>;
   // On-demand, cross-user-cached deadline check. Never rejects (returns null on failure)
-  // so a hiccup can't block loading the tracker. userid attribution becomes a token in
-  // Phase 2, but the endpoint itself is not auth-gated.
-  getDeadlineCheck(oppId: string): Promise<Partial<TrackerInfo> | null>;
+  // so a hiccup can't block loading the tracker. Pass force=true to bypass the 7-day cache
+  // and run a fresh paid check now — that is what the Quest Log's "Check for updates" button
+  // does; passive loads omit it and ride the free cache.
+  getDeadlineCheck(oppId: string, force?: boolean): Promise<Partial<TrackerInfo> | null>;
   // The same call with the REASON attached. Anything that reports back to the student
   // must use this one: a 404 (no catalog row behind this tracked item) and a 402 (trial
   // lapsed) and a network failure are three different things to tell somebody, and
   // collapsing them into a bare null is what made the Quest Log's refresh claim it had
-  // checked opportunities it had not.
-  getDeadlineCheckResult(oppId: string): Promise<DeadlineCheckResult>;
+  // checked opportunities it had not. force=true bypasses the 7-day cache (see above).
+  getDeadlineCheckResult(oppId: string, force?: boolean): Promise<DeadlineCheckResult>;
   // The shared application checklist for one opportunity, generated and verified against
   // the program's own page by generate_action_items.py. Never rejects (null on failure):
   // a missing checklist must not stop an opportunity being tracked, and the caller falls

@@ -509,16 +509,19 @@ export const httpClient: ApiClient = {
     return Array.isArray(data) ? data : (data.opportunities ?? []);
   },
 
-  async getDeadlineCheck(oppId) {
-    return (await this.getDeadlineCheckResult(oppId)).info;
+  async getDeadlineCheck(oppId, force) {
+    return (await this.getDeadlineCheckResult(oppId, force)).info;
   },
 
   // Same call, but says WHY it came back empty. `getDeadlineCheck` above stays the thin
   // never-throws wrapper for callers (the finder) that genuinely only want the overlay.
-  async getDeadlineCheckResult(oppId) {
+  // force=true appends ?refresh=1, which makes the server bypass its 7-day cache and run a
+  // fresh paid check — the Quest Log's "Check for updates" button passes it; passive loads
+  // do not, so an ordinary add/open still rides the free cross-user cache.
+  async getDeadlineCheckResult(oppId, force) {
     try {
       const info = await request<Partial<TrackerInfo>>(
-        `/api/opportunities/${encodeURIComponent(oppId)}/deadline`,
+        `/api/opportunities/${encodeURIComponent(oppId)}/deadline${force ? '?refresh=1' : ''}`,
       );
       return { outcome: 'ok' as const, info };
     } catch (e) {

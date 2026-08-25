@@ -355,10 +355,14 @@ export const ACTION_ITEM_STATUS_LABEL: Record<OppStatus, string> = {
   in_progress: 'In Progress',
   completed: 'Completed',
 };
-const OPP_PILL: Record<OppStatus, { bg: string; fg: string }> = {
-  in_progress: { bg: colors.statusNowBg, fg: colors.statusNowFg },
-  not_started: { bg: colors.statusFutureBg, fg: colors.statusFutureFg },
-  completed: { bg: colors.statusPastBg, fg: colors.statusPastFg },
+// OPPORTUNITY pills got new styling (2026-08-24): an OUTLINED pill with a leading dot,
+// all three of the border, the dot and the label carrying the status accent. The TASK
+// pills (the action-item state pills, including the tappable ones that cycle a task)
+// keep the original solid-fill + navy-border look on purpose.
+const OPP_PILL: Record<OppStatus, { accent: string }> = {
+  in_progress: { accent: colors.statusNowFg },
+  not_started: { accent: colors.statusFutureFg },
+  completed: { accent: colors.statusPastFg },
 };
 const TASK_PILL: Record<OppStatus, { bg: string; fg: string }> = {
   not_started: { bg: colors.peach, fg: colors.statusPastFg },
@@ -366,10 +370,23 @@ const TASK_PILL: Record<OppStatus, { bg: string; fg: string }> = {
   completed: { bg: colors.statusNowBg, fg: colors.statusNowFg },
 };
 export function StatusPill({ status, kind = 'opp', label, onPress }: { status: OppStatus; kind?: 'opp' | 'task'; label?: string; onPress?: () => void }) {
-  const c = (kind === 'opp' ? OPP_PILL : TASK_PILL)[status];
   const text = label ?? (kind === 'opp' ? PROGRESS_STATUS_LABEL[status] : ACTION_ITEM_STATUS_LABEL[status]);
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
+
+  // Opportunity pills: outlined + dot, never tappable.
+  if (kind === 'opp') {
+    const { accent } = OPP_PILL[status];
+    return (
+      <View style={[styles.statusPill, styles.statusPillOutlined, { borderColor: accent }]}>
+        <View style={[styles.statusPillDot, { backgroundColor: accent }]} />
+        <Text style={[styles.statusPillText, { color: accent }]}>{text}</Text>
+      </View>
+    );
+  }
+
+  // Task pills: original solid-fill + navy-border look.
+  const c = TASK_PILL[status];
   if (!onPress) {
     return (
       <View style={[styles.statusPill, { backgroundColor: c.bg }]}>
@@ -619,7 +636,9 @@ const styles = StyleSheet.create({
   reviewPopoverText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 18, color: colors.slate500 },
 
   statusPill: { borderWidth: 2, borderColor: colors.navy, borderRadius: radius.pill, paddingVertical: 3, paddingHorizontal: 10, alignSelf: 'flex-start' },
+  statusPillOutlined: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1.5, backgroundColor: colors.white, paddingVertical: 4, paddingHorizontal: 11 },
   statusPillPressable: { cursor: 'pointer' },
+  statusPillDot: { width: 6, height: 6, borderRadius: 3 },
   clickable: { cursor: 'pointer' },
   statusPillText: { fontFamily: fonts.bodyXBold, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.2 },
 

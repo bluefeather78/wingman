@@ -221,9 +221,14 @@ export interface DeadlineRefreshResult {
 
 // Quest Log's "Check for updates" button — ported from script.js's refreshTracker(), minus
 // the extractTrackerInfo() re-classification pass (a separate, heavier AI call this RN port
-// never wired up elsewhere). This overlays the same shared/cached on-demand deadline check
-// buildTracker() already uses (getDeadlineCheck -> GET /api/opportunities/<id>/deadline),
-// which no-ops into a cheap cache hit for anything checked by any user in the last 7 days.
+// never wired up elsewhere). This overlays the same shared on-demand deadline check
+// buildTracker() uses (GET /api/opportunities/<id>/deadline), but FORCES a real check
+// (force=true -> ?refresh=1): pressing the button is an explicit "look again now", so it
+// bypasses the 7-day cache rather than no-opping into a cache hit. A successful check
+// re-stamps the row, so it is then cached for another 7 days for everyone. The cost of that
+// is one paid Claude check per tracked item per press (~$0.07 each); the button is disabled
+// while a pass runs, so it cannot be double-fired. Passive loads (adds, card opens) still
+// use the free cache — only this deliberate action pays.
 export async function refreshTrackerDeadlines(
   onProgress?: (checked: number, total: number) => void,
 ): Promise<DeadlineRefreshResult> {
@@ -242,7 +247,7 @@ export async function refreshTrackerDeadlines(
     // so it has to know whether an empty answer means "nothing changed", "this item has no
     // catalog row", "your trial lapsed" or "the network failed". Collapsing those into null
     // is what let this report "no changes found" for items it never checked at all.
-    const res = await httpClient.getDeadlineCheckResult(item.id);
+    const res = await httpClient.getDeadlineCheckResult(item.id, true);
     if (res.outcome !== 'ok' || !res.info) {
       if (res.outcome === 'not-found') {
         skipped++;

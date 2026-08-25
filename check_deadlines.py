@@ -390,12 +390,53 @@ is not in them.
 
 Today's date is {today}.
 
+PRIORITY — this app exists so a student never misses a deadline. An empty "important_dates" \
+gives the student no reminder, no calendar entry and no "happening now" signal, so a \
+well-founded estimate is ALWAYS better than an empty field. When you estimate a date from a \
+window or range, round toward the EARLIER edge, never the later one: a date shown before the \
+true deadline is fail-safe — a student who acts on it finishes in time — while a date shown \
+after it causes the exact miss this app exists to prevent. Bias every uncertain deadline \
+estimate early. This does NOT license inventing dates: an estimate must still (a) be on or \
+after {today}, (b) stay inside the window the notes actually support — the near edge of the \
+stated range, not a date conjured months before it — and (c) be marked "estimated": true with \
+the real window kept in the note, so the student is prompted to confirm rather than trust a \
+placeholder. A past-dated or visibly-wrong estimate is worse than an empty field: the first \
+reads as "you already missed it" and makes a student abandon a program still open to them, the \
+second teaches them to ignore every date the app shows.
+
 RULES, in order:
 - Every date the notes reason about must become a structured entry in "important_dates" — \
 never leave a date mentioned only in prose in "important_date_note". If the notes give enough \
 basis to write a date into the note, that date gets its own structured entry.
-- Every specific date in "important_date_note" must have a matching entry in \
-"important_dates", and vice versa — the two must agree.
+- A date WINDOW, month, season or range the notes commit to ("abstract deadlines typically \
+October-December", "opens in fall", "regionals in early spring") is a date you are reasoning \
+about — it MUST become a concrete structured entry with "estimated": true, not be left as prose \
+in the note. Materialise it by picking one representative day inside the stated window and \
+routing it through the on-or-after-{today} check below: for a "deadline", take the EARLIEST \
+day in the window (so the student is warned before the soonest real cutoff); for "opens", \
+"event_start" or a bare season, take the FIRST day of the window. Never collapse a multi-part \
+cycle into one entry — an abstract deadline, a regional event and a national event named as \
+three separate windows are three separate entries. This whole materialisation rule applies \
+ONLY to a running program: if the notes say the program is suspended, discontinued or not \
+running this cycle, status is "not_running" and you report NO future dates — do not materialise \
+a window for it. A well-founded estimate beats an empty field, but a FABRICATED deadline for a \
+program that is not accepting anyone is worse than either — it tells a student to prepare for \
+something that will not happen.
+- A window whose early edge is already in the PAST (today falls inside or after the window's \
+start) is the dangerous case: do NOT roll the whole window a full year forward — that hides a \
+deadline still imminent THIS cycle, which is the exact miss this app prevents. For a "deadline", \
+use the EARLIEST day of the window that is still on or after {today}. For an "opens" date whose \
+day has already passed, OMIT the structured entry rather than anchoring it to {today}, and say \
+in the note that registration has likely already opened. Only roll a window forward a year when \
+it lies ENTIRELY in the past.
+- A window may stay prose-only ONLY when the note explains why there is genuinely no date to \
+give at all (e.g. "rolling admissions, no published open date"). A merely typical or historical \
+pattern ("deadlines are usually in the fall", "historically October-December") is NOT such a \
+case — that is exactly the situation you must materialise into a dated entry, not exempt.
+- Every date OR date-window in "important_date_note" — a specific day, a month, a season or a \
+range — must have a matching entry in "important_dates", and vice versa — the two must agree. A \
+vague summary that names no window ("dates vary by cycle") does not satisfy this: if the notes \
+give any window at all, name it and date it.
 - Every date must be on or after {today}, and a past date is never reported as-is. If the \
 notes give the dates of a cycle that has already ended and do NOT say the program is \
 discontinued, project each one onto its next annual occurrence — same month and day, plus the \

@@ -1,18 +1,20 @@
 # Deadline & Task creation — coverage and accuracy (MAIN PLAN)
 
-**Status:** **P0–P5 SHIPPED** — P0–P4 (2026-08-25) + **P5 (2026-08-26): trusted-domain
-allowlist, rung 4 PROVEN LIVE** (999 pytest green, DDL run, $0.146 proof, no DB writes). A free
-tracker SYNC layer (`/api/tracker/sync`) sits on top. **REPLAN 2026-08-26 — decision 6
-superseded: both features now unify onto ONE fetch+verify SUBSTRATE (§5a).** The P5 rung-4 proof
-showed deadlines (Claude `web_fetch`) read THINK's PDF while tasks (our urllib) can't — so the
-fix is to share Claude's fetcher and keep code-side verification for both by capturing the
-fetched content, gated by the P5 trust tiers. **P6a DONE (2026-08-26): capture viability proven
-live** — `web_fetch` returns clean text for HTML and base64 (→pypdf) for PDF; `web_search` is
-encrypted/unusable, so verify against fetched pages only. **P6 COMPLETE (2026-08-26): P6b
-(tasks on the substrate — THINK proven live, 4 PDF-derived verified tasks) + P6c (date-verify
-analogue, per-date `verified`/`source_url`).** **NEXT: P7 = frontend trust gradient** (surface
-the `source_tier`/`source_url` P6b now produces — grouped headings + source chips; needs Metro),
-then P8–P10, P11 last. Operator decisions all resolved; technical unknowns T1–T8 resolved.
+**Status:** **P0–P6 + T6 SHIPPED (backend complete through the substrate).** P0–P4 (2026-08-25);
+**P5** trusted-domain allowlist + rung 4 (proven live); **REPLAN** — decision 6 superseded, both
+features unified onto ONE fetch+verify SUBSTRATE (§5a); **P6a** capture viability (T8 resolved);
+**P6b** tasks on the substrate (THINK proven live — real PDF-derived verified tasks, no
+fabrication); **P6c** date-verify analogue (per-date `verified`/`source_url`); **T6** shared
+program-source finder — read-once + FAQ/sub-page discovery for tasks (proven live on THINK, a
+tier-merge bug found & fixed in-session). A free tracker SYNC layer (`/api/tracker/sync`) sits on
+top. **1045 pytest green, tsc clean, ~$0.70 of live proofs this session, zero DB writes.**
+
+**NEXT SESSION STARTS AT P7 — frontend trust gradient** (the user-visible payoff): surface what
+the backend now stores but does NOT yet show students — task `source_tier`/`source_url` (grouped
+headings "From the program's own page" / "From a trusted guide · {domain}" / "Typical steps" +
+per-task source chips) and per-date `verified`/estimated markers. **P7 is RN frontend** — needs
+Metro (8081/8082), separate from the :8001 API this session used. Then P8 (collapse the Gemini
+producer), P9, P10, P11 last. Operator decisions all resolved; technical unknowns T1–T8 resolved.
 **Owner:** _tbd_  **Started:** 2026-08-25  **Branch:** `P5-P7-deadline-and-task-tracker`
 
 > **This is the single source of truth for the deadline creator and the task creator.**
@@ -617,10 +619,26 @@ operator decisions resolved; T1–T8 at build time)*
     like its URLs. No auto-downgrade — watch the signal first (task-demotion-rate discipline).
   - **T6 (one pass vs two):** aim for one fetch pass feeding both extracts, its stop-condition
     covering date- AND requirement-bearing pages; persist discovered/ rung-4 URLs for reuse.
-- **P7 — Frontend trust gradient.** `ActionItem` tier fields, `taskTrustTier`, grouped headings
-  ("From the program's own page" / "From a trusted guide · {domain}" / "Typical steps") +
-  per-task source chips (colour fixed per tier; chip links the evidence `source_url`, trailing
-  ↗ stays the step-action `url`).
+- **P7 — Frontend trust gradient (NEXT — pure RN/Metro, no backend work needed).** Surface the
+  provenance the backend already emits. **Data contract now live (produced by P6b/P6c/T6):**
+  - Each **task** the `/action-items` endpoint returns carries, when page-backed: `basis:"page"`,
+    `source_tier` (`official`|`trusted`|`pending`), `source_url`, `source_domain`. Generic tasks
+    have `basis:"generic"` and no tier. The serve path already withholds `pending`/`blocked`
+    (`_servable`), so the client only ever sees `official`/`trusted`/generic.
+  - Each **date** the `/deadline` endpoint returns carries `estimated` (bool) and, new, `verified`
+    (bool) + `source_url` (present when verified). A projected/estimated date is `verified:false`
+    by design.
+  - **Build:** `frontend/src/api/trackerStore.ts` `ActionItem` gains `sourceTier`/`sourceUrl`/
+    `sourceDomain`; a `taskTrustTier` helper; grouped headings ("From the program's own page" /
+    "From a trusted guide · {domain}" / "Typical steps — confirm on the site"); per-task source
+    chips (colour fixed per tier — green Program page / blue Guide·{domain} / grey Typical step;
+    chip links the evidence `source_url`, the trailing ↗ stays the step-action `url`). Dates: a
+    per-date "verified"/"(est.)" marker sharing one visual language with the tier chips (T4).
+  - **Legacy/back-compat:** tasks written before P6b have no `source_tier` → render as generic
+    (unknown provenance is not evidence of provenance). Existing normalizers
+    (`normalizeUnverifiedActionItems` forces client-produced items to generic;
+    `isPageBackedTask` is the only test) already handle this — P7 extends the VERIFIED-path
+    normalizer (`normalizeVerifiedActionItems`) to read the new tier fields.
 
 **Client consolidation & refresh**
 - **P8 — Collapse the Gemini producer.** Slim `extractTrackerInfo` to `meta`/`fit`; dates←
@@ -651,12 +669,15 @@ operator decisions resolved; T1–T8 at build time)*
 **Deferred / optional:** fetch fixes A (PDF) + B (link discovery) survive only as a possible
 LOCAL fallback now that Claude `web_fetch` is the shared fetcher (§5a); C (Playwright) deferred.
 
-**Order:** ~~P0 → P1 → P2 → P3 → P4 → P5~~ ✅ **done** → **P6 (next): unified substrate**
-(P6a capture-probe → P6b task extract on substrate → P6c date-verify) → **P7** frontend trust
-gradient → P8 → P9 → P10, then **P11 last** (calendar ongoing-submissions UI). P6 reworks
-shipped P0–P1 (tasks leave urllib) but keeps the student contract until P7. P11 depends only on
-P4's `rolling` status (shipped), so it can be pulled forward with any calendar work — scheduled
-last by request.
+**Order:** ~~P0 → P1 → P2 → P3 → P4 → P5 → P6 (P6a → P6b → P6c) → T6~~ ✅ **done** → **P7 (next):
+frontend trust gradient** → P8 → P9 → P10, then **P11 last** (calendar ongoing-submissions UI).
+The whole backend substrate is now built and proven live; P7 is the first purely student-facing
+phase (RN/Metro). P11 depends only on P4's `rolling` status (shipped), so it can be pulled forward
+with any calendar work — scheduled last by request.
+
+**BACKEND IS DONE; P7 IS PURE FRONTEND.** Everything the student sees for tasks/dates is still the
+*old* rendering — the trust tiers and per-date provenance the backend now stores are invisible
+until P7 wires them into the RN app. Nothing else backend is required before P7.
 
 **Loose ends carried out of the P0–P4 session (none blocking):**
 - P0 tasks-on-Claude never run on real rows — a graded sample costs money; do one when
@@ -677,20 +698,25 @@ last by request.
 - `check_deadlines.py` — escalation loop; per-round `max_uses:1` + ladder; `FOUND_*` /
   `SITE_REACHED` tails; prompt caching; `VALID_STATUS`+`rolling`; `deadline_write_decision`
   + `SOURCE_UNREACHED`; rung-4 trusted filter.
-- **Substrate (P6, new 2026-08-26):** a shared "fetch+capture+tier" helper on top of the P2
-  finder returning `{url, domain, text, tier}` per fetched block (capture from
-  `web_fetch_tool_result`/`web_search_tool_result`; tier from `aggregators_common`). Likely a
-  new module (e.g. `source_capture.py`) or an extension of the finder in `check_deadlines.py`.
-- `generate_action_items.py` — **P6b:** fetch via the shared substrate (Claude `web_fetch`)
-  instead of `page_text`/urllib; KEEP `quote_is_on_page`/`claim_is_supported` but run them
-  against the CAPTURED content; tier-tagging; eligibility detector (T3). *(P0's
-  `call_gemini`→`call_claude` already done.)* `page_text`'s fetch half becomes optional local
-  fallback; its verify half is retained.
-- `app/services/action_items.py` — interactive twin fetches via the substrate too; keep the
-  7-day TTL + serve-path `pending`/`blocked` filter (both live from P0–P1/P5).
-- `check_deadlines.py` — **P6a/P6c:** capture fetched content in the finder; optional date
-  verification analogue (T7). *(escalation loop, rung-4 filter, rolling, write-decision already
-  done in P2–P5.)*
+- **`source_capture.py` (new, DONE):** the substrate CAPTURE layer — `parse_captured_sources`
+  (`web_fetch` blocks → `CapturedSource{url,domain,media_type,text,tier}`; HTML text/plain direct,
+  PDF base64 → PyPDF2; `web_search` ignored), `tier_for`, `fetch_and_capture` (Claude web_fetch),
+  widened FETCH_SYSTEM (hunts how-to-apply/FAQ/key-dates/timeline/PDF).
+- `check_deadlines.py` — **DONE:** `find_program_sources(want_dates, want_requirements)` (T6
+  shared finder + `_shared_capture_cache` read-once); `call_claude(return_captured=True)`;
+  `verify_dates_against_capture` (P6c) enriches each date with `verified`/`source_url`;
+  `check_one(want_requirements=...)`. *(escalation loop, rung-4 filter, rolling, write-decision
+  already done in P2–P5; date ladder UNCHANGED.)*
+- `generate_action_items.py` — **DONE:** `process_one(full_capture=...)` fetches via the shared
+  `find_program_sources` (not urllib); `verify_items(raw, opp, sources)` runs the UNCHANGED
+  `quote_is_on_page`/`claim_is_supported` against captured content, tags each task's tier by the
+  source holding its quote; page-backed items gain `source_tier`/`source_url`/`source_domain`.
+- `page_text.py` — **DONE:** `is_eligibility_claim` (T3), `date_is_on_page` (P6c); the urllib
+  `fetch_page_text` is now an optional local fallback, its verify half retained.
+- `app/services/action_items.py` — **DONE:** interactive twin calls `process_one(full_capture=True)`;
+  7-day TTL + serve-path `pending`/`blocked` filter (`_servable`) live.
+- `app/routes/opportunities.py` — **DONE:** deadline endpoint calls
+  `check_one(want_requirements=True)` (read-once).
 - `app/routes/opportunities.py` — inherits `check_one`; new-outcome stamp handling.
 - `aggregators_common.py` (new), `trusted_aggregators_schema.sql` (new).
 - `ops/core.py` + `ops/admin.py` + `ops/admin_console.html` — Sources tab (approve/block/park).

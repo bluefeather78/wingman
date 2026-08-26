@@ -935,9 +935,20 @@ deadline."
     `wingman-web-8083` (Metro, EXPO_PUBLIC_API_BASE→:8002), so this session's servers never
     collide with 8000/8001/8081/8082 in use by others. Seeded via dev_test_account.py +
     /api/data/save; seed cleared after.
-  - NOT verified (paid): a live add via P8's new flow and a live decoupled refresh both make
-    real Claude/Gemini calls — logic is tsc-checked and the free paths browser-proven; run one
-    real add/refresh when a paid check is next authorized.
+  - **PAID E2E PROVEN LIVE same session ($0.199, operator-approved).** Real flow, real THINK
+    row (ec17921), through the browser UI: Quest Log intake with `https://think.mit.edu/` →
+    slim Gemini classify (~$0.002) → user submission DEDUPED into ec17921 (no new queue row) →
+    deadline endpoint (cached hit from the 08-26 stamp) → action-items endpoint generated
+    FRESH on the substrate (~$0.192 — it read the guidelines PDF): **3 page-backed
+    OFFICIAL-tier tasks, verbatim quotes, source_url to the PDF**, rendered under "From the
+    program's own page" with linked green chips. Then the P9 forced refresh (~$0.006, rung 1):
+    fresh check found the 2025-26 cycle ended → rolled all 5 dates forward, every date
+    `estimated:true, verified:false` — the honest answer, rendered as "(estimated)" with no
+    verified marks — and the label read **"1 deadline updated"** (distinct counts live; tasks
+    unchanged so no task count). Snapshot inspection confirmed tier + verified/sourceUrl
+    fields flow catalog→endpoint→normalizer→users.data intact. The `verified:true` render
+    path was proven on seeded data (a live one needs a program with posted current-cycle
+    dates; P6c proved the backend emits it).
 - **2026-08-26** — **T6 BUILT — shared program-source finder (read-once + FAQ for tasks).**
   Prompted by the question "shouldn't tasks discover pages the same thorough way deadlines do,
   so FAQ/how-to-apply pages get checked for tasks too?". Yes — it's an ACCURACY win, not just

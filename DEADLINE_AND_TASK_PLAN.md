@@ -6,10 +6,11 @@ tracker SYNC layer (`/api/tracker/sync`) sits on top. **REPLAN 2026-08-26 — de
 superseded: both features now unify onto ONE fetch+verify SUBSTRATE (§5a).** The P5 rung-4 proof
 showed deadlines (Claude `web_fetch`) read THINK's PDF while tasks (our urllib) can't — so the
 fix is to share Claude's fetcher and keep code-side verification for both by capturing the
-fetched content, gated by the P5 trust tiers. **NEXT: P6 = the substrate** (P6a capture-probe →
-P6b task extract on substrate → P6c date-verify), then P7 frontend trust gradient, P8–P10, P11
-last. Operator decisions all resolved; technical unknowns T1–T8 resolvable at build time. See
-the change log for the full record.
+fetched content, gated by the P5 trust tiers. **P6a DONE (2026-08-26): capture viability proven
+live** — `web_fetch` returns clean text for HTML and base64 (→pypdf) for PDF; `web_search` is
+encrypted/unusable, so verify against fetched pages only. **NEXT: P6b = task extract on the
+substrate**, then P6c date-verify, P7 frontend trust gradient, P8–P10, P11 last. Operator
+decisions all resolved; technical unknowns T1–T8 resolved or resolvable at build time.
 **Owner:** _tbd_  **Started:** 2026-08-25  **Branch:** `P5-P7-deadline-and-task-tracker`
 
 > **This is the single source of truth for the deadline creator and the task creator.**
@@ -343,14 +344,20 @@ Modelled on the repo's existing discovery-vs-execution splits (mailing-list reci
 absent, the console shows the setup step, every aggregator domain is treated as pending
 (nothing ships), and the deadline rung-4 filter simply keeps nothing off-domain.
 
-**Fetch layer — Claude `web_fetch` is the shared fetcher (2026-08-26).** Both features fetch
-through Claude's server-side tools, which read PDFs, SPAs and 403/TLS-walled pages our urllib
-cannot. So the old local-fetcher fixes are **largely moot for reading**: A (accept
-`application/pdf` via `pypdf`) and B (follow same-domain requirement links) survive only as a
-possible *local fallback* if we ever want one; C (Playwright) is **deferred** and no longer the
-only way to read an SPA (Claude's fetcher already does). `page_text`'s VERIFY half
-(`quote_is_on_page` / `claim_is_supported`, the generic-token list) is retained and is now run
-against the CAPTURED fetch content rather than a urllib fetch.
+**Fetch layer — Claude `web_fetch` is the shared fetcher; capture DECODES per media type
+(2026-08-26, P6a-confirmed).** Both features fetch through Claude's server-side tools, which
+read PDFs, SPAs and 403/TLS-walled pages our urllib cannot. The capture step then normalizes
+what `web_fetch` returns to text (T8):
+- **HTML** → `media_type text/plain`, clean markdown text → use directly.
+- **PDF** → `media_type application/pdf`, base64 bytes → **base64-decode + pypdf extract** (this
+  is fetch-fix A, revived as a capture DECODER — Claude still does the fetching/reaching).
+- **`web_search` snippets are `encrypted_content` → unusable for verification.** The substrate
+  must `web_fetch` any page it verifies against.
+
+So B (same-domain link discovery) and C (Playwright) stay deferred/optional — Claude's fetcher
+already reaches SPAs — but A is now a REQUIRED part of capture, not an optional local win.
+`page_text`'s VERIFY half (`quote_is_on_page` / `claim_is_supported`, the generic-token list) is
+retained and runs against the captured, decoded text.
 
 **Shared search machinery ("program source finder").** The deadline escalation loop (§3 G1) is
 built as a **reusable helper**, not a deadline-only function: prose phase-1, tools ON, per-round
@@ -502,9 +509,19 @@ list is dropped on refresh — fatal for both features, so both hinge on **exten
   not the string match tasks use. Bias: verify the date is grounded, but do not DROP an
   estimated/projected date (which by definition is not on any page) — gate only NON-estimated
   dates, mark unverifiable ones rather than deleting.
-- **T8** (new 2026-08-26) capture plumbing: `web_fetch_tool_result` / `web_search_tool_result`
-  blocks must yield `{url, domain, text}`, deduped, within `max_content_tokens`. Confirm the
-  block shape carries retrievable text (not only URLs) on Haiku before committing the substrate.
+- **T8** (new 2026-08-26) capture plumbing — **RESOLVED by the P6a live probe (2026-08-26,
+  ~$0.09). The substrate is VIABLE.** Concrete block shapes on Haiku:
+  - `web_fetch_tool_result.content.content.source` — for **HTML** it is
+    `{type:'text', media_type:'text/plain', data:<clean markdown text>}` → **verifiable
+    directly**. For a **PDF** it is `{type:'base64', media_type:'application/pdf', data:<b64>}`
+    → the model reads it natively but WE get bytes, so capture must **base64-decode + extract
+    text locally (pypdf)** before `quote_is_on_page`. This REVIVES fetch-fix A — not as a
+    fetcher (Claude reaches the PDF, even off an SPA) but as a **capture DECODER**.
+  - `web_search_tool_result` items carry **`encrypted_content`, opaque to us** — search
+    snippets are NOT verifiable. **Consequence:** the substrate must `web_fetch` every page it
+    verifies against; a search-only hit cannot back a task/date. The finder must fetch, not
+    just search (ties into T6 — the fetch pass must actually fetch requirement pages).
+  - Capture yields `{url, domain, media_type, text, tier}` per fetched block, deduped by url.
 
 ---
 
@@ -556,12 +573,13 @@ operator decisions resolved; T1–T8 at build time)*
 - **P6 — Unified fetch+verify substrate.** The 2026-08-26 replan, in sub-steps so each ships
   and is provable on its own. Reworks shipped P0–P1 (tasks move off urllib) but leaves the
   student-visible contract the same until P7.
-  - **P6a — Content capture + tier-tag (the new primitive, T8).** Extend the P2 "program source
-    finder" to return `{url, domain, text, tier}` per fetched block, not just URLs — `text`
-    from `web_fetch_tool_result` / `web_search_tool_result`, `tier` from `aggregators_common`.
-    **First** confirm on Haiku that the block shape carries retrievable text (T8) — if it does
-    not, the whole substrate is blocked and we fall back to fetch-fix A/B locally; prove this
-    live before building on it. Free-ish (one probe).
+  - **P6a — Capture-viability probe (T8). ✅ DONE 2026-08-26 (~$0.09 live).** Confirmed on
+    Haiku: `web_fetch` HTML → `text/plain` clean text (verify directly); `web_fetch` PDF →
+    base64 (decode + pypdf); `web_search` → `encrypted_content` (unusable, must `web_fetch`).
+    **Substrate viable.** Build target for the capture helper: return
+    `{url, domain, media_type, text, tier}` per fetched block (`text` decoded per media type,
+    `tier` from `aggregators_common`), deduped by url; verify only against fetched (not
+    searched) content. Adds `pypdf` as a capture decoder.
   - **P6b — Task extract on the substrate.** Rework `generate_action_items.py` +
     `app/services/action_items.py`: fetch via the shared finder (Claude `web_fetch`) instead of
     `page_text`/urllib; run the EXISTING `quote_is_on_page` / `claim_is_supported` against the
@@ -675,12 +693,12 @@ last by request.
 - **Status ripple (rolling).** Enumerate every `status` reader before shipping P4.
 - **Merge fragility (P10).** Preserving user tasks + tombstones is the one real code risk;
   key on text, never positional id.
-- **Substrate capture plumbing (T8) is a hard prerequisite — prove it FIRST (P6a).** The whole
-  substrate assumes `web_fetch_tool_result` / `web_search_tool_result` blocks carry retrievable
-  page TEXT (not only URLs) on Haiku. If they don't, code-side verification against the capture
-  is impossible and the substrate is blocked — fall back to fetch-fix A/B (local pypdf + link
-  discovery). So P6a is a cheap live probe gating the rest; do not build P6b on an unverified
-  assumption.
+- **Substrate capture plumbing (T8) — RESOLVED 2026-08-26 (P6a), substrate viable.** `web_fetch`
+  HTML returns clean `text/plain` (verify directly), PDF returns base64 (decode + pypdf),
+  `web_search` returns `encrypted_content` (unusable — the substrate MUST `web_fetch` any page
+  it verifies against, never rely on a search snippet). The residual risk is narrow: a page
+  Claude fetches but returns as an unexpected media type — capture must degrade to "no text →
+  no verifiable claim from this source", never crash.
 - **Task cost rises on the substrate.** Tasks move from an ~free local fetch to a paid
   `web_fetch`/search pass. Mitigated by ONE shared fetch feeding both extracts (T6) and by the
   interactive 7-day cache, but confirm per-row cost on a live P6b sample before a full pass.
@@ -816,6 +834,15 @@ deadline."
 
 ## Change log
 
+- **2026-08-26** — **P6a DONE — capture-viability probe (T8 resolved, ~$0.09 live, no writes).**
+  The hard prerequisite for the substrate passed. Live on Haiku:
+  `web_fetch_tool_result.content.content.source` is `{text, text/plain, <clean markdown>}` for
+  HTML (verifiable directly) and `{base64, application/pdf, <bytes>}` for a PDF (decode + pypdf);
+  `web_search_tool_result` items carry `encrypted_content`, opaque, so search snippets are NOT
+  verifiable and the substrate must `web_fetch` any page it verifies against. **Substrate
+  viable.** Refinements folded into the plan: capture returns `{url, domain, media_type, text,
+  tier}` per fetched block; fetch-fix A (`pypdf`) is REVIVED as a capture DECODER (not a fetcher);
+  verification is `web_fetch`-only. Next: **P6b** (task extract on the substrate).
 - **2026-08-26** — **REPLAN: unified fetch+verify substrate** (decision 6 superseded; §5a new).
   Triggered by the P5 rung-4 proof, which exposed that deadlines and tasks stood on two fetchers
   of unequal power: Claude `web_fetch` read THINK's guidelines PDF (deadlines) while our urllib

@@ -519,6 +519,64 @@ def test_verify_dates_handles_no_capture_and_no_dates():
     assert cd.verify_dates_against_capture(info, []) == 1
 
 
+# ------------------------------------------------- status evidence gate (2026-08-26)
+# A not_running verdict must be proven against a fetched page or it downgrades to unknown.
+# Born from ec18599 (Impact Internships): the off-season of an annual program — "2026 cycle
+# closed... No 2027 dates posted yet" — was written as `not_running`, burying a live program
+# as a Past Event with no dates and no visible tasks.
+
+
+def test_status_evidence_verified_keeps_not_running_and_records_evidence():
+    quote = "The Impact Internships program has permanently ended and will not be returning."
+    info = {"status": "not_running", "status_evidence": quote,
+            "important_date_note": "Program discontinued."}
+    out = cd.verify_status_evidence(
+        info, [_src("https://prog.example/", f"About us. {quote} Thanks to all alumni.")])
+    assert out == "verified"
+    assert info["status"] == "not_running"
+    assert "status_evidence" not in info  # consumed, never written to the row
+    assert quote in info["important_date_note"]
+    assert "https://prog.example/" in info["important_date_note"]
+
+
+def test_status_evidence_missing_quote_downgrades_to_unknown():
+    info = {"status": "not_running", "important_date_note": "2026 cycle closed."}
+    out = cd.verify_status_evidence(
+        info, [_src("https://prog.example/", "Apply to Summer 2026! Deadline June 3.")])
+    assert out == "downgraded"
+    assert info["status"] == "unknown"
+    assert "unverified" in info["important_date_note"]
+    # The original note survives alongside the caveat.
+    assert "2026 cycle closed." in info["important_date_note"]
+
+
+def test_status_evidence_quote_not_on_any_fetched_page_downgrades():
+    info = {"status": "not_running",
+            "status_evidence": "This program has been permanently discontinued."}
+    out = cd.verify_status_evidence(
+        info, [_src("https://prog.example/", "Apply to Summer 2026 HSIP today")])
+    assert out == "downgraded"
+    assert info["status"] == "unknown"
+    assert "status_evidence" not in info
+
+
+def test_status_evidence_downgrade_with_no_capture_at_all():
+    info = {"status": "not_running", "status_evidence": "The program has ended for good."}
+    assert cd.verify_status_evidence(info, []) == "downgraded"
+    assert info["status"] == "unknown"
+
+
+def test_status_evidence_other_statuses_untouched_and_stray_field_stripped():
+    for status in ("running", "rolling", "unknown"):
+        info = {"status": status, "status_evidence": "stray quote the model emitted anyway"}
+        assert cd.verify_status_evidence(info, []) is None
+        assert info["status"] == status
+        assert "status_evidence" not in info
+    # Non-dict outcomes ({} silent / None unparsed) pass through untouched.
+    assert cd.verify_status_evidence(None, []) is None
+    assert cd.verify_status_evidence({}, []) is None
+
+
 # --------------------------------------------------------------- shared finder (T6)
 
 def _fake_finder_halves(monkeypatch, date_captured=(), req_captured=(), date_cost=0.5,

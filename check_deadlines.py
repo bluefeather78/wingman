@@ -356,7 +356,13 @@ confirm the pattern behind a found date or to construct an estimate when nothing
 accepted," etc. DISTINGUISH between: (a) current cycle is closed but program recurs (e.g., "2026 closed, 2027 \
 opening Fall") → status="running" (the program itself is ongoing), still extract dates for the next cycle; \
 (b) program is permanently discontinued (e.g., "no longer offered," "program ended") → status="not_running", \
-do not estimate future dates; (c) the program admits CONTINUOUSLY with no application cycle or deadline at \
+do not estimate future dates. A closed or completed CYCLE is NEVER by itself evidence of discontinuation: \
+past event dates, "applications are closed", a deadline that has passed, "next cycle not yet announced" — an \
+annual program spends most of the year looking exactly like that, so all of it is case (a) unless the site \
+POSITIVELY says the program is gone. If you do conclude the program is discontinued, copy the exact \
+sentence(s) saying so into your notes VERBATIM, in quotation marks, and name the page they appear on — a \
+discontinuation claim with no verbatim quote from a fetched page will be discarded downstream; \
+(c) the program admits CONTINUOUSLY with no application cycle or deadline at \
 all — a rolling or always-open program (e.g., "join anytime", "rolling admissions with no deadline", a \
 standing club/advisory board/volunteer role that is simply always open) → status="rolling", with an EMPTY \
 important_dates, because there genuinely is no date to find. Use "rolling" ONLY when the page positively \
@@ -442,8 +448,11 @@ where SITE_REACHED is whether you successfully fetched the program's OWN web pag
 (no = it was unreachable, an empty JS-only shell, or you only reached third-party pages); \
 FOUND_CONFIRMED_DATES is "yes" only when you found the current/upcoming cycle's dates \
 EXPLICITLY posted AND they include the registration/application OPENING date (or the program \
-has no application step, e.g. it is rolling/always-open) — a confirmed deadline with NO opening \
-date is "no", because the opening still has to be recovered from a prior cycle; and \
+is rolling/always-open with no application step). A confirmed deadline with NO opening \
+date is "no", because the opening still has to be recovered from a prior cycle. Believing the \
+program is discontinued is ALSO "no", never "yes": the prior-cycle round must still run, both \
+to corroborate the discontinuation and to hold the estimation basis in case it is wrong — a \
+program between annual cycles looks discontinued to a single search; and \
 FOUND_PRIOR_CYCLE_BASIS is whether you found a prior cycle's real dates that can be used as an \
 estimation basis. Say "no" honestly rather than guessing — a "no" simply runs one more search."""
 
@@ -485,11 +494,12 @@ day in the window (so the student is warned before the soonest real cutoff); for
 "event_start" or a bare season, take the FIRST day of the window. Never collapse a multi-part \
 cycle into one entry — an abstract deadline, a regional event and a national event named as \
 three separate windows are three separate entries. This whole materialisation rule applies \
-ONLY to a running program: if the notes say the program is suspended, discontinued or not \
-running this cycle, status is "not_running" and you report NO future dates — do not materialise \
-a window for it. A well-founded estimate beats an empty field, but a FABRICATED deadline for a \
-program that is not accepting anyone is worse than either — it tells a student to prepare for \
-something that will not happen.
+ONLY to a running program: if the notes establish the program is PERMANENTLY DISCONTINUED \
+(see the "not_running" rule below — a verbatim quote is required), status is "not_running" \
+and you report NO future dates — do not materialise a window for it. A merely closed or \
+finished CYCLE is not that case and does not suspend this rule. A well-founded estimate beats \
+an empty field, but a FABRICATED deadline for a program that is not accepting anyone is worse \
+than either — it tells a student to prepare for something that will not happen.
 - A window whose early edge is already in the PAST (today falls inside or after the window's \
 start) is the dangerous case: do NOT roll the whole window a full year forward — that hides a \
 deadline still imminent THIS cycle, which is the exact miss this app prevents. For a "deadline", \
@@ -533,10 +543,18 @@ what the app renders.
 - "was_estimated" is true if ANY reported date came from a prior cycle or a vague pattern \
 rather than an explicitly posted current-cycle date — it is the row-level roll-up of the \
 per-date flags above, not a substitute for them.
-- If the notes say the program is permanently discontinued, status is "not_running" and you \
-report no future dates. If they say the current cycle is closed but the program recurs, \
-status is "running" with forward-dated entries — the ones the notes give if they give them, \
-otherwise the projection described above.
+- Status "not_running" means PERMANENTLY DISCONTINUED, and nothing weaker. Use it ONLY when \
+the notes quote the program's own site saying so ("no longer offered", "the program has \
+ended", "will not be returning"), and when you do, copy that quote into "status_evidence" \
+VERBATIM, character for character — it is checked in code against the pages actually fetched, \
+and a "not_running" whose quote is missing or not found on a fetched page is discarded. A \
+closed, completed or not-yet-posted CYCLE is NOT discontinuation: "the 2026 cycle has closed", \
+"applications are closed", event dates that have passed, "no 2027 dates posted yet" all mean \
+status "running" with forward-dated entries — the ones the notes give if they give them, \
+otherwise the projection described above. An annual program spends most of the year between \
+cycles; reading its off-season as death is the single most damaging mistake this schema can \
+make, because it hides the program from the student entirely. Set "status_evidence" to null \
+for every status other than "not_running".
 - If the notes say the program admits CONTINUOUSLY with no application cycle or deadline at \
 all (rolling/always-open — e.g. "join anytime", "rolling with no deadline", a standing club or \
 advisory board), status is "rolling" with an EMPTY important_dates: there is genuinely no date \
@@ -554,6 +572,7 @@ entirely; they are NOT dates and NOT status.
 
 Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, \
 matching exactly this schema: {{"status": "running, not_running, rolling, or unknown", \
+"status_evidence": "verbatim discontinuation quote when status is not_running, else null", \
 "important_dates": [{{"label": "short specific label", "date_iso": "YYYY-MM-DD", "type": \
 "opens, deadline, event_start, event_end, or other", "estimated": true or false}}], \
 "was_estimated": true or false, \
@@ -902,11 +921,65 @@ def check_one(opp, api_key, retry_on_silent=True, want_requirements=False):
     if not searches:
         return {}, cost, 0, attempts, site_reached
     info, extract_cost = extract_deadlines(opp, notes, sources, api_key)
+    # A not_running verdict must meet the same standard as every other claim in this pipeline:
+    # proven against a page we fetched, or not written. Runs BEFORE the date verifier so a
+    # downgraded status goes through the normal date marking.
+    verify_status_evidence(info, captured)
     # P6c: mark each date verified against the captured page content, IN PLACE. This does not
     # change check_one's return shape — both call sites read the enriched dates straight out of
     # info["important_dates"] — and it never deletes a date (see _verify_dates).
     verify_dates_against_capture(info, captured)
     return info, cost + extract_cost, searches, attempts, site_reached
+
+
+def verify_status_evidence(info, captured):
+    """Gate a `not_running` verdict on a discontinuation quote that is really on a fetched
+    page — the STATUS analogue of verify_dates_against_capture, and the most consequential of
+    the three verifiers. "This program is dead" flips the card to Past Event, blocks all date
+    estimation, hides the item from the task surface and drops it from calendar sync — yet it
+    used to be the only load-bearing claim requiring no evidence at all. Measured live
+    2026-08-26 (ec18599, Impact Internships): a program whose 2026 cycle ended two weeks
+    earlier was written `not_running` from the note "2026 cycle closed... No 2027 dates posted
+    yet" — the off-season of an annual program read as its death, while the SAME capture
+    carried that cycle's apply links.
+
+    IN PLACE, like the date verifier, so check_one's return shape and both call sites are
+    unchanged. Returns None (status was not not_running), "verified" (quote found on a fetched
+    page; kept, with the evidence appended to the note so a reviewer can see why), or
+    "downgraded" (no quote, or quote not on any fetched page → status becomes "unknown").
+
+    The downgrade lands on "unknown" deliberately: unlike not_running it gets no empty-write
+    carve-out in deadline_write_decision, so it cannot wipe existing dates (kept-existing
+    protects them) — and the card neither buries the program as a Past Event nor asserts an
+    open cycle nothing proved.
+    """
+    if not isinstance(info, dict):
+        return None
+    if info.get("status") != "not_running":
+        info.pop("status_evidence", None)
+        return None
+    raw = info.get("status_evidence")
+    evidence = raw.strip() if isinstance(raw, str) else ""
+    info.pop("status_evidence", None)
+    pages = [(c.url, c.text) for c in (captured or []) if getattr(c, "text", "")]
+    if evidence:
+        hit = next((url for url, txt in pages
+                    if page_text.quote_is_on_page(evidence, txt)), None)
+        if hit:
+            note = info.get("important_date_note") or ""
+            marker = f'Discontinuation evidence ({hit}): "{evidence}"'
+            if marker not in note:
+                info["important_date_note"] = f"{note} {marker}".strip()
+            return "verified"
+    info["status"] = "unknown"
+    caveat = ("Model reported the program discontinued, but no discontinuation statement "
+              "was found on any fetched page - treated as unverified.")
+    note = info.get("important_date_note") or ""
+    if caveat not in note:
+        info["important_date_note"] = f"{note} {caveat}".strip()
+    print("  [status] not_running lacked a verifiable discontinuation quote - "
+          "downgraded to unknown", flush=True)
+    return "downgraded"
 
 
 def verify_dates_against_capture(info, captured):

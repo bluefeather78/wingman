@@ -160,7 +160,10 @@ def resolve(opp_id):
         return payload(generic_items(opp), "generic-fallback"), 0.0
 
     try:
-        decision, cost, _stats, _reason = process_one(opp, ANTHROPIC_API_KEY)
+        # full_capture=True (T6): go through the shared finder with the date ladder too, so a
+        # deadline check firing alongside this reads the program ONCE (the finder caches the
+        # full capture per opportunity). Also gives tasks the same thorough sub-page discovery.
+        decision, cost, _stats, _reason = process_one(opp, ANTHROPIC_API_KEY, full_capture=True)
     except Exception as e:
         print(f"[WARN] action-item generation failed for {opp_id}: {e}")
         # Never blank a verified list because a re-verify raised. Keep what we have.

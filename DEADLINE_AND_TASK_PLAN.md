@@ -499,12 +499,18 @@ list is dropped on refresh — fatal for both features, so both hinge on **exten
 - **T3** eligibility-claim detector (a new classifier, bias toward flagging; own test suite).
 - **T4** one confidence vocabulary across dates (`(est.)`) and tasks (tier chips).
 - **T5** copy that makes "the aggregator SAID it" vs "the program REQUIRES it" legible.
-- **T6** (new 2026-08-26) the shared fetch pass: ONE pass whose stop-condition covers both
-  date- AND requirement-bearing pages, or two coordinated passes over shared machinery? A
-  date-optimized early-exit (`FOUND_CONFIRMED_DATES` → stop) can leave the requirements page
-  unfetched, so the task extract would see a capture chosen for dates. Lean: a fetch pass whose
-  stop-condition is satisfied only when BOTH a date-bearing and a requirement-bearing page have
-  been captured (or a bounded extra fetch for the missing one), then two extracts over it.
+- **T6** (new 2026-08-26) — **RESOLVED / BUILT 2026-08-26.** The shared fetch is
+  `check_deadlines.find_program_sources(want_dates, want_requirements)`: the date ladder
+  (`research_deadlines`, UNCHANGED) fetches date-bearing pages; a requirements half
+  (`source_capture.fetch_and_capture`, prompt widened to hunt How-to-Apply / FAQ / Key-Dates /
+  Timeline / Guidelines-PDF) fetches requirement-bearing pages; the captures are merged. Rather
+  than one loop with a combined stop-condition (which risked the proven date ladder), the two
+  halves run and their captures union — deadlines read the date NOTES, tasks read the captured
+  CONTENT. The **FULL (both) result is cached per-opportunity for 120s** (`_shared_capture_cache`),
+  so the interactive deadline endpoint (`check_one(want_requirements=True)`) and the action-item
+  endpoint (`process_one(full_capture=True)`) firing together read the program ONCE. Batches stay
+  single-goal (deadline batch dates-only = unchanged; task batch requirements-only = cheaper), and
+  single-goal calls never touch the cache.
 - **T7** (new 2026-08-26) date verification analogue: the code-side check that a claimed date
   actually appears in the captured content (the dates' `quote_is_on_page`). Dates are formatted
   many ways ("Jan 15", "January 15, 2027", "15/01/27"), so this needs date-aware normalization,
@@ -852,6 +858,19 @@ deadline."
 
 ## Change log
 
+- **2026-08-26** — **T6 BUILT — shared program-source finder (read-once + FAQ for tasks).**
+  Prompted by the question "shouldn't tasks discover pages the same thorough way deadlines do,
+  so FAQ/how-to-apply pages get checked for tasks too?". Yes — it's an ACCURACY win, not just
+  efficiency (those sub-pages carry both dates and requirements). Built
+  `check_deadlines.find_program_sources(want_dates, want_requirements)`: the date ladder stays
+  `research_deadlines` (UNCHANGED, proven); a requirements half reuses `fetch_and_capture` with a
+  widened prompt (How-to-Apply / FAQ / Key-Dates / Timeline / Guidelines-PDF); captures merge.
+  The FULL result is cached per-opportunity 120s so the two interactive endpoints firing together
+  read the program ONCE (`check_one(want_requirements=True)` + `process_one(full_capture=True)`).
+  Batches stay single-goal (deadline dates-only unchanged; task requirements-only). 1044 pytest
+  green. Live read-once + FAQ-coverage proof still pending (paid). Task-batch note: interactive
+  reads once, but a program viewed for deadlines only still fetches requirement pages (the cost of
+  "one read feeds both" — accepted, client fires both together).
 - **2026-08-26** — **P6b PROVEN LIVE + P6c DONE.** P6b E2E on THINK ($0.088, read-only): 4
   page-backed OFFICIAL-tier tasks from its guidelines PDF, verbatim verified quotes, no
   fabricated Algebra 2. **P6c** (date verification analogue T7, 1039 pytest green, backend-only,

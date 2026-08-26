@@ -130,12 +130,16 @@ def parse_captured_sources(response_data, own_domain=None, policy=None):
 # ---------- the fetch call ----------
 
 FETCH_SYSTEM = (
-    "You retrieve one high-school program's own application / requirements page so it can be "
-    "read. Use web_search ONLY to locate the right URL on the program's own site (its "
-    "application, requirements, 'how to apply', eligibility, or guidelines/PDF page), then use "
-    "web_fetch to RETRIEVE each such page in full. Prefer the program's own domain. Fetch the "
-    "guidelines PDF if the program publishes one. Do not answer from memory — the point is to "
-    "fetch the real pages; a one-line acknowledgement of what you fetched is enough text.")
+    "You retrieve one high-school program's own pages that describe HOW TO APPLY, so they can "
+    "be read. Use web_search ONLY to locate the right URLs on the program's own site, then use "
+    "web_fetch to RETRIEVE each in full. Fetch EVERY page that carries application steps or "
+    "requirements — the main page AND, importantly, its sub-pages: 'How to Apply', "
+    "'Application', 'Requirements', 'Eligibility', 'FAQ', 'Key Dates', 'Timeline', "
+    "'Guidelines', and any guidelines/instructions PDF the program publishes. Application "
+    "requirements very often live on an FAQ or 'How to Apply' sub-page rather than the landing "
+    "page, so do not stop at the first page. Prefer the program's own domain. Do not answer "
+    "from memory — the point is to fetch the real pages; a one-line acknowledgement of what you "
+    "fetched is enough text.")
 
 
 def _capture_call(user_content, api_key, timeout):

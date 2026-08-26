@@ -764,6 +764,76 @@ def research_deadlines(opp, api_key, retry_on_silent=True, trusted_domains=None)
             site_reached, union_captured)
 
 
+# ---------- the shared program-source finder (T6, 2026-08-26) ----------
+# ONE finder both features read from. Deadlines want date-bearing pages (the escalation ladder
+# above); tasks want requirement-bearing pages (how-to-apply / FAQ / guidelines PDF). The SAME
+# pages usually carry both, so reading a program once and running both extracts over that one
+# capture is more accurate for tasks (they stop missing FAQ-buried steps) AND cheaper (a
+# program is fetched once, not twice). See DEADLINE_AND_TASK_PLAN.md §5a / decision 6 (T6).
+#
+# The date half stays research_deadlines UNCHANGED (proven, P2-P5), so a dates-only call
+# behaves exactly as before. The requirements half reuses source_capture.fetch_and_capture
+# (search-to-locate + web_fetch of the how-to-apply/FAQ/PDF pages). want_dates / want_requirements
+# select which halves run; the FULL (both) result is cached per opportunity so the deadline and
+# action-item endpoints firing together read the program ONCE.
+_shared_capture_cache = {}          # opp_id -> (monotonic_ts, full_result_tuple)
+SHARED_CAPTURE_TTL = 120.0
+
+
+def _merge_captured(a, b):
+    """Union two CapturedSource lists, deduped by URL, first-wins."""
+    seen, out = set(), []
+    for c in list(a) + list(b):
+        if c.url not in seen:
+            seen.add(c.url)
+            out.append(c)
+    return out
+
+
+def find_program_sources(opp, api_key, want_dates=True, want_requirements=False,
+                         retry_on_silent=True, trusted_domains=None, policy=None):
+    """(notes, cost, searches, urls, attempts, site_reached, captured) — the same 7-tuple
+    research_deadlines returns, so check_one uses it uniformly. `notes` is the date-research
+    prose (empty when want_dates is False); `captured` is the union of every page fetched by
+    either half, tier-tagged, for the task verifier.
+
+    Only the FULL (dates AND requirements) result is cached, keyed by opportunity id for a short
+    window — so the two interactive endpoints firing together read once, while a single-goal
+    batch call neither reads nor writes the cache.
+    """
+    full = want_dates and want_requirements
+    opp_id = opp.get("id")
+    if full and opp_id:
+        hit = _shared_capture_cache.get(opp_id)
+        if hit and (time.monotonic() - hit[0]) < SHARED_CAPTURE_TTL:
+            notes, _cost, searches, urls, attempts, site_reached, captured = hit[1]
+            # Cost 0 on a cache hit: the fetch was already billed to whoever ran it first,
+            # so the second caller must not be charged for it again.
+            return notes, 0.0, searches, urls, attempts, site_reached, captured
+
+    notes, cost, searches, urls, attempts, site_reached, captured = "", 0.0, 0, [], 0, False, []
+    if want_dates:
+        (notes, dcost, searches, urls, attempts, site_reached,
+         captured) = research_deadlines(opp, api_key, retry_on_silent, trusted_domains)
+        cost += dcost
+    if want_requirements:
+        if policy is None:
+            policy = aggregators_common.get_policy(
+                os.environ.get("SUPABASE_URL", "").rstrip("/"),
+                os.environ.get("SUPABASE_SERVICE_KEY", ""))
+        req_sources, rcost, reason = source_capture.fetch_and_capture(
+            opp, api_key, policy=policy)
+        cost += rcost
+        captured = _merge_captured(captured, req_sources)
+        if reason == "ok":
+            site_reached = True
+
+    result = (notes, cost, searches, urls, attempts, site_reached, captured)
+    if full and opp_id:
+        _shared_capture_cache[opp_id] = (time.monotonic(), result)
+    return result
+
+
 def extract_deadlines(opp, notes, sources, api_key):
     """PHASE 2 — notes plus the pages actually fetched in, strict JSON out. No tools."""
     source_block = "\n".join(f"- {u}" for u in sources) or "(none retrieved)"
@@ -779,8 +849,14 @@ def extract_deadlines(opp, notes, sources, api_key):
     return extract_json(text), estimate_cost(usage)
 
 
-def check_one(opp, api_key, retry_on_silent=True):
+def check_one(opp, api_key, retry_on_silent=True, want_requirements=False):
     """Both phases. (info, cost, searches, attempts, site_reached).
+
+    `want_requirements` (T6): the interactive path passes True so the shared finder ALSO fetches
+    the how-to-apply / FAQ / requirements pages and caches the full capture — so the action-item
+    endpoint firing right after reads the program once instead of re-fetching. The batch passes
+    False (dates only, unchanged, cheaper). Either way the DEADLINE result is identical; the flag
+    only decides whether requirement pages are fetched alongside for the task extract to reuse.
 
     `info` carries THREE distinguishable outcomes, and every caller must tell them apart
     before writing anything (use deadline_write_decision below rather than re-deriving it):
@@ -811,8 +887,9 @@ def check_one(opp, api_key, retry_on_silent=True):
     Phase 2 is SKIPPED when phase 1 stayed silent — notes written without looking are not
     worth converting, and the caller can see `searches == 0` and label the result.
     """
-    notes, cost, searches, sources, attempts, site_reached, captured = research_deadlines(
-        opp, api_key, retry_on_silent)
+    notes, cost, searches, sources, attempts, site_reached, captured = find_program_sources(
+        opp, api_key, want_dates=True, want_requirements=want_requirements,
+        retry_on_silent=retry_on_silent)
     if not searches:
         return {}, cost, 0, attempts, site_reached
     info, extract_cost = extract_deadlines(opp, notes, sources, api_key)

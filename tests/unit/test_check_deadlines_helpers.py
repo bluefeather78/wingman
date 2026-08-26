@@ -517,3 +517,88 @@ def test_verify_dates_handles_no_capture_and_no_dates():
     info = {"important_dates": [{"date_iso": "2027-01-15", "estimated": False}]}
     # No captured pages -> nothing to verify against -> marked unverified, counted.
     assert cd.verify_dates_against_capture(info, []) == 1
+
+
+# --------------------------------------------------------------- shared finder (T6)
+
+def _fake_finder_halves(monkeypatch, date_captured=(), req_captured=(), date_cost=0.5,
+                        req_cost=0.3, date_searches=1, req_reason="ok"):
+    """Patch the two halves find_program_sources composes so no network is hit."""
+    def fake_research(opp, api_key, retry_on_silent=True, trusted_domains=None):
+        return ("date notes", date_cost, date_searches, [c.url for c in date_captured],
+                1, True, list(date_captured))
+    monkeypatch.setattr(cd, "research_deadlines", fake_research)
+
+    def fake_capture(opp, api_key, timeout=None, policy=None):
+        return list(req_captured), req_cost, req_reason
+    monkeypatch.setattr(cd.source_capture, "fetch_and_capture", fake_capture)
+
+
+def _clear_cache():
+    cd._shared_capture_cache.clear()
+
+
+def test_finder_dates_only_runs_no_requirements(monkeypatch):
+    _clear_cache()
+    _fake_finder_halves(monkeypatch, date_captured=[_src("https://p/a", "dates page")])
+    notes, cost, searches, urls, attempts, reached, captured = cd.find_program_sources(
+        {"id": "x1", "url": "https://p"}, "k", want_dates=True, want_requirements=False)
+    assert notes == "date notes" and cost == 0.5
+    assert [c.url for c in captured] == ["https://p/a"]  # only the date half
+
+
+def test_finder_requirements_only_skips_date_ladder(monkeypatch):
+    _clear_cache()
+    _fake_finder_halves(monkeypatch, req_captured=[_src("https://p/faq", "faq page")])
+    notes, cost, searches, urls, attempts, reached, captured = cd.find_program_sources(
+        {"id": "x2", "url": "https://p"}, "k", want_dates=False, want_requirements=True)
+    assert notes == "" and cost == 0.3 and searches == 0     # no date ladder ran
+    assert [c.url for c in captured] == ["https://p/faq"]
+    assert reached is True                                    # requirements fetch reached site
+
+
+def test_finder_both_merges_captures(monkeypatch):
+    _clear_cache()
+    _fake_finder_halves(monkeypatch,
+                        date_captured=[_src("https://p/a", "dates")],
+                        req_captured=[_src("https://p/faq", "faq"), _src("https://p/a", "dup")])
+    _n, cost, _s, _u, _a, _r, captured = cd.find_program_sources(
+        {"id": "x3", "url": "https://p"}, "k", want_dates=True, want_requirements=True)
+    urls = [c.url for c in captured]
+    assert cost == 0.8                                        # both halves billed
+    assert urls == ["https://p/a", "https://p/faq"]           # merged, deduped (first wins)
+
+
+def test_finder_full_result_is_cached_read_once(monkeypatch):
+    _clear_cache()
+    calls = {"n": 0}
+    orig_research = cd.research_deadlines
+
+    def counting_research(opp, api_key, retry_on_silent=True, trusted_domains=None):
+        calls["n"] += 1
+        return ("notes", 0.5, 1, [], 1, True, [_src("https://p/a", "dates")])
+    monkeypatch.setattr(cd, "research_deadlines", counting_research)
+    monkeypatch.setattr(cd.source_capture, "fetch_and_capture",
+                        lambda opp, api_key, timeout=None, policy=None: ([], 0.3, "ok"))
+
+    opp = {"id": "x4", "url": "https://p"}
+    first = cd.find_program_sources(opp, "k", want_dates=True, want_requirements=True)
+    second = cd.find_program_sources(opp, "k", want_dates=True, want_requirements=True)
+    assert calls["n"] == 1              # second call served from cache, no re-fetch
+    assert first[1] == 0.8             # first pays for the fetch
+    assert second[1] == 0.0            # cache hit costs nothing (already billed)
+
+
+def test_finder_single_goal_is_not_cached(monkeypatch):
+    _clear_cache()
+    calls = {"n": 0}
+
+    def counting_research(opp, api_key, retry_on_silent=True, trusted_domains=None):
+        calls["n"] += 1
+        return ("notes", 0.5, 1, [], 1, True, [])
+    monkeypatch.setattr(cd, "research_deadlines", counting_research)
+
+    opp = {"id": "x5", "url": "https://p"}
+    cd.find_program_sources(opp, "k", want_dates=True, want_requirements=False)
+    cd.find_program_sources(opp, "k", want_dates=True, want_requirements=False)
+    assert calls["n"] == 2              # dates-only calls never touch the read-once cache

@@ -66,8 +66,11 @@ import urllib.error
 from agent_common import add_agent_args, apply_timing, emit_preview, snapshot_stamp
 from claude_common import call_claude, extract_json, estimate_cost
 import aggregators_common
+# The shared program-source finder (T6) lives in check_deadlines — tasks and deadlines read the
+# same pages the same way through it. Importing it here is one-directional (check_deadlines does
+# not import this module), so there is no cycle.
+import check_deadlines
 import page_text
-import source_capture
 from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
 
 DB_AGENT = "action_item_generator"
@@ -418,14 +421,23 @@ def _load_policy():
         os.environ.get("SUPABASE_SERVICE_KEY", ""))
 
 
-def process_one(opp, api_key, timeout=None):
+def process_one(opp, api_key, timeout=None, full_capture=False):
     """Full pipeline for one row: CAPTURE (Claude web_fetch) → EXTRACT (no tools) → verify →
     decide. Returns (decision, cost, stats, fetch_reason). The capture is what reads a PDF/SPA
     the old urllib fetch could not; the extract and verification are unchanged in spirit, now
     running over the captured content and tier-tagging each task by the source that backed it.
+
+    Both halves go through the SHARED finder (T6, check_deadlines.find_program_sources) so task
+    discovery is the same thorough sub-page hunt deadlines do — the how-to-apply / FAQ / key-dates
+    pages application steps hide on. `full_capture` (interactive path) ALSO runs the date ladder,
+    so the finder's per-opportunity cache lets the deadline endpoint firing alongside read the
+    program ONCE; the batch leaves it False (requirement pages only, cheaper).
     """
     policy = _load_policy()
-    sources, cost, reason = source_capture.fetch_and_capture(opp, api_key, timeout, policy)
+    _notes, cost, _searches, _urls, _attempts, _reached, sources = \
+        check_deadlines.find_program_sources(
+            opp, api_key, want_dates=full_capture, want_requirements=True, policy=policy)
+    reason = "ok" if any(s.text.strip() for s in sources) else "no-fetch"
     combined = "\n\n".join(s.text for s in sources if s.text)
     text_ok = bool(combined.strip())
     raw, model_ok, stats = [], False, _new_stats()

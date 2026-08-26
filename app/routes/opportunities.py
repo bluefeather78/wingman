@@ -99,7 +99,12 @@ def handle_deadline_check(opp_id: str, request: Request,
         # retry_on_silent (check_one's default) costs one extra round-trip when Claude
         # answers without searching. Worth it: the answer is cached for 7 days, so a
         # single silent set of dates would be served to every student for a week.
-        info, _cost, searches, _attempts, site_reached = check_deadline_one(opp, ANTHROPIC_API_KEY)
+        # want_requirements=True (T6): the shared finder also fetches this program's
+        # how-to-apply / FAQ pages and caches the full capture, so the action-item endpoint
+        # firing right after reads the program ONCE instead of fetching it again. The deadline
+        # result itself is identical.
+        info, _cost, searches, _attempts, site_reached = check_deadline_one(
+            opp, ANTHROPIC_API_KEY, want_requirements=True)
 
         # One shared decision with the batch loop (check_deadlines.deadline_write_decision),
         # so the two can never disagree about when a row may be overwritten. Three of its

@@ -342,3 +342,46 @@ def claim_is_supported(task_text, page_text, name="", org=""):
     hay = {_singular(t) for t in _tokens(page_text)}
     missing = [t for t in toks if t not in hay]
     return (not missing), missing
+
+
+# ---------- eligibility-claim detector (T3, 2026-08-26) ----------
+# Flags a task that STATES a specific eligibility CONDITION — a prerequisite, required course,
+# test, score, GPA, age, grade level, or citizenship/residency — as opposed to the safe generic
+# advice "review the eligibility requirements", which asserts no condition. The task pipeline
+# DROPS such a claim unless it was read on the program's OWN page (official tier): an aggregator
+# being wrong about a prerequisite is the original "Algebra 2" harm with a citation, and
+# verification proves only that the source SAID it, not that it is true (DEADLINE_AND_TASK_PLAN
+# decision 5). BIASED TOWARD FLAGGING per T3 — a false positive only drops one aggregator-tier
+# logistics task, while a false negative lets a fabricated eligibility bar through, which is the
+# exact failure this whole subsystem exists to prevent. It runs only on page-backed non-official
+# tasks, so over-flagging never touches an official-tier or generic task.
+_ELIGIBILITY_TOKENS = {
+    "prerequisite", "prerequisites", "prereq", "prereqs",
+    "gpa", "sat", "act", "psat", "toefl", "ielts", "gre",
+    "citizen", "citizens", "citizenship", "resident", "residency", "residence",
+    "visa", "national", "nationality", "permanent",
+    "freshman", "sophomore", "junior", "senior", "undergraduate", "graduate",
+    "algebra", "calculus", "geometry", "trigonometry", "precalculus", "trig",
+}
+_GRADE_RE = re.compile(
+    r"\b(?:grade|grades|9th|10th|11th|12th|ninth|tenth|eleventh|twelfth)\b", re.I)
+_AGE_RE = re.compile(
+    r"\b(?:age|ages|years?\s+old|at\s+least\s+\d|under\s+\d|over\s+\d|"
+    r"older\s+than|younger\s+than)\b", re.I)
+_GPA_RE = re.compile(r"\b[0-4]\.\d\b")                       # a GPA-like decimal (3.5)
+# Deliberately NO "must be/have" pattern: it is too ambiguous to separate an APPLICANT
+# condition ("must be 16", "must have a 3.5 GPA") from plain logistics ("materials must be
+# submitted", "must be completed online"), and it false-flagged generic checklist lines like
+# "Check what must be submitted". The concrete signals below (courses, tests, scores, GPA,
+# age, grade, citizenship) catch the real eligibility harms without that noise.
+
+
+def is_eligibility_claim(task_text):
+    """True when the task asserts a concrete eligibility condition (see the section note)."""
+    t = task_text or ""
+    if set(_tokens(t)) & _ELIGIBILITY_TOKENS:
+        return True
+    low = t.lower()
+    if "advanced placement" in low:
+        return True
+    return bool(_GRADE_RE.search(low) or _AGE_RE.search(low) or _GPA_RE.search(low))

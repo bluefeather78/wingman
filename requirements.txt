@@ -13,8 +13,11 @@ uvicorn[standard]>=0.30
 PyJWT>=2.8
 argon2-cffi>=23.1
 
-# Optional, used by the resume/LinkedIn import endpoint when present. The handler
-# degrades to a plain-text fallback if these are missing, so they are not hard deps,
-# but the Render service should install them so uploads parse.
+# PyPDF2: the resume/LinkedIn import endpoint AND the action-item substrate's capture layer
+# (source_capture.py — decodes the base64 PDF bytes Claude web_fetch returns, so a program's
+# guidelines PDF can be read and verified). Both degrade gracefully if it is missing (resume
+# falls back to plain text; capture yields no text for a PDF, so that source backs nothing),
+# so it is not a hard dep — but the Render service should install it so PDFs parse.
+# python-docx is resume-only.
 PyPDF2>=3.0
 python-docx>=1.1

@@ -10,6 +10,7 @@ the angle where the model relabels the invented task "generic" to dodge the chec
 import pytest
 
 import page_text
+import source_capture
 from generate_action_items import (
     SOURCE_GENERIC,
     SOURCE_PAGE_EMPTY,
@@ -19,6 +20,14 @@ from generate_action_items import (
     generic_items,
     verify_items,
 )
+
+
+def src(text, tier="official", url="https://www.nyu.edu/example", domain="nyu.edu"):
+    """Wrap page text as the CAPTURED sources verify_items now takes (substrate, P6b). Default
+    tier 'official' preserves the pre-substrate behaviour of every existing test — they proved
+    the verification LOGIC, which is tier-independent; the tier-specific tests pass an explicit
+    tier below."""
+    return [source_capture.CapturedSource(url, domain, "text/plain", text, tier)]
 
 # A realistic slice of a program page: says plenty, but says nothing about Algebra.
 PAGE = """
@@ -33,6 +42,9 @@ The program fee is $1,850, and need-based financial aid is available.
 OPP = {"id": "ec17542", "name": "User Experience Design", "org": "NYU", "type": "Program",
        "url": "https://www.nyu.edu/example"}
 
+# The page as an official-tier captured source (nyu.edu matches OPP's own domain).
+PAGE_SRC = src(PAGE)
+
 
 def item(text, basis="page", evidence=None, url=None):
     return {"text": text, "basis": basis, "evidence": evidence, "url": url}
@@ -46,7 +58,7 @@ def test_algebra_prerequisite_is_dropped():
     kept, stats = verify_items(
         [item("Review prerequisite requirements (Algebra 2)",
               evidence="Students entering grades 10 through 12 in the fall are eligible to apply.")],
-        OPP, PAGE)
+        OPP, PAGE_SRC)
     assert kept == []
     assert stats["dropped"] == 1
 
@@ -55,13 +67,13 @@ def test_algebra_relabelled_generic_is_still_dropped():
     """The loophole worth guarding: if verification only ran on tasks the model CALLED
     page-backed, relabelling the same invention 'generic' would walk straight through."""
     kept, _ = verify_items(
-        [item("Review prerequisite requirements (Algebra 2)", basis="generic")], OPP, PAGE)
+        [item("Review prerequisite requirements (Algebra 2)", basis="generic")], OPP, PAGE_SRC)
     assert kept == []
 
 
 def test_invented_test_requirement_is_dropped():
     kept, _ = verify_items([item("Register for the required SAT subject test",
-                                 basis="generic")], OPP, PAGE)
+                                 basis="generic")], OPP, PAGE_SRC)
     assert kept == []
 
 
@@ -69,7 +81,7 @@ def test_real_page_claim_survives():
     kept, stats = verify_items(
         [item("Request one recommendation letter",
               evidence="A complete application includes one letter of recommendation and an official transcript.")],
-        OPP, PAGE)
+        OPP, PAGE_SRC)
     assert len(kept) == 1
     assert kept[0]["basis"] == "page"
     assert stats["page_backed"] == 1
@@ -79,7 +91,7 @@ def test_generic_task_needs_no_proof():
     """A task making no program-specific claim has nothing to verify. That is the intended
     reading of 'no distinctive tokens', not a hole."""
     kept, _ = verify_items([item("Draft your personal statement", basis="generic")],
-                           OPP, PAGE)
+                           OPP, PAGE_SRC)
     assert len(kept) == 1
     assert kept[0]["basis"] == "generic"
 
@@ -89,7 +101,7 @@ def test_program_own_name_is_not_a_claim():
     url_repair.py makes. Otherwise every task would have to prove the page repeats its own
     title."""
     kept, _ = verify_items([item("Submit the NYU User Experience Design application",
-                                 basis="generic")], OPP, PAGE)
+                                 basis="generic")], OPP, PAGE_SRC)
     assert len(kept) == 1
 
 
@@ -102,7 +114,7 @@ def test_fabricated_quote_demotes_rather_than_drops():
     kept, stats = verify_items(
         [item("Submit an official transcript",
               evidence="Applicants must submit a sealed official transcript by the deadline.")],
-        OPP, PAGE)
+        OPP, PAGE_SRC)
     assert len(kept) == 1
     assert kept[0]["basis"] == "generic"
     assert kept[0]["evidence"] is None
@@ -125,20 +137,131 @@ def test_typographic_differences_do_not_fail_an_honest_quote():
 
 
 def test_missing_basis_is_never_read_as_page_backed():
-    kept, _ = verify_items([{"text": "Note the application deadline"}], OPP, PAGE)
+    kept, _ = verify_items([{"text": "Note the application deadline"}], OPP, PAGE_SRC)
     assert kept[0]["basis"] == "generic"
 
 
 def test_item_cap_is_enforced():
     many = [item(f"Draft your personal statement {i}", basis="generic") for i in range(20)]
-    kept, _ = verify_items(many, OPP, PAGE)
+    kept, _ = verify_items(many, OPP, PAGE_SRC)
     assert len(kept) <= 5
 
 
 def test_constructed_url_is_dropped():
     kept, _ = verify_items([item("Complete the application form", basis="generic",
-                                 url="not-a-url")], OPP, PAGE)
+                                 url="not-a-url")], OPP, PAGE_SRC)
     assert kept[0]["url"] is None
+
+
+# ---------- eligibility-claim detector (T3) ----------
+
+@pytest.mark.parametrize("task", [
+    "Have completed Algebra 2 before applying",
+    "Maintain a 3.5 GPA",
+    "Be a U.S. citizen or permanent resident",
+    "Score at least 1400 on the SAT",
+    "Be in grades 9 through 12",
+    "Must be a high school junior or senior",
+    "Complete AP Calculus",
+    "Applicants must have taken advanced placement courses",
+])
+def test_eligibility_claims_are_flagged(task):
+    assert page_text.is_eligibility_claim(task) is True
+
+
+@pytest.mark.parametrize("task", [
+    "Review the eligibility requirements",       # safe advice, asserts no condition
+    "Read the application page",
+    "Submit your transcript",
+    "Ask a teacher for a recommendation",
+    "Draft your personal statement",
+    "Register before the entry deadline",
+    "Note the application deadline",
+    "Complete the online application form",
+])
+def test_safe_advice_is_not_flagged(task):
+    assert page_text.is_eligibility_claim(task) is False
+
+
+def test_no_generic_checklist_line_is_an_eligibility_claim():
+    """Belt-and-braces: a generic line must never read as an eligibility CONDITION, or it
+    could be wrongly dropped if it ever landed on an off-domain source."""
+    for opp_type in list(__import__("generate_action_items").GENERIC_BY_TYPE) + [None]:
+        for it in generic_items({"type": opp_type, "url": "https://x.example"}):
+            assert not page_text.is_eligibility_claim(it["text"]), it["text"]
+
+
+# ---------- verify_items: trust tiers + the eligibility gate (substrate, P6b) ----------
+
+def _src(text, tier, url="https://src.example/p", domain="src.example"):
+    return [source_capture.CapturedSource(url, domain, "text/plain", text, tier)]
+
+
+ELIG_PAGE = "Applicants must have completed Algebra 2 before the program begins."
+
+
+def test_eligibility_claim_kept_at_official_tier():
+    kept, _ = verify_items(
+        [item("Complete Algebra 2 before applying", evidence=ELIG_PAGE)],
+        OPP, _src(ELIG_PAGE, "official"))
+    assert len(kept) == 1 and kept[0]["basis"] == "page"
+    assert kept[0]["source_tier"] == "official"
+
+
+def test_eligibility_claim_dropped_at_trusted_tier():
+    """An aggregator being wrong about a prerequisite is the original harm with a citation —
+    so an eligibility claim off the official page is DROPPED, not demoted."""
+    kept, stats = verify_items(
+        [item("Complete Algebra 2 before applying", evidence=ELIG_PAGE)],
+        OPP, _src(ELIG_PAGE, "trusted"))
+    assert kept == []
+    assert stats["dropped_eligibility"] == 1
+
+
+LOGI_PAGE = "Submit a one-page research abstract with your application."
+
+
+def test_non_eligibility_claim_kept_at_trusted_tier_with_provenance():
+    kept, _ = verify_items(
+        [item("Submit a research abstract", evidence=LOGI_PAGE)],
+        OPP, _src(LOGI_PAGE, "trusted", url="https://lumiere-education.com/g",
+                  domain="lumiere-education.com"))
+    assert len(kept) == 1 and kept[0]["basis"] == "page"
+    assert kept[0]["source_tier"] == "trusted"
+    assert kept[0]["source_url"] == "https://lumiere-education.com/g"
+    assert kept[0]["source_domain"] == "lumiere-education.com"
+
+
+def test_pending_tier_task_is_parked_not_dropped():
+    """A not-yet-approved domain's non-eligibility claim is STORED with tier 'pending'; the
+    serve path withholds it (P5) until the operator approves the domain."""
+    kept, _ = verify_items(
+        [item("Submit a research abstract", evidence=LOGI_PAGE)],
+        OPP, _src(LOGI_PAGE, "pending"))
+    assert len(kept) == 1 and kept[0]["source_tier"] == "pending"
+
+
+def test_blocked_source_claim_is_dropped():
+    kept, stats = verify_items(
+        [item("Submit a research abstract", evidence=LOGI_PAGE)],
+        OPP, _src(LOGI_PAGE, "blocked"))
+    assert kept == [] and stats["dropped"] == 1
+
+
+def test_tier_comes_from_the_source_holding_the_quote():
+    """Two sources; the quote is only in the trusted one, so the task takes the trusted tier
+    and the trusted source's url — not the official source it did not come from."""
+    official = source_capture.CapturedSource(
+        "https://prog.example/home", "prog.example", "text/plain",
+        "Welcome to the program. General overview only.", "official")
+    trusted = source_capture.CapturedSource(
+        "https://lumiere-education.com/g", "lumiere-education.com", "text/plain",
+        LOGI_PAGE, "trusted")
+    kept, _ = verify_items(
+        [item("Submit a research abstract", evidence=LOGI_PAGE)], OPP, [official, trusted])
+    assert len(kept) == 1
+    assert kept[0]["source_tier"] == "trusted"
+    assert kept[0]["source_domain"] == "lumiere-education.com"
 
 
 # ---------- the write decision ----------

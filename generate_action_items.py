@@ -16,9 +16,11 @@ Three properties of the old design made that inevitable, and this agent inverts 
 
   1. It could not read the page. /api/messages attaches exactly one tool, googleSearch —
      no web_fetch, no urlContext — while the prompt instructed it to "Fetch this URL". The
-     two tools it was told to use did not exist in the call. Here the page is fetched by
-     page_text.fetch_page_text() before the model is called at all, for free, and handed
-     over as text.
+     two tools it was told to use did not exist in the call. Here the page is fetched by the
+     shared CAPTURE substrate (source_capture.fetch_and_capture, Claude web_fetch — reads
+     PDFs and SPAs our urllib cannot; see DEADLINE_AND_TASK_PLAN.md §5a) and its content is
+     handed to the extract call as text AND kept for the code-side verification below. The
+     extract call itself still has no tools.
   2. Nothing could check the answer. The proxy returns only the response text; grounding
      and search counts are discarded, so no caller could tell a researched answer from a
      recalled one. Here every task is checked in code against the fetched page, and one
@@ -39,14 +41,16 @@ model producing sloppy near-quotes that fail verification in bulk, add a prose p
 the verifier will make that visible as a demotion rate, which is exactly the signal to
 watch. Do not add it speculatively.
 
-COST SHAPE
-----------
-A row whose page we cannot read costs NOTHING — there is no model call at all, because
-there would be nothing to verify the answer against. Those rows get a per-type generic
-checklist that is honest by construction (it asserts nothing about the program) and is
-built locally. Roughly one page in ten refuses our client, so the paid population is
-smaller than the catalog. Cost is dominated by page-text input tokens, ~1c/row, with no
-per-search fee anywhere.
+COST SHAPE (revised 2026-08-26, substrate)
+------------------------------------------
+Two Claude calls per readable row now: a CAPTURE call (web_search to locate + web_fetch to
+retrieve, ~$0.01/search) and the EXTRACT call (no tools) over the captured text. A row whose
+capture fetches nothing still costs the capture call, then falls to a free local generic
+checklist (no extract call) — the same honest, asserts-nothing fallback as before, just no
+longer free, because reading now happens server-side. This is the accepted trade for reading
+PDFs/SPAs the urllib fetcher rejected outright (which produced generic lists for free but with
+no real coverage). One shared capture is meant to eventually feed BOTH the task and deadline
+extracts (T6); until then tasks pay for their own capture.
 
 THIS AGENT COSTS MONEY. Like the other five paid agents, never run it without fresh
 explicit approval in chat. `--preview` is free and resolves the scope and price first.
@@ -61,7 +65,9 @@ import urllib.error
 
 from agent_common import add_agent_args, apply_timing, emit_preview, snapshot_stamp
 from claude_common import call_claude, extract_json, estimate_cost
+import aggregators_common
 import page_text
+import source_capture
 from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
 
 DB_AGENT = "action_item_generator"
@@ -254,21 +260,30 @@ def build_user_content(opp, text):
 
 # ---------- verification (free, and the actual guarantee) ----------
 
-def verify_items(raw_items, opp, text):
-    """(kept, stats). The single place a model's proposal becomes a stored task.
+def _new_stats():
+    return {"proposed": 0, "dropped": 0, "demoted": 0, "page_backed": 0, "generic": 0,
+            "dropped_eligibility": 0}
 
-    Two tests, both from page_text.py and both applied to EVERY item regardless of what the
-    model labelled it:
-      * claim_is_supported  — a task asserting words that are not on the page is DROPPED.
-        Applying this to generic items too is not belt-and-braces: without it the model
-        dodges the whole system by labelling an invented prerequisite "generic".
-      * quote_is_on_page    — a task claiming page backing whose quote is not really there
-        is DEMOTED to generic, not dropped. Its words are all on the page, so it asserts
-        nothing unsupported; it just did not prove the specific sentence.
+
+def verify_items(raw_items, opp, sources):
+    """(kept, stats). The single place a model's proposal becomes a stored task, now over the
+    CAPTURED sources (list of source_capture.CapturedSource) rather than one urllib page.
+
+    Three code-side gates, all applied to EVERY item regardless of what the model labelled it:
+      * claim_is_supported  — words not present in ANY captured page → task DROPPED.
+      * quote_is_on_page    — a "page" task whose quote is not on any captured page → DEMOTED
+        to generic (its words are all on some page, it just did not prove the sentence). The
+        SOURCE that carries the quote sets the task's tier (official / trusted / pending), so
+        "which page said it" and "how far to trust that page" are decided together.
+      * eligibility gate (T3) — a page-backed task that STATES an eligibility condition
+        (is_eligibility_claim) is kept ONLY at official tier; at trusted/pending it is DROPPED,
+        not demoted (a false prerequisite with a citation is the original harm). A blocked
+        source backs nothing and its claims are dropped outright.
     """
     kept = []
-    stats = {"proposed": 0, "dropped": 0, "demoted": 0, "page_backed": 0, "generic": 0}
+    stats = _new_stats()
     name, org = opp.get("name") or "", opp.get("org") or ""
+    combined = "\n\n".join(s.text for s in sources if s.text)
     for it in raw_items:
         if not isinstance(it, dict):
             continue
@@ -276,28 +291,54 @@ def verify_items(raw_items, opp, text):
         if not task:
             continue
         stats["proposed"] += 1
-        supported, missing = page_text.claim_is_supported(task, text, name, org)
+        supported, _missing = page_text.claim_is_supported(task, combined, name, org)
         if not supported:
             stats["dropped"] += 1
             continue
         evidence = it.get("evidence")
         evidence = evidence.strip() if isinstance(evidence, str) and evidence.strip() else None
-        basis = "generic"
-        if it.get("basis") == "page" and evidence and page_text.quote_is_on_page(evidence, text):
-            basis = "page"
+        basis, tier, src = "generic", None, None
+        if it.get("basis") == "page" and evidence:
+            # The SOURCE whose text actually carries the quote — that is what decides the tier.
+            src = next((s for s in sources
+                        if s.text and page_text.quote_is_on_page(evidence, s.text)), None)
+            if src is not None:
+                basis, tier = "page", src.tier
+            else:
+                stats["demoted"] += 1
+                evidence = None
         elif it.get("basis") == "page":
             stats["demoted"] += 1
             evidence = None
         else:
             evidence = None
+
+        if basis == "page":
+            # A blocked source never backs a stored task; an eligibility claim survives only
+            # at official tier. Both are DROPS, not demotions — the claim itself is what is
+            # untrustworthy off-domain, not merely its citation.
+            if tier == "blocked":
+                stats["dropped"] += 1
+                continue
+            if tier != "official" and page_text.is_eligibility_claim(task):
+                stats["dropped_eligibility"] += 1
+                continue
+
         stats["page_backed" if basis == "page" else "generic"] += 1
         url = it.get("url")
-        kept.append({
+        item = {
             "text": task,
             "url": url if isinstance(url, str) and url.startswith("http") else None,
             "basis": basis,
             "evidence": evidence,
-        })
+        }
+        if basis == "page" and src is not None:
+            # Provenance the client renders as the trust gradient (P7) and the serve path
+            # filters on (pending/blocked withheld). Absent on generic items by design.
+            item["source_tier"] = tier
+            item["source_url"] = src.url
+            item["source_domain"] = src.domain
+        kept.append(item)
         if len(kept) >= MAX_ITEMS:
             break
     return kept, stats
@@ -369,41 +410,49 @@ def action_items_write_decision(kept, opp, page_ok, model_ok, existing):
     return WriteDecision(generic_items(opp), SOURCE_GENERIC, True, False)
 
 
+def _load_policy():
+    """The operator's trusted-domain policy for tier-tagging captured sources; empty (all
+    third-party → pending) when Supabase/env is not configured. Cached in aggregators_common."""
+    return aggregators_common.get_policy(
+        os.environ.get("SUPABASE_URL", "").rstrip("/"),
+        os.environ.get("SUPABASE_SERVICE_KEY", ""))
+
+
 def process_one(opp, api_key, timeout=None):
-    """Full free-plus-paid pipeline for one row: fetch, call, verify, decide. Returns
-    (decision, cost, stats, fetch_reason)."""
-    text, reason = page_text.fetch_page_text(opp.get("url"))
-    cost = 0.0
-    raw, model_ok, stats = [], False, {"proposed": 0, "dropped": 0, "demoted": 0,
-                                       "page_backed": 0, "generic": 0}
-    if text:
+    """Full pipeline for one row: CAPTURE (Claude web_fetch) → EXTRACT (no tools) → verify →
+    decide. Returns (decision, cost, stats, fetch_reason). The capture is what reads a PDF/SPA
+    the old urllib fetch could not; the extract and verification are unchanged in spirit, now
+    running over the captured content and tier-tagging each task by the source that backed it.
+    """
+    policy = _load_policy()
+    sources, cost, reason = source_capture.fetch_and_capture(opp, api_key, timeout, policy)
+    combined = "\n\n".join(s.text for s in sources if s.text)
+    text_ok = bool(combined.strip())
+    raw, model_ok, stats = [], False, _new_stats()
+    if text_ok:
         # The call and the PARSE are in separate try blocks on purpose. Wrapping both in one
-        # `except Exception: model_ok = False` hid a plain TypeError here (estimate_cost
-        # takes the usage dict, not three numbers) and reported it as the model producing
-        # unreadable output — a programming error wearing a model failure's clothes, while
-        # also throwing away the cost of a call that had already been billed.
-        out, usage = call_claude(SYSTEM, build_user_content(opp, text), api_key,
+        # `except Exception: model_ok = False` hid a plain TypeError here (estimate_cost takes
+        # the usage dict, not three numbers) and reported it as the model producing unreadable
+        # output — a programming error wearing a model failure's clothes, while also throwing
+        # away the cost of a call that had already been billed.
+        out, usage = call_claude(SYSTEM, build_user_content(opp, combined), api_key,
                                  use_web_search=False, max_tokens=MAX_TOKENS,
                                  timeout=timeout)
-        # Banked immediately, before anything that can raise. Same rule the two-phase agents
-        # learned: an exception downstream must not discard money already spent.
-        cost = estimate_cost(usage)
+        # Banked immediately, on top of the capture cost, before anything that can raise.
+        cost += estimate_cost(usage)
         try:
             parsed = extract_json(out)
             if isinstance(parsed, dict) and isinstance(parsed.get("action_items"), list):
                 raw = parsed["action_items"]
                 model_ok = True
         except Exception as e:
-            # A genuinely unreadable response. Named in the log rather than silently
-            # becoming an "unparsed" tally, because a systematic parse failure and an
-            # occasional garbled answer need different responses.
             print(f"  [unparsed] {type(e).__name__}: {e}")
             model_ok = False
     kept = []
-    if text and model_ok:
-        kept, stats = verify_items(raw, opp, text)
+    if text_ok and model_ok:
+        kept, stats = verify_items(raw, opp, sources)
     existing = opp.get("action_items") if isinstance(opp.get("action_items"), list) else []
-    decision = action_items_write_decision(kept, opp, bool(text), model_ok, existing)
+    decision = action_items_write_decision(kept, opp, text_ok, model_ok, existing)
     return decision, cost, stats, reason
 
 
@@ -491,7 +540,7 @@ def main():
 
     total_cost = 0.0
     updated = errors = 0
-    totals = {"proposed": 0, "dropped": 0, "demoted": 0, "page_backed": 0, "generic": 0}
+    totals = _new_stats()
     by_source = {}
     unreadable = {}
     snapshot = []
@@ -545,7 +594,8 @@ def main():
     print(f"[SUMMARY] tasks proposed: {totals['proposed']}, kept page-backed: "
           f"{totals['page_backed']}, kept generic: {totals['generic']}, "
           f"DROPPED as unsupported: {totals['dropped']}, demoted (quote not on page): "
-          f"{totals['demoted']}")
+          f"{totals['demoted']}, dropped as off-domain eligibility: "
+          f"{totals['dropped_eligibility']}")
     print(f"[SUMMARY] outcomes: {by_source}")
     if unreadable:
         # Named rather than silently folded into "generic", because this is the number that

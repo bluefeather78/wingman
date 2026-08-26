@@ -580,13 +580,18 @@ operator decisions resolved; T1–T8 at build time)*
     `{url, domain, media_type, text, tier}` per fetched block (`text` decoded per media type,
     `tier` from `aggregators_common`), deduped by url; verify only against fetched (not
     searched) content. Adds `pypdf` as a capture decoder.
-  - **P6b — Task extract on the substrate.** Rework `generate_action_items.py` +
-    `app/services/action_items.py`: fetch via the shared finder (Claude `web_fetch`) instead of
-    `page_text`/urllib; run the EXISTING `quote_is_on_page` / `claim_is_supported` against the
-    captured content; tag each task's tier by the domain its quote matched; eligibility-claim
-    detector (T3) drops eligibility claims not at official tier; pending/blocked serve filter
-    (already live from P5). Operator-run + `--preview`-costed for the batch; interactive path
-    inherits. This is what finally gives THINK a real, PDF-derived checklist.
+  - **P6b — Task extract on the substrate. ✅ CODE-COMPLETE 2026-08-26 (1033 pytest green;
+    paid end-to-end check on THINK still pending).** New `source_capture.py` (parse
+    `web_fetch` blocks → `{url,domain,media_type,text,tier}`; HTML text/plain direct, PDF via
+    PyPDF2; `web_search` ignored; tier via `aggregators_common`). `generate_action_items.py`:
+    `process_one` fetches via `source_capture.fetch_and_capture` (Claude web_fetch) instead of
+    `page_text`/urllib; `verify_items` runs the EXISTING `quote_is_on_page` /
+    `claim_is_supported` against the captured content and tags each task's tier by the SOURCE
+    that carried its quote; new `page_text.is_eligibility_claim` (T3) drops eligibility claims
+    at non-official tiers (blocked sources dropped, pending parked). `app/services/action_items`
+    inherits via the shared `process_one`. Item schema gains `source_tier`/`source_url`/
+    `source_domain` on page-backed tasks. Tests: `test_source_capture.py` +
+    eligibility/tier suites in `test_action_items.py`.
   - **P6c — Date verification analogue (T7), optional/strengthening.** Bring deadlines UP to the
     same code-side standard: verify a NON-estimated date appears in the captured content
     (date-aware normalization; never drop an estimated/projected date). Sequenceable after

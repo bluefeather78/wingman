@@ -350,10 +350,18 @@ export const PROGRESS_STATUS_LABEL: Record<OppStatus, string> = {
   in_progress: 'Happening Now',
   completed: 'Past Event',
 };
-export const ACTION_ITEM_STATUS_LABEL: Record<OppStatus, string> = {
+// A task carries one state MORE than an opportunity does: "Not Needed", the student saying
+// this step does not apply to them. It is a state rather than a delete because the checklist
+// is shared catalog data and is re-pulled on every refresh — a removed task would come
+// straight back, and the control would read as broken. Kept off OppStatus deliberately:
+// computeProgressStatus can never return it, and widening that union would force every
+// opportunity-side lookup to handle a case it does not have.
+export type TaskStatus = OppStatus | 'not_needed';
+export const ACTION_ITEM_STATUS_LABEL: Record<TaskStatus, string> = {
   not_started: 'Not Started',
   in_progress: 'In Progress',
   completed: 'Completed',
+  not_needed: 'Not Needed',
 };
 // OPPORTUNITY pills got new styling (2026-08-24): an OUTLINED pill with a leading dot,
 // all three of the border, the dot and the label carrying the status accent. The TASK
@@ -364,19 +372,25 @@ const OPP_PILL: Record<OppStatus, { accent: string }> = {
   not_started: { accent: colors.statusFutureFg },
   completed: { accent: colors.statusPastFg },
 };
-const TASK_PILL: Record<OppStatus, { bg: string; fg: string }> = {
+const TASK_PILL: Record<TaskStatus, { bg: string; fg: string }> = {
   not_started: { bg: colors.peach, fg: colors.statusPastFg },
   in_progress: { bg: colors.statusFutureBg, fg: colors.statusFutureFg },
   completed: { bg: colors.statusNowBg, fg: colors.statusNowFg },
+  // Deliberately the only neutral one: "not needed" is the student stepping a task out of
+  // the way, not an achievement, and giving it a status colour would read as progress.
+  not_needed: { bg: colors.slate200, fg: colors.slate500 },
 };
-export function StatusPill({ status, kind = 'opp', label, onPress }: { status: OppStatus; kind?: 'opp' | 'task'; label?: string; onPress?: () => void }) {
-  const text = label ?? (kind === 'opp' ? PROGRESS_STATUS_LABEL[status] : ACTION_ITEM_STATUS_LABEL[status]);
+export function StatusPill({ status, kind = 'opp', label, onPress }: { status: TaskStatus; kind?: 'opp' | 'task'; label?: string; onPress?: () => void }) {
+  // 'not_needed' exists only on the task side; nothing can hand it to an opportunity pill,
+  // but narrowing here beats indexing an OppStatus table with a key it has no entry for.
+  const oppStatus: OppStatus = status === 'not_needed' ? 'not_started' : status;
+  const text = label ?? (kind === 'opp' ? PROGRESS_STATUS_LABEL[oppStatus] : ACTION_ITEM_STATUS_LABEL[status]);
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
 
   // Opportunity pills: outlined + dot, never tappable.
   if (kind === 'opp') {
-    const { accent } = OPP_PILL[status];
+    const { accent } = OPP_PILL[oppStatus];
     return (
       <View style={[styles.statusPill, styles.statusPillOutlined, { borderColor: accent }]}>
         <View style={[styles.statusPillDot, { backgroundColor: accent }]} />

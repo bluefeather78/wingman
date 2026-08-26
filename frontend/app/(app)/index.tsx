@@ -10,7 +10,7 @@ import {
   peekTrackerSaved,
   saveTrackerData,
   isPageBackedTask,
-  visibleTasks,
+  isSetAsideTask,
   type ActionItem,
   type SavedState,
   type TrackerData,
@@ -35,6 +35,7 @@ import {
   StatusPill,
   Txt,
   type OppStatus,
+  type TaskStatus,
 } from '@/ui/components';
 import { colors, fonts, radius, space } from '@/ui/theme';
 
@@ -44,14 +45,13 @@ interface StoredProfile {
 
 // One task row. Extracted when the list split into page-backed and generic groups, so the
 // two cannot drift in how a row actually renders — only the heading above them differs.
-function TaskRow({ ai, onPress, onDismiss }: {
+function TaskRow({ ai, onPress }: {
   ai: ActionItem;
   onPress: () => void;
-  onDismiss: () => void;
 }) {
   return (
     <View style={styles.taskRow}>
-      <Text style={[styles.taskText, ai.state === 'completed' && styles.taskDone]}>
+      <Text style={[styles.taskText, (ai.state === 'completed' || isSetAsideTask(ai)) && styles.taskDone]}>
         {ai.text}
         {/* extractTrackerInfo already stores a per-step url; the old app rendered
             it as a trailing arrow titled "Go to this step". */}
@@ -61,23 +61,15 @@ function TaskRow({ ai, onPress, onDismiss }: {
           </Text>
         )}
       </Text>
+      {/* Tapping cycles the state, and "Not Needed" is the last stop before it wraps back
+          round — a step that does not apply to THIS student, set aside rather than deleted.
+          The checklist is shared catalog data and is re-pulled on every refresh, so a
+          deleted task would come straight back; the state survives, via mergeActionItems. */}
       <StatusPill
-        status={(ai.state as OppStatus) in ACTION_ITEM_STATUS_LABEL ? (ai.state as OppStatus) : 'not_started'}
+        status={(ai.state as TaskStatus) in ACTION_ITEM_STATUS_LABEL ? (ai.state as TaskStatus) : 'not_started'}
         kind="task"
         onPress={onPress}
       />
-      {/* The checklist is shared across every student tracking this program and is
-          regenerated on refresh, so a step that genuinely does not apply to THIS student
-          needs somewhere to go that survives the next regeneration. Dismissing marks it,
-          it does not delete it — see mergeActionItems. */}
-      <Pressable
-        onPress={onDismiss}
-        accessibilityLabel={`Dismiss "${ai.text}"`}
-        hitSlop={8}
-        style={styles.taskDismiss}
-      >
-        <Text style={styles.taskDismissMark}>{'×'}</Text>
-      </Pressable>
     </View>
   );
 }
@@ -105,7 +97,7 @@ export default function Home() {
 
   // Cycle an action item's status (not_started → in_progress → completed → …), persisting
   // to the shared tracker data — ported from cycleActionItemState().
-  const NEXT_STATE: Record<string, OppStatus> = { not_started: 'in_progress', in_progress: 'completed', completed: 'not_started' };
+  const NEXT_STATE: Record<string, TaskStatus> = { not_started: 'in_progress', in_progress: 'completed', completed: 'not_needed', not_needed: 'not_started' };
   async function cycleActionItem(itemId: string, actionId: string) {
     if (!data) return;
     const next: TrackerData = { ...data };
@@ -113,23 +105,6 @@ export default function Home() {
       next[bucket] = next[bucket].map((it) =>
         it.id === itemId
           ? { ...it, actionItems: (it.actionItems ?? []).map((ai) => (ai.id === actionId ? { ...ai, state: NEXT_STATE[ai.state] ?? 'not_started' } : ai)) }
-          : it,
-      );
-    }
-    setData(next);
-    await saveTrackerData(next);
-  }
-
-  // Mark a task as not applicable to this student. Deliberately a flag rather than a
-  // splice: the list comes from the shared catalog row and is re-pulled on every refresh,
-  // so a removed task would come straight back and the button would read as broken.
-  async function dismissActionItem(itemId: string, actionId: string) {
-    if (!data) return;
-    const next: TrackerData = { ...data };
-    for (const bucket of Object.keys(next) as (keyof TrackerData)[]) {
-      next[bucket] = next[bucket].map((it) =>
-        it.id === itemId
-          ? { ...it, actionItems: (it.actionItems ?? []).map((ai) => (ai.id === actionId ? { ...ai, dismissed: true } : ai)) }
           : it,
       );
     }
@@ -274,7 +249,12 @@ export default function Home() {
         <View style={styles.rowBetween}>
           <Txt variant="h2" style={styles.cardTitle}>Your Next Moves</Txt>
           <View style={styles.pillRow}>
-            {(['not_started', 'in_progress', 'completed'] as OppStatus[]).map((k) => (
+            {/* 'not_needed' joins the row only when something is in it: it is an exception
+                state, and a permanent "0 Not Needed" pill would read as a fourth stage of
+                the workflow rather than an escape hatch. */}
+            {(['not_started', 'in_progress', 'completed', 'not_needed'] as TaskStatus[])
+              .filter((k) => k !== 'not_needed' || taskCounts.not_needed > 0)
+              .map((k) => (
               <StatusPill key={k} status={k} kind="task" label={`${taskCounts[k]} ${ACTION_ITEM_STATUS_LABEL[k]}`} />
             ))}
           </View>
@@ -333,7 +313,7 @@ export default function Home() {
                 // is the only test — a task with no `basis` (everything written before
                 // 2026-08-24) counts as generic, because those came from a prompt that was
                 // told to fill gaps with "what's typical", i.e. to make something up.
-                const allTasks = visibleTasks(item.actionItems);
+                const allTasks = item.actionItems ?? [];
                 const grounded = allTasks.filter(isPageBackedTask);
                 const generic = allTasks.filter((ai) => !isPageBackedTask(ai));
                 return (
@@ -372,12 +352,7 @@ export default function Home() {
                         <>
                           <Text style={styles.taskGroupLabel}>From the program page</Text>
                           {grounded.map((ai) => (
-                            <TaskRow
-                              key={ai.id}
-                              ai={ai}
-                              onPress={() => cycleActionItem(item.id, ai.id)}
-                              onDismiss={() => dismissActionItem(item.id, ai.id)}
-                            />
+                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} />
                           ))}
                         </>
                       )}
@@ -387,12 +362,7 @@ export default function Home() {
                             Typical steps — confirm on the site
                           </Text>
                           {generic.map((ai) => (
-                            <TaskRow
-                              key={ai.id}
-                              ai={ai}
-                              onPress={() => cycleActionItem(item.id, ai.id)}
-                              onDismiss={() => dismissActionItem(item.id, ai.id)}
-                            />
+                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} />
                           ))}
                         </>
                       )}
@@ -447,7 +417,11 @@ const styles = StyleSheet.create({
   freshFindsBtn: { paddingVertical: 8 },
   emptyState: { color: '#9AA9B8', fontStyle: 'italic', fontSize: 13 },
 
-  pillRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  // flexShrink + minWidth:0 are load-bearing: RN-web defaults flex items to flex-shrink:0,
+  // so as the right-hand child of `rowBetween` this group expanded to its full content
+  // width and its flexWrap never engaged — the fourth pill ("Not Needed") ran off the right
+  // edge on a phone. Letting it shrink to the line width makes the pills wrap instead.
+  pillRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', flexShrink: 1, minWidth: 0, justifyContent: 'flex-end' },
   todoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.slate100 },
   todoName: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.navy },
   todoMeta: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.inkSoft },
@@ -467,8 +441,6 @@ const styles = StyleSheet.create({
   taskRows: { borderTopWidth: 1, borderTopColor: colors.slate200, paddingTop: 8, gap: 6 },
   // Deliberately quiet: this is a provenance label, not a section header competing with
   // the program name. It has to be readable, not loud.
-  taskDismiss: { paddingHorizontal: 2 },
-  taskDismissMark: { fontFamily: fonts.bodyMed, fontSize: 15, lineHeight: 15, color: colors.slate400 },
   taskGroupLabel: { fontFamily: fonts.bodyMed, fontSize: 10, letterSpacing: 0.4,
     textTransform: 'uppercase', color: colors.slate400, marginTop: 2 },
   taskRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },

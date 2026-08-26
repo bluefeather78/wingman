@@ -250,6 +250,33 @@ export default function Finder() {
   const [untrackedOnly, setUntrackedOnly] = useState(false);
   const [filters, setFilters] = useState<Record<FilterKey, Set<string>>>({ type: new Set(), price: new Set(), season: new Set(), location: new Set() });
   const [openFacet, setOpenFacet] = useState<FilterKey | 'profile' | null>(null);
+  // A facet dropdown is absolutely positioned under its toggle with a fixed width. On a
+  // phone the filter row wraps, so a toggle can sit far enough right that a left-anchored
+  // panel runs off the screen (the "Type" filter did). When a facet opens we measure its
+  // toggle against the viewport and flip the panel to right-anchored if a left-anchored one
+  // would overflow — so it opens leftward from the toggle and stays on screen.
+  //
+  // Measurement is done here (on web, via the toggle's DOM rect at open time) rather than
+  // with onLayout: onLayout proved not to fire reliably for these wrapped flex children, and
+  // the viewport is what the panel must fit inside anyway — not the filter bar.
+  const facetToggleRefs = useRef<Record<string, unknown>>({});
+  const [facetAlign, setFacetAlign] = useState<Record<string, 'left' | 'right'>>({});
+  const toggleFacet = (key: FilterKey | 'profile', panelW: number) => {
+    if (openFacet === key) { setOpenFacet(null); return; }
+    let align: 'left' | 'right' = 'left';
+    if (Platform.OS === 'web') {
+      const node = facetToggleRefs.current[key] as { getBoundingClientRect?: () => DOMRect } | null;
+      const rect = node?.getBoundingClientRect?.();
+      if (rect && typeof window !== 'undefined') {
+        const margin = 8;
+        // Flip to right only if a left-anchored panel would run past the right edge AND a
+        // right-anchored one actually fits (its left edge stays on screen).
+        if (rect.left + panelW > window.innerWidth - margin && rect.right - panelW >= margin) align = 'right';
+      }
+    }
+    setFacetAlign((a) => ({ ...a, [key]: align }));
+    setOpenFacet(key);
+  };
   const [profileTags, setProfileTags] = useState<EnrichedTag[]>([]);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [tagScores, setTagScores] = useState<Record<string, TagScore> | null>(null);
@@ -1051,11 +1078,11 @@ export default function Finder() {
       <View style={styles.filterBar}>
         <Text style={styles.filterLabel}>FILTER:</Text>
         {profileTags.length > 0 && (
-          <View>
+          <View ref={(r) => { facetToggleRefs.current.profile = r; }}>
             <Pressable
               {...profileFacetPop.handlers}
               style={[styles.filterToggle, profileFacetPop.shadowStyle]}
-              onPress={() => setOpenFacet(openFacet === 'profile' ? null : 'profile')}
+              onPress={() => toggleFacet('profile', 320)}
             >
               <Text style={styles.filterToggleText}>▾ Your Profile{selectedTag ? ' (1)' : ''}</Text>
             </Pressable>
@@ -1065,7 +1092,7 @@ export default function Finder() {
                  simply ran off the bottom of the viewport and the tags below the fold could
                  not be reached at all. `None` sits outside the scroller so the way to clear
                  the filter is always visible, never scrolled past. */
-              <View style={[styles.facetPanel, styles.facetPanelWide]}>
+              <View style={[styles.facetPanel, styles.facetPanelWide, facetAlign.profile === 'right' ? styles.facetPanelRight : styles.facetPanelLeft]}>
                 <Pressable style={styles.facetRow} onPress={() => { setSelectedTag(null); setVisibleCount(10); setOpenFacet(null); }}>
                   <Text style={styles.facetRowText}>{selectedTag ? '○' : '●'} None</Text>
                 </Pressable>
@@ -1095,7 +1122,7 @@ export default function Finder() {
           if (values.length < 2) return null;
           const active = filters[f.key].size;
           return (
-            <View key={f.key}>
+            <View key={f.key} ref={(r) => { facetToggleRefs.current[f.key] = r; }}>
               <Pressable
                 onHoverIn={() => setHoveredFacetKey(f.key)}
                 onHoverOut={() => setHoveredFacetKey((cur) => (cur === f.key ? null : cur))}
@@ -1108,12 +1135,12 @@ export default function Finder() {
                     ? styles.filterTogglePressed
                     : hoveredFacetKey === f.key && styles.filterToggleHovered,
                 ]}
-                onPress={() => setOpenFacet(openFacet === f.key ? null : f.key)}
+                onPress={() => toggleFacet(f.key, 224)}
               >
                 <Text style={styles.filterToggleText}>▾ {f.label}{active ? ` (${active})` : ''}</Text>
               </Pressable>
               {openFacet === f.key && (
-                <View style={styles.facetPanel}>
+                <View style={[styles.facetPanel, facetAlign[f.key] === 'right' ? styles.facetPanelRight : styles.facetPanelLeft]}>
                   {values.map((v) => (
                     <Pressable key={v} style={styles.facetRow} onPress={() => toggleFilter(f.key, v)}>
                       <Text style={styles.facetRowText}>
@@ -1349,7 +1376,7 @@ function SoftSelect({ value, options, onChange }: { value: string; options: stri
         <Text style={styles.softSelectText}>{value}  ▾</Text>
       </Pressable>
       {open && (
-        <View style={styles.facetPanel}>
+        <View style={[styles.facetPanel, styles.facetPanelLeft]}>
           {options.map((o) => (
             <Pressable key={o} style={styles.facetRow} onPress={() => { onChange(o); setOpen(false); }}>
               <Text style={styles.facetRowText}>{o}</Text>
@@ -1442,8 +1469,10 @@ const styles = StyleSheet.create({
   filterBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 10 },
   clearFilters: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.md },
   clearFiltersText: { fontFamily: fonts.body, fontSize: 13, fontWeight: '700', color: colors.orangeDeep, textDecorationLine: 'underline' },
-  facetPanel: { position: 'absolute', top: '100%', left: 0, marginTop: 8, width: 224, backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.lg, padding: 12, zIndex: 50, gap: 2 },
+  facetPanel: { position: 'absolute', top: '100%', marginTop: 8, width: 224, backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.lg, padding: 12, zIndex: 50, gap: 2 },
   facetPanelWide: { width: 320 },
+  facetPanelLeft: { left: 0 },
+  facetPanelRight: { right: 0 },
   facetScroll: { maxHeight: 320 },
   facetRow: { paddingVertical: 4 },
   facetRowText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: colors.slate900 },

@@ -45,9 +45,10 @@ export interface ActionItem {
   // stays auditable after the fact and so a re-check can re-verify it without re-asking a
   // model. Null/absent on 'generic' tasks.
   evidence?: string | null;
-  // The student said this one does not apply to them. Hidden everywhere and excluded from
-  // every count, but NOT deleted: the checklist is shared and regenerated, so a deleted
-  // task would simply reappear on the next refresh and the dismissal would read as broken.
+  // LEGACY. Tasks a student dismissed before 2026-08-24, when dismissing hid a task
+  // outright. That is now the 'not_needed' STATE instead — visible, reversible, and
+  // countable — and parseTrackerData migrates this flag into it on load. Nothing writes
+  // it any more; it stays declared so the migration has a typed field to read.
   dismissed?: boolean;
 }
 
@@ -58,8 +59,12 @@ export function isPageBackedTask(ai: Pick<ActionItem, 'basis' | 'evidence'>): bo
   return ai.basis === 'page' && !!(ai.evidence && ai.evidence.trim());
 }
 
-export function visibleTasks(items: ActionItem[] | undefined): ActionItem[] {
-  return (items ?? []).filter((ai) => !ai.dismissed);
+// A task the student has stepped out of the way. Excluded from the progress bar and from
+// DUE SOON — a student who says a step does not apply to them and still sees it counted in
+// "3 not started" has not been listened to — but still RENDERED, which is the difference
+// from the dismiss button this replaced: they can see what they set aside and undo it.
+export function isSetAsideTask(ai: Pick<ActionItem, 'state'>): boolean {
+  return ai.state === 'not_needed';
 }
 
 // Refreshing pulls the shared, re-verified checklist off the catalog row — which means the
@@ -77,7 +82,8 @@ export function mergeActionItems(existing: ActionItem[] | undefined, incoming: A
   const previous = new Map((existing ?? []).map((ai) => [key(ai.text), ai]));
   return incoming.map((ai) => {
     const was = previous.get(key(ai.text));
-    return was ? { ...ai, state: was.state, dismissed: was.dismissed } : ai;
+    // State alone now carries "not needed", so there is nothing else to preserve.
+    return was ? { ...ai, state: was.state } : ai;
   });
 }
 
@@ -104,6 +110,12 @@ export interface TrackerItem {
 }
 
 export type TrackerData = Record<Bucket, TrackerItem[]>;
+
+function migrateDismissed(ai: ActionItem): ActionItem {
+  if (!ai?.dismissed) return ai;
+  const { dismissed: _dropped, ...rest } = ai;
+  return { ...rest, state: 'not_needed' };
+}
 
 function emptyData(): TrackerData {
   return {
@@ -147,7 +159,10 @@ function parseTrackerData(raw: string | Record<string, unknown> | null): { data:
         ...it,
         bucket: b,
         importantDates: Array.isArray(it.importantDates) ? it.importantDates : [],
-        actionItems: Array.isArray(it.actionItems) ? it.actionItems : [],
+        // Migrate the retired `dismissed` flag into the 'not_needed' state. Idempotent, and
+        // done on the read path so it applies to data written before the state existed
+        // without needing a one-off pass over every account.
+        actionItems: Array.isArray(it.actionItems) ? it.actionItems.map(migrateDismissed) : [],
       }));
     }
   });

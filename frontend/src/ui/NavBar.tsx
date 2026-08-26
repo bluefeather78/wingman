@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { backendUrl, httpClient } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
@@ -53,6 +53,16 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
   const [location, setLocation] = useState(user?.location ?? '');
   const [locationStatus, setLocationStatus] = useState('');
 
+  // The full pill (wordmark + BETA + four labelled tabs + avatar) has a fixed natural
+  // width of ~791px — the tab labels alone are ~520px — so anywhere narrower it ran off
+  // the right edge and forced the WHOLE app to scroll sideways (iPad portrait at 768 and
+  // every phone). Below the threshold the pill goes compact: the wordmark drops to just the
+  // logo + BETA, and the tabs become icon-only with tighter padding, which brings the
+  // natural width to ~343px so it fits a 360px phone with room to spare. Labels return above
+  // the threshold, where the max-w-4xl column is wide enough to hold them.
+  const { width } = useWindowDimensions();
+  const compact = width < 800;
+
   async function handleLogout() {
     setDrawerOpen(false);
     // Navigate BEFORE clearing the session: the (app) layout redirects to /login the moment
@@ -82,23 +92,26 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
         <View style={[styles.bar, navShadow()]}>
           <Pressable style={styles.brand} onPress={() => !locked && router.push('/(app)' as never)}>
             <Logo size={32} />
-            <Text style={styles.word}>Wingman</Text>
+            {!compact && <Text style={styles.word}>Wingman</Text>}
             <View style={styles.beta}>
               <Text style={styles.betaText}>BETA</Text>
             </View>
           </Pressable>
 
-          <View style={styles.tabs}>
+          <View style={[styles.tabs, compact && styles.tabsCompact]}>
             {(locked ? [] : TABS).map((t) => {
               const active = isActive(pathname, t.path);
               return (
                 <Pressable
                   key={t.path}
                   onPress={() => router.push(t.path as never)}
-                  style={[styles.tab, active && styles.tabActive]}
+                  accessibilityRole="tab"
+                  accessibilityLabel={t.label}
+                  accessibilityState={{ selected: active }}
+                  style={[styles.tab, compact && styles.tabCompact, active && styles.tabActive]}
                 >
                   <t.Icon size={18} color={active ? colors.white : '#B7D3E8'} />
-                  <Text style={[styles.tabText, active && styles.tabTextActive]}>{t.label}</Text>
+                  {!compact && <Text style={[styles.tabText, active && styles.tabTextActive]}>{t.label}</Text>}
                 </Pressable>
               );
             })}
@@ -243,7 +256,11 @@ const styles = StyleSheet.create({
   beta: { backgroundColor: colors.orange, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 2 },
   betaText: { fontFamily: fonts.bodyXBold, fontSize: 9, lineHeight: 13, color: colors.white, letterSpacing: 0.5, textTransform: 'uppercase' },
   tabs: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  tabsCompact: { gap: 2 },
   tab: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 16, borderRadius: radius.pill },
+  // Icon-only tabs on narrow screens: no label, tighter padding, and the row gap is trimmed
+  // (via tabsCompact) so four tabs + logo + avatar fit a phone's pill.
+  tabCompact: { paddingHorizontal: 10, gap: 0 },
   tabActive: { backgroundColor: colors.orange },
   tabText: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 20, color: '#B7D3E8' },
   tabTextActive: { color: colors.white },

@@ -1,4 +1,4 @@
-import { visibleTasks, type TrackerData, type TrackerItem } from '@/api/trackerStore';
+import { isSetAsideTask, type TrackerData, type TrackerItem } from '@/api/trackerStore';
 import { ALL_BUCKETS, type Bucket } from './constants';
 
 // Ported verbatim from script.js — the single source of truth for opportunity event-timing
@@ -6,6 +6,10 @@ import { ALL_BUCKETS, type Bucket } from './constants';
 // classify identically or the same student sees different numbers on each.
 
 export type OppStatus = 'not_started' | 'in_progress' | 'completed';
+// Mirrors TaskStatus in src/ui/components.tsx — a task has the three opportunity states
+// plus 'not_needed'. Mirrored rather than imported for the same reason OppStatus is: this
+// module is pure logic and must not depend on the UI layer.
+export type TaskStatus = OppStatus | 'not_needed';
 
 export const BUCKET_LABELS: Record<Bucket, string> = {
   summerPrograms: 'Summer Program',
@@ -271,16 +275,17 @@ export function getAllDeadlineItems(data: TrackerData, saved: SavedState): Upcom
 
 // Task (action-item) counts across a set of upcoming entries.
 export function allTodoUnitCounts(upcoming: UpcomingEntry[]) {
-  const counts: Record<OppStatus, number> = { not_started: 0, in_progress: 0, completed: 0 };
+  const counts: Record<TaskStatus, number> = { not_started: 0, in_progress: 0, completed: 0, not_needed: 0 };
   let total = 0;
   upcoming.forEach(({ item }) => {
-    // Dismissed tasks are excluded from every count, not merely hidden. A student who says
-    // a step does not apply to them and still sees it in "3 not started" has not been
-    // listened to, and the DUE SOON badge on Home Base reads off this number.
-    visibleTasks(item.actionItems).forEach((ai) => {
-      const st = (ai.state as OppStatus) in counts ? (ai.state as OppStatus) : 'not_started';
+    (item.actionItems ?? []).forEach((ai) => {
+      const st = (ai.state as TaskStatus) in counts ? (ai.state as TaskStatus) : 'not_started';
       counts[st]++;
-      total++;
+      // 'not_needed' is counted but kept OUT of the total, so it neither fills a segment of
+      // the progress bar nor inflates the denominator the other three are drawn against —
+      // and DUE SOON, which reads off these counts, ignores it. A student who says a step
+      // does not apply to them and still sees it in "3 not started" has not been listened to.
+      if (!isSetAsideTask(ai)) total++;
     });
   });
   return { counts, total };

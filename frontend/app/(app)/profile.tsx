@@ -786,7 +786,10 @@ const styles = StyleSheet.create({
   updatedText: { fontFamily: fonts.bodyBold, fontSize: 12, lineHeight: 16, color: colors.lime700 },
   updatedStale: { backgroundColor: '#FFE4E6' },
   updatedStaleText: { color: '#BE123C' },
-  headBtns: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  // flexShrink + minWidth:0 so this button group shrinks to the line width and its flexWrap
+  // engages, instead of expanding to its full content width (RN-web's flex-shrink:0 default)
+  // and pushing "Deepen your story" off the right edge on a phone.
+  headBtns: { flexDirection: 'row', gap: 10, flexWrap: 'wrap', flexShrink: 1, minWidth: 0 },
   hBtnText: { fontSize: 13, lineHeight: 18, fontFamily: fonts.bodyBold },
   deepenBtn: { borderWidth: 2, borderColor: colors.ink, paddingHorizontal: 20 },
 

@@ -907,6 +907,29 @@ deadline."
 
 ## Change log
 
+- **2026-08-26** — **`not_running` now requires PROOF (status-evidence gate), from a live
+  user-reported case.** ec18599 (Impact Internships, an annual program between cycles) was
+  written `not_running` from "2026 cycle closed... No 2027 dates posted yet" — the off-season
+  read as death. One wrong word cascades: Past Event pill (`computeProgressStatus` →
+  completed), zero dates (the empty-write carve-out let it write instantly), item excluded
+  from Home Base's task surface (its 2 page-verified tasks invisible) and from calendar sync.
+  Root causes fixed in `check_deadlines.py` (commit 3bc43de, 1070 pytest green):
+  (1) phase 2's own rule said "not running this cycle → not_running" — the exact conflation
+  phase 1 guards against, now removed; not_running = permanently discontinued, nothing weaker;
+  (2) phase 1: a closed cycle is never by itself discontinuation evidence, and a
+  discontinuation claim must be quoted VERBATIM from a fetched page; FOUND_CONFIRMED_DATES may
+  never be "yes" because the program is believed dead (the ladder loophole that stopped the
+  prior-cycle rung from running); (3) NEW `verify_status_evidence()` in `check_one` — the
+  status analogue of `verify_dates_against_capture`: phase 2 emits `status_evidence`, code
+  checks it via `quote_is_on_page` against the capture, and an unproven not_running downgrades
+  to `unknown` (no empty-write carve-out → cannot wipe dates) with the caveat in the note.
+  "This program is dead" was the only load-bearing claim with no evidence requirement; now it
+  meets the same standard as dates and tasks. **Corrective re-run proven live ($0.081):** the
+  fixed rung 1 found the FALL 2026 cycle — applications open Aug 30, 2026 (five days out),
+  `verified:true` against the apply page — status `running`, 3 dates. The old verdict was
+  hiding a program whose window opens this week. Residual (accepted): the row's stored tasks
+  still carry a page-verified but PAST June 3 task until their TTL re-verifies (~7 days);
+  task timeliness (drop/demote past-dated tasks) remains an open follow-up.
 - **2026-08-25 (later session)** — **P7 + P8 + P9 SHIPPED (all client, tsc clean, $0).**
   - **P7 (trust gradient):** `NormalizedActionItem`/`ActionItem` gained `sourceTier`/
     `sourceUrl`/`sourceDomain`; `taskTrustTier()` in trackerStore is the only tier test

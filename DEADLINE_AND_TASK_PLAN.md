@@ -580,8 +580,12 @@ operator decisions resolved; T1–T8 at build time)*
     `{url, domain, media_type, text, tier}` per fetched block (`text` decoded per media type,
     `tier` from `aggregators_common`), deduped by url; verify only against fetched (not
     searched) content. Adds `pypdf` as a capture decoder.
-  - **P6b — Task extract on the substrate. ✅ CODE-COMPLETE 2026-08-26 (1033 pytest green;
-    paid end-to-end check on THINK still pending).** New `source_capture.py` (parse
+  - **P6b — Task extract on the substrate. ✅ DONE + PROVEN LIVE 2026-08-26 (1033 pytest green;
+    E2E on THINK $0.088, read-only).** End-to-end proof: THINK Scholars — a generic-only list
+    under the urllib fetcher — now yields **4 page-backed OFFICIAL-tier tasks from its
+    guidelines PDF**, each with a verbatim verified quote and a `source_url` to the PDF, plus 1
+    generic; 1 demoted, 0 dropped, **no fabricated "algebra"**. The exact coverage win the
+    substrate was built for. New `source_capture.py` (parse
     `web_fetch` blocks → `{url,domain,media_type,text,tier}`; HTML text/plain direct, PDF via
     PyPDF2; `web_search` ignored; tier via `aggregators_common`). `generate_action_items.py`:
     `process_one` fetches via `source_capture.fetch_and_capture` (Claude web_fetch) instead of

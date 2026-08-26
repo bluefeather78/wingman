@@ -175,7 +175,7 @@ async def handle_pending_moderate(request: Request):
     body = await read_json_body(request)
     result = core.moderate_opportunities(
         body.get("ids") or [], (body.get("status") or "").strip(),
-        duplicate_of=body.get("duplicate_of"))
+        duplicate_of=body.get("duplicate_of"), reason=body.get("reason"))
     return json_response(200 if result.get("ok") else 400, result, default=str)
 
 

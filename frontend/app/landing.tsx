@@ -34,6 +34,40 @@ function clearWalkthroughPlayhead(win?: Window | null) {
   }
 }
 
+// Fullscreen API with the WebKit-prefixed fallback older Safari still needs. The film
+// plays in the top layer, so no ancestor stacking context can clip or cover it — which
+// a position:fixed pseudo-fullscreen inside this ScrollView could not guarantee.
+// iPhone Safari has neither form for non-<video> elements, so a play there simply
+// stays inline, same as before fullscreen existed. All three helpers are web-only
+// callers' responsibility (they touch `document`).
+function requestStageFullscreen(el: HTMLElement | null) {
+  const req = (el as any)?.requestFullscreen ?? (el as any)?.webkitRequestFullscreen;
+  if (!req) return;
+  try {
+    const p = req.call(el);
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  } catch {
+    // denied (no user gesture, permissions policy) — the film still plays inline
+  }
+}
+
+function exitStageFullscreen() {
+  const anyDoc = document as any;
+  const exit = anyDoc.exitFullscreen ?? anyDoc.webkitExitFullscreen;
+  if (!exit) return;
+  try {
+    const p = exit.call(document);
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  } catch {
+    // already left (Esc raced the click) — nothing to do
+  }
+}
+
+function fullscreenElement(): Element | null {
+  const anyDoc = document as any;
+  return anyDoc.fullscreenElement ?? anyDoc.webkitFullscreenElement ?? null;
+}
+
 // Mounts the walkthrough iframe and rewinds its internal player to 0:00 (it has no
 // autoplay/seek query param or postMessage API of its own, so this reaches in and
 // drives its own transport controls once the bundle has unpacked). Belt-and-braces
@@ -102,9 +136,30 @@ export default function Landing() {
   // a fresh mount (fresh <iframe>) even if it was already playing. The remount alone does
   // NOT rewind — see clearWalkthroughPlayhead above for what actually gets it back to 0:00.
   const [filmKey, setFilmKey] = useState(0);
+  // Tracks the browser's actual fullscreen state, not our request: Esc, the browser's
+  // own UI and our exit button all funnel through the fullscreenchange listener below,
+  // so the toggle can never disagree with what's on screen.
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const ctaSecondaryPop = usePopInteraction(3, colors.slate900, 1);
   const scrollRef = useRef<ScrollView>(null);
   const filmSectionY = useRef(0);
+  const stageRef = useRef<View>(null);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const onChange = () => setIsFullscreen(fullscreenElement() != null);
+    document.addEventListener('fullscreenchange', onChange);
+    document.addEventListener('webkitfullscreenchange', onChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange);
+      document.removeEventListener('webkitfullscreenchange', onChange);
+    };
+  }, []);
+
+  // react-native-web hands back the host DOM element as the View's ref.
+  function stageDomNode(): HTMLElement | null {
+    return (stageRef.current as unknown as HTMLElement) ?? null;
+  }
 
   function playWalkthrough() {
     if (Platform.OS === 'web') {
@@ -112,6 +167,9 @@ export default function Landing() {
       // building its initial state, so a later clear would arrive too late.
       clearWalkthroughPlayhead();
       setFilmKey((k) => k + 1);
+      // Same tick as the click: requestFullscreen needs the user gesture, so it goes
+      // on the always-mounted stage container rather than waiting for the iframe.
+      requestStageFullscreen(stageDomNode());
     } else {
       Linking.openURL(WALKTHROUGH_URL);
     }
@@ -199,9 +257,20 @@ export default function Landing() {
         <View style={styles.section} onLayout={(e) => { filmSectionY.current = e.nativeEvent.layout.y; }}>
           <Text style={[styles.sectionTitle, styles.sectionTitleTight]}>See how it works</Text>
           <View style={[styles.filmFrame, popShadow(4)]}>
-            <View style={styles.filmStage}>
+            <View ref={stageRef} style={styles.filmStage}>
               {filmKey > 0 && Platform.OS === 'web' ? (
-                <WalkthroughFrame key={filmKey} frameKey={filmKey} />
+                <>
+                  <WalkthroughFrame key={filmKey} frameKey={filmKey} />
+                  <Pressable
+                    style={styles.fsToggle}
+                    onPress={() => (isFullscreen ? exitStageFullscreen() : requestStageFullscreen(stageDomNode()))}
+                    accessibilityRole="button"
+                    accessibilityLabel={isFullscreen ? 'Exit full screen' : 'Enter full screen'}
+                  >
+                    <Ionicons name={isFullscreen ? 'contract' : 'expand'} size={16} color={colors.white} />
+                    {isFullscreen ? <Text style={styles.fsToggleText}>Exit full screen</Text> : null}
+                  </Pressable>
+                </>
               ) : (
                 <Pressable
                   style={styles.filmStagePressable}
@@ -370,6 +439,9 @@ const styles = StyleSheet.create({
   filmTitle: { fontFamily: fonts.display, fontSize: 20, color: colors.white },
   playChip: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.orangeDeep, alignItems: 'center', justifyContent: 'center' },
   filmNote: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.muted },
+  // Top-right so it stays clear of the film's own transport controls along the bottom.
+  fsToggle: { position: 'absolute', top: 12, right: 12, zIndex: 10, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(10, 10, 10, 0.65)', borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 8 },
+  fsToggleText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.white },
 
   featRow: { flexDirection: 'row', gap: 24, flexWrap: 'wrap' },
   featCard: { flex: 1, minWidth: 240, padding: 32, gap: 8 },

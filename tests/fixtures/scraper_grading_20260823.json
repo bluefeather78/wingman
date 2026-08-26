@@ -1,0 +1,675 @@
+{
+ "batch": "scraper-national-20260823",
+ "snapshots": [
+  "scrape_review_national_20260823-012518.json",
+  "scrape_review_national_20260823-015749.json"
+ ],
+ "graded_at": "2026-08-25",
+ "grading": "Human review of 2026-08-23/24: console approve/reject decisions plus direct DB deletions (reconstructed by diffing snapshots against the DB and confirmed by the operator's pasted deletion list).",
+ "verdicts": {
+  "ec18524": {
+   "verdict": "approved",
+   "name": "NYU High School Summer Art Intensive"
+  },
+  "ec18525": {
+   "verdict": "approved",
+   "name": "MassArt Summer Intensives"
+  },
+  "ec18526": {
+   "verdict": "approved",
+   "name": "Otis College Summer of Art"
+  },
+  "ec18527": {
+   "verdict": "approved",
+   "name": "Summer@Cornish Art & Design Intensive"
+  },
+  "ec18528": {
+   "verdict": "approved",
+   "name": "Youth Design Center Summer Portfolio Intensive"
+  },
+  "ec18529": {
+   "verdict": "rejected",
+   "name": "Supervised Program for Alignment Research (SPAR)"
+  },
+  "ec18530": {
+   "verdict": "approved",
+   "name": "Princeton AI4ALL Summer Program"
+  },
+  "ec18531": {
+   "verdict": "rejected",
+   "name": "Technical AI Safety / AI Safety Fundamentals"
+  },
+  "ec18532": {
+   "verdict": "rejected",
+   "name": "AI Scholars & Responsible AI Capstone Program"
+  },
+  "ec18533": {
+   "verdict": "rejected",
+   "name": "Johns Hopkins Internship in Brain Sciences (JHIBS)"
+  },
+  "ec18534": {
+   "verdict": "deleted",
+   "name": "Summer Neuroscience Program (SNP) at Rockefeller University"
+  },
+  "ec18535": {
+   "verdict": "rejected",
+   "name": "Brain Research Apprenticeships in New York at Columbia (BRAINYAC)"
+  },
+  "ec18536": {
+   "verdict": "approved",
+   "name": "Stanford Clinical Neuroscience Immersion Experience (CNI-X)"
+  },
+  "ec18537": {
+   "verdict": "approved",
+   "name": "Max Planck Florida Institute for Neuroscience High School Summer Research Internship"
+  },
+  "ec18538": {
+   "verdict": "deleted",
+   "name": "Cooper Hewitt National High School Design Competition"
+  },
+  "ec18539": {
+   "verdict": "rejected",
+   "name": "NYU Summer Program in User Experience (UX) Design"
+  },
+  "ec18540": {
+   "verdict": "rejected",
+   "name": "NextGen Bootcamp UX & UI Design Summer Program"
+  },
+  "ec18541": {
+   "verdict": "approved",
+   "name": "American Graphics Institute Graphic Design Bootcamp for High School Students"
+  },
+  "ec18542": {
+   "verdict": "approved",
+   "name": "Ringling College PreCollege Summer Art Program"
+  },
+  "ec18543": {
+   "verdict": "rejected",
+   "name": "embARC Summer Design Academy"
+  },
+  "ec18544": {
+   "verdict": "approved",
+   "name": "BAC Summer Academy (and Urban Design & Planning Studio)"
+  },
+  "ec18545": {
+   "verdict": "approved",
+   "name": "National High School Design Competition"
+  },
+  "ec18546": {
+   "verdict": "approved",
+   "name": "Digital Design for Teens: Architecture"
+  },
+  "ec18547": {
+   "verdict": "approved",
+   "name": "TxA Student Design Challenge"
+  },
+  "ec18548": {
+   "verdict": "rejected",
+   "name": "FIT Precollege High School Programs"
+  },
+  "ec18549": {
+   "verdict": "approved",
+   "name": "LIM College Summer Fashion Academy"
+  },
+  "ec18550": {
+   "verdict": "approved",
+   "name": "National Fashion Merchandising & Management Challenge"
+  },
+  "ec18551": {
+   "verdict": "deleted",
+   "name": "Banson NYC Fashion Summer Camp"
+  },
+  "ec18552": {
+   "verdict": "approved",
+   "name": "Reinvention High School Fashion Challenge"
+  },
+  "ec18553": {
+   "verdict": "rejected",
+   "name": "DECA Competitive Event: Fashion Merchandising and Marketing Series"
+  },
+  "ec18554": {
+   "verdict": "approved",
+   "name": "Idyllwild Arts Summer Dance Intensive"
+  },
+  "ec18555": {
+   "verdict": "approved",
+   "name": "NYCDA Summer Pre-Professional Intensive"
+  },
+  "ec18556": {
+   "verdict": "approved",
+   "name": "Backhausdance Summer Intensive at Chapman University"
+  },
+  "ec18557": {
+   "verdict": "approved",
+   "name": "Regional Dance America (RDA) Dance & Choreography Intensive"
+  },
+  "ec18558": {
+   "verdict": "approved",
+   "name": "Steps Academy Pre-Professional Summer Intensive"
+  },
+  "ec18559": {
+   "verdict": "approved",
+   "name": "Elite Culinary Intensive at The Culinary Institute of America"
+  },
+  "ec18560": {
+   "verdict": "approved",
+   "name": "JWU Career Explorations & Teen Kitchen Academy"
+  },
+  "ec18561": {
+   "verdict": "approved",
+   "name": "Future Chefs Teen Program"
+  },
+  "ec18562": {
+   "verdict": "approved",
+   "name": "Walnut Hill College Summer Institute & High School Competitions"
+  },
+  "ec18563": {
+   "verdict": "approved",
+   "name": "Humanity's Kitchen High School Culinary Program"
+  },
+  "ec18564": {
+   "verdict": "approved",
+   "name": "Camp Delicious!"
+  },
+  "ec18565": {
+   "verdict": "approved",
+   "name": "UC San Diego Sports Medicine Summer Academy"
+  },
+  "ec18566": {
+   "verdict": "approved",
+   "name": "Wake Forest Health and Exercise Science Institute"
+  },
+  "ec18567": {
+   "verdict": "approved",
+   "name": "UMass Amherst Sport Management & Leadership Academy"
+  },
+  "ec18568": {
+   "verdict": "approved",
+   "name": "Texas A&M Youth Adventure Program: Kinesiology & Sports Science"
+  },
+  "ec18569": {
+   "verdict": "approved",
+   "name": "Emory Youth Theological Initiative (YTI) Summer Academy"
+  },
+  "ec18570": {
+   "verdict": "approved",
+   "name": "Light the World! Summer Institute"
+  },
+  "ec18571": {
+   "verdict": "approved",
+   "name": "Saints & Scholars Summer Theology Institute"
+  },
+  "ec18572": {
+   "verdict": "approved",
+   "name": "Christian Leadership Institute (CLI)"
+  },
+  "ec18573": {
+   "verdict": "approved",
+   "name": "Fresh Films Weekly Filmmaking Program"
+  },
+  "ec18574": {
+   "verdict": "approved",
+   "name": "Youth Documentary Workshop (YDW)"
+  },
+  "ec18575": {
+   "verdict": "approved",
+   "name": "Youth Documentary Academy (YDA)"
+  },
+  "ec18576": {
+   "verdict": "approved",
+   "name": "School of Doc"
+  },
+  "ec18577": {
+   "verdict": "approved",
+   "name": "Teen Producers Project"
+  },
+  "ec18578": {
+   "verdict": "approved",
+   "name": "YoungArts National Arts Competition – Film Discipline"
+  },
+  "ec18579": {
+   "verdict": "approved",
+   "name": "NYU Tisch Summer High School Filmmakers Workshop"
+  },
+  "ec18580": {
+   "verdict": "rejected",
+   "name": "NYU Steinhardt Music Technology Summer Intensives (SIMPT & SEMI)"
+  },
+  "ec18581": {
+   "verdict": "approved",
+   "name": "Berklee College of Music: Music Production Workshop"
+  },
+  "ec18582": {
+   "verdict": "approved",
+   "name": "Berklee College of Music: Aspire Five-Week Music Performance Intensive"
+  },
+  "ec18583": {
+   "verdict": "approved",
+   "name": "Juilliard Summer Music: High School Composition Program"
+  },
+  "ec18584": {
+   "verdict": "approved",
+   "name": "The ASCAP Foundation Morton Gould Young Composer Awards"
+  },
+  "ec18585": {
+   "verdict": "approved",
+   "name": "YoungArts National Foundation Competition (Classical & Jazz Music Disciplines)"
+  },
+  "ec18586": {
+   "verdict": "rejected",
+   "name": "Telluride Association Summer Seminar (TASS)"
+  },
+  "ec18587": {
+   "verdict": "deleted",
+   "name": "LaunchX Entrepreneurship Program"
+  },
+  "ec18588": {
+   "verdict": "approved",
+   "name": "MITES Summer"
+  },
+  "ec18589": {
+   "verdict": "approved",
+   "name": "USC Bovard Scholars"
+  },
+  "ec18590": {
+   "verdict": "approved",
+   "name": "NIH Clinical Center Summer Internship Program (CC SIP)"
+  },
+  "ec18591": {
+   "verdict": "rejected",
+   "name": "Fred Hutch Summer High School Internship Program (SHIP)"
+  },
+  "ec18592": {
+   "verdict": "approved",
+   "name": "Seattle Children's Research Institute - Research Training Program (RTP)"
+  },
+  "ec18593": {
+   "verdict": "approved",
+   "name": "NASA Office of STEM Engagement (OSTEM) High School Internship"
+  },
+  "ec18594": {
+   "verdict": "approved",
+   "name": "Children's National Hospital - Mentored Experience to Expand Opportunities in Research (METEOR v3)"
+  },
+  "ec18595": {
+   "verdict": "deleted",
+   "name": "Stanford AIMI Summer Research Internship"
+  },
+  "ec18596": {
+   "verdict": "approved",
+   "name": "EnergyMag Virtual Internship"
+  },
+  "ec18597": {
+   "verdict": "approved",
+   "name": "American Anthropological Association (AAA) Virtual High School Internship"
+  },
+  "ec18598": {
+   "verdict": "rejected",
+   "name": "Pre-Health Shadowing Virtual Program"
+  },
+  "ec18599": {
+   "verdict": "approved",
+   "name": "Impact Internships STEM Immersion Programs (HSIP, C-SIP, E-IP)"
+  },
+  "ec18600": {
+   "verdict": "approved",
+   "name": "Stanford Institutes of Medicine Summer Research Program (SIMR)"
+  },
+  "ec18601": {
+   "verdict": "rejected",
+   "name": "Garcia Summer Research Program"
+  },
+  "ec18602": {
+   "verdict": "rejected",
+   "name": "Rockefeller University Summer Science Research Program (SSRP)"
+  },
+  "ec18603": {
+   "verdict": "approved",
+   "name": "National High School Ethics Bowl (NHSEB)"
+  },
+  "ec18604": {
+   "verdict": "deleted",
+   "name": "North American Computational Linguistics Open Competition (NACLO)"
+  },
+  "ec18605": {
+   "verdict": "rejected",
+   "name": "Congressional App Challenge"
+  },
+  "ec18606": {
+   "verdict": "rejected",
+   "name": "Scholastic Art & Writing Awards"
+  },
+  "ec18607": {
+   "verdict": "rejected",
+   "name": "YoungArts National Arts Competition"
+  },
+  "ec18608": {
+   "verdict": "approved",
+   "name": "Penguin Random House Creative Writing Awards"
+  },
+  "ec18609": {
+   "verdict": "rejected",
+   "name": "Ocean Awareness Contest"
+  },
+  "ec18610": {
+   "verdict": "deleted",
+   "name": "Civic Innovators Fellowship"
+  },
+  "ec18611": {
+   "verdict": "rejected",
+   "name": "Rhizome Civic Service Fellowship"
+  },
+  "ec18612": {
+   "verdict": "approved",
+   "name": "American Red Cross Youth & Young Adult Ambassador Program"
+  },
+  "ec18613": {
+   "verdict": "approved",
+   "name": "H2O for Life High School Fellowship Program"
+  },
+  "ec18614": {
+   "verdict": "rejected",
+   "name": "The Concord Review (TCR)"
+  },
+  "ec18615": {
+   "verdict": "approved",
+   "name": "National High School Journal of Science (NHSJS)"
+  },
+  "ec18616": {
+   "verdict": "approved",
+   "name": "Journal of High School Science (JHSS)"
+  },
+  "ec18617": {
+   "verdict": "approved",
+   "name": "International Journal of High School Research (IJHSR)"
+  },
+  "ec18618": {
+   "verdict": "rejected",
+   "name": "Sigma Xi Student Research Showcase"
+  },
+  "ec18619": {
+   "verdict": "rejected",
+   "name": "International Young Researchers' Conference (IYRC)"
+  },
+  "ec18620": {
+   "verdict": "approved",
+   "name": "Harvard Science Research Conference (HSRC)"
+  },
+  "ec18621": {
+   "verdict": "rejected",
+   "name": "Civic Innovators Fellowship"
+  },
+  "ec18622": {
+   "verdict": "rejected",
+   "name": "Carnegie Youth Fellowship"
+  },
+  "ec18623": {
+   "verdict": "approved",
+   "name": "Youth Advisory Council (YAC)"
+  },
+  "ec18624": {
+   "verdict": "approved",
+   "name": "Bank of America Student Leaders Program"
+  },
+  "ec18625": {
+   "verdict": "rejected",
+   "name": "National Youth Advisory Board"
+  },
+  "ec18626": {
+   "verdict": "rejected",
+   "name": "Diamond Challenge"
+  },
+  "ec18627": {
+   "verdict": "rejected",
+   "name": "LaunchX Entrepreneurship Programs"
+  },
+  "ec18628": {
+   "verdict": "rejected",
+   "name": "Wharton Leadership in the Business World (LBW)"
+  },
+  "ec18629": {
+   "verdict": "approved",
+   "name": "Michigan Health Sciences Pre-College Exposure Academy (SPEA)"
+  },
+  "ec18630": {
+   "verdict": "approved",
+   "name": "PhysicianTrack Program (PTP)"
+  },
+  "ec18631": {
+   "verdict": "approved",
+   "name": "The Building Blocks: Rush Scholars Program"
+  },
+  "ec18632": {
+   "verdict": "approved",
+   "name": "Medical Applications of Science for Health (M*A*S*H) Program"
+  },
+  "ec18633": {
+   "verdict": "rejected",
+   "name": "NYU Tandon Computer Science for Cyber Security (CS4CS)"
+  },
+  "ec18634": {
+   "verdict": "rejected",
+   "name": "UT Austin Engineering & Computer Science Camp"
+  },
+  "ec18635": {
+   "verdict": "approved",
+   "name": "Georgia Tech CEISMC Summer PEAKS (High School STEAM Sessions)"
+  },
+  "ec18636": {
+   "verdict": "approved",
+   "name": "Girls Who Code Pathways & Summer Immersion Program (SIP)"
+  },
+  "ec18637": {
+   "verdict": "rejected",
+   "name": "Summer Program on Applied Rationality and Cognition (SPARC)"
+  },
+  "ec18638": {
+   "verdict": "approved",
+   "name": "Atlas Fellowship"
+  },
+  "ec18639": {
+   "verdict": "approved",
+   "name": "Forecasting the Future Tournament"
+  },
+  "ec18640": {
+   "verdict": "approved",
+   "name": "Reason & Rationality Summer Program"
+  },
+  "ec18641": {
+   "verdict": "rejected",
+   "name": "Non-Trivial Fellowship"
+  },
+  "ec18642": {
+   "verdict": "rejected",
+   "name": "Stanford Young Investigators Program"
+  },
+  "ec18643": {
+   "verdict": "approved",
+   "name": "Teen Research and Education in Environmental Science (TREES) Program"
+  },
+  "ec18644": {
+   "verdict": "approved",
+   "name": "High School Sustainable Energy Education (SEE) Program"
+  },
+  "ec18645": {
+   "verdict": "approved",
+   "name": "Columbia Climate School Pre-College Programs"
+  },
+  "ec18646": {
+   "verdict": "approved",
+   "name": "Immerse Education Academic Insights"
+  },
+  "ec18647": {
+   "verdict": "approved",
+   "name": "Oxford Scholastica Academy Summer School"
+  },
+  "ec18648": {
+   "verdict": "approved",
+   "name": "The Oxford Tradition & The Cambridge Tradition"
+  },
+  "ec18649": {
+   "verdict": "approved",
+   "name": "Oxford Summer Courses"
+  },
+  "ec18650": {
+   "verdict": "approved",
+   "name": "NSDA National Speech & Debate Tournament"
+  },
+  "ec18651": {
+   "verdict": "approved",
+   "name": "Harvard National Speech and Debate Tournament"
+  },
+  "ec18652": {
+   "verdict": "approved",
+   "name": "Ronald Reagan Great Communicator Debate Series"
+  },
+  "ec18653": {
+   "verdict": "approved",
+   "name": "J.W. Patterson Tournament of Champions (TOC)"
+  },
+  "ec18654": {
+   "verdict": "approved",
+   "name": "picoCTF"
+  },
+  "ec18655": {
+   "verdict": "approved",
+   "name": "CyberPatriot"
+  },
+  "ec18656": {
+   "verdict": "approved",
+   "name": "GenCyber Summer Camps"
+  },
+  "ec18657": {
+   "verdict": "approved",
+   "name": "US Cyber Open / US Cyber Games"
+  },
+  "ec18658": {
+   "verdict": "approved",
+   "name": "HSCTF (High School Capture the Flag)"
+  },
+  "ec18659": {
+   "verdict": "approved",
+   "name": "Sea Education Association (SEA) High School Summer Programs"
+  },
+  "ec18660": {
+   "verdict": "approved",
+   "name": "High School Science Discovery Program"
+  },
+  "ec18661": {
+   "verdict": "approved",
+   "name": "Marjot Foundation Independent Environmental Research Grants"
+  },
+  "ec18662": {
+   "verdict": "approved",
+   "name": "Salish Sea Sciences Pre-College Summer Program"
+  },
+  "ec18663": {
+   "verdict": "approved",
+   "name": "Kenyon Review Young Writers Workshops"
+  },
+  "ec18664": {
+   "verdict": "rejected",
+   "name": "Polyphony Lit Editorial Board & Training Program"
+  },
+  "ec18665": {
+   "verdict": "approved",
+   "name": "United States Senate Youth Program (USSYP)"
+  },
+  "ec18666": {
+   "verdict": "approved",
+   "name": "Youth Council Internship"
+  },
+  "ec18667": {
+   "verdict": "approved",
+   "name": "APAPA National Internship Program"
+  },
+  "ec18668": {
+   "verdict": "approved",
+   "name": "High School Civil & Human Rights Policy Internship"
+  },
+  "ec18669": {
+   "verdict": "approved",
+   "name": "MIT Beaver Works Summer Institute: Autonomous RACECAR"
+  },
+  "ec18670": {
+   "verdict": "rejected",
+   "name": "Cooper Union Summer STEM: Engineering Design & Makerspace Prototyping"
+  },
+  "ec18671": {
+   "verdict": "rejected",
+   "name": "FIRST Robotics Competition (FRC)"
+  },
+  "ec18672": {
+   "verdict": "approved",
+   "name": "The Conrad Challenge"
+  },
+  "ec18673": {
+   "verdict": "approved",
+   "name": "Social Science Summer Pre-College Research Experience"
+  },
+  "ec18674": {
+   "verdict": "approved",
+   "name": "Penn Summer Prep: Thinking Like an Anthropologist"
+  },
+  "ec18675": {
+   "verdict": "approved",
+   "name": "UCSB Research Mentorship Program (RMP) – Social Sciences Track"
+  },
+  "ec18676": {
+   "verdict": "approved",
+   "name": "Chicago Summer Business Institute (CSBI)"
+  },
+  "ec18677": {
+   "verdict": "rejected",
+   "name": "CLA High School Internship Program"
+  },
+  "ec18678": {
+   "verdict": "approved",
+   "name": "Futures and Options Internship Program"
+  },
+  "ec18679": {
+   "verdict": "approved",
+   "name": "VyStar Academy of Business High School Branch Program"
+  },
+  "ec18680": {
+   "verdict": "rejected",
+   "name": "Inspirit AI Scholars"
+  },
+  "ec18681": {
+   "verdict": "approved",
+   "name": "Harvard AI Summer Bootcamp"
+  },
+  "ec18682": {
+   "verdict": "approved",
+   "name": "BLAST AI Research & ML Bootcamp"
+  },
+  "ec18683": {
+   "verdict": "rejected",
+   "name": "Stanford AI4ALL"
+  },
+  "ec18684": {
+   "verdict": "approved",
+   "name": "Python for Data Science & AI Machine Learning Live Online"
+  },
+  "ec18685": {
+   "verdict": "approved",
+   "name": "UC San Diego Extended Studies: Machine Learning & Deep Neural Networks"
+  },
+  "ec18686": {
+   "verdict": "rejected",
+   "name": "North American Computational Linguistics Open Competition (NACLO)"
+  },
+  "ec18687": {
+   "verdict": "approved",
+   "name": "Summer Linguistic Institute for Youth Scholars (SLIYS)"
+  },
+  "ec18688": {
+   "verdict": "rejected",
+   "name": "Stanford SHTEM Summer Internship Program"
+  },
+  "ec18689": {
+   "verdict": "rejected",
+   "name": "National Security Language Initiative for Youth (NSLI-Y)"
+  }
+ }
+}

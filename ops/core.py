@@ -1554,6 +1554,12 @@ _BASE_PENDING_SELECT = ("id,name,org,type,url,summary,source,created_at,review_s
 _MODERATION_SELECT = ("moderation_status,submitted_by,submitted_at,reviewed_by,reviewed_at,"
                       "duplicate_of,dup_candidates,quality_flags")
 
+# WHY a row was rejected — labeled training data for the scraper (see
+# user_submissions_schema.sql, which must be re-run to add the column). Stored as
+# "code" or "code: note"; the console owns the code list, the server only bounds length.
+_MODERATION_REASON_COLUMN = "moderation_reason"
+MODERATION_REASON_MAX_LEN = 500
+
 # A human's verdict on a queued row. Mirrors the CHECK constraint in
 # user_submissions_schema.sql — keep the two in step or a write here 400s.
 MODERATION_STATUSES = ("pending_review", "approved", "rejected", "duplicate")
@@ -1596,18 +1602,23 @@ def list_pending_opportunities(limit=500, source=None, status="queue"):
     elif status == "rejected":
         filters["moderation_status"] = f"in.({','.join(ADJUDICATED_STATUSES)})"
 
-    # Degrade one step rather than failing: without the migration there is no
-    # moderation_status to select or filter on, and a queue with no reject button beats
-    # no queue at all.
+    # Degrade one step at a time rather than failing: moderation_reason arrived after the
+    # other moderation columns (2026-08-25), so a DB migrated before then must keep its
+    # working queue and reject button — only the reason column reads as missing. Without
+    # any migration there is no moderation_status to select or filter on either, and a
+    # queue with no reject button beats no queue at all.
     attempts = [
-        (dict(base, select=f"{_BASE_PENDING_SELECT},{_MODERATION_SELECT}", **filters), True),
-        (dict(base, select=_BASE_PENDING_SELECT), False),
+        (dict(base, select=f"{_BASE_PENDING_SELECT},{_MODERATION_SELECT},"
+                           f"{_MODERATION_REASON_COLUMN}", **filters), True, True),
+        (dict(base, select=f"{_BASE_PENDING_SELECT},{_MODERATION_SELECT}", **filters),
+         True, False),
+        (dict(base, select=_BASE_PENDING_SELECT), False, False),
     ]
-    rows, moderation_ready = None, False
-    for params, ready in attempts:
+    rows, moderation_ready, reason_ready = None, False, False
+    for params, ready, r_ready in attempts:
         rows = _supabase_request("opportunities", params=params)
         if rows is not None:
-            moderation_ready = ready
+            moderation_ready, reason_ready = ready, r_ready
             break
     if rows is None:
         return {"ok": False, "error": "Could not read opportunities from Supabase."}
@@ -1632,6 +1643,9 @@ def list_pending_opportunities(limit=500, source=None, status="queue"):
         # False means user_submissions_schema.sql has not been run: the console shows the
         # setup step and hides the reject controls instead of offering a button that 400s.
         "moderation_ready": moderation_ready,
+        # False (with moderation_ready true) means the file predates moderation_reason and
+        # must be RE-RUN: rejects still work, but the why is dropped with a notice.
+        "reason_ready": reason_ready,
         "moderation_sql": "user_submissions_schema.sql",
         "statuses": statuses,
         "sources": sorted(({"source": k, "count": v} for k, v in sources.items()),
@@ -1818,7 +1832,39 @@ def _duplicate_targets(rows):
     return {row["id"]: row for row in found}
 
 
-def moderate_opportunities(ids, status, reviewed_by="admin-console", duplicate_of=None):
+def _moderation_updates(status, duplicate_of, reason, now):
+    """The PATCH body for one moderation verdict. Pure — everything testable lives here.
+
+    The reason is stored only on adjudicated-away verdicts (that is where the scraper
+    signal is) and is ALWAYS written, like duplicate_of: restoring a row must clear the
+    old why, or it keeps explaining a verdict that no longer stands. A duplicate with no
+    reason given gets one derived from its survivor, so the label is never blank for the
+    one verdict whose cause is already known.
+    """
+    reason = str(reason or "").strip()[:MODERATION_REASON_MAX_LEN]
+    if status == "duplicate" and not reason:
+        reason = f"duplicate: superseded by {duplicate_of}"
+    updates = {
+        "moderation_status": status,
+        "reviewed_by": "admin-console",
+        "reviewed_at": now,
+        "updated_at": now,
+        # Always written, never merely set: restoring or rejecting a row that was previously
+        # marked duplicate must clear the pointer, or it keeps naming a survivor for a
+        # relationship that no longer exists.
+        "duplicate_of": duplicate_of if status == "duplicate" else None,
+        _MODERATION_REASON_COLUMN: reason if status in ADJUDICATED_STATUSES and reason else None,
+    }
+    if status in ADJUDICATED_STATUSES:
+        # An adjudicated-away row must not be left visible to students, whatever it was
+        # before. Approving, by contrast, does NOT activate: that stays an explicit,
+        # separate decision on the Activate button.
+        updates["is_active"] = False
+    return updates
+
+
+def moderate_opportunities(ids, status, reviewed_by="admin-console", duplicate_of=None,
+                           reason=None):
     """Record a human verdict on an explicit list of queued rows.
 
     This is the counterpart to activate_opportunities: that one says "students should see
@@ -1867,26 +1913,27 @@ def moderate_opportunities(ids, status, reviewed_by="admin-console", duplicate_o
         return {"ok": False, "error": "duplicate_of only applies to the 'duplicate' status."}
 
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    updates = {
-        "moderation_status": status,
-        "reviewed_by": reviewed_by,
-        "reviewed_at": now,
-        "updated_at": now,
-        # Always written, never merely set: restoring or rejecting a row that was previously
-        # marked duplicate must clear the pointer, or it keeps naming a survivor for a
-        # relationship that no longer exists.
-        "duplicate_of": duplicate_of if status == "duplicate" else None,
-    }
-    if status in ADJUDICATED_STATUSES:
-        # An adjudicated-away row must not be left visible to students, whatever it was
-        # before. Approving, by contrast, does NOT activate: that stays an explicit,
-        # separate decision on the Activate button.
-        updates["is_active"] = False
+    updates = _moderation_updates(status, duplicate_of, reason, now)
+    updates["reviewed_by"] = reviewed_by
 
     done, errors, details = 0, 0, []
+    payload, reason_dropped = updates, False
     for opp_id in ids:
         try:
-            _commit_patch(opp_id, updates)
+            try:
+                _commit_patch(opp_id, payload)
+            except Exception as e:
+                # moderation_reason arrived after the other moderation columns, so a DB
+                # migrated before 2026-08-25 rejects the whole PATCH over that one key.
+                # Drop the reason and keep the verdict — losing the why must never cost
+                # the decision itself — and latch for the rest of the batch.
+                if not (_is_missing_column_error(e)
+                        and _MODERATION_REASON_COLUMN in payload):
+                    raise
+                payload = {k: v for k, v in updates.items()
+                           if k != _MODERATION_REASON_COLUMN}
+                reason_dropped = True
+                _commit_patch(opp_id, payload)
             done += 1
         except Exception as e:
             if _is_missing_column_error(e):
@@ -1901,8 +1948,14 @@ def moderate_opportunities(ids, status, reviewed_by="admin-console", duplicate_o
     if done and status in ADJUDICATED_STATUSES:
         with _opportunities_cache_lock:
             _opportunities_cache["fetched_at"] = 0.0
-    return {"ok": errors == 0, "moderated": done, "status": status,
-            "errors": errors, "error_details": details}
+    result = {"ok": errors == 0, "moderated": done, "status": status,
+              "errors": errors, "error_details": details}
+    if reason_dropped:
+        result["reason_dropped"] = True
+        result["note"] = ("The verdict was recorded, but the reason was dropped: the "
+                          "moderation_reason column does not exist yet. Re-run "
+                          "user_submissions_schema.sql (idempotent) to keep reasons.")
+    return result
 
 
 def activate_opportunities(ids, active=True):

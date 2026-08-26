@@ -28,7 +28,16 @@ ALTER TABLE opportunities
   -- widening the student-facing catalog schema. Note that apply_url/apply_label/meta/
   -- requirements/description are NOT columns on this table — an earlier version of
   -- _insert_user_opportunity wrote them directly and every insert 400'd as a result.
-  ADD COLUMN IF NOT EXISTS submission_payload jsonb;
+  ADD COLUMN IF NOT EXISTS submission_payload jsonb,
+  -- WHY the human decided (added 2026-08-25, so this file must be RE-RUN — it is
+  -- idempotent). Written by the console's Reject flow as "code" or "code: note"
+  -- (codes: duplicate, third-party-url, wrong-page, dead-link, not-a-fit, low-quality,
+  -- other), auto-filled for the Duplicate button, cleared on Restore. This is labeled
+  -- training data for the scraper: grade_scraper_batch.py fixtures read it to map each
+  -- rejection to the scraper failure mode that caused it, instead of re-inferring the
+  -- reason from row content after the fact. Until the column exists the console still
+  -- rejects fine — the reason is dropped with a notice, never the whole verdict.
+  ADD COLUMN IF NOT EXISTS moderation_reason text;
 
 -- moderation_status is deliberately NOT a merge of is_active. The two are independent:
 --   is_active          = is this visible to students right now?

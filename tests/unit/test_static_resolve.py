@@ -42,6 +42,34 @@ def test_walkthrough_film_is_served():
     assert main._resolve_static("walkthrough.html") == _norm("walkthrough.html")
 
 
+def test_walkthrough_served_with_playhead_reset_injected(monkeypatch):
+    """The film's player persists its playhead ('animstage-v3:t') and plays exactly once,
+    so a reload holds the final frame. The parent-side clear only works same-origin
+    (production); in dev the iframe is cross-origin and it no-ops — so serve_static
+    injects the clear into the served document itself, where it runs in the film's own
+    origin before the bundle builds its initial state. This pins: injected exactly once,
+    at the top of <head> (before anything else can run), and NEVER written to the
+    vendored file on disk, which is a re-export-only artifact."""
+    from fastapi.responses import HTMLResponse
+
+    monkeypatch.setattr(main, "SERVE_WEB_DIST", False)
+    resp = main.serve_static("walkthrough.html")
+    assert isinstance(resp, HTMLResponse)
+    snippet = b"localStorage.removeItem('animstage-v3:t')"
+    assert resp.body.count(snippet) == 1
+    assert resp.body.index(snippet) < resp.body.index(b"<style")
+    with open(_norm("walkthrough.html"), "rb") as f:
+        assert snippet not in f.read()
+
+
+def test_other_root_pages_are_not_injected(monkeypatch):
+    """Only the walkthrough gets the rewrite; everything else streams from disk."""
+    from fastapi.responses import FileResponse
+
+    monkeypatch.setattr(main, "SERVE_WEB_DIST", False)
+    assert isinstance(main.serve_static("terms.html"), FileResponse)
+
+
 def test_allowed_static_assets():
     assert main._resolve_static("styles.css") == _norm("styles.css")
     assert main._resolve_static("terms.html") == _norm("terms.html")

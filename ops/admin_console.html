@@ -1008,6 +1008,43 @@ tr.disabled-seed { opacity: .48; }
   </div>
 </div>
 
+<!-- Why a row is being rejected. The codes are labeled training data for the scraper:
+     each one names a scraper failure mode, and grade_scraper_batch.py fixtures read the
+     stored reason instead of re-inferring it from row content. Codes here must stay in
+     step with the taxonomy documented in user_submissions_schema.sql. -->
+<div class="overlay" id="rejectModal">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-head">
+      <h2>Reject — why?</h2>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" id="rejectClose">Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:12px" id="rejectSubject"></div>
+      <div id="rejectReasons"></div>
+      <div class="field" style="margin-top:10px">
+        <label for="rejectNote">Note (optional — required for “Other”)</label>
+        <input id="rejectNote" type="text" maxlength="400" autocomplete="off"
+               placeholder="e.g. kept ec17096 instead">
+      </div>
+      <div class="hint" id="rejectReasonSetup" style="margin-top:8px">
+        Reasons aren’t stored yet — re-run <span class="mono">user_submissions_schema.sql</span>
+        (idempotent) to add the <span class="mono">moderation_reason</span> column. The
+        rejection itself still works.
+      </div>
+      <div class="hint" style="margin-top:8px">
+        Nothing is deleted — the row stays in the table so its URL keeps blocking
+        re-submission, and Restore undoes it from the Rejected tab.
+      </div>
+      <div id="rejectError" class="notice err hidden"></div>
+    </div>
+    <div class="modal-foot">
+      <div class="spacer"></div>
+      <button class="btn btn-danger" id="rejectSave">Reject</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="oppModal">
   <div class="modal" style="max-width:760px">
     <div class="modal-head">
@@ -1271,6 +1308,7 @@ async function refreshDashboard() {
     S.pending = (pending && pending.opportunities) || [];
     S.pendingSources = (pending && pending.sources) || [];
     S.moderationReady = !pending || pending.moderation_ready !== false;
+    S.reasonReady = !pending || pending.reason_ready !== false;
     S.duplicateTargets = (pending && pending.duplicate_targets) || {};
     notice('');
     renderKPIs(); renderBilled(); renderUserCosts(); renderMetrics(); renderChart(); renderCards(); renderHistory();
@@ -1519,6 +1557,8 @@ function renderPending() {
       isAdjudicated(o) ? `<span class="pill danger">${esc(o.moderation_status)}${o.reviewed_at ? ' ' + ago(o.reviewed_at) : ''}</span>` : '',
       // A bare duplicate_of id means nothing to a reader; name the survivor.
       o.duplicate_of ? `<span class="pill info">of ${esc((S.duplicateTargets[o.duplicate_of] || {}).name || o.duplicate_of)}</span>` : '',
+      // The recorded why. Only ever present on adjudicated rows; the full text rides the tooltip.
+      o.moderation_reason ? `<span class="pill info" title="${esc(String(o.moderation_reason))}">why: ${esc(String(o.moderation_reason).slice(0, 60))}</span>` : '',
     ].filter(Boolean).join(' ');
     return `<tr class="${on ? 'sel-row' : ''}">
       <td><input type="checkbox" ${on ? 'checked' : ''} onchange="togglePending('${esc(o.id)}', this.checked)"></td>
@@ -1787,28 +1827,85 @@ function updateReviewButtons() {
   res.textContent = n ? `Restore ${n} to queue` : 'Restore to queue';
 }
 
+async function postModerate(ids, status, reason) {
+  const r = await api('/api/agents/pending/moderate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(reason ? { ids, status, reason } : { ids, status }),
+  });
+  toast(`${status === 'rejected' ? 'Rejected' : 'Restored'} ${r.moderated} `
+      + `opportunit${r.moderated === 1 ? 'y' : 'ies'}.`);
+  if (r.errors) notice(`${r.errors} failed: ${(r.error_details || []).join(' | ')}`);
+  if (r.reason_dropped) notice(r.note || 'Reason dropped — re-run user_submissions_schema.sql.');
+  S.selectedPending.clear();
+  refreshDashboard();
+  return r;
+}
+
 async function moderateSelected(status) {
   const ids = [...S.selectedPending];
   if (!ids.length) return;
+  if (status === 'rejected') { openRejectModal(ids); return; }
   const many = ids.length === 1 ? 'this opportunity' : `these ${ids.length} opportunities`;
-  const msg = status === 'rejected'
-    ? `Reject ${many}?\n\nNothing is deleted — the row stays in the database so its URL keeps `
-      + `blocking re-submission, and it drops out of the queue. You can restore it from the `
-      + `Rejected tab.`
-    : `Put ${many} back in the review queue?`;
-  if (!confirm(msg)) return;
+  if (!confirm(`Put ${many} back in the review queue?`)) return;
   try {
-    const r = await api('/api/agents/pending/moderate', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids, status }),
-    });
-    toast(`${status === 'rejected' ? 'Rejected' : 'Restored'} ${r.moderated} `
-        + `opportunit${r.moderated === 1 ? 'y' : 'ies'}.`);
-    if (r.errors) notice(`${r.errors} failed: ${(r.error_details || []).join(' | ')}`);
-    S.selectedPending.clear();
-    refreshDashboard();
+    await postModerate(ids, status);
   } catch (e) {
-    notice((status === 'rejected' ? 'Reject' : 'Restore') + ' failed: ' + e.message);
+    notice('Restore failed: ' + e.message);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Rejecting with a reason.
+
+   Each code names a SCRAPER FAILURE MODE — this is labeled training data, the thing
+   the 2026-08-23 review had to reconstruct by inference after the fact. Approvals
+   deliberately stay one-click: an approved row with no reason IS the label "good row",
+   and friction on the most common action would cost more than it teaches.
+--------------------------------------------------------------------------- */
+const REJECT_REASONS = [
+  ['duplicate',       'Duplicate — already have this program (use the Duplicate button if you know the survivor)'],
+  ['third-party-url', 'URL is an article / listicle / video ABOUT it, not the program’s own page'],
+  ['wrong-page',      'Right site, wrong page (facilities page, costs page, another program…)'],
+  ['dead-link',       'Page is gone (404 / domain dead)'],
+  ['not-a-fit',       'Not a high-school extracurricular opportunity'],
+  ['low-quality',     'Suspicious, thin, or low-value program'],
+  ['other',           'Other (explain in the note)'],
+];
+
+function openRejectModal(ids) {
+  S.rejectIds = ids;
+  $('rejectSubject').innerHTML = ids.length === 1
+    ? `Rejecting <strong>${esc(((S.pending || []).find(x => x.id === ids[0]) || {}).name || ids[0])}</strong>.`
+    : `Rejecting <strong>${ids.length} opportunities</strong> — the same reason is stamped on all of them.`;
+  $('rejectReasons').innerHTML = REJECT_REASONS.map(([code, label], i) => `
+    <label class="dup-opt" style="display:flex;gap:8px;align-items:baseline;cursor:pointer">
+      <input type="radio" name="rejectReason" value="${code}" ${i === 0 ? 'checked' : ''}>
+      <span><span class="mono">${code}</span> — ${esc(label)}</span>
+    </label>`).join('');
+  $('rejectNote').value = '';
+  $('rejectError').classList.add('hidden');
+  $('rejectReasonSetup').classList.toggle('hidden', S.reasonReady !== false);
+  $('rejectModal').classList.add('open');
+}
+
+async function confirmReject() {
+  const ids = S.rejectIds || [];
+  if (!ids.length) return;
+  const code = (document.querySelector('input[name="rejectReason"]:checked') || {}).value || 'other';
+  const note = $('rejectNote').value.trim();
+  if (code === 'other' && !note) {
+    $('rejectError').textContent = '“Other” needs a note — that is the whole reason.';
+    $('rejectError').classList.remove('hidden');
+    return;
+  }
+  const reason = note ? `${code}: ${note}` : code;
+  try {
+    await postModerate(ids, 'rejected', reason);
+    $('rejectModal').classList.remove('open');
+    S.rejectIds = null;
+  } catch (e) {
+    $('rejectError').textContent = e.message;
+    $('rejectError').classList.remove('hidden');
   }
 }
 
@@ -3602,6 +3699,8 @@ $('oppClose').onclick = () => { $('oppModal').classList.remove('open'); S.editin
 $('oppSave').onclick = saveOpportunity;
 $('rejectBtn').onclick = () => moderateSelected('rejected');
 $('restoreBtn').onclick = () => moderateSelected('pending_review');
+$('rejectSave').onclick = () => confirmReject();
+$('rejectClose').onclick = () => { $('rejectModal').classList.remove('open'); S.rejectIds = null; };
 $('pendingSource').onchange = e => { S.pendingSource = e.target.value; renderPending(); };
 [...document.querySelectorAll('#pendingStatusTabs .tab')].forEach(t => {
   // Switching slices clears the selection: an id selected in the queue means something

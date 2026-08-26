@@ -229,3 +229,34 @@ def test_find_duplicates_no_match_returns_empty():
 def test_find_duplicates_empty_rows():
     assert ud.find_duplicates("https://x.com/a", "Name", []) == (None, [])
     assert ud.find_duplicates("https://x.com/a", "Name", None) == (None, [])
+
+
+# ------------------------------------------------------- candidate id/name alignment
+def test_find_duplicates_candidates_carry_their_own_rows_fields():
+    """Each candidate's id, name, url and reason all come from the SAME pool row.
+
+    Pinned after the 2026-08-23 review: a rejected NACLO row's dup_candidates named an
+    id whose snapshot row was an unrelated film workshop with reason "name 100%
+    similar". By construction (dict(row, ...)) that mismatch should be impossible in
+    this function — the likely culprit is snapshot/DB drift from the old date-only
+    snapshot overwrite bug — but the invariant is load-bearing for the console's
+    dupe back-links, so it gets a pin.
+    """
+    pool = [
+        _row("ecNaclo", "North American Computational Linguistics Open Competition",
+             "https://naclo.org/register"),
+        _row("ecFilm", "Summer High School Filmmakers Workshop",
+             "https://tisch.nyu.edu/film"),
+    ]
+    exact, cands = ud.find_duplicates(
+        "https://linguistics.example.edu/naclo",
+        "North American Computational Linguistics Open Competition (NACLO)", pool)
+    assert exact is None
+    by_id = {c["id"]: c for c in cands}
+    # The similar-name candidate is the NACLO row, carrying the NACLO row's own fields.
+    assert "ecNaclo" in by_id
+    assert by_id["ecNaclo"]["name"].startswith("North American")
+    assert by_id["ecNaclo"]["url"] == "https://naclo.org/register"
+    assert "similar" in by_id["ecNaclo"]["reason"]
+    # The unrelated row must not appear under any id.
+    assert "ecFilm" not in by_id

@@ -15,7 +15,7 @@ import re
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import GEMINI_API_KEY, ANTHROPIC_API_KEY
@@ -190,6 +190,21 @@ def _resolve_static(rel: str):
     return candidate if os.path.isfile(candidate) else None
 
 
+# The walkthrough film's player persists its playhead in localStorage ('animstage-v3:t')
+# and the composition is authored to play exactly once — so a reload restores
+# time === duration and holds the final frame instead of playing. The landing page
+# clears that key from the parent before mounting the iframe, but only when the two are
+# same-origin (production); in dev Metro (:8081) and this API (:8000) differ, so the
+# clear silently no-ops and "See how it works" replays nothing. Injecting the clear into
+# the served document runs it in the film's OWN origin, synchronously before the bundle
+# script builds its initial state, so every mount starts at 0:00 regardless of who the
+# parent is (or whether there is one — the native handoff opens this URL directly). The
+# vendored file on disk is never edited: it is a re-export-only artifact (see CLAUDE.md).
+_WALKTHROUGH_PLAYHEAD_RESET = (
+    b"<head>\n  <script>try{localStorage.removeItem('animstage-v3:t')}catch(e){}</script>"
+)
+
+
 @app.get("/{full_path:path}")
 def serve_static(full_path: str):
     # 1) The web-app bundle (exact file or exported route html), when enabled.
@@ -202,6 +217,10 @@ def serve_static(full_path: str):
     if resolved is None:
         resolved = _dist_index()
     if resolved is not None:
+        if os.path.basename(resolved).lower() == "walkthrough.html":
+            with open(resolved, "rb") as f:
+                html = f.read()
+            return HTMLResponse(html.replace(b"<head>", _WALKTHROUGH_PLAYHEAD_RESET, 1))
         return FileResponse(resolved)
     if not full_path.strip("/"):
         if WEB_APP_URL:

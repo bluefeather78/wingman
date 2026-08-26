@@ -27,6 +27,17 @@
       }
     },
     {
+      "name": "wingman-api-8004",
+      "runtimeExecutable": "C:\\Users\\shama\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+      "runtimeArgs": [
+        "server.py"
+      ],
+      "port": 8004,
+      "env": {
+        "PORT": "8004"
+      }
+    },
+    {
       "name": "wingman-api-8002",
       "runtimeExecutable": "C:\\Users\\shama\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
       "runtimeArgs": [

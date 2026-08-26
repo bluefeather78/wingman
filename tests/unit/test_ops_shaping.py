@@ -472,3 +472,42 @@ class TestQsInt:
         # value below lo is raised to lo, which sits within hi.
         req = _StubRequest({"limit": "0"})
         assert _qs_int(req, "limit", 10, lo=5, hi=500) == 5
+
+
+# --------------------------------------------------------------------------- #
+# _moderation_updates — the PATCH body for a human verdict, reason included.
+# --------------------------------------------------------------------------- #
+NOW = "2026-08-25T12:00:00+00:00"
+
+
+def test_moderation_updates_rejected_stores_reason_and_deactivates():
+    u = core._moderation_updates("rejected", "", "third-party-url: lumiere listicle", NOW)
+    assert u["moderation_reason"] == "third-party-url: lumiere listicle"
+    assert u["moderation_status"] == "rejected"
+    assert u["is_active"] is False
+    assert u["duplicate_of"] is None
+
+
+def test_moderation_updates_restore_clears_reason_and_pointer():
+    # Restoring must clear the old why, or it keeps explaining a dead verdict.
+    u = core._moderation_updates("pending_review", "", "stale reason", NOW)
+    assert u["moderation_reason"] is None
+    assert u["duplicate_of"] is None
+    assert "is_active" not in u          # restore does not touch visibility
+
+
+def test_moderation_updates_duplicate_defaults_reason_from_survivor():
+    u = core._moderation_updates("duplicate", "ec17096", None, NOW)
+    assert u["moderation_reason"] == "duplicate: superseded by ec17096"
+    assert u["duplicate_of"] == "ec17096"
+    assert u["is_active"] is False
+
+
+def test_moderation_updates_duplicate_explicit_reason_wins():
+    u = core._moderation_updates("duplicate", "ec17096", "duplicate: kept the deeper URL", NOW)
+    assert u["moderation_reason"] == "duplicate: kept the deeper URL"
+
+
+def test_moderation_updates_reason_is_capped():
+    u = core._moderation_updates("rejected", "", "x" * 2000, NOW)
+    assert len(u["moderation_reason"]) == core.MODERATION_REASON_MAX_LEN

@@ -281,6 +281,42 @@ def next_id_generator(existing_ids):
         n += 1
 
 
+TOMBSTONES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "scraper_tombstones.json")
+
+
+def load_tombstones(path=TOMBSTONES_PATH):
+    """Rows deliberately DELETED from the catalog by an operator, as dedupe-pool entries.
+
+    A DELETE removes the row from url_dedupe's pool, so the next run that finds the same
+    URL re-inserts it — the operator then re-reviews a row they already killed
+    (conradchallenge.org and girlswhocode.com's program page were both left in exactly
+    that state by the 2026-08-23/24 consolidation). These entries rejoin the pool under
+    tomb-* ids: same normalized-URL-AND-similar-name matching as everything else, so a
+    program re-found at a NEW url is never blocked, and next_id_generator ignores the
+    ids (no "ec" prefix). Missing or unreadable file degrades to no tombstones, loudly.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as e:
+        print(f"[WARN] {os.path.basename(path)} unreadable ({e}) — running without "
+              f"tombstones; previously deleted rows may be re-inserted.")
+        return []
+    entries = []
+    for entry in data.get("entries", []):
+        if isinstance(entry, dict) and entry.get("url") and entry.get("name"):
+            entries.append({"id": entry.get("id") or "tomb-?",
+                            "name": entry["name"], "url": entry["url"]})
+    return entries
+
+
+def is_tombstone(row):
+    return bool(row) and str(row.get("id", "")).startswith("tomb-")
+
+
 def clean_value(value, valid_set):
     return value if value in valid_set else None
 
@@ -548,7 +584,10 @@ def main():
     print(f"[OK] Fetching existing catalog from Supabase for dedup...")
     existing = supabase_get(supabase_url, "opportunities", {"select": "id,name,url"}, service_key)
     mint_id = next_id_generator({r["id"] for r in existing})
-    print(f"[OK] {len(existing)} existing rows loaded.")
+    tombstones = load_tombstones()
+    existing.extend(tombstones)
+    print(f"[OK] {len(existing) - len(tombstones)} existing rows loaded"
+          f" (+{len(tombstones)} tombstones of operator-deleted rows).")
 
     # Dry runs are logged too: they skip DATABASE writes, not the paid Gemini calls, so a
     # dry scrape costs the same as a real one. The "-dryrun" mode suffix marks them.
@@ -656,8 +695,14 @@ def main():
                 if exact:
                     duplicates_skipped += 1
                     seed_dupes += 1
-                    rejected.append({"reason": f"exact duplicate of {exact.get('id')} "
-                                               f"({exact.get('name')})", "raw": candidate})
+                    if is_tombstone(exact):
+                        # Not in the catalog — an operator deliberately DELETED this row.
+                        # Skipping keeps it from coming back through the review queue.
+                        reason = (f"previously deleted by operator — tombstone for "
+                                  f"{exact.get('name')} ({exact.get('url')})")
+                    else:
+                        reason = f"exact duplicate of {exact.get('id')} ({exact.get('name')})"
+                    rejected.append({"reason": reason, "raw": candidate})
                     continue
 
                 row = build_row(candidate, next(mint_id), source, url, flags)

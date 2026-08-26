@@ -9,12 +9,15 @@ program-source finder — read-once + FAQ/sub-page discovery for tasks (proven l
 tier-merge bug found & fixed in-session). A free tracker SYNC layer (`/api/tracker/sync`) sits on
 top. **1045 pytest green, tsc clean, ~$0.70 of live proofs this session, zero DB writes.**
 
-**P7–P9 SHIPPED 2026-08-25** (frontend trust gradient; Gemini producer collapsed; refresh
-decoupled with distinct deadline/task counts). tsc clean; the P7 rendering + the P9 skip path
-verified live in-browser on seeded data (Metro :8083 → API :8002, $0, no DB writes beyond the
-dev test account). **NEXT: P10** (per-user task delete + user-added tasks — the
-`mergeActionItems` extension), **then P11 last** (calendar "Open now" band). Operator decisions
-all resolved; technical unknowns T1–T8 resolved.
+**ALL PHASES SHIPPED — P0–P11 COMPLETE (P10+P11 on 2026-08-26, commit e68a230).** The full
+plan is live: substrate + trust tiers end-to-end, frontend gradient, producer collapse,
+decoupled refresh, per-user task delete/user-added tasks, calendar "Open now" band — plus the
+`not_running` evidence gate added from the live ec18599 case. Everything verified in-browser
+(the paid E2E on THINK $0.199; the ec18599 corrective re-check $0.081; P10/P11 free against
+real catalog sync data). **Remaining follow-ups are outside the phased plan:** task
+TIMELINESS (page-verified tasks can carry past dates), the §13 coverage/measurement layers
+(F1 change-detection/reminders, F2 accuracy harness), and the deliberately-deferred proactive
+coverage (item 1).
 **Owner:** _tbd_  **Started:** 2026-08-25  **Branch:** `P5-P7-deadline-and-task-tracker`
 
 > **This is the single source of truth for the deadline creator and the task creator.**
@@ -671,9 +674,28 @@ operator decisions resolved; T1–T8 at build time)*
   ($0): one 404'd deadline call, NO task call, honest "1 added by URL can't be auto-checked".
 
 **Future**
-- **P10 — Per-user task delete + user-added tasks.** `ActionItem.origin`; extend
-  `mergeActionItems` (preserve `user` tasks, honour tombstones); removal/undo; add/delete UI.
-- **P11 — Calendar: surface programs with ONGOING submissions (LAST phase).** A `rolling`
+- **P10 — Per-user task delete + user-added tasks. ✅ DONE 2026-08-26** (commit e68a230; tsc
+  clean; merge + UI verified live in-browser against a REAL catalog sync). `taskKey()` is the
+  shared text identity; `mergeActionItems(existing, incoming, removedKeys)` drops tombstoned
+  catalog tasks and APPENDS surviving `origin:'user'` tasks (when a user task's text later
+  matches a regenerated catalog line, the catalog copy wins and inherits the state). Item
+  gains `removedTasks: string[]`; `ActionItem.origin` absent ⇒ catalog. Store helpers:
+  `deleteTrackerTask` (tombstone for catalog, splice for user), `restoreRemovedTasks`
+  (clears tombstones + the UI forces a free sync so the tasks visibly return), `addUserTask`
+  (never page-backed, duplicate text refused — text IS the merge identity — and re-adding
+  lifts a matching tombstone). UI in the Home Base modal: ✕ per row, "Your own tasks" group
+  + "Added by you" chip, per-item add input, "N removed tasks — restore" undo line. Live
+  proof: THINK's cached catalog list re-merged on focus sync WITHOUT resurrecting the
+  tombstoned task or dropping the user tasks; in_progress state preserved; restore returned
+  the task instantly.
+- **P11 — Calendar: surface programs with ONGOING submissions (LAST phase). ✅ DONE
+  2026-08-26** (same commit; verified live — KCLS `rolling` renders in the band and nowhere
+  else on the calendar). Green "OPEN NOW — APPLY ANYTIME" band above the month lanes in
+  `CalendarCard`, listing `status === 'rolling'` entries as tappable pills (→ the list card,
+  same jump the lane entries use). Outside the date sort; no placeholder dates; saved/
+  not_running excluded (upstream/by definition); dated currently-open programs deliberately
+  NOT duplicated into the band — they already sit on a month lane with their real dates.
+  The empty-state now only shows when both lanes AND the band are empty. A `rolling`
   program (G3) carries no `important_dates`, so the Quest Log's month-swimlane **Calendar**
   view — which places items by date — never shows it; it appears only in the List view with
   the "Open now" badge. A student scanning the calendar for "what can I apply to right now"
@@ -692,15 +714,14 @@ operator decisions resolved; T1–T8 at build time)*
 **Deferred / optional:** fetch fixes A (PDF) + B (link discovery) survive only as a possible
 LOCAL fallback now that Claude `web_fetch` is the shared fetcher (§5a); C (Playwright) deferred.
 
-**Order:** ~~P0 → P1 → P2 → P3 → P4 → P5 → P6 (P6a → P6b → P6c) → T6 → P7 → P8 → P9~~ ✅ **done**
-→ **P10 (next)**, then **P11 last** (calendar ongoing-submissions UI). P11 depends only on P4's
-`rolling` status (shipped), so it can be pulled forward with any calendar work — scheduled last
-by request.
+**Order:** ~~P0 → P1 → P2 → P3 → P4 → P5 → P6 (P6a → P6b → P6c) → T6 → P7 → P8 → P9 → P10 →
+P11~~ ✅ **ALL DONE (2026-08-26).**
 
-**BACKEND AND CLIENT CONSOLIDATION ARE DONE.** The trust tiers and per-date provenance render
-in the app; the redundant Gemini producer is gone; refresh reports deadlines and tasks
-separately. What remains is additive UX: P10 (per-user task delete + user-added tasks, hinging
-on the `mergeActionItems` extension) and P11 (calendar rolling band).
+**THE PHASED PLAN IS COMPLETE.** Trust tiers and per-date provenance render in the app; the
+redundant Gemini producer is gone; refresh reports deadlines and tasks separately; students
+can remove and add their own tasks (surviving every refresh); rolling programs surface on the
+calendar; and a `not_running` verdict now requires proof. Next work items live in §13/§13a
+(F1 reminders, F2 accuracy harness, proactive coverage) plus the task-timeliness follow-up.
 
 **Loose ends carried out of the P0–P4 session (none blocking):**
 - P0 tasks-on-Claude never run on real rows — a graded sample costs money; do one when
@@ -907,6 +928,17 @@ deadline."
 
 ## Change log
 
+- **2026-08-26** — **P10 + P11 SHIPPED — the phased plan is COMPLETE** (commit e68a230, tsc
+  clean, verified live in-browser at $0 against real catalog data). P10: `taskKey` text
+  identity; `mergeActionItems` honours per-user tombstones (`TrackerItem.removedTasks`) and
+  appends surviving `origin:'user'` tasks; store helpers `deleteTrackerTask` /
+  `restoreRemovedTasks` / `addUserTask`; Home Base modal gains ✕ per row, a "Your own tasks"
+  group ("Added by you" chip), an add-task input and a restore-undo line. Live proof: the
+  focus sync re-merged THINK's cached catalog list without resurrecting the tombstoned task
+  or dropping user tasks (state preserved); restore returned the task instantly. P11: green
+  "OPEN NOW — APPLY ANYTIME" band above the calendar's month lanes listing rolling programs
+  (tappable pills → list card); outside the date sort, no invented dates, no duplication of
+  dated open programs; KCLS verified in the band and nowhere else.
 - **2026-08-26** — **`not_running` now requires PROOF (status-evidence gate), from a live
   user-reported case.** ec18599 (Impact Internships, an annual program between cycles) was
   written `not_running` from "2026 cycle closed... No 2027 dates posted yet" — the off-season

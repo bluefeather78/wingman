@@ -411,9 +411,13 @@ which are independent until the client consolidation.
   ✅ CODE-COMPLETE 2026-08-25** (branch `P5-P7-deadline-and-task-tracker`; 999 pytest green;
   console Sources tab browser-verified in the degraded table-absent state). Unlocks deadline
   rung 4 AND the task aggregator tier. Serve-path `pending`/`blocked` filter (safe no-op until
-  aggregators exist) live. Deadline **rung 4** wired into the P2 loop.
-  *(Awaiting the manual DDL step — run `trusted_aggregators_schema.sql` in Supabase — and a
-  paid live check on a hard row to prove rung 4 end-to-end; unit-tested until then.)*
+  aggregators exist) live. Deadline **rung 4** wired into the P2 loop. **DDL RUN + rung 4
+  PROVEN LIVE 2026-08-26** ($0.146 total, no DB writes): gating verified on THINK ec17921 +
+  Harvard ec18392 (own-site rungs 1-3 succeed → rung 4 correctly skipped); positive path
+  verified directly on THINK — allowlist injected into the focus, model returned 9
+  lumiere-education.com URLs + 1 Wikipedia, the Wikipedia hit **dropped by the trust filter**
+  (only trusted sources reach phase 2), 3 dates emitted all `estimated=true` with a note
+  citing the lumiere guide. P5 fully closed.
 
 **Task coverage & accuracy** *(operator decisions resolved; T1–T5 design at build time)*
 - **P6 — Aggregator discovery + tiers.** `--aggregators` reusing the P2 "program source finder"
@@ -654,9 +658,17 @@ deadline."
   - Tests: new `tests/unit/test_aggregators_common.py` (normalize/classify/policy/cache +
     serve filter); rung-4 loop tests + updated own-site-rung count in
     `test_check_deadlines_helpers.py`. **999 pytest green.**
-  - **Not done (as scoped — checkpoint before P6/P7):** run the DDL; a paid live rung-4 check
-    on a hard row (e.g. THINK); the task aggregator discovery (P6) and frontend trust
-    gradient (P7).
+  - **Rung 4 PROVEN LIVE 2026-08-26** ($0.146, no DB writes). Gating: THINK ec17921 rungs
+    1-2 found the prior-cycle basis via the guidelines PDFs and stopped → rung 4 skipped;
+    Harvard ec18392 rung 1 found its REAL site (`harvardresearch.org`, though the catalog
+    url `hcura.org` is stale) → rung 4 skipped. Both confirm rung 4 is the last resort.
+    Positive path (direct rung-4 invocation on THINK): focus carried `lumiere-education.com`,
+    the model returned 9 lumiere URLs + 1 Wikipedia, the Wikipedia hit was **dropped by the
+    trust filter** so only trusted sources reached phase 2, and phase 2 emitted 3 dates all
+    `estimated=true` noting the lumiere guide. Both traced "hard" rows are now handled by the
+    escalation loop's own-site rungs — rung 4 is genuinely rare, which is the intended shape.
+  - **Not done (as scoped — checkpoint before P6/P7):** the task aggregator discovery (P6)
+    and frontend trust gradient (P7).
 - **2026-08-25** — Created as the merged main plan from `DEADLINE_CREATION_PLAN.md` and
   `ACTION_ITEMS_TRUST_PLAN.md`. Deadline decisions all resolved; task-trust decisions carried
   forward as open. Nothing implemented.

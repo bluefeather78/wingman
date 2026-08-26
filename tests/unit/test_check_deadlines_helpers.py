@@ -6,6 +6,14 @@ incurred — they exercise research_deadlines' round sequencing, early-exit and 
 aggregation, which is otherwise only-live logic.
 """
 import check_deadlines as cd
+import source_capture
+
+
+def _cap(urls, text=""):
+    """CapturedSource objects for the fake call_claude's return_captured path (P6c). Text is
+    empty by default — the sequencing tests do not exercise date verification."""
+    return [source_capture.CapturedSource(u, cd.base_domain(u), "text/plain", text, None)
+            for u in urls]
 
 
 # --------------------------------------------------------------------------- extract_source_urls
@@ -326,12 +334,15 @@ def _fake_rounds(monkeypatch, per_round):
     calls = {"n": 0}
 
     def fake(system, user_content, api_key, use_web_search=False, max_searches=None,
-             return_sources=False, cache_system=False):
+             return_sources=False, return_captured=False, cache_system=False):
         i = calls["n"]
         calls["n"] += 1
         notes, searches = per_round[min(i, len(per_round) - 1)]
         usage = {"server_tool_use": {"web_search_requests": searches}}
-        return (notes, usage, ["https://prog.example/apply"]) if return_sources else (notes, usage)
+        urls = ["https://prog.example/apply"]
+        if return_captured:
+            return notes, usage, urls, _cap(urls)
+        return (notes, usage, urls) if return_sources else (notes, usage)
 
     monkeypatch.setattr(cd, "call_claude", fake)
     return calls
@@ -339,7 +350,7 @@ def _fake_rounds(monkeypatch, per_round):
 
 def test_loop_stops_at_rung_one_on_confirmed_dates(monkeypatch):
     calls = _fake_rounds(monkeypatch, [(_signals(confirmed="yes"), 1)])
-    notes, cost, searches, sources, attempts, reached = cd.research_deadlines(OPP, "k")
+    notes, cost, searches, sources, attempts, reached, captured = cd.research_deadlines(OPP, "k")
     assert calls["n"] == 1  # confirmed incl. opening -> stop immediately
     assert searches == 1 and reached is True
     assert "SITE_REACHED" not in notes  # signal lines stripped before phase 2
@@ -350,7 +361,7 @@ def test_loop_climbs_to_rung_two_for_prior_cycle_basis(monkeypatch):
         (_signals(confirmed="no", prior="no"), 1),   # rung 1: deadline only, no opening
         (_signals(confirmed="no", prior="yes"), 1),  # rung 2: prior-cycle basis found -> stop
     ])
-    notes, cost, searches, sources, attempts, reached = cd.research_deadlines(OPP, "k")
+    notes, cost, searches, sources, attempts, reached, captured = cd.research_deadlines(OPP, "k")
     assert calls["n"] == 2
     assert searches == 2 and reached is True
     assert "Round 1" in notes and "Round 2" in notes
@@ -366,7 +377,7 @@ OWN_SITE_RUNGS = sum(1 for r in cd.RUNGS[:cd.ESCALATION_RUNGS]
 def test_loop_runs_all_own_site_rungs_and_reports_unreachable(monkeypatch):
     calls = _fake_rounds(monkeypatch, [(_signals(site="no"), 1)])  # never satisfied, never reached
     # No allowlist -> rung 4 is a no-op, so the loop runs exactly the own-site rungs.
-    _n, _c, searches, _s, _a, reached = cd.research_deadlines(OPP, "k", trusted_domains=[])
+    _n, _c, searches, _s, _a, reached, _cd = cd.research_deadlines(OPP, "k", trusted_domains=[])
     assert calls["n"] == OWN_SITE_RUNGS
     assert reached is False  # feeds deadline_write_decision's unreachable-fallback
 
@@ -378,7 +389,7 @@ def test_loop_site_reached_is_or_across_rounds(monkeypatch):
         (_signals(site="no"), 1),
         (_signals(site="no"), 1),
     ])
-    _n, _c, _searches, _s, _a, reached = cd.research_deadlines(OPP, "k", trusted_domains=[])
+    _n, _c, _searches, _s, _a, reached, _cd = cd.research_deadlines(OPP, "k", trusted_domains=[])
     assert calls["n"] == OWN_SITE_RUNGS
     assert reached is True
 
@@ -398,11 +409,13 @@ def test_rung4_runs_when_own_site_fails_and_allowlist_present(monkeypatch):
     seen_focus = {}
 
     def fake(system, user_content, api_key, use_web_search=False, max_searches=None,
-             return_sources=False, cache_system=False):
+             return_sources=False, return_captured=False, cache_system=False):
         seen_focus.setdefault("last", user_content)
         seen_focus["last"] = user_content
         notes = _signals(site="no", confirmed="no", prior="no")
         usage = {"server_tool_use": {"web_search_requests": 1}}
+        if return_captured:
+            return notes, usage, [], []
         return (notes, usage, []) if return_sources else (notes, usage)
 
     monkeypatch.setattr(cd, "call_claude", fake)
@@ -417,7 +430,7 @@ def test_rung4_sources_are_trust_filtered(monkeypatch):
     round_idx = {"n": 0}
 
     def fake(system, user_content, api_key, use_web_search=False, max_searches=None,
-             return_sources=False, cache_system=False):
+             return_sources=False, return_captured=False, cache_system=False):
         i = round_idx["n"]
         round_idx["n"] += 1
         notes = _signals(site="no", confirmed="no", prior="no")
@@ -428,11 +441,79 @@ def test_rung4_sources_are_trust_filtered(monkeypatch):
             srcs = ["https://prog.example/apply"]
         else:
             srcs = ["https://lumiere-education.com/think", "https://spammy.example/listicle"]
+        if return_captured:
+            return notes, usage, srcs, _cap(srcs)
         return (notes, usage, srcs) if return_sources else (notes, usage)
 
     monkeypatch.setattr(cd, "call_claude", fake)
-    _n, _c, _s, sources, _a, _r = cd.research_deadlines(
+    _n, _c, _s, sources, _a, _r, captured = cd.research_deadlines(
         OPP, "k", trusted_domains=["lumiere-education.com"])
     assert "https://lumiere-education.com/think" in sources
     assert "https://spammy.example/listicle" not in sources  # untrusted -> dropped
     assert "https://prog.example/apply" in sources           # own-site rung, not filtered
+    # Captured CONTENT is trust-filtered the same way, so a date is never verified against an
+    # untrusted third-party page.
+    cap_urls = [c.url for c in captured]
+    assert "https://lumiere-education.com/think" in cap_urls
+    assert "https://spammy.example/listicle" not in cap_urls
+
+
+# --------------------------------------------------------------- date-on-page (P6c / T7)
+
+import page_text as _pt
+import source_capture as _sc
+
+
+def _src(url, text, tier=None):
+    return _sc.CapturedSource(url, cd.base_domain(url), "text/plain", text, tier)
+
+
+def test_date_on_page_matches_common_formats():
+    for text in ["Applications close January 15, 2027.", "Deadline: Jan 15",
+                 "due 1/15/2027", "submit by 15/01/2027", "2027-01-15"]:
+        assert _pt.date_is_on_page("2027-01-15", text), text
+
+
+def test_date_on_page_rejects_bare_number_and_wrong_date():
+    assert not _pt.date_is_on_page("2027-01-15", "There were 150 applicants.")
+    assert not _pt.date_is_on_page("2027-02-01", "Applications close January 15, 2027.")
+    assert not _pt.date_is_on_page("not-a-date", "January 15, 2027")
+
+
+def test_verify_dates_marks_confirmed_date_found():
+    info = {"important_dates": [{"date_iso": "2027-01-15", "type": "deadline",
+                                 "estimated": False}]}
+    unverified = cd.verify_dates_against_capture(
+        info, [_src("https://prog.example/apply", "Applications close January 15, 2027.")])
+    d = info["important_dates"][0]
+    assert d["verified"] is True
+    assert d["source_url"] == "https://prog.example/apply"
+    assert unverified == 0
+
+
+def test_verify_dates_marks_confirmed_date_not_found_and_counts_it():
+    info = {"important_dates": [{"date_iso": "2027-01-15", "type": "deadline",
+                                 "estimated": False}]}
+    unverified = cd.verify_dates_against_capture(
+        info, [_src("https://prog.example/x", "nothing dated on this page")])
+    d = info["important_dates"][0]
+    assert d["verified"] is False and "source_url" not in d
+    assert unverified == 1  # the quality signal
+
+
+def test_verify_dates_never_counts_an_estimated_date():
+    """A projected date is absent from every page BY DESIGN — mark it, never count it as a
+    miss, never delete it."""
+    info = {"important_dates": [{"date_iso": "2027-11-01", "type": "opens",
+                                 "estimated": True}]}
+    unverified = cd.verify_dates_against_capture(info, [_src("https://p/x", "no dates")])
+    assert info["important_dates"][0]["verified"] is False
+    assert unverified == 0  # estimated dates are not part of the signal
+
+
+def test_verify_dates_handles_no_capture_and_no_dates():
+    assert cd.verify_dates_against_capture({}, []) == 0
+    assert cd.verify_dates_against_capture({"important_dates": []}, []) == 0
+    info = {"important_dates": [{"date_iso": "2027-01-15", "estimated": False}]}
+    # No captured pages -> nothing to verify against -> marked unverified, counted.
+    assert cd.verify_dates_against_capture(info, []) == 1

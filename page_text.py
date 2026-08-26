@@ -385,3 +385,46 @@ def is_eligibility_claim(task_text):
     if "advanced placement" in low:
         return True
     return bool(_GRADE_RE.search(low) or _AGE_RE.search(low) or _GPA_RE.search(low))
+
+
+# ---------- date-on-page verification (P6c / T7, 2026-08-26) ----------
+# The deadline analogue of quote_is_on_page: does a date the model reported actually appear on
+# a page we fetched? Dates are written many ways, so this is date-aware rather than a string
+# match. It is used ONLY to MARK a non-estimated date verified/unverified — NEVER to delete a
+# date (an estimated/projected date is absent from every page BY DESIGN, and a matcher false
+# negative must not lose a real deadline), so the bias is: require day+month together (a bare
+# "15" proves nothing) but treat the year as optional, since program pages routinely write a
+# date without its year in an already-dated context.
+_MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august",
+                "september", "october", "november", "december"]
+_MONTH_ABBR = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+_ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+
+
+def date_is_on_page(date_iso, page_text):
+    """True when the ISO date (YYYY-MM-DD) appears on the page in any common written form —
+    'January 15, 2027', 'Jan 15', '1/15/2027', '15/01/27', or the ISO form itself."""
+    m = _ISO_DATE_RE.match(str(date_iso or ""))
+    if not m:
+        return False
+    year, mon, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if not (1 <= mon <= 12 and 1 <= day <= 31):
+        return False
+    hay = normalize_for_match(page_text)
+    if not hay:
+        return False
+    name = f"(?:{_MONTH_NAMES[mon - 1]}|{_MONTH_ABBR[mon - 1]})"
+    d, mm, y4 = str(day), str(mon), str(year)
+    y2 = y4[2:]
+    dd = rf"0?{d}(?:st|nd|rd|th)?"           # 15 / 15th, optional leading zero
+    yr = rf"(?:,?\s+(?:{y4}|{y2}))?"          # optional trailing year, 4- or 2-digit
+    sep = r"[/\-.]"
+    year_alt = rf"(?:{y4}|{y2})"
+    patterns = [
+        rf"\b{name}\.?\s+{dd}(?!\d){yr}",                     # january 15, 2027
+        rf"\b{dd}(?!\d)\s+{name}\.?{yr}",                     # 15 january 2027
+        rf"\b0?{mm}{sep}0?{d}{sep}{year_alt}\b",             # 1/15/2027 (m/d/y, year required)
+        rf"\b0?{d}{sep}0?{mm}{sep}{year_alt}\b",             # 15/1/2027 (d/m/y, year required)
+        rf"\b{y4}{sep}0?{mm}{sep}0?{d}\b",                   # 2027-01-15 (iso-ish)
+    ]
+    return any(re.search(p, hay) for p in patterns)

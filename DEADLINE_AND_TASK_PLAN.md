@@ -8,9 +8,11 @@ showed deadlines (Claude `web_fetch`) read THINK's PDF while tasks (our urllib) 
 fix is to share Claude's fetcher and keep code-side verification for both by capturing the
 fetched content, gated by the P5 trust tiers. **P6a DONE (2026-08-26): capture viability proven
 live** — `web_fetch` returns clean text for HTML and base64 (→pypdf) for PDF; `web_search` is
-encrypted/unusable, so verify against fetched pages only. **NEXT: P6b = task extract on the
-substrate**, then P6c date-verify, P7 frontend trust gradient, P8–P10, P11 last. Operator
-decisions all resolved; technical unknowns T1–T8 resolved or resolvable at build time.
+encrypted/unusable, so verify against fetched pages only. **P6 COMPLETE (2026-08-26): P6b
+(tasks on the substrate — THINK proven live, 4 PDF-derived verified tasks) + P6c (date-verify
+analogue, per-date `verified`/`source_url`).** **NEXT: P7 = frontend trust gradient** (surface
+the `source_tier`/`source_url` P6b now produces — grouped headings + source chips; needs Metro),
+then P8–P10, P11 last. Operator decisions all resolved; technical unknowns T1–T8 resolved.
 **Owner:** _tbd_  **Started:** 2026-08-25  **Branch:** `P5-P7-deadline-and-task-tracker`
 
 > **This is the single source of truth for the deadline creator and the task creator.**
@@ -421,10 +423,10 @@ list is dropped on refresh — fatal for both features, so both hinge on **exten
 - **`action_items_checked_at`** already exists — now drives the 7-day on-demand TTL.
 - **Deadline columns** unchanged; `VALID_STATUS` gains `rolling`; a new write-decision source
   `unreachable-fallback`.
-- **Recommended cheap now-addition (enables F2):** give each `important_dates` entry a
-  `source_url` (additive JSONB, no DDL) — the resolved URL the date came from. Phase 2 already
-  holds the loop's grounding-resolved `sources`, so capturing it per date is near-free, and it
-  saves a retrofit when F2's provenance surface ships. Not required for the core to function.
+- **Per-date `source_url` + `verified` — ✅ SHIPPED with P6c (2026-08-26):** each verified
+  `important_dates` entry now carries `verified` (bool) and, when found, `source_url` (the
+  fetched page the date appears on) — additive JSONB, no DDL. The F2 provenance groundwork the
+  plan recommended adding early; F2's student-facing recency/provenance surface renders it.
 - No schema change for per-user delete / user-added tasks (they live in `users.data`).
 
 ---
@@ -596,10 +598,17 @@ operator decisions resolved; T1–T8 at build time)*
     inherits via the shared `process_one`. Item schema gains `source_tier`/`source_url`/
     `source_domain` on page-backed tasks. Tests: `test_source_capture.py` +
     eligibility/tier suites in `test_action_items.py`.
-  - **P6c — Date verification analogue (T7), optional/strengthening.** Bring deadlines UP to the
-    same code-side standard: verify a NON-estimated date appears in the captured content
-    (date-aware normalization; never drop an estimated/projected date). Sequenceable after
-    P6b — it hardens, it does not unblock coverage.
+  - **P6c — Date verification analogue (T7). ✅ DONE 2026-08-26 (1039 pytest green; backend-only,
+    additive, no extra API cost).** `page_text.date_is_on_page` (date-aware, multi-format: "Jan
+    15", "January 15, 2027", "1/15/2027", ISO). The deadline loop now CAPTURES fetched content
+    (`call_claude(return_captured=True)` → `source_capture.parse_captured_sources`, threaded
+    through `research_deadlines`); `check_one` calls `verify_dates_against_capture` which MARKS
+    each date `verified` + attaches `source_url`, IN PLACE (check_one's 5-tuple unchanged, so
+    both call sites inherit; interactive route enriches its payload for free). NEVER deletes:
+    an estimated/projected date is marked `verified:false` and not counted; only a NON-estimated
+    date absent from every fetched page is counted as the quality signal (batch summary:
+    "confirmed dates not found on any fetched page"). Rung-4 captured content is trust-filtered
+    like its URLs. No auto-downgrade — watch the signal first (task-demotion-rate discipline).
   - **T6 (one pass vs two):** aim for one fetch pass feeding both extracts, its stop-condition
     covering date- AND requirement-bearing pages; persist discovered/ rung-4 URLs for reuse.
 - **P7 — Frontend trust gradient.** `ActionItem` tier fields, `taskTrustTier`, grouped headings
@@ -843,6 +852,16 @@ deadline."
 
 ## Change log
 
+- **2026-08-26** — **P6b PROVEN LIVE + P6c DONE.** P6b E2E on THINK ($0.088, read-only): 4
+  page-backed OFFICIAL-tier tasks from its guidelines PDF, verbatim verified quotes, no
+  fabricated Algebra 2. **P6c** (date verification analogue T7, 1039 pytest green, backend-only,
+  no extra API cost): `page_text.date_is_on_page` (multi-format); the deadline loop captures
+  fetched content (`return_captured` → `parse_captured_sources`, threaded through
+  `research_deadlines`); `check_one` → `verify_dates_against_capture` marks each date `verified`
+  + `source_url` IN PLACE (5-tuple unchanged; interactive route inherits); never deletes
+  (estimated dates marked not-counted); batch summary counts confirmed dates not found on any
+  fetched page (quality signal, no auto-downgrade). Per-date `source_url`/`verified` = F2
+  provenance groundwork, shipped early.
 - **2026-08-26** — **P6a DONE — capture-viability probe (T8 resolved, ~$0.09 live, no writes).**
   The hard prerequisite for the substrate passed. Live on Haiku:
   `web_fetch_tool_result.content.content.source` is `{text, text/plain, <clean markdown>}` for

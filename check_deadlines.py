@@ -123,6 +123,10 @@ from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supa
 # This is the ONLY off-domain sourcing the deadline loop is permitted, and it degrades to
 # "keep nothing off-domain" when the table is absent — see _load_trusted_domains below.
 import aggregators_common
+# P6c: capture the fetched page CONTENT (not just URLs) so a NON-estimated date can be verified
+# against it in code (page_text.date_is_on_page) — the deadline analogue of the task quote check.
+import source_capture
+import page_text
 
 # "rolling" (2026-08-25, G3): a genuine continuous-admission / always-open program, for
 # which an EMPTY important_dates is the CORRECT answer — there is no cycle to find. It is
@@ -217,7 +221,7 @@ def extract_source_urls(response_data):
 
 
 def call_claude(system, user_content, api_key, use_web_search=False, max_searches=None,
-                return_sources=False, cache_system=False):
+                return_sources=False, return_captured=False, cache_system=False):
     """Call Claude Haiku with web search AND web fetch enforced for deadline extraction.
     web_search finds candidate pages (e.g. an org's FAQ/key-dates subpage); web_fetch then
     retrieves the FULL text of a specific known URL (the given opportunity URL, or a URL
@@ -293,8 +297,15 @@ def call_claude(system, user_content, api_key, use_web_search=False, max_searche
         "server_tool_use": response_data.get("usage", {}).get("server_tool_use") or {},
     }
 
-    # Third element only on request, so the existing 2-tuple call sites are untouched —
+    # Extra elements only on request, so the existing 2-tuple call sites are untouched —
     # same convention as gemini_common's return_grounding.
+    if return_captured:
+        # P6c: the URL list (for phase 2 + the rung-4 trust filter, unchanged) PLUS the fetched
+        # CONTENT as CapturedSource objects, so a non-estimated date can be verified against the
+        # page it should have come from. parse_captured_sources ignores encrypted search
+        # snippets — a date is verified only against a page we actually fetched.
+        return (text, usage, extract_source_urls(response_data),
+                source_capture.parse_captured_sources(response_data))
     if return_sources:
         return text, usage, extract_source_urls(response_data)
     return text, usage
@@ -651,18 +662,18 @@ def _search_round(opp, api_key, focus, retry_on_silent):
                     f"Report the current status and every relevant date — registration "
                     f"open/close, event dates, notifications — not just a single deadline.")
     cost = 0.0
-    notes, usage, sources = "", {}, []
+    notes, usage, sources, captured = "", {}, [], []
     attempts = 2 if retry_on_silent else 1
     for attempt in range(1, attempts + 1):
-        notes, usage, sources = call_claude(system, user_content, api_key,
-                                            use_web_search=True, max_searches=MAX_SEARCHES,
-                                            return_sources=True, cache_system=True)
+        notes, usage, sources, captured = call_claude(
+            system, user_content, api_key, use_web_search=True, max_searches=MAX_SEARCHES,
+            return_captured=True, cache_system=True)
         cost += estimate_cost(usage)
         searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
         if searches or attempt == attempts:
-            return notes, cost, searches, sources, attempt
+            return notes, cost, searches, sources, attempt, captured
         print("  [SILENT] no search invoked — retrying once", flush=True)
-    return notes, cost, 0, sources, attempts
+    return notes, cost, 0, sources, attempts, captured
 
 
 RUNG_TRUSTED_THIRD_PARTY = "trusted third-party"
@@ -697,7 +708,7 @@ def research_deadlines(opp, api_key, retry_on_silent=True, trusted_domains=None)
     """
     if trusted_domains is None:
         trusted_domains = _load_trusted_domains()
-    all_notes, all_sources = [], []
+    all_notes, all_sources, all_captured = [], [], []
     total_cost, total_searches, total_attempts = 0.0, 0, 0
     site_reached = False
     for idx, (name, focus) in enumerate(RUNGS[:ESCALATION_RUNGS]):
@@ -708,7 +719,7 @@ def research_deadlines(opp, api_key, retry_on_silent=True, trusted_domains=None)
             if not trusted_domains:
                 continue
             focus = focus.format(domains=", ".join(trusted_domains))
-        notes, cost, searches, sources, attempts = _search_round(
+        notes, cost, searches, sources, attempts, captured = _search_round(
             opp, api_key, focus, retry_on_silent)
         total_cost += cost
         total_searches += searches
@@ -721,10 +732,14 @@ def research_deadlines(opp, api_key, retry_on_silent=True, trusted_domains=None)
             # rung-4 date is therefore always grounded on an allowlisted site, and the focus
             # forced it estimated=true. (Rungs 1-3 search the program's OWN site and are NOT
             # trust-filtered — the plan gates rung 4's contribution, not the own-site rungs,
-            # so own-site recall is unchanged.)
+            # so own-site recall is unchanged.) The captured CONTENT is filtered the same way,
+            # so a date is never "verified" against an untrusted third-party page.
             sources = [u for u in sources
                        if aggregators_common.domain_matches(u, trusted_domains)]
+            captured = [c for c in captured
+                        if aggregators_common.domain_matches(c.url, trusted_domains)]
         all_sources.extend(sources)
+        all_captured.extend(captured)
         site_reached = site_reached or sig["site_reached"]
         # Confirmed current-cycle dates INCLUDING the opening are the best case — stop.
         if sig["confirmed"]:
@@ -739,7 +754,14 @@ def research_deadlines(opp, api_key, retry_on_silent=True, trusted_domains=None)
             break
     combined = "\n\n".join(all_notes)
     union_sources = list(dict.fromkeys(all_sources))
-    return combined, total_cost, total_searches, union_sources, total_attempts, site_reached
+    # Dedupe captured by URL, keeping the first (same rule parse_captured_sources uses).
+    seen, union_captured = set(), []
+    for c in all_captured:
+        if c.url not in seen:
+            seen.add(c.url)
+            union_captured.append(c)
+    return (combined, total_cost, total_searches, union_sources, total_attempts,
+            site_reached, union_captured)
 
 
 def extract_deadlines(opp, notes, sources, api_key):
@@ -789,12 +811,50 @@ def check_one(opp, api_key, retry_on_silent=True):
     Phase 2 is SKIPPED when phase 1 stayed silent — notes written without looking are not
     worth converting, and the caller can see `searches == 0` and label the result.
     """
-    notes, cost, searches, sources, attempts, site_reached = research_deadlines(
+    notes, cost, searches, sources, attempts, site_reached, captured = research_deadlines(
         opp, api_key, retry_on_silent)
     if not searches:
         return {}, cost, 0, attempts, site_reached
     info, extract_cost = extract_deadlines(opp, notes, sources, api_key)
+    # P6c: mark each date verified against the captured page content, IN PLACE. This does not
+    # change check_one's return shape — both call sites read the enriched dates straight out of
+    # info["important_dates"] — and it never deletes a date (see _verify_dates).
+    verify_dates_against_capture(info, captured)
     return info, cost + extract_cost, searches, attempts, site_reached
+
+
+def verify_dates_against_capture(info, captured):
+    """Mark each date in `info` verified/unverified against the captured page content, and
+    attach the URL it was found on. Returns the count of NON-estimated dates that could NOT be
+    found — the quality signal (the deadline analogue of the task demotion rate).
+
+    NEVER deletes a date (T7): an estimated/projected date is absent from every page by design,
+    and a matcher false negative must not lose a real deadline. So an unverifiable confirmed
+    date is only MARKED (`verified: false`), left in place for the client to render and for the
+    summary to count.
+    """
+    if not isinstance(info, dict):
+        return 0
+    dates = info.get("important_dates")
+    if not isinstance(dates, list):
+        return 0
+    pages = [(c.url, c.text) for c in (captured or []) if getattr(c, "text", "")]
+    unverified = 0
+    for d in dates:
+        if not isinstance(d, dict) or not d.get("date_iso"):
+            continue
+        if d.get("estimated"):
+            # A projected date is not on any page by construction; mark it, count nothing.
+            d["verified"] = False
+            continue
+        hit = next((url for url, txt in pages
+                    if page_text.date_is_on_page(d["date_iso"], txt)), None)
+        d["verified"] = hit is not None
+        if hit:
+            d["source_url"] = hit
+        else:
+            unverified += 1
+    return unverified
 
 
 # ---------- What to do with a check's result ----------
@@ -999,6 +1059,7 @@ def main():
     kept_count = 0
     unreachable_count = 0
     missing_opens_count = 0
+    unverified_dates_count = 0
     retried = 0
     dry_run_results = []
 
@@ -1065,9 +1126,18 @@ def main():
             no_opens = missing_opens_date(important_dates)
             if no_opens:
                 missing_opens_count += 1
+            # P6c quality signal: dates the model reported as CONFIRMED (not estimated) that
+            # we could not find on any page we fetched. High counts are the signal that would
+            # justify acting on verification (e.g. downgrading), the way the task agent watches
+            # its demotion rate — do not act speculatively, watch this first.
+            row_unverified = sum(1 for d in important_dates
+                                 if isinstance(d, dict) and not d.get("estimated")
+                                 and d.get("verified") is False)
+            unverified_dates_count += row_unverified
             print(f"{status}, {searches} search(es), ${cost:.4f}"
                   + (" [changed]" if changed else "")
-                  + (" [no opens date]" if no_opens else ""))
+                  + (" [no opens date]" if no_opens else "")
+                  + (f" [{row_unverified} unverified date(s)]" if row_unverified else ""))
         except urllib.error.HTTPError as e:
             errors += 1
             print(f"[ERROR] HTTP {e.code}")
@@ -1085,6 +1155,7 @@ def main():
           f"searched-but-empty (row kept its dates): {kept_count}/{len(items)}, "
           f"empty + site unreachable (left due): {unreachable_count}/{len(items)}, "
           f"deadline but no opens date: {missing_opens_count}, "
+          f"confirmed dates not found on any fetched page: {unverified_dates_count}, "
           f"silent-search retries: {retried}, cost: ${total_cost:.4f}")
     if mode == "sample" and items:
         per_item = total_cost / len(items)

@@ -16,7 +16,6 @@ import {
   isSetAsideTask,
   taskTrustTier,
   type ActionItem,
-  type TaskTrustTier,
   type SavedState,
   type TrackerData,
 } from '@/api/trackerStore';
@@ -48,87 +47,56 @@ interface StoredProfile {
   synthesized?: string;
 }
 
-// The per-task source chip — the P7 trust gradient's per-row half. Colour is FIXED per
-// tier (green Program page / blue Guide·{domain} / grey Typical step), never positional,
-// for the same reason the console's provider colours are fixed: a colour that changes
-// meaning between rows reads backwards. The chip links the EVIDENCE (`sourceUrl`, the
-// fetched page the quote was verified against) — a different link from the trailing ↗,
-// which stays the step's ACTION url. Legacy official tasks (pre-P6b) have no sourceUrl,
-// so their chip renders without a link rather than not at all.
-const CHIP_STYLE: Record<TaskTrustTier, { box: object; text: object }> = {
-  official: { box: { backgroundColor: '#DCFCE7', borderColor: '#166534' }, text: { color: '#166534' } },
-  trusted: { box: { backgroundColor: '#DBEAFE', borderColor: '#1E40AF' }, text: { color: '#1E40AF' } },
-  generic: { box: { backgroundColor: '#F1F5F9', borderColor: '#94A3B8' }, text: { color: '#64748B' } },
-};
-
-function SourceChip({ ai }: { ai: ActionItem }) {
-  // A student's own task gets its own neutral chip — it is never page-backed by
-  // construction, but "Typical step" would misdescribe something they wrote themselves.
-  if (ai.origin === 'user') {
-    return (
-      <View style={[styles.sourceChip, styles.chipUser]}>
-        <Text style={[styles.sourceChipText, styles.chipUserText]}>Added by you</Text>
-      </View>
-    );
-  }
-  const tier = taskTrustTier(ai);
-  const label = tier === 'official'
-    ? 'Program page'
-    : tier === 'trusted'
-      ? `Guide · ${ai.sourceDomain || 'approved source'}`
-      : 'Typical step';
-  const evidenceUrl = tier !== 'generic' ? ai.sourceUrl : null;
-  const c = CHIP_STYLE[tier];
-  return (
-    <Pressable
-      onPress={evidenceUrl ? () => Linking.openURL(evidenceUrl) : undefined}
-      disabled={!evidenceUrl}
-      style={[styles.sourceChip, c.box]}
-    >
-      <Text style={[styles.sourceChipText, c.text]}>
-        {label}
-        {evidenceUrl ? ' ↗' : ''}
-      </Text>
-    </Pressable>
-  );
-}
-
 // One task row. Extracted when the list split into page-backed and generic groups, so the
 // groups cannot drift in how a row actually renders — only the heading above them differs.
+// The per-row source chips were removed in the 2026-08-26 redesign: the group heading
+// already states the provenance, so the chip said the same thing twice per row.
 function TaskRow({ ai, onPress, onDelete }: {
   ai: ActionItem;
   onPress: () => void;
   onDelete: () => void;
 }) {
+  const [delHovered, setDelHovered] = useState(false);
+  // The trailing ↗ prefers the step's ACTION url. A verified task with no action url falls
+  // back to its EVIDENCE url (the fetched page the quote was verified against) — the link
+  // the removed source chip used to carry, without which a trusted-guide step would have no
+  // way back to its source.
+  const tier = ai.origin === 'user' ? null : taskTrustTier(ai);
+  const linkUrl = ai.url || (tier && tier !== 'generic' ? ai.sourceUrl : null) || null;
   return (
     <View style={styles.taskRow}>
       <View style={styles.taskLeft}>
         <Text style={[styles.taskText, (ai.state === 'completed' || isSetAsideTask(ai)) && styles.taskDone]}>
           {ai.text}
-          {/* The step-action url; the old app rendered it as a trailing arrow titled
-              "Go to this step". Distinct from the SourceChip's evidence link. */}
-          {!!ai.url && (
-            <Text style={styles.taskStepLink} onPress={() => Linking.openURL(ai.url as string)}>
+          {!!linkUrl && (
+            <Text style={styles.taskStepLink} onPress={() => Linking.openURL(linkUrl)}>
               {'  ↗'}
             </Text>
           )}
         </Text>
-        <SourceChip ai={ai} />
       </View>
       {/* Tapping cycles the state, and "Not Needed" is the last stop before it wraps back
           round — a step that does not apply to THIS student, set aside rather than deleted.
           The delete ✕ beside it is the P10 remove: for a catalog task it writes a per-user
           tombstone (the shared list regenerates, so a plain splice would come straight
           back), for the student's own task it deletes outright. Reversible via the Restore
-          line under the list. */}
-      <StatusPill
-        status={(ai.state as TaskStatus) in ACTION_ITEM_STATUS_LABEL ? (ai.state as TaskStatus) : 'not_started'}
-        kind="task"
-        onPress={onPress}
-      />
-      <Pressable onPress={onDelete} hitSlop={8}>
-        <Text style={styles.taskDelete}>✕</Text>
-      </Pressable>
+          line under the list. The fixed-width right column keeps the pills vertically
+          aligned across rows instead of ragged against each row's text length. */}
+      <View style={styles.taskRight}>
+        <StatusPill
+          status={(ai.state as TaskStatus) in ACTION_ITEM_STATUS_LABEL ? (ai.state as TaskStatus) : 'not_started'}
+          kind="task"
+          onPress={onPress}
+        />
+        <Pressable
+          onPress={onDelete}
+          hitSlop={8}
+          onHoverIn={() => setDelHovered(true)}
+          onHoverOut={() => setDelHovered(false)}
+        >
+          <Text style={[styles.taskDelete, delHovered && styles.taskDeleteHover]}>✕</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -231,7 +199,6 @@ export default function Home() {
   const stats = useMemo(() => (data ? computeStats(data, saved) : { total: 0, not_started: 0, in_progress: 0, completed: 0 }), [data, saved]);
   const upcoming = useMemo(() => (data ? getAllDeadlineItems(data, saved) : []), [data, saved]);
   const { counts: taskCounts, total: taskTotal } = useMemo(() => allTodoUnitCounts(upcoming), [upcoming]);
-  const dueSoon = taskCounts.not_started + taskCounts.in_progress;
 
   // Home progress bar shows in_progress + not_started segments only (script.js renderStats).
   const OPP_ORDER: OppStatus[] = ['in_progress', 'not_started'];
@@ -266,9 +233,19 @@ export default function Home() {
             Hey <Txt variant="h1" style={{ color: colors.orange }}>{user?.firstName || 'there'}</Txt>, ready?
           </Txt>
         </View>
-        <View style={styles.dueBadge}>
-          <Txt style={styles.dueNum}>{dueSoon}</Txt>
-          <Txt style={styles.dueLabel}>DUE SOON</Txt>
+        <View style={styles.statPills}>
+          <View style={styles.statPill}>
+            <Txt style={styles.statNum}>{stats.total}</Txt>
+            <Txt style={styles.statLabel}>Quests being tracked</Txt>
+          </View>
+          <View style={styles.statPill}>
+            <Txt style={styles.statNum}>{taskCounts.not_started}</Txt>
+            <Txt style={styles.statLabel}>Tasks not started yet</Txt>
+          </View>
+          <View style={styles.statPill}>
+            <Txt style={styles.statNum}>{taskCounts.in_progress}</Txt>
+            <Txt style={styles.statLabel}>Tasks in progress</Txt>
+          </View>
         </View>
       </SoftCard>
 
@@ -530,12 +507,13 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
-  banner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.lg, paddingVertical: space.xl },
+  banner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.lg, paddingVertical: space.xl, flexWrap: 'wrap' },
   bannerLeft: { flexDirection: 'row', alignItems: 'center', gap: space.md, flex: 1, flexWrap: 'wrap' },
   greeting: { color: colors.navy },
-  dueBadge: { backgroundColor: colors.navy, borderRadius: radius.lg, paddingHorizontal: 16, paddingVertical: 8, alignItems: 'center' },
-  dueNum: { fontFamily: fonts.display, fontSize: 18, lineHeight: 18, color: colors.white },
-  dueLabel: { fontFamily: fonts.bodyBold, fontSize: 9, lineHeight: 13, color: colors.orange, letterSpacing: 0.45, marginTop: 2, textTransform: 'uppercase' },
+  statPills: { flexDirection: 'row', gap: 10, flexWrap: 'wrap', flexShrink: 1, minWidth: 0 },
+  statPill: { backgroundColor: colors.navy, borderRadius: radius.lg, paddingHorizontal: 14, paddingVertical: 8, alignItems: 'center', justifyContent: 'center', minWidth: 96 },
+  statNum: { fontFamily: fonts.display, fontSize: 18, lineHeight: 18, color: colors.white },
+  statLabel: { fontFamily: fonts.bodyBold, fontSize: 8.5, lineHeight: 12, color: colors.orange, letterSpacing: 0.4, marginTop: 3, textTransform: 'uppercase', textAlign: 'center', maxWidth: 84 },
 
   emptyProfile: {
     borderRadius: radius.xl,
@@ -596,11 +574,11 @@ const styles = StyleSheet.create({
   // the same RN-web flex-shrink:0 default the navbar fix documents.
   taskLeft: { flex: 1, flexShrink: 1, minWidth: 0, gap: 3, alignItems: 'flex-start' },
   taskText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: '#334155' },
-  sourceChip: { borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 6, paddingVertical: 1 },
-  sourceChipText: { fontFamily: fonts.bodyBold, fontSize: 9, lineHeight: 13, letterSpacing: 0.2 },
-  chipUser: { backgroundColor: colors.lavender, borderColor: colors.navy },
-  chipUserText: { color: colors.navy },
-  taskDelete: { fontFamily: fonts.bodyBold, fontSize: 12, lineHeight: 16, color: colors.slate400, paddingHorizontal: 2 },
+  // Fixed-width right column so the status pills align down the card; flexShrink 0 keeps
+  // the pill from being crushed by a long task text (taskLeft is the shrinking side).
+  taskRight: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0, minWidth: 120, justifyContent: 'flex-end' },
+  taskDelete: { fontFamily: fonts.bodyBold, fontSize: 13, lineHeight: 16, color: colors.slate400, paddingHorizontal: 2 },
+  taskDeleteHover: { color: '#D64545' },
   restoreLine: { fontFamily: fonts.bodyBold, fontSize: 11, color: colors.indigo600, textDecorationLine: 'underline', marginTop: 6 },
   addTaskRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
   addTaskInput: { flex: 1, borderWidth: 1, borderColor: colors.slate200, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, fontFamily: fonts.bodyMed, fontSize: 12, color: '#334155', backgroundColor: colors.white },

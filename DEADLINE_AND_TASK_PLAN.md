@@ -223,6 +223,42 @@ today-dated "opens" entry (violates "never anchor a date to today"). **Ripple:**
 every `status` reader (`cycleYearShift`, the three `get*DeadlineItems`, mocks) so `rolling`
 doesn't fall through.
 
+### G5 — a false `not_running` (found POST-plan, 2026-08-26, from a live user report) — FIXED
+
+**The off-season of an annual program read as its death.** ec18599 (Impact Internships): its
+first-ever check wrote `not_running` from the note *"2026 cycle closed; grace period ended
+June 3, 2026. No 2027 dates posted yet"* — while the site still carried the whole 2026 cycle
+(apply links, June 6–Aug 8 schedule) and the SAME shared capture's task extract quoted its
+application-cycle language verbatim seconds later. One wrong word cascades: Past Event pill
+(`computeProgressStatus` → completed), zero dates (the `EMPTY_IS_VALID_STATUS` carve-out lets
+`not_running` write instantly), the item excluded from Home Base's task surface (its
+page-verified tasks invisible) and from calendar sync. In late August — between cycles for a
+large fraction of the catalog — this is the season this misread peaks.
+
+Three mechanical causes, all fixed (commit 3bc43de; 1070 pytest green):
+1. **Phase 2's own rule contained the conflation**: "suspended, discontinued or *not running
+   this cycle* → not_running" — the exact case (a)/(b) distinction phase 1 guards against,
+   written into the extract. Now: `not_running` = PERMANENTLY DISCONTINUED, nothing weaker;
+   a closed/completed/unposted cycle is `running` with forward-dated estimates.
+2. **A believed-dead verdict stopped the ladder**: `FOUND_CONFIRMED_DATES`'s "no application
+   step" escape let a rung-1 discontinuation conclusion halt the prior-cycle rung — the one
+   built to correct it. Now the signal must be "no" when the program is believed dead, so
+   the ladder keeps climbing (corroborate the discontinuation OR recover the next cycle).
+3. **Status was the only load-bearing claim with no evidence requirement** — dates have
+   per-date `verified`, tasks need a code-checked quote, eligibility needs the official page,
+   but "this program is dead" needed nothing. Now `verify_status_evidence()` in `check_one`
+   (the status analogue of `verify_dates_against_capture`): phase 2 must emit a verbatim
+   `status_evidence` quote with any `not_running`; code checks it against the captured pages
+   via `quote_is_on_page`; missing/unfound → **downgrade to `unknown`**, which gets no
+   empty-write carve-out (kept-existing protects any dates) and carries the caveat in the
+   note. A verified quote is appended to the note with its source URL.
+
+**Corrective re-run proven live ($0.081):** the fixed rung 1 found the FALL 2026 cycle —
+applications open Aug 30, 2026, `verified:true` against the apply page — status `running`,
+3 dates. The old verdict had been hiding a program whose application window opens within the
+week. Residual: rows already carrying a wrong `not_running` from before the fix self-heal
+only when re-checked; a targeted sweep of `not_running` rows is a cheap candidate follow-up.
+
 ---
 
 ## 4. Task creation — gaps & fixes
@@ -243,7 +279,7 @@ that substrate plus the trust tiers:
   `lumiere-education.com`). The substrate's fetch may surface it and the trust tier decides
   whether it ships — the aggregator content is verified the same way, then tier-gated (below).
 
-### Fix — trusted-aggregator tiers (design; operator decisions open)
+### Fix — trusted-aggregator tiers (built P5/P6; operator decisions resolved in §8)
 
 Add a **per-task trust tier**, highest→lowest, displayed as a confidence gradient:
 
@@ -393,26 +429,42 @@ failed), tasks fall to a static client-side generic checklist, until the row is 
 
 ### "Check for updates" — refreshes deadlines AND tasks
 
-Partly built: `refreshTrackerDeadlines` already re-pulls the checklist, but (a) only when the
-deadline check ran (coupled via `continue`), and (b) `resolve()` served tasks forever, so it
-never re-verified. **Change:** with the task TTL in place, **decouple** the two checks so each
-honours its own staleness window; a stale item's `getActionItems` then triggers a fresh Claude
-task re-verification; **report deadline vs task updates as distinct counts** ("N deadlines, M
-tasks updated"). Cost: a stale item now triggers up to two Claude calls on refresh — accepted.
+**✅ SHIPPED with P9 (2026-08-25).** The two checks are decoupled in
+`refreshTrackerDeadlines`: the task re-pull no longer hides behind a successful deadline check
+(it runs on `ok`/`failed`; skipped only on `not-found` — no row serves either — and `blocked` —
+the 402 gate covers both endpoints), the button forces the deadline check while the task
+endpoint honours its own server-side 7-day TTL, and the result carries distinct
+`deadlineUpdates`/`taskUpdates` counts ("N deadlines and M task lists updated"). Cost: a stale
+item can trigger up to two Claude calls on refresh — accepted (the T6 read-once capture cache
+means the two together still read the program once when fired in the same window).
 
-### Per-user task delete & user-added tasks (FUTURE)
+### Per-user task delete & user-added tasks — ✅ SHIPPED with P10 (2026-08-26)
 
-Both are **per-user**, live entirely in the tracker item (`users.data`), need **no catalog
+Both are **per-user**, live entirely in the tracker item (`users.data`), needed **no catalog
 schema change**. The catalog `action_items` stays the shared, regenerated source;
-`mergeActionItems` reconciles on **task text** (positional ids are unstable). The central
-constraint: `mergeActionItems` today maps over `incoming` only, so anything not in the catalog
-list is dropped on refresh — fatal for both features, so both hinge on **extending the merge**:
-- **Delete** = a per-user tombstone (by text-key); merge drops an incoming task whose key is
-  tombstoned; reversible (the `dismissed`→`not_needed` precedent: visible, undoable).
-- **User-added** = `ActionItem.origin: 'catalog' | 'user'` (absent ⇒ catalog); stable client
-  id; never page-backed; rendered in its own group; **merge appends surviving `origin:'user'`
-  tasks** instead of dropping them. Never written to the catalog; composes with the trust tiers
-  (`user` is just another never-page-backed source).
+`mergeActionItems` reconciles on **task text** via the shared `taskKey()` (positional ids are
+unstable). The central constraint held exactly as predicted — the old merge mapped over
+`incoming` only, so anything not in the catalog list was dropped on refresh — and both
+features landed as **the merge extension**
+(`mergeActionItems(existing, incoming, removedKeys)`):
+- **Delete** = a per-user tombstone (`TrackerItem.removedTasks`, taskKey strings); the merge
+  drops an incoming task whose key is tombstoned. A USER task is deleted by a real splice
+  instead — nothing regenerates it, so a tombstone would be dead weight. Reversible: the
+  modal shows "N removed tasks — restore" (`restoreRemovedTasks` clears the tombstones and
+  forces a free sync so the tasks visibly return).
+- **User-added** = `ActionItem.origin: 'catalog' | 'user'` (absent ⇒ catalog); random-suffix
+  client id (stable while catalog `-tN` ids shuffle around it); never page-backed (`generic`,
+  no tier — `user` is just another never-page-backed source); rendered in its own "Your own
+  tasks" group with an "Added by you" chip; **the merge appends surviving `origin:'user'`
+  tasks** instead of dropping them. Never written to the catalog. `addUserTask` refuses a
+  duplicate text (text IS the merge identity, so a duplicate key would make
+  state-preservation ambiguous) and lifts a matching tombstone on re-add; if a user task's
+  text later matches a regenerated catalog line, the catalog copy wins and inherits the
+  student's state.
+
+Proven live against real data: the on-focus catalog sync re-merged THINK's cached task list
+without resurrecting the tombstoned task and without dropping the user tasks, with ticked
+state preserved.
 
 ---
 
@@ -432,7 +484,15 @@ list is dropped on refresh — fatal for both features, so both hinge on **exten
   `important_dates` entry now carries `verified` (bool) and, when found, `source_url` (the
   fetched page the date appears on) — additive JSONB, no DDL. The F2 provenance groundwork the
   plan recommended adding early; F2's student-facing recency/provenance surface renders it.
-- No schema change for per-user delete / user-added tasks (they live in `users.data`).
+- **`status_evidence` (phase-2 transient, 2026-08-26):** the extract schema emits a verbatim
+  discontinuation quote alongside a `not_running` status. It is CONSUMED by
+  `verify_status_evidence()` and never written to the row — a verified quote is appended to
+  `important_date_note` (with its source URL) so a reviewer can see why; an unproven
+  `not_running` is downgraded to `unknown` before any write. No column, no DDL.
+- **Per-user task fields — ✅ SHIPPED with P10 (2026-08-26), client-side only, no DDL:**
+  `ActionItem.origin: 'catalog' | 'user'` (absent ⇒ catalog) and
+  `TrackerItem.removedTasks: string[]` (taskKey tombstones), both living in the per-user
+  tracker snapshot in `users.data` exactly as planned — the catalog row is untouched.
 
 ---
 
@@ -695,21 +755,12 @@ operator decisions resolved; T1–T8 at build time)*
   same jump the lane entries use). Outside the date sort; no placeholder dates; saved/
   not_running excluded (upstream/by definition); dated currently-open programs deliberately
   NOT duplicated into the band — they already sit on a month lane with their real dates.
-  The empty-state now only shows when both lanes AND the band are empty. A `rolling`
-  program (G3) carries no `important_dates`, so the Quest Log's month-swimlane **Calendar**
-  view — which places items by date — never shows it; it appears only in the List view with
-  the "Open now" badge. A student scanning the calendar for "what can I apply to right now"
-  therefore misses every always-open program. Add a persistent **"Open now — apply anytime"**
-  section/lane at the top of the Calendar view listing programs whose submissions are ongoing:
-  primarily `status === 'rolling'`, and consider also currently-open dated programs
-  (`computeProgressStatus(item) === 'in_progress'`, i.e. an opens date has passed with the
-  deadline still ahead — those DO already appear on a month lane, so decide whether to
-  duplicate them into the "open now" band or just style them). Client-only —
-  `frontend/app/(app)/tracker.tsx` calendar renderer; no backend, no new data (the `rolling`
-  status and `computeProgressStatus` already exist). Watch: keep the band out of the date
-  sort, keep saved-for-later and `not_running` excluded (same rules the swimlanes use), and do
-  not invent a placeholder date to force a rolling program onto a month lane (violates "never
-  anchor a date" — the whole point is it has no date).
+  The empty-state now only shows when both lanes AND the band are empty. *(Original
+  rationale: a `rolling` program (G3) carries no `important_dates`, so the month-swimlane
+  Calendar view — which places items by date — never showed it, and a student scanning "what
+  can I apply to right now" missed every always-open program. The "consider also
+  currently-open dated programs" question was decided against — no duplication.)* Client-only,
+  in `frontend/app/(app)/tracker.tsx`'s `CalendarCard`; no backend, no new data.
 
 **Deferred / optional:** fetch fixes A (PDF) + B (link discovery) survive only as a possible
 LOCAL fallback now that Claude `web_fetch` is the shared fetcher (§5a); C (Playwright) deferred.
@@ -765,15 +816,26 @@ calendar; and a `not_running` verdict now requires proof. Next work items live i
 - `aggregators_common.py` (new), `trusted_aggregators_schema.sql` (new).
 - `ops/core.py` + `ops/admin.py` + `ops/admin_console.html` — Sources tab (approve/block/park).
 - `frontend/src/lib/status.ts` — `rolling` in `computeProgressStatus` + list readers.
-- `frontend/src/lib/tracker.ts` — slim `extractTrackerInfo`; `intakeExtractAndClassify` keeps
-  classifying; `rolling` in status-accept list.
-- `frontend/src/api/trackerStore.ts` — `ActionItem` tier + `origin` fields; `taskTrustTier`;
-  extend `mergeActionItems` (P10).
-- `frontend/app/(app)/finder.tsx` + `tracker.tsx` + `index.tsx` — dates←deadline, tasks←
-  action-items, `applyUrl=opp.url`; refresh both; trust-gradient rendering; rolling badge.
+- `frontend/src/lib/tracker.ts` — **DONE (P7/P8):** tier/verified fields in the raw types +
+  normalizer; `extractTrackerInfo` slimmed to meta/fit (search OFF, signature line preserved);
+  intake keeps classifying + dates but no longer asks for tasks; `ACTION_ITEM_RULES` and
+  `normalizeUnverifiedActionItems` DELETED; new `staticGenericChecklist`.
+- `frontend/src/api/trackerStore.ts` — **DONE (P7/P9/P10):** `ActionItem` tier + `origin`
+  fields; `taskTrustTier`; `taskKey`; `mergeActionItems(existing, incoming, removedKeys)`
+  honours tombstones + appends user tasks; `deleteTrackerTask`/`restoreRemovedTasks`/
+  `addUserTask`; `refreshTrackerDeadlines` decoupled with distinct counts;
+  `applyDeadlineToTrackerItem` carries per-date `verified`/`sourceUrl`.
+- `frontend/app/(app)/finder.tsx` + `tracker.tsx` + `index.tsx` — **DONE (P7-P11):**
+  dates←deadline, tasks←action-items, `applyUrl=opp.url`; refresh reports both counts;
+  trust-gradient rendering (3 tier groups + source chips + per-date verified marker); rolling
+  badge; P10 task delete/add/restore UI; P11 calendar "Open now" band (`CalendarCard`).
+- `check_deadlines.py` — **DONE (2026-08-26, post-plan):** `verify_status_evidence()` + the
+  not_running prompt fixes in both phases + the `FOUND_CONFIRMED_DATES` believed-dead guard
+  (§3 G5).
 - cost attribution — `classify_feature` signature + Claude model pin for `provider_for_model`.
-- tests — `test_check_deadlines_helpers.py` (write-decision matrix), `test_action_items.py`
-  (Claude path + generic-token suite), status logic, mocks.
+- tests — `test_check_deadlines_helpers.py` (write-decision matrix, date-verify, status
+  evidence gate), `test_action_items.py` (Claude path + generic-token suite), status logic,
+  mocks.
 
 ---
 
@@ -784,9 +846,17 @@ calendar; and a `not_running` verdict now requires proof. Next work items live i
   tasks can never carry eligibility.
 - **Non-determinism remains.** The loop makes the strategy *sequence* deterministic; the model
   still decides whether to search within a round — keep silent-search retry.
-- **Status ripple (rolling).** Enumerate every `status` reader before shipping P4.
-- **Merge fragility (P10).** Preserving user tasks + tombstones is the one real code risk;
-  key on text, never positional id.
+- **Status ripple (rolling).** Enumerate every `status` reader before shipping P4. *(Done in
+  P4; the same enumeration is why a false `not_running` cascades so far — see §3 G5.)*
+- **Merge fragility (P10) — RESOLVED 2026-08-26.** Preserving user tasks + tombstones was the
+  one real code risk; keyed on text (`taskKey`), never positional id, and proven live against
+  a real catalog sync (tombstone held, user tasks survived, ticked state preserved).
+- **A false `not_running` buries a live program — MITIGATED 2026-08-26 (§3 G5).** The
+  evidence gate makes it require a code-verified quote; the residual is rows written wrong
+  BEFORE the gate, which only self-heal on their next check.
+- **Task TIMELINESS (open follow-up).** A page-verified task can carry an already-past date
+  ("Submit your application by June 3rd, 2026" — true, quoted, stale). Verification checks
+  truth, not currency; a date-aware demotion/drop for past-dated tasks is unbuilt.
 - **Substrate capture plumbing (T8) — RESOLVED 2026-08-26 (P6a), substrate viable.** `web_fetch`
   HTML returns clean `text/plain` (verify directly), PDF returns base64 (decode + pypdf),
   `web_search` returns `encrypted_content` (unusable — the substrate MUST `web_fetch` any page
@@ -822,6 +892,24 @@ calendar; and a `not_running` verdict now requires proof. Next work items live i
   detector (T3) with its own adversarial suite. **P6a live probe** confirms Haiku's blocks carry
   text before P6b builds on it. Date-verify analogue (T7) with date-format-normalization cases,
   incl. that an estimated/projected date is never dropped for being absent from the page.
+- **Status-evidence gate (G5):** unit suite in `test_check_deadlines_helpers.py` — verified
+  quote keeps `not_running` + records evidence in the note; missing quote, quote-not-on-page,
+  and no-capture all downgrade to `unknown`; other statuses untouched with a stray
+  `status_evidence` stripped; `{}`/`None` outcomes pass through. 1070 pytest green.
+- **Client verification record (P7–P11; no frontend unit framework — tsc + live browser
+  against this session's own servers, API :8002 / Metro :8083, dev test account):**
+  - P7 seeded-data pass: three tier groups, chip colours by computed style, "✓ verified ↗"
+    and "(estimated)" markers, unmarked-unknown case, zero console errors.
+  - Paid E2E ($0.199, operator-approved): real intake of think.mit.edu deduped into ec17921;
+    task extract generated fresh on the substrate from the guidelines PDF (3 official-tier
+    tasks, verbatim quotes, source_url); P9 forced refresh → "1 deadline updated" with
+    distinct counts; fields proven intact catalog→endpoint→normalizer→users.data.
+  - P9 skip path (free): one 404'd deadline call, NO task call, honest can't-auto-check label.
+  - G5 corrective re-check ($0.081): ec18599 `running` + Fall-2026 dates, opens date
+    `verified:true` against the apply page.
+  - P10/P11 (free, real catalog data): focus-sync merge held the tombstone, kept the user
+    tasks and the ticked state; restore returned the task instantly; add/delete/restore all
+    persisted server-side; KCLS rendered in the "Open now" band and nowhere else.
 
 ---
 

@@ -1,15 +1,16 @@
 # Deadline & Task creation — coverage and accuracy (MAIN PLAN)
 
-**Status:** **P0–P4 SHIPPED (2026-08-25)** — deadline track + task foundation, all verified
-(975 pytest green, tsc clean, 3 traced rows live in the catalog, browser-confirmed). A free
-tracker SYNC layer (`/api/tracker/sync`) was added on top to fix stale per-user snapshots.
-**NEXT SESSION STARTS AT P5** (`trusted_aggregators` + `aggregators_common` + console Sources
-tab), which unblocks deadline rung 4 AND the task aggregator tier (P6–P7). P8–P10 after, then
-**P11 last** — calendar UI to surface programs with ongoing/rolling submissions (added
-2026-08-25 by request; depends only on the already-shipped `rolling` status). All
-operator decisions resolved; only technical-design unknowns (T1–T5) remain, resolvable at
-build time. See the change log at the bottom for the full P0–P4 build record.
-**Owner:** _tbd_  **Started:** 2026-08-25
+**Status:** **P0–P5 SHIPPED** — P0–P4 (2026-08-25) + **P5 (2026-08-26): trusted-domain
+allowlist, rung 4 PROVEN LIVE** (999 pytest green, DDL run, $0.146 proof, no DB writes). A free
+tracker SYNC layer (`/api/tracker/sync`) sits on top. **REPLAN 2026-08-26 — decision 6
+superseded: both features now unify onto ONE fetch+verify SUBSTRATE (§5a).** The P5 rung-4 proof
+showed deadlines (Claude `web_fetch`) read THINK's PDF while tasks (our urllib) can't — so the
+fix is to share Claude's fetcher and keep code-side verification for both by capturing the
+fetched content, gated by the P5 trust tiers. **NEXT: P6 = the substrate** (P6a capture-probe →
+P6b task extract on substrate → P6c date-verify), then P7 frontend trust gradient, P8–P10, P11
+last. Operator decisions all resolved; technical unknowns T1–T8 resolvable at build time. See
+the change log for the full record.
+**Owner:** _tbd_  **Started:** 2026-08-25  **Branch:** `P5-P7-deadline-and-task-tracker`
 
 > **This is the single source of truth for the deadline creator and the task creator.**
 > It merges and supersedes `DEADLINE_CREATION_PLAN.md` and `ACTION_ITEMS_TRUST_PLAN.md` — both
@@ -21,10 +22,11 @@ Self-contained; you do not need the originating conversations. Two features shar
 **deadlines** (dates → Quest-Log milestones + calendar events) and **tasks** (the application
 checklist). Both are being moved to Claude, both are on-demand + 7-day cached, both draw on a
 shared operator-controlled trusted-domain allowlist, and both were failing on the same live
-row (THINK Scholars, a JS SPA). The work is phased at the bottom. The deadline gaps (G1–G4)
-and the task-trust tiers (aggregators) are both fully designed and **every operator decision is
-settled (2026-08-25)**; only technical-design unknowns (T1–T5) remain, to be resolved at build
-time.
+row (THINK Scholars, a JS SPA). The work is phased at the bottom. **As of 2026-08-26 the two
+features share ONE fetch+verify substrate (§5a / decision 6) — the spine of the design; read it
+first.** The deadline gaps (G1–G4) and the task-trust tiers (aggregators) are fully designed and
+**every operator decision is settled**; only technical-design unknowns (T1–T8) remain, resolved
+at build time.
 
 ---
 
@@ -41,7 +43,8 @@ failure.**
 | meta / fit | `extractTrackerInfo` (client) | Gemini (slimmed) | none needed (descriptive only) |
 | apply url | static `opp.url` | — | link-checked by `check_links.py` |
 
-**Five architecture decisions that govern both features (confirmed 2026-08-25):**
+**Architecture decisions that govern both features (confirmed 2026-08-25; decision 6
+superseded 2026-08-26):**
 
 1. **Claude (Haiku 4.5) owns both tasks and deadlines** — the product's two core surfaces,
    promoted off `gemini-3.5-flash-lite` for reasoning quality. Cost via
@@ -64,23 +67,65 @@ failure.**
    aggregator quote can verify perfectly and still be wrong, so aggregator content is verified
    the same way but carries a lower tier, is labelled by source, and **may back logistics,
    never eligibility** (see §5).
-6. **Two separate calls, never one combined call.** Deadlines and tasks are two authoritative
-   endpoints (`/deadline`, `/action-items`), two Claude calls, two independent 7-day caches
-   (`dates_last_checked_at` vs `action_items_checked_at`). The deadline call **searches**
-   (escalation loop); the task call **must not search** — its page is fetched by us and its
-   quotes are verified against that page in code, which is the anti-fabrication guarantee a
-   combined search-fed call would break. They share the *search machinery* (§5) and may share
-   discovered *URLs*, but not the call. The client fires both together on add / open / refresh,
-   so it reads as one action to the student while staying two calls server-side.
+6. **One shared fetch+verify SUBSTRATE; two feature-specific EXTRACTS.** *(Revised 2026-08-26 —
+   supersedes the earlier "two separate calls, task must not search". See §5a and the change
+   log.)* Both features stand on ONE substrate, and only the extract differs:
+   - **Shared discovery + fetch** — Claude `web_search` / `web_fetch` (the escalation
+     "program source finder", §3/§5). This is the fetcher for BOTH, chosen because it reads
+     PDFs, JS-rendered SPAs, and 403/TLS-walled pages that our stdlib `urllib` fetcher cannot
+     — the exact pages tasks were falling back to generic on. THINK's guidelines PDF, proven
+     live 2026-08-26, is read this way.
+   - **Shared content capture** — the fetched TEXT of every `web_search_tool_result` /
+     `web_fetch_tool_result` block, not just its URL. Today the deadline agent keeps only the
+     URLs (`extract_source_urls`); the substrate additionally keeps the content, which is the
+     "page text we hold locally" the verifier needs.
+   - **Shared code-side verification** — the extracted fact must appear in the captured
+     content: tasks via `page_text.quote_is_on_page` / `claim_is_supported`, dates via the
+     same-shaped date analogue (new — brings deadlines UP to the task standard, rather than
+     tasks down to none). Model and verifier see the SAME captured blocks, so `web_fetch`
+     truncation causes no false demotion.
+   - **Shared trust tiers** (§5) — every captured source is classified by domain (official /
+     trusted / pending / blocked). This is what makes a shared search-fed fetch safe: a claim
+     verified only against a non-official domain is tier-limited (logistics, never
+     eligibility), so the third-party-quote risk is gated, not trusted.
+   - **Per-feature EXTRACT only** — a search-OFF JSON pass over the captured content: dates
+     for one, tasks for the other.
 
-**The shared root cause that started both threads.** THINK Scholars (`ec17921`,
-`think.mit.edu`) is a client-side-rendered SPA: the server returns ~490 bytes (a `<title>` and
-a JS bundle), and its guidelines PDF link is JS-injected. Our stdlib fetcher (`page_text`,
-`urllib`) reads nothing → **empty deadlines AND a generic task list**, from one cause. The only
-fix that reads an SPA's own page is a headless render (Playwright, "fetch fix C"), which is
-**DEFERRED (2026-08-25)** — deadlines instead recover dates via the escalation loop's
-prior-cycle and trusted-third-party rungs; tasks rely on the aggregator tier. Revisit C only if
-SPA-only sites prove common.
+   **Why this replaces "task must not search".** The anti-fabrication guarantee was never
+   search-OFF itself — it was CODE verification against text we hold. Capturing Claude's fetch
+   content preserves that guarantee (an invented "Algebra 2" is not in the captured blocks, so
+   `quote_is_on_page` still fails it) while using a fetcher strong enough to read the real
+   source. Verification ≠ trust (decision 5) is what closes the remaining gap.
+
+   **Still two extracts, two caches.** `dates_last_checked_at` vs `action_items_checked_at`
+   stay independent. But ONE shared fetch pass populates both, so the combined cost is a single
+   paid discovery/fetch plus two cheap search-OFF extracts — *cheaper* than two independent
+   search passes, which is why unifying is efficient, not merely tidy. The client still fires
+   both together on add / open / refresh.
+
+   **Open build question (T6).** Whether the shared fetch is literally ONE pass whose
+   stop-condition covers both date-bearing AND requirement-bearing pages, or two coordinated
+   passes over shared machinery: a date-optimized early-exit (stop as soon as dates are found)
+   can under-fetch the requirements page a task needs. Resolve at build time (§8, T6).
+
+**The shared root cause that started both threads — and why the fix is the substrate.** THINK
+Scholars (`ec17921`, `think.mit.edu`) is a client-side-rendered SPA: the server returns ~490
+bytes (a `<title>` and a JS bundle), and its guidelines PDF link is JS-injected. **Two
+different fetchers gave two different outcomes, and that IS the finding:**
+- The **deadline** agent uses Claude's server-side `web_search` / `web_fetch`, which reads the
+  static guidelines PDF fine (proven live 2026-08-26 — its dates were recovered from
+  `THINK_Program_Guidelines_2026.pdf`). The deadline gap was never the SPA; it was **G1** (only
+  one search round ran, so the prior-cycle PDF was never fetched), fixed by P2's escalation loop.
+- The **task** agent uses our stdlib `page_text` / `urllib`, which rejects the SPA (~490 bytes
+  → `empty-or-js`) AND the PDF (`Content-Type: application/pdf` → `not-html`) — so it reads
+  **nothing** and falls back to a generic list, while the richest requirement content sits in a
+  PDF Claude's fetcher already reads.
+
+So the two features diverged only because they stood on two different fetchers of unequal
+capability. **Decision 6 (revised 2026-08-26) unifies them onto Claude's fetcher** — the task
+agent reads the same PDF the deadline agent does, and both verify in code against the captured
+content. This makes **fetch fixes A (pypdf) and C (Playwright) largely moot for READING** (Claude
+does it server-side); they survive only as a possible local fallback, and stay deferred.
 
 ---
 
@@ -177,12 +222,18 @@ doesn't fall through.
 Task *accuracy* is already strong: the code-side quote verification (`claim_is_supported` /
 `quote_is_on_page`) is what stopped the fabricated "Algebra 2 prerequisite". The problem is
 **coverage** — everything that is neither the program's own readable page nor generic
-boilerplate is invisible:
+boilerplate is invisible. **The 2026-08-26 replan (decision 6 / §5a) addresses both coverage
+gaps at the root by moving tasks onto the shared substrate**, so this section's fixes are now
+that substrate plus the trust tiers:
 
-- **The official page may be unreadable** (SPA like THINK, or a PDF behind JS). Fetch fixes
-  A (PDF) / B (same-domain link discovery) help; C (Playwright) is deferred.
+- **The official page may be unreadable by US** (SPA like THINK, or a PDF behind JS) — but
+  Claude's `web_fetch` reads it. Under the substrate the task extract runs over the CAPTURED
+  fetch content (the same PDF the deadline agent already reads), verified in code against that
+  capture. The urllib-fetcher gap that produced THINK's generic list is gone; fetch fixes A/B/C
+  are demoted to an optional local fallback (§5).
 - **The richest description often sits on a third-party aggregator** (e.g.
-  `lumiere-education.com`) the agent is currently forbidden to use.
+  `lumiere-education.com`). The substrate's fetch may surface it and the trust tier decides
+  whether it ships — the aggregator content is verified the same way, then tier-gated (below).
 
 ### Fix — trusted-aggregator tiers (design; operator decisions open)
 
@@ -234,6 +285,49 @@ is a later optimization.
 
 ## 5. Shared infrastructure
 
+### 5a. The unified fetch+verify substrate (the spine — decision 6, 2026-08-26)
+
+This is now the CENTRE of the design: both features are the same pipeline with one differing
+step. Build it once; deadlines and tasks are thin extracts on top.
+
+```
+  DISCOVER + FETCH   Claude web_search/web_fetch  ── the "program source finder" (§ below)
+        │            reads PDFs, SPAs, 403/TLS-walled pages our urllib cannot
+        ▼
+  CAPTURE            the fetched TEXT of every result block (+ its resolved URL + domain)
+        │            — this is the local text the verifier checks against
+        ▼
+  TIER-TAG           classify every captured source's domain via aggregators_common
+        │            (official / trusted / pending / blocked)
+        ▼
+  EXTRACT  ◄──────── the ONE per-feature step: dates | tasks (search-OFF JSON over the capture)
+        │
+        ▼
+  VERIFY (code)      the extracted fact must appear in the captured content:
+        │            tasks → quote_is_on_page / claim_is_supported
+        │            dates → the same-shaped date analogue (new)
+        ▼
+  DECIDE + WRITE     deadline_write_decision | action_items_write_decision (already parallel)
+                     + eligibility gate: eligibility claims kept ONLY at official tier
+```
+
+- **Reuse is the point.** Discovery, fetch, capture, tier-tag, verify-mechanics, write-decision
+  shape — all shared. Only the extract prompt and the cache column differ.
+- **One paid fetch feeds both extracts.** A single discovery/fetch pass per row, then two cheap
+  search-OFF extracts over the same capture. Cheaper than two independent search passes.
+- **Capture is the new primitive.** `extract_source_urls` keeps only URLs today; the substrate
+  keeps `{url, domain, text, tier}` per fetched block. Verification and tiering both read it.
+- **Verification ≠ trust still holds (decision 5).** Code proves the source SAID it; the tier
+  says how far to trust the source. A trusted-aggregator quote verifies the same way as an
+  official one but is tier-limited (logistics, never eligibility).
+- **Brings deadlines UP, not tasks down.** Deadlines gain a code-side "is this date on the
+  captured page" check they never had; tasks gain a fetcher that reads the real source. Same
+  standard both ways — the parity the 2026-08-26 replan asked for.
+- **T6 (build-time):** one fetch pass vs. two coordinated passes — a date-optimized early-exit
+  can under-fetch the requirements page a task needs. See §8.
+
+### 5b. Trusted-domain allowlist
+
 **Trusted-domain allowlist (`trusted_aggregators`).** One table + one shared lib
 (`aggregators_common.py`: `normalize_domain`, `load_aggregator_policy`, `classify_source`) +
 one console **Sources** tab. Serves **both** features:
@@ -249,18 +343,24 @@ Modelled on the repo's existing discovery-vs-execution splits (mailing-list reci
 absent, the console shows the setup step, every aggregator domain is treated as pending
 (nothing ships), and the deadline rung-4 filter simply keeps nothing off-domain.
 
-**Fetch layer (shared).** A (accept `application/pdf`, extract via `PyPDF2`) and B (follow ≤2–3
-same-domain requirement-bearing links/PDFs) are low-risk future wins, not current scope. C
-(Playwright headless render) is **deferred** (the only fix for SPA-only official pages).
+**Fetch layer — Claude `web_fetch` is the shared fetcher (2026-08-26).** Both features fetch
+through Claude's server-side tools, which read PDFs, SPAs and 403/TLS-walled pages our urllib
+cannot. So the old local-fetcher fixes are **largely moot for reading**: A (accept
+`application/pdf` via `pypdf`) and B (follow same-domain requirement links) survive only as a
+possible *local fallback* if we ever want one; C (Playwright) is **deferred** and no longer the
+only way to read an SPA (Claude's fetcher already does). `page_text`'s VERIFY half
+(`quote_is_on_page` / `claim_is_supported`, the generic-token list) is retained and is now run
+against the CAPTURED fetch content rather than a urllib fetch.
 
 **Shared search machinery ("program source finder").** The deadline escalation loop (§3 G1) is
 built as a **reusable helper**, not a deadline-only function: prose phase-1, tools ON, per-round
 `max_uses:1`, grounding-resolved `sources`, trusted-domain classification, cheap structured tail
-signals (`FOUND_*`, `SITE_REACHED`). Deadlines call it to find date-bearing pages; task
-aggregator discovery calls the same helper to find where a program is described (D1). The
-feature-specific *extract* (dates vs. verified tasks) stays separate and search-off. Trusted
-rung-4 URLs the deadline loop surfaces are persisted so the task pass can reuse them without
-re-paying for discovery.
+signals (`FOUND_*`, `SITE_REACHED`). It is the DISCOVER+FETCH step of the substrate (§5a).
+Deadlines call it to find date-bearing pages; the task pass calls the same helper for
+requirement-bearing pages. The feature-specific *extract* (dates vs. tasks) is a search-OFF pass
+over the shared **captured content** (not a separate urllib fetch), and each extract is verified
+in code against that same capture. One fetch pass can feed both extracts; trusted rung-4 URLs
+the deadline loop surfaces are persisted so a task-only pass can reuse them without re-paying.
 
 ---
 
@@ -336,7 +436,24 @@ list is dropped on refresh — fatal for both features, so both hinge on **exten
 7. **Task cache TTL:** 7 days on-demand (batch's 90-day stays a separate bulk knob).
 8. **Playwright (fetch fix C):** deferred.
 - Plus architecture decisions: on-demand + stamp-on-success; collapse the Gemini producer
-  (resolves G4); `apply_url = opp.url`; two Claude calls stay separate.
+  (resolves G4); `apply_url = opp.url`. *(The "two Claude calls stay separate" decision was
+  SUPERSEDED 2026-08-26 — see the unified-substrate entry below.)*
+
+### Resolved — unified fetch+verify substrate (2026-08-26)
+
+- **Same standard, maximal reuse — DECIDED (2026-08-26): unify BOTH features onto one
+  fetch+verify substrate (§5a), unified UPWARD onto Claude `web_fetch`.** Supersedes decision 6's
+  "two separate calls, task must not search". Rationale: the two features diverged only because
+  they stood on fetchers of unequal capability (Claude `web_fetch` vs. our urllib) — proven live
+  2026-08-26, where the deadline agent read THINK's guidelines PDF that the task agent's urllib
+  rejects outright. The fix is not a task-only local PDF patch; it is to share the fetcher and
+  keep code-side verification for both by capturing the fetched content. Shared: discover+fetch,
+  content capture, code-side verify, trust tiers, write-decision shape. Per-feature: the extract
+  (dates vs tasks) only. The trust tiers (P5, already built) are what make a shared search-fed
+  fetch safe — a non-official quote is tier-limited, never eligibility. (No longer open.)
+- **Direction — unify UPWARD, not downward.** Downward (both on our urllib+pypdf fetcher) keeps
+  hitting our client's 403/TLS/SPA ceiling and would REGRESS deadline coverage; upward reads the
+  real source for both. Fetch fixes A/B/C demoted to optional local fallback. (No longer open.)
 
 ### Resolved — task-trust (aggregator) side (2026-08-25)
 
@@ -373,6 +490,21 @@ list is dropped on refresh — fatal for both features, so both hinge on **exten
 - **T3** eligibility-claim detector (a new classifier, bias toward flagging; own test suite).
 - **T4** one confidence vocabulary across dates (`(est.)`) and tasks (tier chips).
 - **T5** copy that makes "the aggregator SAID it" vs "the program REQUIRES it" legible.
+- **T6** (new 2026-08-26) the shared fetch pass: ONE pass whose stop-condition covers both
+  date- AND requirement-bearing pages, or two coordinated passes over shared machinery? A
+  date-optimized early-exit (`FOUND_CONFIRMED_DATES` → stop) can leave the requirements page
+  unfetched, so the task extract would see a capture chosen for dates. Lean: a fetch pass whose
+  stop-condition is satisfied only when BOTH a date-bearing and a requirement-bearing page have
+  been captured (or a bounded extra fetch for the missing one), then two extracts over it.
+- **T7** (new 2026-08-26) date verification analogue: the code-side check that a claimed date
+  actually appears in the captured content (the dates' `quote_is_on_page`). Dates are formatted
+  many ways ("Jan 15", "January 15, 2027", "15/01/27"), so this needs date-aware normalization,
+  not the string match tasks use. Bias: verify the date is grounded, but do not DROP an
+  estimated/projected date (which by definition is not on any page) — gate only NON-estimated
+  dates, mark unverifiable ones rather than deleting.
+- **T8** (new 2026-08-26) capture plumbing: `web_fetch_tool_result` / `web_search_tool_result`
+  blocks must yield `{url, domain, text}`, deduped, within `max_content_tokens`. Confirm the
+  block shape carries retrievable text (not only URLs) on Haiku before committing the substrate.
 
 ---
 
@@ -419,12 +551,34 @@ which are independent until the client consolidation.
   (only trusted sources reach phase 2), 3 dates emitted all `estimated=true` with a note
   citing the lumiere guide. P5 fully closed.
 
-**Task coverage & accuracy** *(operator decisions resolved; T1–T5 design at build time)*
-- **P6 — Aggregator discovery + tiers.** `--aggregators` reusing the P2 "program source finder"
-  (D1) + eligibility carve-out (T3) + tier tagging + write decision + serve filter. Consume any
-  persisted trusted rung-4 URLs the deadline loop already found. Operator-run, `--preview`-costed.
+**Unified fetch+verify substrate + task coverage** *(replan 2026-08-26; decision 6 / §5a;
+operator decisions resolved; T1–T8 at build time)*
+- **P6 — Unified fetch+verify substrate.** The 2026-08-26 replan, in sub-steps so each ships
+  and is provable on its own. Reworks shipped P0–P1 (tasks move off urllib) but leaves the
+  student-visible contract the same until P7.
+  - **P6a — Content capture + tier-tag (the new primitive, T8).** Extend the P2 "program source
+    finder" to return `{url, domain, text, tier}` per fetched block, not just URLs — `text`
+    from `web_fetch_tool_result` / `web_search_tool_result`, `tier` from `aggregators_common`.
+    **First** confirm on Haiku that the block shape carries retrievable text (T8) — if it does
+    not, the whole substrate is blocked and we fall back to fetch-fix A/B locally; prove this
+    live before building on it. Free-ish (one probe).
+  - **P6b — Task extract on the substrate.** Rework `generate_action_items.py` +
+    `app/services/action_items.py`: fetch via the shared finder (Claude `web_fetch`) instead of
+    `page_text`/urllib; run the EXISTING `quote_is_on_page` / `claim_is_supported` against the
+    captured content; tag each task's tier by the domain its quote matched; eligibility-claim
+    detector (T3) drops eligibility claims not at official tier; pending/blocked serve filter
+    (already live from P5). Operator-run + `--preview`-costed for the batch; interactive path
+    inherits. This is what finally gives THINK a real, PDF-derived checklist.
+  - **P6c — Date verification analogue (T7), optional/strengthening.** Bring deadlines UP to the
+    same code-side standard: verify a NON-estimated date appears in the captured content
+    (date-aware normalization; never drop an estimated/projected date). Sequenceable after
+    P6b — it hardens, it does not unblock coverage.
+  - **T6 (one pass vs two):** aim for one fetch pass feeding both extracts, its stop-condition
+    covering date- AND requirement-bearing pages; persist discovered/ rung-4 URLs for reuse.
 - **P7 — Frontend trust gradient.** `ActionItem` tier fields, `taskTrustTier`, grouped headings
-  + per-task source chips.
+  ("From the program's own page" / "From a trusted guide · {domain}" / "Typical steps") +
+  per-task source chips (colour fixed per tier; chip links the evidence `source_url`, trailing
+  ↗ stays the step-action `url`).
 
 **Client consolidation & refresh**
 - **P8 — Collapse the Gemini producer.** Slim `extractTrackerInfo` to `meta`/`fit`; dates←
@@ -452,14 +606,15 @@ which are independent until the client consolidation.
   not invent a placeholder date to force a rolling program onto a month lane (violates "never
   anchor a date" — the whole point is it has no date).
 
-**Deferred / optional:** fetch fixes A (PDF) + B (link discovery) any time; C (Playwright)
-deferred.
+**Deferred / optional:** fetch fixes A (PDF) + B (link discovery) survive only as a possible
+LOCAL fallback now that Claude `web_fetch` is the shared fetcher (§5a); C (Playwright) deferred.
 
-**Order:** ~~P0 → P1 → P2 → P3 → P4~~ ✅ **done** → **P5 (next)** → (P6 → P7) → P8 → P9 → P10,
-then **P11 last** (calendar ongoing-submissions UI). Deadline track (P2–P4) and task
-foundation (P0–P1) are independent until P5/P8, so two people can parallelize. P11 depends
-only on P4's `rolling` status (already shipped), so it could in fact be pulled forward
-whenever the calendar UI is being touched — but it is scheduled last by request.
+**Order:** ~~P0 → P1 → P2 → P3 → P4 → P5~~ ✅ **done** → **P6 (next): unified substrate**
+(P6a capture-probe → P6b task extract on substrate → P6c date-verify) → **P7** frontend trust
+gradient → P8 → P9 → P10, then **P11 last** (calendar ongoing-submissions UI). P6 reworks
+shipped P0–P1 (tasks leave urllib) but keeps the student contract until P7. P11 depends only on
+P4's `rolling` status (shipped), so it can be pulled forward with any calendar work — scheduled
+last by request.
 
 **Loose ends carried out of the P0–P4 session (none blocking):**
 - P0 tasks-on-Claude never run on real rows — a graded sample costs money; do one when
@@ -480,11 +635,20 @@ whenever the calendar UI is being touched — but it is scheduled last by reques
 - `check_deadlines.py` — escalation loop; per-round `max_uses:1` + ladder; `FOUND_*` /
   `SITE_REACHED` tails; prompt caching; `VALID_STATUS`+`rolling`; `deadline_write_decision`
   + `SOURCE_UNREACHED`; rung-4 trusted filter.
-- `generate_action_items.py` — `call_gemini`→`call_claude`; `claude_common.estimate_cost`;
-  keep `page_text` + quote verification; `--aggregators` (P6); tier tagging; eligibility
-  detector.
-- `app/services/action_items.py` — `ANTHROPIC_API_KEY`; 7-day TTL on `action_items_checked_at`;
-  serve-path `pending`/`blocked` filter.
+- **Substrate (P6, new 2026-08-26):** a shared "fetch+capture+tier" helper on top of the P2
+  finder returning `{url, domain, text, tier}` per fetched block (capture from
+  `web_fetch_tool_result`/`web_search_tool_result`; tier from `aggregators_common`). Likely a
+  new module (e.g. `source_capture.py`) or an extension of the finder in `check_deadlines.py`.
+- `generate_action_items.py` — **P6b:** fetch via the shared substrate (Claude `web_fetch`)
+  instead of `page_text`/urllib; KEEP `quote_is_on_page`/`claim_is_supported` but run them
+  against the CAPTURED content; tier-tagging; eligibility detector (T3). *(P0's
+  `call_gemini`→`call_claude` already done.)* `page_text`'s fetch half becomes optional local
+  fallback; its verify half is retained.
+- `app/services/action_items.py` — interactive twin fetches via the substrate too; keep the
+  7-day TTL + serve-path `pending`/`blocked` filter (both live from P0–P1/P5).
+- `check_deadlines.py` — **P6a/P6c:** capture fetched content in the finder; optional date
+  verification analogue (T7). *(escalation loop, rung-4 filter, rolling, write-decision already
+  done in P2–P5.)*
 - `app/routes/opportunities.py` — inherits `check_one`; new-outcome stamp handling.
 - `aggregators_common.py` (new), `trusted_aggregators_schema.sql` (new).
 - `ops/core.py` + `ops/admin.py` + `ops/admin_console.html` — Sources tab (approve/block/park).
@@ -511,6 +675,18 @@ whenever the calendar UI is being touched — but it is scheduled last by reques
 - **Status ripple (rolling).** Enumerate every `status` reader before shipping P4.
 - **Merge fragility (P10).** Preserving user tasks + tombstones is the one real code risk;
   key on text, never positional id.
+- **Substrate capture plumbing (T8) is a hard prerequisite — prove it FIRST (P6a).** The whole
+  substrate assumes `web_fetch_tool_result` / `web_search_tool_result` blocks carry retrievable
+  page TEXT (not only URLs) on Haiku. If they don't, code-side verification against the capture
+  is impossible and the substrate is blocked — fall back to fetch-fix A/B (local pypdf + link
+  discovery). So P6a is a cheap live probe gating the rest; do not build P6b on an unverified
+  assumption.
+- **Task cost rises on the substrate.** Tasks move from an ~free local fetch to a paid
+  `web_fetch`/search pass. Mitigated by ONE shared fetch feeding both extracts (T6) and by the
+  interactive 7-day cache, but confirm per-row cost on a live P6b sample before a full pass.
+- **Verification strength must not regress in the move.** The captured content must be exactly
+  what the model saw (same blocks), or a real quote could fail `quote_is_on_page`. Test that the
+  "Algebra 2" fabrication still fails under substrate verification, not just under urllib.
 - **Non-goal:** recurring event-date extraction for rolling programs (e.g. monthly meetings).
 - **Non-goal:** confirmed-delivery / open-tracking anywhere (privacy).
 
@@ -527,6 +703,13 @@ whenever the calendar UI is being touched — but it is scheduled last by reques
 - Every built-in generic checklist line runs through the verifier against an EMPTY page
   (existing `test_action_items.py` discipline) so no generic line smuggles a claim.
 - Per-tier task rendering (official/trusted/generic) and the serve-path pending filter.
+- **Substrate (P6):** capture parsing (`{url,domain,text,tier}` from fetch/search result
+  blocks, deduped, truncation-bounded) unit-tested against recorded block fixtures;
+  `quote_is_on_page`/`claim_is_supported` re-run against captured content (the "Algebra 2"
+  fabrication must still fail); tier-tagging by domain via `aggregators_common`; the eligibility
+  detector (T3) with its own adversarial suite. **P6a live probe** confirms Haiku's blocks carry
+  text before P6b builds on it. Date-verify analogue (T7) with date-format-normalization cases,
+  incl. that an estimated/projected date is never dropped for being absent from the page.
 
 ---
 
@@ -633,6 +816,21 @@ deadline."
 
 ## Change log
 
+- **2026-08-26** — **REPLAN: unified fetch+verify substrate** (decision 6 superseded; §5a new).
+  Triggered by the P5 rung-4 proof, which exposed that deadlines and tasks stood on two fetchers
+  of unequal power: Claude `web_fetch` read THINK's guidelines PDF (deadlines) while our urllib
+  `page_text` rejects both the SPA (`empty-or-js`) and the PDF (`not-html`), so tasks fell to
+  generic. Operator direction: **same standard for both features, maximal logic reuse.** Decision:
+  unify BOTH onto ONE substrate (discover+fetch via Claude `web_fetch` → capture the fetched
+  content → tier-tag by domain → per-feature extract → code-side verify against the capture →
+  write-decision), unified **upward** (Claude's fetcher, not our urllib) so coverage rises for
+  both and neither is stricter. The trust tiers (P5, built) make a shared search-fed fetch safe
+  (non-official quotes are tier-limited). Supersedes "two separate calls, task must not search":
+  still two extracts + two caches, but one shared fetch pass feeds both (cheaper). Fetch fixes
+  A/B/C demoted to optional local fallback. Re-scoped: **P6 = the substrate** (P6a capture-probe
+  T8 → P6b task extract on substrate → P6c date-verify analogue T7), P7 unchanged. New unknowns
+  T6 (one pass vs two), T7 (date-on-page check), T8 (capture plumbing). **Plan only — no code
+  yet;** P5 code unchanged and still valid (the substrate builds ON P2's finder + P5's tiers).
 - **2026-08-25** — **P5 IMPLEMENTED** (code-complete; branch `P5-P7-deadline-and-task-tracker`,
   dev server on :8001). Shared trust infrastructure, all five deliverables:
   - **`trusted_aggregators_schema.sql`** (new) — domain-pk allowlist, `status`

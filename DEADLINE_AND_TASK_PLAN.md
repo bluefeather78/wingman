@@ -407,9 +407,13 @@ which are independent until the client consolidation.
   its triggers, and the "Last checked" DB-timestamp stamp.
 
 **Shared trust infrastructure**
-- **P5 — `trusted_aggregators` + `aggregators_common` (read side) + console Sources tab.**
-  Unlocks deadline rung 4 AND the task aggregator tier. Serve-path `pending`/`blocked` filter
-  (safe no-op until aggregators exist). Then wire **deadline rung 4** into the P2 loop.
+- **P5 — `trusted_aggregators` + `aggregators_common` (read side) + console Sources tab.
+  ✅ CODE-COMPLETE 2026-08-25** (branch `P5-P7-deadline-and-task-tracker`; 999 pytest green;
+  console Sources tab browser-verified in the degraded table-absent state). Unlocks deadline
+  rung 4 AND the task aggregator tier. Serve-path `pending`/`blocked` filter (safe no-op until
+  aggregators exist) live. Deadline **rung 4** wired into the P2 loop.
+  *(Awaiting the manual DDL step — run `trusted_aggregators_schema.sql` in Supabase — and a
+  paid live check on a hard row to prove rung 4 end-to-end; unit-tested until then.)*
 
 **Task coverage & accuracy** *(operator decisions resolved; T1–T5 design at build time)*
 - **P6 — Aggregator discovery + tiers.** `--aggregators` reusing the P2 "program source finder"
@@ -625,6 +629,34 @@ deadline."
 
 ## Change log
 
+- **2026-08-25** — **P5 IMPLEMENTED** (code-complete; branch `P5-P7-deadline-and-task-tracker`,
+  dev server on :8001). Shared trust infrastructure, all five deliverables:
+  - **`trusted_aggregators_schema.sql`** (new) — domain-pk allowlist, `status`
+    trusted/blocked (absent row ⇒ pending), ALTER-then-CREATE, seeds `lumiere-education.com`
+    as trusted. **Manual DDL step — not yet run in Supabase.**
+  - **`aggregators_common.py`** (new, stdlib-only, repo root) — the ONE read side both
+    features share: `normalize_domain` (scheme-aware, subdomain-safe), `AggregatorPolicy`
+    (`.classify` → trusted/blocked/pending, blocked wins, subdomain-suffix match),
+    `domain_matches`, `load_aggregator_policy` (never raises; missing table ⇒ present=False,
+    everything pending), `get_policy` cached + `invalidate_policy_cache`.
+  - **Deadline rung 4** wired into `check_deadlines.py`'s escalation loop: `RUNGS` gains
+    "trusted third-party" (focus filled with the allowlist at round time), `ESCALATION_RUNGS`
+    4, reached only when rungs 1-3 fail AND the allowlist is non-empty, its sources
+    trust-filtered before phase 2 (own-site rungs unfiltered — recall unchanged), dates
+    forced estimated via the focus. `_load_trusted_domains()` lazy-loads (cached) so neither
+    call site changed. Empty allowlist ⇒ rung 4 no-op ⇒ pre-P5 behaviour preserved.
+  - **Serve-path tier filter** in `app/services/action_items.py`: `payload()`/`_servable()`
+    drop `source_tier` pending/blocked (defense in depth; no-op until P6 tags tiers; legacy
+    untagged items pass).
+  - **Console Sources tab** (`ops/core.py` CRUD + `ops/admin.py` 3 routes +
+    `ops/admin_console.html` view): list/trust/block/remove domains, counts, degrade-to-setup
+    notice. Writes invalidate the policy cache (same process). Browser-verified.
+  - Tests: new `tests/unit/test_aggregators_common.py` (normalize/classify/policy/cache +
+    serve filter); rung-4 loop tests + updated own-site-rung count in
+    `test_check_deadlines_helpers.py`. **999 pytest green.**
+  - **Not done (as scoped — checkpoint before P6/P7):** run the DDL; a paid live rung-4 check
+    on a hard row (e.g. THINK); the task aggregator discovery (P6) and frontend trust
+    gradient (P7).
 - **2026-08-25** — Created as the merged main plan from `DEADLINE_CREATION_PLAN.md` and
   `ACTION_ITEMS_TRUST_PLAN.md`. Deadline decisions all resolved; task-trust decisions carried
   forward as open. Nothing implemented.

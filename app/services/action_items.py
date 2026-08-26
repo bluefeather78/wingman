@@ -93,8 +93,27 @@ def patch_action_items(opp_id, patch):
         resp.read()
 
 
+# Tiers that must NEVER reach a student (P5). Independent of how the item was tagged at
+# generation time — the serve path filters again so a generation bug can't leak an
+# un-approved aggregator source (DEADLINE_AND_TASK_PLAN.md §4, "enforced at BOTH generation
+# and serve time"). A no-op today: nothing writes source_tier until P6, and legacy items
+# (no tier / basis:'page' / basis:'generic') carry none, so they all pass.
+WITHHELD_TIERS = {"pending", "blocked"}
+
+
+def _servable(items):
+    """Drop items whose trust tier is pending/blocked. An item with no source_tier is kept —
+    absence of a tier is the pre-P6 official/generic case, not an un-approved aggregator."""
+    kept = []
+    for it in items or []:
+        if isinstance(it, dict) and it.get("source_tier") in WITHHELD_TIERS:
+            continue
+        kept.append(it)
+    return kept
+
+
 def payload(items, source):
-    return {"action_items": items or [], "source": source}
+    return {"action_items": _servable(items), "source": source}
 
 
 def _is_fresh(checked_at):

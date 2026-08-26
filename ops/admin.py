@@ -208,6 +208,33 @@ async def handle_signups_moderate(request: Request):
     return json_response(200 if result.get("ok") else 400, result, default=str)
 
 
+# ---------------- Sources: trusted-domain allowlist (P5) ----------------
+
+@router.get("/api/agents/aggregators")
+def handle_aggregators_list():
+    return json_response(200, core.list_trusted_aggregators(), default=str)
+
+
+@router.post("/api/agents/aggregators")
+async def handle_aggregator_upsert(request: Request):
+    body = await read_json_body(request)
+    result = core.upsert_trusted_aggregator(
+        (body.get("domain") or "").strip(),
+        (body.get("status") or "").strip(),
+        label=body.get("label"),
+        notes=body.get("notes"))
+    return json_response(200 if result.get("ok") else 400, result, default=str)
+
+
+@router.post("/api/agents/aggregators/delete")
+async def handle_aggregator_delete(request: Request):
+    """POST, not DELETE /{domain}: a domain carries dots and slashes that make a path segment
+    awkward, so the domain travels in the body."""
+    body = await read_json_body(request)
+    result = core.delete_trusted_aggregator((body.get("domain") or "").strip())
+    return json_response(200 if result.get("ok") else 400, result, default=str)
+
+
 @router.post("/api/agents/preview")
 async def handle_agents_preview(request: Request):
     body = await read_json_body(request)

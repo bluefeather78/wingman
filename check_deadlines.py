@@ -119,6 +119,10 @@ from gemini_common import extract_json
 # deadline_check_log row written before 2026-08-22 carries that mispricing.
 from claude_common import estimate_cost
 from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
+# Rung 4 (P5) draws its allowed third-party listing domains from the operator's allowlist.
+# This is the ONLY off-domain sourcing the deadline loop is permitted, and it degrades to
+# "keep nothing off-domain" when the table is absent — see _load_trusted_domains below.
+import aggregators_common
 
 # "rolling" (2026-08-25, G3): a genuine continuous-admission / always-open program, for
 # which an EMPTY important_dates is the CORRECT answer — there is no cycle to find. It is
@@ -582,11 +586,23 @@ RUNGS = [
      "FOCUS THIS ROUND: search the program's OWN site for a FAQ, 'How to Apply', 'Key Dates', "
      "'Timeline' or 'Deadlines' subpage and fetch the best hit — deadline details usually live "
      "on a subpage that a top-level search snippet never shows."),
-    # Rung 4 (trusted third-party listings) — P5. Draws ONLY from the operator's
-    # trusted_aggregators allowlist and forces every date it yields to estimated=true. Not
-    # wired until that table and aggregators_common exist.
+    # Rung 4 (trusted third-party listings) — P5, wired 2026. Reached ONLY when rungs 1-3
+    # could not satisfy the found-signals (a hard row: SPA, site down, unposted cycle), and
+    # ONLY when the operator's trusted_aggregators allowlist is non-empty. The {domains}
+    # placeholder is filled at round time with that allowlist, and this round's sources are
+    # trust-filtered before phase 2 (research_deadlines) so an untrusted third-party page can
+    # never ground a date. Every date it yields is an ESTIMATE, forced estimated=true.
+    ("trusted third-party",
+     "FOCUS THIS ROUND: the program's own site did not yield dates. Search ONLY these "
+     "operator-approved third-party listing / guide sites for THIS program's dates, and no "
+     "other off-site source: {domains}. Anything you find on one of these is an ESTIMATE, not "
+     "a confirmation — set \"estimated\": true for every date whose only support is one of "
+     "these sites, and name the site in the note (e.g. \"from lumiere-education.com's listing\")."),
 ]
-ESCALATION_RUNGS = 3  # rungs 1-3 for now; rung 4 lands with P5.
+# Rungs 1-4. Rung 4 is a NO-OP unless the trusted_aggregators allowlist has domains, so this
+# is safe to set to 4 before the table exists: the loop skips rung 4 when there is nothing to
+# search, leaving pre-P5 behaviour (rungs 1-3) exactly unchanged. See research_deadlines.
+ESCALATION_RUNGS = 4
 
 _SIGNAL_RE = {
     "site_reached": ("SITE_REACHED",),
@@ -649,7 +665,22 @@ def _search_round(opp, api_key, focus, retry_on_silent):
     return notes, cost, 0, sources, attempts
 
 
-def research_deadlines(opp, api_key, retry_on_silent=True):
+RUNG_TRUSTED_THIRD_PARTY = "trusted third-party"
+
+
+def _load_trusted_domains():
+    """The operator's trusted third-party domains for rung 4, or [] when the allowlist is
+    absent/unreachable. [] makes rung 4 a no-op — 'keep nothing off-domain', the degrade-not-
+    break behaviour DEADLINE_AND_TASK_PLAN.md §5 specifies. Reads env creds (batch main()
+    has run load_dotenv; the interactive process has them from app.config) and goes through
+    aggregators_common's cached policy so a burst of checks is one Supabase read."""
+    policy = aggregators_common.get_policy(
+        os.environ.get("SUPABASE_URL", "").rstrip("/"),
+        os.environ.get("SUPABASE_SERVICE_KEY", ""))
+    return policy.trusted_domains()
+
+
+def research_deadlines(opp, api_key, retry_on_silent=True, trusted_domains=None):
     """PHASE 1 as an ESCALATION LOOP — up to ESCALATION_RUNGS rounds, each a distinct strategy,
     stopping as soon as a found-signal is satisfied. Returns
     (combined_notes, cost, total_searches, union_sources, total_attempts, site_reached).
@@ -657,11 +688,26 @@ def research_deadlines(opp, api_key, retry_on_silent=True):
     site_reached is the OR across rounds of whether the program's OWN page was fetched — the
     G2/G3 signal that separates "we looked and there is nothing" (write a real answer) from
     "we could not reach the site" (leave the row due, do not freeze a hole for 7 days).
+
+    Rung 4 ("trusted third-party", P5) is reached only when rungs 1-3 could not satisfy the
+    found-signals AND the operator's allowlist is non-empty; its focus is filled with the
+    allowlist and ITS sources are trust-filtered before they join the union, so an untrusted
+    page can never reach phase 2. `trusted_domains` is loaded lazily when None, so neither
+    call site (batch main / interactive route) had to change.
     """
+    if trusted_domains is None:
+        trusted_domains = _load_trusted_domains()
     all_notes, all_sources = [], []
     total_cost, total_searches, total_attempts = 0.0, 0, 0
     site_reached = False
     for idx, (name, focus) in enumerate(RUNGS[:ESCALATION_RUNGS]):
+        if name == RUNG_TRUSTED_THIRD_PARTY:
+            # No allowlist -> nothing to search -> keep nothing off-domain. Skipping (rather
+            # than searching the whole web) is what makes ESCALATION_RUNGS=4 safe before the
+            # table exists.
+            if not trusted_domains:
+                continue
+            focus = focus.format(domains=", ".join(trusted_domains))
         notes, cost, searches, sources, attempts = _search_round(
             opp, api_key, focus, retry_on_silent)
         total_cost += cost
@@ -670,6 +716,14 @@ def research_deadlines(opp, api_key, retry_on_silent=True):
         clean, sig = _parse_signals(notes)
         if clean:
             all_notes.append(f"[Round {idx + 1} — {name}]\n{clean}")
+        if name == RUNG_TRUSTED_THIRD_PARTY:
+            # HARD guarantee: only trusted-domain pages from this rung reach phase 2. A
+            # rung-4 date is therefore always grounded on an allowlisted site, and the focus
+            # forced it estimated=true. (Rungs 1-3 search the program's OWN site and are NOT
+            # trust-filtered — the plan gates rung 4's contribution, not the own-site rungs,
+            # so own-site recall is unchanged.)
+            sources = [u for u in sources
+                       if aggregators_common.domain_matches(u, trusted_domains)]
         all_sources.extend(sources)
         site_reached = site_reached or sig["site_reached"]
         # Confirmed current-cycle dates INCLUDING the opening are the best case — stop.

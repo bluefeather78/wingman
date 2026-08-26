@@ -25,6 +25,7 @@ import urllib.parse
 import urllib.request
 
 import agent_common
+import aggregators_common
 import dryrun_common
 import mailing_list_common
 from agent_common import PREVIEW_PREFIX as AGENT_PREVIEW_PREFIX
@@ -2166,6 +2167,94 @@ def moderate_signup_recipes(ids, status, reviewed_by="admin-console"):
                 details.append(f"{opp_id}: {str(e)[:160]}")
     return {"ok": errors == 0, "moderated": done, "status": status,
             "errors": errors, "error_details": details}
+
+
+# ---------- Sources: the trusted-domain allowlist (P5) ----------
+# The console half of trusted_aggregators. The READ side both features consume lives in
+# aggregators_common; this is the operator's CRUD over it. Writes invalidate that module's
+# cache so an approval is live on the deadline path at once, not up to a TTL later — the
+# console and the deadline loop run in the SAME process (server.py mounts ops), so the
+# in-process cache is shared.
+AGGREGATORS_TABLE = "trusted_aggregators"
+AGGREGATOR_STATUSES = ("trusted", "blocked")
+AGGREGATORS_SETUP_HINT = (
+    "The trusted_aggregators table is missing. Run trusted_aggregators_schema.sql in the "
+    "Supabase SQL editor (it is idempotent), then restart with restart_server.ps1. Until "
+    "then no off-domain source is trusted anywhere: the deadline loop keeps nothing off the "
+    "program's own site, and aggregator tasks (P6) all stay parked.")
+
+
+def list_trusted_aggregators():
+    """The allowlist for the console Sources tab, plus counts. Degrades to a setup notice
+    (aggregators_ready=False) when the table is absent, exactly like the mailing-list tab."""
+    try:
+        rows = _supabase_request_strict(
+            AGGREGATORS_TABLE,
+            params={"select": "domain,status,label,notes,added_by,created_at,updated_at",
+                    "order": "updated_at.desc"})
+    except Exception as e:
+        if _missing_table_error(e):
+            return {"ok": True, "aggregators_ready": False, "aggregators": [], "counts": {},
+                    "setup_hint": AGGREGATORS_SETUP_HINT}
+        return {"ok": False, "error": f"Could not read {AGGREGATORS_TABLE}: {e}"}
+    counts = {}
+    for row in rows or []:
+        counts[row.get("status")] = counts.get(row.get("status"), 0) + 1
+    return {"ok": True, "aggregators_ready": True, "aggregators": rows or [], "counts": counts}
+
+
+def upsert_trusted_aggregator(domain, status, label=None, notes=None, added_by="admin-console"):
+    """Add or update one domain. Domain is normalized (aggregators_common) so what the
+    deadline filter compares against is what the operator sees, and a paste of a full URL
+    ("https://www.lumiere-education.com/guides") stores as the bare domain. Upsert on the
+    domain primary key so re-approving an existing row edits it rather than 400ing."""
+    if status not in AGGREGATOR_STATUSES:
+        return {"ok": False, "error": f"Unknown status {status!r}. "
+                                      f"Expected one of {', '.join(AGGREGATOR_STATUSES)}."}
+    norm = aggregators_common.normalize_domain(domain)
+    if not norm:
+        return {"ok": False, "error": f"Could not read a domain from {domain!r}."}
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    row = {"domain": norm, "status": status, "added_by": added_by, "updated_at": now}
+    # Only overwrite label/notes when the operator supplied them, so editing a domain's
+    # status from the row action doesn't blank a note typed earlier.
+    if label is not None:
+        row["label"] = label.strip() or None
+    if notes is not None:
+        row["notes"] = notes.strip() or None
+    try:
+        _supabase_request_strict(
+            AGGREGATORS_TABLE, method="POST",
+            params={"on_conflict": "domain"}, data=[row],
+            extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+    except Exception as e:
+        if _missing_table_error(e):
+            return {"ok": False, "aggregators_ready": False, "error": AGGREGATORS_SETUP_HINT}
+        return {"ok": False, "error": f"Could not write {AGGREGATORS_TABLE}: {e}"}
+    aggregators_common.invalidate_policy_cache()
+    return {"ok": True, "domain": norm, "status": status}
+
+
+def delete_trusted_aggregator(domain):
+    """Remove a domain from the allowlist. Removing (as opposed to blocking) returns the
+    domain to PENDING — the safe default — so this is how you undo a mistaken approval
+    without asserting the domain is bad."""
+    norm = aggregators_common.normalize_domain(domain)
+    if not norm:
+        return {"ok": False, "error": f"Could not read a domain from {domain!r}."}
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
+    try:
+        _supabase_request_strict(AGGREGATORS_TABLE, method="DELETE",
+                                 params={"domain": f"eq.{norm}"})
+    except Exception as e:
+        if _missing_table_error(e):
+            return {"ok": False, "aggregators_ready": False, "error": AGGREGATORS_SETUP_HINT}
+        return {"ok": False, "error": f"Could not delete from {AGGREGATORS_TABLE}: {e}"}
+    aggregators_common.invalidate_policy_cache()
+    return {"ok": True, "domain": norm}
 
 
 def get_agents_summary(days=30):

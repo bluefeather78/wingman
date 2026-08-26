@@ -356,10 +356,18 @@ def test_loop_climbs_to_rung_two_for_prior_cycle_basis(monkeypatch):
     assert "Round 1" in notes and "Round 2" in notes
 
 
-def test_loop_runs_all_rungs_and_reports_unreachable(monkeypatch):
+# Rungs that actually run when there is NO trusted allowlist: every rung except rung 4
+# (trusted third-party), which is skipped with nothing to search. Computed rather than
+# hard-coded so adding/removing an own-site rung keeps these tests honest.
+OWN_SITE_RUNGS = sum(1 for r in cd.RUNGS[:cd.ESCALATION_RUNGS]
+                     if r[0] != cd.RUNG_TRUSTED_THIRD_PARTY)
+
+
+def test_loop_runs_all_own_site_rungs_and_reports_unreachable(monkeypatch):
     calls = _fake_rounds(monkeypatch, [(_signals(site="no"), 1)])  # never satisfied, never reached
-    _n, _c, searches, _s, _a, reached = cd.research_deadlines(OPP, "k")
-    assert calls["n"] == cd.ESCALATION_RUNGS
+    # No allowlist -> rung 4 is a no-op, so the loop runs exactly the own-site rungs.
+    _n, _c, searches, _s, _a, reached = cd.research_deadlines(OPP, "k", trusted_domains=[])
+    assert calls["n"] == OWN_SITE_RUNGS
     assert reached is False  # feeds deadline_write_decision's unreachable-fallback
 
 
@@ -370,6 +378,61 @@ def test_loop_site_reached_is_or_across_rounds(monkeypatch):
         (_signals(site="no"), 1),
         (_signals(site="no"), 1),
     ])
-    _n, _c, _searches, _s, _a, reached = cd.research_deadlines(OPP, "k")
-    assert calls["n"] == cd.ESCALATION_RUNGS
+    _n, _c, _searches, _s, _a, reached = cd.research_deadlines(OPP, "k", trusted_domains=[])
+    assert calls["n"] == OWN_SITE_RUNGS
     assert reached is True
+
+
+# --------------------------------------------------------------- rung 4 (trusted third-party, P5)
+
+def test_rung4_skipped_without_allowlist(monkeypatch):
+    # Every own-site rung fails to satisfy; with no trusted domains, rung 4 never runs, so the
+    # loop stops after the own-site rungs (pre-P5 behaviour is preserved).
+    calls = _fake_rounds(monkeypatch, [(_signals(site="no", confirmed="no", prior="no"), 1)])
+    cd.research_deadlines(OPP, "k", trusted_domains=[])
+    assert calls["n"] == OWN_SITE_RUNGS
+
+
+def test_rung4_runs_when_own_site_fails_and_allowlist_present(monkeypatch):
+    # Own-site rungs never satisfy -> rung 4 runs, injecting the allowlist into its focus.
+    seen_focus = {}
+
+    def fake(system, user_content, api_key, use_web_search=False, max_searches=None,
+             return_sources=False, cache_system=False):
+        seen_focus.setdefault("last", user_content)
+        seen_focus["last"] = user_content
+        notes = _signals(site="no", confirmed="no", prior="no")
+        usage = {"server_tool_use": {"web_search_requests": 1}}
+        return (notes, usage, []) if return_sources else (notes, usage)
+
+    monkeypatch.setattr(cd, "call_claude", fake)
+    cd.research_deadlines(OPP, "k", trusted_domains=["lumiere-education.com"])
+    # The final round is rung 4 and its user content names the trusted domain.
+    assert "lumiere-education.com" in seen_focus["last"]
+
+
+def test_rung4_sources_are_trust_filtered(monkeypatch):
+    # Rung 4 returns one trusted and one untrusted source; only the trusted one survives into
+    # the union handed to phase 2. Own-site rungs return an own-site source, which passes.
+    round_idx = {"n": 0}
+
+    def fake(system, user_content, api_key, use_web_search=False, max_searches=None,
+             return_sources=False, cache_system=False):
+        i = round_idx["n"]
+        round_idx["n"] += 1
+        notes = _signals(site="no", confirmed="no", prior="no")
+        usage = {"server_tool_use": {"web_search_requests": 1}}
+        # Own-site rungs (0..OWN_SITE_RUNGS-1) return an own-domain source; rung 4 returns a
+        # trusted + an untrusted source.
+        if i < OWN_SITE_RUNGS:
+            srcs = ["https://prog.example/apply"]
+        else:
+            srcs = ["https://lumiere-education.com/think", "https://spammy.example/listicle"]
+        return (notes, usage, srcs) if return_sources else (notes, usage)
+
+    monkeypatch.setattr(cd, "call_claude", fake)
+    _n, _c, _s, sources, _a, _r = cd.research_deadlines(
+        OPP, "k", trusted_domains=["lumiere-education.com"])
+    assert "https://lumiere-education.com/think" in sources
+    assert "https://spammy.example/listicle" not in sources  # untrusted -> dropped
+    assert "https://prog.example/apply" in sources           # own-site rung, not filtered

@@ -400,6 +400,7 @@ tr.disabled-seed { opacity: .48; }
     <button class="vtab" data-view="agents">Agents</button>
     <button class="vtab" data-view="review">Review queue<span class="count" id="reviewTabCount"></span></button>
     <button class="vtab" data-view="signups">Mailing lists<span class="count" id="signupTabCount"></span></button>
+    <button class="vtab" data-view="sources">Sources<span class="count" id="sourcesTabCount"></span></button>
     <button class="vtab" data-view="users">Cost per user<span class="count" id="userTabCount"></span></button>
     <button class="vtab" data-view="emails">Emails<span class="count" id="emailTabCount"></span></button>
   </div>
@@ -700,6 +701,73 @@ tr.disabled-seed { opacity: .48; }
               <th>Evidence</th><th class="num">Conf.</th><th>Found on</th><th></th>
             </tr></thead>
             <tbody id="signupBody"><tr><td colspan="7" class="empty">Loading&hellip;</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="view hidden" id="view-sources">
+    <div class="view-lead">
+      The <strong>trusted-domain allowlist</strong> &mdash; the one operator-controlled policy
+      that governs every <em>off-domain</em> source in the app. It decides which third-party
+      sites the deadline tracker may take a date from (its last-resort 4th search rung) and,
+      once aggregator discovery ships, which guide sites a task may cite.
+      <br><br>
+      <strong>Trusted</strong> domains are shown to students and may back logistics, never
+      eligibility. <strong>Blocked</strong> domains are dropped everywhere. A domain that is
+      <strong>neither</strong> is <em>pending</em>: withheld from students by default, so an
+      unknown site is safe. Verification (does the page really say this?) is separate and lives
+      in code &mdash; this is only about <em>how far to trust the source</em>.
+      <br><br>
+      A trusted date is always marked <strong>estimated</strong> and names its source; the
+      program&rsquo;s own site is always preferred over anything here.
+    </div>
+
+    <div class="hint hidden" id="sourcesSetup" style="padding:10px 14px;margin-bottom:16px"></div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Add / update a domain</h2>
+      </div>
+      <div class="card-body tight">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;padding:12px 14px">
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-2)">
+            Domain
+            <input id="aggDomain" placeholder="lumiere-education.com" style="width:240px">
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-2)">
+            Label (optional)
+            <input id="aggLabel" placeholder="Lumiere Education" style="width:200px">
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-2)">
+            Notes (optional)
+            <input id="aggNotes" placeholder="why trusted / blocked" style="width:240px">
+          </label>
+          <button class="btn" id="aggAddTrusted">Trust</button>
+          <button class="btn btn-danger" id="aggAddBlocked">Block</button>
+        </div>
+        <div class="hint" style="padding:0 14px 12px">
+          A full URL is fine &mdash; it is reduced to its bare domain. Blocking overrides an
+          accidental parent-trust. Removing a row (below) returns the domain to <em>pending</em>.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Allowlist</h2>
+        <div class="spacer"></div>
+        <span class="hint" id="aggCounts"></span>
+      </div>
+      <div class="card-body tight">
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr>
+              <th>Domain</th><th>Status</th><th>Label</th><th>Notes</th>
+              <th>Added by</th><th>Updated</th><th></th>
+            </tr></thead>
+            <tbody id="aggBody"><tr><td colspan="7" class="empty">Loading&hellip;</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -1598,6 +1666,106 @@ async function moderateSignups(status, ids) {
   }
 }
 
+/* ===========================================================================
+   Sources — the trusted-domain allowlist (P5)
+=========================================================================== */
+async function loadAggregators() {
+  try {
+    const d = await api('/api/agents/aggregators');
+    S.aggregators = (d && d.aggregators) || [];
+    S.aggregatorsReady = !d || d.aggregators_ready !== false;
+    S.aggregatorSetupHint = (d && d.setup_hint) || '';
+    S.aggregatorCounts = (d && d.counts) || {};
+  } catch (e) {
+    S.aggregators = [];
+    S.aggregatorsReady = true;
+    notice('Could not load sources: ' + e.message);
+  }
+  renderAggregators();
+}
+
+function renderAggregators() {
+  const setup = $('sourcesSetup');
+  if (!S.aggregatorsReady) {
+    setup.classList.remove('hidden');
+    setup.innerHTML = esc(S.aggregatorSetupHint ||
+      'Run trusted_aggregators_schema.sql in the Supabase SQL editor, then restart.');
+  } else {
+    setup.classList.add('hidden');
+  }
+  const c = S.aggregatorCounts || {};
+  const total = (c.trusted || 0) + (c.blocked || 0);
+  $('sourcesTabCount').textContent = c.trusted ? c.trusted : '';
+  $('aggCounts').textContent = total
+    ? `${c.trusted || 0} trusted · ${c.blocked || 0} blocked`
+    : 'nothing on the allowlist yet — every off-domain source is pending';
+
+  const body = $('aggBody');
+  const rows = S.aggregators || [];
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="7" class="empty">No domains yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(r => {
+    const trusted = r.status === 'trusted';
+    const badge = `<span class="pill ${trusted ? 'ok' : 'danger'}">${esc(r.status)}</span>`;
+    // Offer the opposite status as a one-click toggle, plus Remove (-> pending).
+    const flip = trusted
+      ? `<button class="btn btn-sm btn-danger" onclick="setAggregator('${esc(r.domain)}','blocked')">Block</button>`
+      : `<button class="btn btn-sm" onclick="setAggregator('${esc(r.domain)}','trusted')">Trust</button>`;
+    return `<tr>
+      <td class="mono">${esc(r.domain)}</td>
+      <td>${badge}</td>
+      <td>${esc(r.label || '—')}</td>
+      <td>${esc(r.notes || '—')}</td>
+      <td>${esc(r.added_by || '—')}</td>
+      <td>${r.updated_at ? esc(ago(r.updated_at)) : '—'}</td>
+      <td style="white-space:nowrap">${flip}
+        <button class="btn btn-sm" onclick="removeAggregator('${esc(r.domain)}')">Remove</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function addAggregator(status) {
+  const domain = $('aggDomain').value.trim();
+  if (!domain) { notice('Enter a domain first.'); return; }
+  await setAggregator(domain, status, {
+    label: $('aggLabel').value, notes: $('aggNotes').value, fromForm: true });
+}
+
+async function setAggregator(domain, status, extra) {
+  extra = extra || {};
+  const body = { domain, status };
+  if (extra.label !== undefined) body.label = extra.label;
+  if (extra.notes !== undefined) body.notes = extra.notes;
+  try {
+    await api('/api/agents/aggregators', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (extra.fromForm) {
+      $('aggDomain').value = ''; $('aggLabel').value = ''; $('aggNotes').value = '';
+    }
+    await loadAggregators();
+  } catch (e) {
+    notice('Could not save domain: ' + e.message);
+  }
+}
+
+async function removeAggregator(domain) {
+  if (!confirm(`Remove ${domain} from the allowlist?\n\nIt returns to pending — withheld ` +
+               `from students, not blocked.`)) return;
+  try {
+    await api('/api/agents/aggregators/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain }),
+    });
+    await loadAggregators();
+  } catch (e) {
+    notice('Could not remove domain: ' + e.message);
+  }
+}
+
 function togglePending(id, on) {
   if (on) S.selectedPending.add(id); else S.selectedPending.delete(id);
   renderPending();
@@ -1889,6 +2057,7 @@ const VIEW_SUBTITLE = {
   users:  'What each user\u2019s own activity costs, against the plan they pay for',
   review: 'Scraped opportunities waiting on a human before students can see them',
   signups: 'Mailing-list signup recipes waiting on a human before any student is subscribed',
+  sources: 'The trusted-domain allowlist — which off-domain sources deadlines and tasks may use',
   emails: 'The three lifecycle emails — what they say, who is due one, and what actually went out',
 };
 
@@ -1897,6 +2066,7 @@ function showView(view) {
   // Loaded on demand rather than in refreshDashboard's Promise.all: this list changes
   // only when an agent runs or a person clicks, so polling it every 20s is pure traffic.
   if (view === 'signups') loadSignups();
+  if (view === 'sources') loadAggregators();
   if (view === 'emails') loadEmails();
   document.querySelectorAll('#viewTabs .vtab').forEach(
     t => t.classList.toggle('active', t.dataset.view === view));
@@ -3640,6 +3810,9 @@ $('signupSelectAll').onclick = () => {
 $('signupClear').onclick = () => { S.selectedSignups.clear(); renderSignups(); };
 $('signupVerifyBtn').onclick = () => moderateSignups('verified');
 $('signupRejectBtn').onclick = () => moderateSignups('rejected');
+
+$('aggAddTrusted').onclick = () => addAggregator('trusted');
+$('aggAddBlocked').onclick = () => addAggregator('blocked');
 
 document.querySelectorAll('#seedTabs .tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('#seedTabs .tab').forEach(x => x.classList.remove('active'));

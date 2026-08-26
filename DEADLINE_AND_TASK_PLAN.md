@@ -9,12 +9,12 @@ program-source finder — read-once + FAQ/sub-page discovery for tasks (proven l
 tier-merge bug found & fixed in-session). A free tracker SYNC layer (`/api/tracker/sync`) sits on
 top. **1045 pytest green, tsc clean, ~$0.70 of live proofs this session, zero DB writes.**
 
-**NEXT SESSION STARTS AT P7 — frontend trust gradient** (the user-visible payoff): surface what
-the backend now stores but does NOT yet show students — task `source_tier`/`source_url` (grouped
-headings "From the program's own page" / "From a trusted guide · {domain}" / "Typical steps" +
-per-task source chips) and per-date `verified`/estimated markers. **P7 is RN frontend** — needs
-Metro (8081/8082), separate from the :8001 API this session used. Then P8 (collapse the Gemini
-producer), P9, P10, P11 last. Operator decisions all resolved; technical unknowns T1–T8 resolved.
+**P7–P9 SHIPPED 2026-08-25** (frontend trust gradient; Gemini producer collapsed; refresh
+decoupled with distinct deadline/task counts). tsc clean; the P7 rendering + the P9 skip path
+verified live in-browser on seeded data (Metro :8083 → API :8002, $0, no DB writes beyond the
+dev test account). **NEXT: P10** (per-user task delete + user-added tasks — the
+`mergeActionItems` extension), **then P11 last** (calendar "Open now" band). Operator decisions
+all resolved; technical unknowns T1–T8 resolved.
 **Owner:** _tbd_  **Started:** 2026-08-25  **Branch:** `P5-P7-deadline-and-task-tracker`
 
 > **This is the single source of truth for the deadline creator and the task creator.**
@@ -619,8 +619,16 @@ operator decisions resolved; T1–T8 at build time)*
     like its URLs. No auto-downgrade — watch the signal first (task-demotion-rate discipline).
   - **T6 (one pass vs two):** aim for one fetch pass feeding both extracts, its stop-condition
     covering date- AND requirement-bearing pages; persist discovered/ rung-4 URLs for reuse.
-- **P7 — Frontend trust gradient (NEXT — pure RN/Metro, no backend work needed).** Surface the
-  provenance the backend already emits. **Data contract now live (produced by P6b/P6c/T6):**
+- **P7 — Frontend trust gradient. ✅ DONE 2026-08-25** (pure RN; tsc clean; verified live
+  in-browser on seeded data — three tier groups, chips green/blue/grey by computed style, the
+  per-date "✓ verified ↗" evidence link, "(estimated)", and the unmarked-unknown case). Built
+  exactly to the contract below: `NormalizedActionItem`/`ActionItem` gained
+  `sourceTier`/`sourceUrl`/`sourceDomain`; `taskTrustTier()` is the ONLY tier test (legacy
+  page-backed-no-tier reads OFFICIAL — its urllib pipeline only ever read the program's own
+  page, so provenance is known, not unknown; a `pending`/`blocked` tier is force-generic'd in
+  the normalizer as defense in depth); `Milestone` carries `verified`/`sourceUrl` (forced
+  false/null on client-projected dates). Surface the
+  provenance the backend already emits. **Data contract (produced by P6b/P6c/T6):**
   - Each **task** the `/action-items` endpoint returns carries, when page-backed: `basis:"page"`,
     `source_tier` (`official`|`trusted`|`pending`), `source_url`, `source_domain`. Generic tasks
     have `basis:"generic"` and no tier. The serve path already withholds `pending`/`blocked`
@@ -641,11 +649,26 @@ operator decisions resolved; T1–T8 at build time)*
     normalizer (`normalizeVerifiedActionItems`) to read the new tier fields.
 
 **Client consolidation & refresh**
-- **P8 — Collapse the Gemini producer.** Slim `extractTrackerInfo` to `meta`/`fit`; dates←
-  deadline endpoint, tasks←action-items endpoint, `applyUrl=opp.url`; `id:null` → static
-  generic. **G4 moot.**
-- **P9 — "Check for updates" refreshes both.** Decouple deadline/task checks per TTL; distinct
-  counts.
+- **P8 — Collapse the Gemini producer. ✅ DONE 2026-08-25.** `extractTrackerInfo` slimmed to
+  `meta`/`fit` ONLY, search OFF (descriptive fields need no source; the prompt states it has no
+  web access and forbids dates outright — the opening line is preserved verbatim as the
+  `tracker_extract` mock + cost-attribution signature). The finder's add is now three
+  INDEPENDENT sources, each failing alone degrading only its slice: meta/fit (slim Gemini),
+  dates/status/note (deadline endpoint — the ONLY date producer, **G4 moot**), tasks
+  (action-items endpoint, else `staticGenericChecklist` — the client twin of GENERIC_DEFAULT),
+  `applyUrl = opp.url`. `intakeExtractAndClassify` keeps classifying + extracting dates (it
+  seeds the review-queue submission) but no longer asks for action items; its unresolvable
+  (`id:null`) fallback is the static generic list. `ACTION_ITEM_RULES` and
+  `normalizeUnverifiedActionItems` are DELETED — no client path asks a model for tasks any
+  more, so the failure mode is removed rather than fenced.
+- **P9 — "Check for updates" refreshes both. ✅ DONE 2026-08-25.** Deadline and task pulls
+  decoupled in `refreshTrackerDeadlines`: the task re-pull no longer hides behind a successful
+  deadline check (it runs even on a failed one; skipped on `not-found` — no row serves either —
+  and on `blocked` — the 402 gate covers both endpoints, don't pay a second refusal). The
+  button still FORCES the deadline check while the task endpoint honours its own server-side
+  7-day TTL. Result carries distinct `deadlineUpdates`/`taskUpdates`; the Quest Log label reads
+  "N deadlines and M task lists updated". The `not-found` skip path verified live in-browser
+  ($0): one 404'd deadline call, NO task call, honest "1 added by URL can't be auto-checked".
 
 **Future**
 - **P10 — Per-user task delete + user-added tasks.** `ActionItem.origin`; extend
@@ -669,15 +692,15 @@ operator decisions resolved; T1–T8 at build time)*
 **Deferred / optional:** fetch fixes A (PDF) + B (link discovery) survive only as a possible
 LOCAL fallback now that Claude `web_fetch` is the shared fetcher (§5a); C (Playwright) deferred.
 
-**Order:** ~~P0 → P1 → P2 → P3 → P4 → P5 → P6 (P6a → P6b → P6c) → T6~~ ✅ **done** → **P7 (next):
-frontend trust gradient** → P8 → P9 → P10, then **P11 last** (calendar ongoing-submissions UI).
-The whole backend substrate is now built and proven live; P7 is the first purely student-facing
-phase (RN/Metro). P11 depends only on P4's `rolling` status (shipped), so it can be pulled forward
-with any calendar work — scheduled last by request.
+**Order:** ~~P0 → P1 → P2 → P3 → P4 → P5 → P6 (P6a → P6b → P6c) → T6 → P7 → P8 → P9~~ ✅ **done**
+→ **P10 (next)**, then **P11 last** (calendar ongoing-submissions UI). P11 depends only on P4's
+`rolling` status (shipped), so it can be pulled forward with any calendar work — scheduled last
+by request.
 
-**BACKEND IS DONE; P7 IS PURE FRONTEND.** Everything the student sees for tasks/dates is still the
-*old* rendering — the trust tiers and per-date provenance the backend now stores are invisible
-until P7 wires them into the RN app. Nothing else backend is required before P7.
+**BACKEND AND CLIENT CONSOLIDATION ARE DONE.** The trust tiers and per-date provenance render
+in the app; the redundant Gemini producer is gone; refresh reports deadlines and tasks
+separately. What remains is additive UX: P10 (per-user task delete + user-added tasks, hinging
+on the `mergeActionItems` extension) and P11 (calendar rolling band).
 
 **Loose ends carried out of the P0–P4 session (none blocking):**
 - P0 tasks-on-Claude never run on real rows — a graded sample costs money; do one when
@@ -884,6 +907,37 @@ deadline."
 
 ## Change log
 
+- **2026-08-25 (later session)** — **P7 + P8 + P9 SHIPPED (all client, tsc clean, $0).**
+  - **P7 (trust gradient):** `NormalizedActionItem`/`ActionItem` gained `sourceTier`/
+    `sourceUrl`/`sourceDomain`; `taskTrustTier()` in trackerStore is the only tier test
+    (page-backed + no tier ⇒ OFFICIAL — legacy items were verified against the program's own
+    page by construction; `pending`/`blocked` force-generic'd in the normalizer, mirroring
+    `_servable`). Home Base's task modal renders THREE groups ("From the program's own page" /
+    "From a trusted guide · {domain}" / "Typical steps — confirm on the site") with per-task
+    chips (green Program page / blue Guide·{domain} / grey Typical step; chip links the
+    evidence `sourceUrl`, the trailing ↗ stays the step-action url). Dates: `ImportantDate`/
+    `Milestone` carry `verified`/`sourceUrl` end-to-end (store merge, free sync, finder add,
+    intake add); the Quest Log date row renders "✓ verified ↗" (green, tappable evidence link)
+    beside the existing "(estimated)"; a client-projected date is forced verified:false. All
+    verified in-browser on seeded data (chips confirmed by computed style; no console errors).
+  - **P8 (collapse producer):** `extractTrackerInfo` → meta/fit only, search OFF, mock/cost
+    signature line preserved; finder add rebuilt as three independent sources (a Gemini outage
+    no longer degrades the whole add to a stub); `staticGenericChecklist()` added (client twin
+    of GENERIC_DEFAULT) for endpoint-less rows; intake prompt no longer asks for action items;
+    `ACTION_ITEM_RULES` + `normalizeUnverifiedActionItems` deleted (no client path asks a model
+    for tasks — removing the ask removes the fabrication failure mode). G4 moot.
+  - **P9 (decoupled refresh):** task re-pull independent of the deadline outcome (runs on
+    `ok`/`failed`; skipped on `not-found`/`blocked`); distinct `deadlineUpdates`/`taskUpdates`
+    counts; label "N deadlines and M task lists updated". Skip path proven live: one 404
+    deadline call, no task call, honest can't-auto-check message.
+  - Verification setup for later sessions: `.claude/launch.json` gained `wingman-api-8002`
+    (PORT=8002, explicit WindowsApps python — the bare `python` on PATH lacks uvicorn) and
+    `wingman-web-8083` (Metro, EXPO_PUBLIC_API_BASE→:8002), so this session's servers never
+    collide with 8000/8001/8081/8082 in use by others. Seeded via dev_test_account.py +
+    /api/data/save; seed cleared after.
+  - NOT verified (paid): a live add via P8's new flow and a live decoupled refresh both make
+    real Claude/Gemini calls — logic is tsc-checked and the free paths browser-proven; run one
+    real add/refresh when a paid check is next authorized.
 - **2026-08-26** — **T6 BUILT — shared program-source finder (read-once + FAQ for tasks).**
   Prompted by the question "shouldn't tasks discover pages the same thorough way deadlines do,
   so FAQ/how-to-apply pages get checked for tasks too?". Yes — it's an ACCURACY win, not just

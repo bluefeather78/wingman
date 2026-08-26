@@ -17,6 +17,12 @@ export interface ImportantDate {
   // read off a current-cycle page. Undefined on rows predating 2026-08-24 — unknown, not
   // confirmed. See status.ts getDisplayMilestones for how it reaches the card.
   estimated?: boolean;
+  // P6c date verification: this date was found (date-aware match) in the content of a page
+  // the deadline check actually fetched — and sourceUrl is that page, the per-date evidence
+  // link F2 asked for. An estimated/projected date is verified:false by design. Absent on
+  // dates written before 2026-08-26: unknown, never rendered as verified.
+  verified?: boolean;
+  sourceUrl?: string | null;
   // Written back by the Google Calendar sync so the next run PATCHes the same event
   // instead of creating a duplicate. Same field, same meaning as the retired SPA's.
   googleEventId?: string | null;
@@ -45,6 +51,15 @@ export interface ActionItem {
   // stays auditable after the fact and so a re-check can re-verify it without re-asking a
   // model. Null/absent on 'generic' tasks.
   evidence?: string | null;
+  // P7 trust gradient: which TIER of source the quote was verified against ('official' =
+  // the program's own page/PDF, 'trusted' = an operator-approved guide), plus the evidence
+  // link — the fetched page holding the quote, distinct from `url` (the step-action link).
+  // Absent on generic tasks and on page-backed tasks written before P6b (those read as
+  // official via taskTrustTier below — the urllib pipeline only ever read the program's
+  // own page).
+  sourceTier?: 'official' | 'trusted' | null;
+  sourceUrl?: string | null;
+  sourceDomain?: string | null;
   // LEGACY. Tasks a student dismissed before 2026-08-24, when dismissing hid a task
   // outright. That is now the 'not_needed' STATE instead — visible, reversible, and
   // countable — and parseTrackerData migrates this flag into it on load. Nothing writes
@@ -57,6 +72,23 @@ export interface ActionItem {
 // one of them.
 export function isPageBackedTask(ai: Pick<ActionItem, 'basis' | 'evidence'>): boolean {
   return ai.basis === 'page' && !!(ai.evidence && ai.evidence.trim());
+}
+
+// The ONLY way to ask which trust tier a task renders at — same rule as isPageBackedTask,
+// which it builds on. Three answers, matching the three groups the Quest Log shows:
+//   'official' page-backed, quote verified against the program's OWN page (or a legacy
+//              pre-P6b page-backed task, whose pipeline only ever read the own page)
+//   'trusted'  page-backed, quote verified against an operator-approved guide domain
+//   'generic'  everything else — asserts nothing, "Typical steps — confirm on the site"
+// A 'pending'/'blocked' tier never reaches here (the serve path and the normalizer both
+// withhold it), but if one did, isPageBackedTask's basis test still bounds the damage.
+export type TaskTrustTier = 'official' | 'trusted' | 'generic';
+
+export function taskTrustTier(
+  ai: Pick<ActionItem, 'basis' | 'evidence' | 'sourceTier'>,
+): TaskTrustTier {
+  if (!isPageBackedTask(ai)) return 'generic';
+  return ai.sourceTier === 'trusted' ? 'trusted' : 'official';
 }
 
 // A task the student has stepped out of the way. Excluded from the progress bar and from
@@ -220,9 +252,15 @@ export function flattenItems(data: TrackerData): TrackerItem[] {
 
 export interface DeadlineRefreshResult {
   data: TrackerData;
-  /** Items we got a real answer for. NOT the number of tracked items. */
+  /** Items we got a real deadline answer for. NOT the number of tracked items. */
   checked: number;
+  /** Items where ANYTHING changed (deadlines or tasks). */
   updated: number;
+  /** P9 distinct counts: items whose dates/status changed vs items whose checklist changed.
+   *  The two checks are decoupled — each honours its own staleness rules — so one number
+   *  cannot speak for both. */
+  deadlineUpdates: number;
+  taskUpdates: number;
   /** Tracked items with no catalog row behind them — they cannot be auto-checked. */
   skipped: number;
   /** Refused by the subscription gate (402). */
@@ -264,6 +302,10 @@ export function applyDeadlineToTrackerItem(item: TrackerItem, info: Partial<Trac
         dateISO: d.date_iso,
         type: d.type || 'deadline',
         estimated: d.estimated,
+        // P6c per-date provenance, carried into the snapshot so the card can render the
+        // verified marker + evidence link without another fetch.
+        verified: d.verified,
+        sourceUrl: d.source_url ?? null,
         // Carry the Google Calendar event id forward by index. Dropping it made the next
         // sync POST a NEW event while the old one (same index-based wingmanId) survived the
         // sweep, so the student's real calendar gained a duplicate on every refresh.
@@ -392,6 +434,8 @@ export async function refreshTrackerDeadlines(
   const items = flattenItems(data);
   let checked = 0;
   let updated = 0;
+  let deadlineUpdates = 0;
+  let taskUpdates = 0;
   let skipped = 0;
   let blocked = 0;
   let failed = 0;
@@ -404,36 +448,47 @@ export async function refreshTrackerDeadlines(
     // catalog row", "your trial lapsed" or "the network failed". Collapsing those into null
     // is what let this report "no changes found" for items it never checked at all.
     const res = await httpClient.getDeadlineCheckResult(item.id, true);
-    if (res.outcome !== 'ok' || !res.info) {
-      if (res.outcome === 'not-found') {
-        skipped++;
-      } else if (res.outcome === 'blocked') {
-        blocked++;
-      } else if (res.outcome === 'auth') {
-        // The session is gone, so every remaining item would fail the same way. Stop and
-        // say so rather than grinding through the rest and reporting them as failures.
-        signedOut = true;
-        break;
-      } else {
-        failed++;
-      }
+    let dateChanged = false;
+    if (res.outcome === 'ok' && res.info) {
+      checked++;
+      dateChanged = applyDeadlineToTrackerItem(item, res.info);
+    } else if (res.outcome === 'not-found') {
+      // No catalog row — neither check can run for this item.
+      skipped++;
       continue;
+    } else if (res.outcome === 'blocked') {
+      // The 402 gate covers the task endpoint identically, so don't pay a second refusal.
+      blocked++;
+      continue;
+    } else if (res.outcome === 'auth') {
+      // The session is gone, so every remaining item would fail the same way. Stop and
+      // say so rather than grinding through the rest and reporting them as failures.
+      signedOut = true;
+      break;
+    } else {
+      failed++;
     }
-    checked++;
-    let changed = applyDeadlineToTrackerItem(item, res.info);
-    // Re-pull the shared checklist. Until 2026-08-24 a refresh updated dates and never touched
-    // tasks, so a wrong task — the invented "Algebra 2" prerequisite among them — was
-    // permanent: there was no code path anywhere that could ever replace one. Almost always
-    // free (the catalog row already holds a verified list), and the merge keeps whatever the
-    // student has ticked off. The button re-pulls tasks from the paid endpoint; the free sync
-    // (below) uses the batch payload's own action_items instead of a per-item call.
+    // Re-pull the shared checklist — DECOUPLED from the deadline outcome (P9). It used to
+    // run only when the deadline check succeeded, so a wrong task on an item whose deadline
+    // fetch happened to fail stayed wrong. The two checks honour independent staleness:
+    // the button FORCES the deadline check (an explicit "look again now"), while the task
+    // endpoint applies its own server-side 7-day TTL — a stale checklist re-verifies, a
+    // fresh one is served free. The merge keeps whatever the student has ticked off.
+    // getActionItems never throws (null on failure), and applyTasksToTrackerItem treats an
+    // empty/absent list as a no-op — so a task fetch failure leaves the checklist untouched
+    // and the next refresh or free sync retries.
     const shared = await httpClient.getActionItems(item.id);
-    if (applyTasksToTrackerItem(item, shared?.action_items)) changed = true;
-    if (changed) updated++;
+    const taskChanged = applyTasksToTrackerItem(item, shared?.action_items);
+    if (dateChanged) deadlineUpdates++;
+    if (taskChanged) taskUpdates++;
+    if (dateChanged || taskChanged) updated++;
   }
   onProgress?.(items.length, items.length);
   await saveTrackerData(data);
-  return { data, checked, updated, skipped, blocked, failed, signedOut, total: items.length };
+  return {
+    data, checked, updated, deadlineUpdates, taskUpdates,
+    skipped, blocked, failed, signedOut, total: items.length,
+  };
 }
 
 export function countItems(data: TrackerData): number {

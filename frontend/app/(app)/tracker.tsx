@@ -33,9 +33,9 @@ import { getLastCheckedLabel, setLastCheckedLabel as rememberLastChecked } from 
 import {
   applyDeadlineCheckToInfo,
   intakeExtractAndClassify,
-  normalizeUnverifiedActionItems,
   normalizeVerifiedActionItems,
   slugifyTracker,
+  staticGenericChecklist,
   type NormalizedActionItem,
 } from '@/lib/tracker';
 import {
@@ -241,7 +241,17 @@ export default function Tracker() {
       // because it is the one that stops them checking themselves.
       const parts: string[] = [];
       if (result.updated) {
-        parts.push(`${result.updated} update${result.updated > 1 ? 's' : ''} found`);
+        // Distinct counts (P9): the deadline and task checks are decoupled, so one blended
+        // "N updates" cannot say WHICH kind of thing moved — and a changed deadline warrants
+        // a different reaction than a changed checklist.
+        const kinds: string[] = [];
+        if (result.deadlineUpdates) {
+          kinds.push(`${result.deadlineUpdates} deadline${result.deadlineUpdates > 1 ? 's' : ''}`);
+        }
+        if (result.taskUpdates) {
+          kinds.push(`${result.taskUpdates} task list${result.taskUpdates > 1 ? 's' : ''}`);
+        }
+        parts.push(`${kinds.join(' and ')} updated`);
       } else if (result.checked) {
         parts.push('no changes found');
       }
@@ -427,7 +437,16 @@ export default function Tracker() {
         importantDates: Array.isArray(extracted.important_dates)
           ? extracted.important_dates
               .filter((d) => d && d.date_iso)
-              .map((d) => ({ label: d.label || 'Date', dateISO: d.date_iso, type: d.type || 'deadline', estimated: d.estimated }))
+              // verified/sourceUrl survive the deadline-check overlay above; the intake
+              // model's own dates never carry them (nothing verified those).
+              .map((d) => ({
+                label: d.label || 'Date',
+                dateISO: d.date_iso,
+                type: d.type || 'deadline',
+                estimated: d.estimated,
+                verified: d.verified,
+                sourceUrl: d.source_url ?? null,
+              }))
               .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
           : [],
         deadlineLabel: extracted.deadline_label || 'CHECK SITE',
@@ -435,10 +454,11 @@ export default function Tracker() {
         applyUrl: extracted.apply_url || url,
         applyLabel: extracted.apply_label || 'Apply / learn more',
         // Verified list when the submission resolved to a catalog row; otherwise the
-        // model's own, forced generic because nothing on this path ever read the page.
+        // static generic checklist (P8) — an unresolvable row has no page anything could
+        // have verified, and a generic list asserts nothing, so it cannot be wrong.
         actionItems: sharedItems.length
           ? sharedItems
-          : normalizeUnverifiedActionItems(extracted.action_items, id),
+          : staticGenericChecklist(id, url),
       };
       setData(await addTrackerItem(bucket, item));
       setIntakeStatus(`Added “${item.name}” ✓`);
@@ -835,6 +855,20 @@ function ListCard({
               {e.m.estimated && !/estimat/i.test(e.m.label) && (
                 <Text style={styles.dateRowEstimated}>{'  (estimated)'}</Text>
               )}
+              {/* P7 verified marker — shown only on verified === true (P6c found this exact
+                  date on a page it fetched; absent = unknown, never rendered as proof). Green
+                  matches the official-tier task chip: one visual language for "we checked
+                  this against the source" (T4). Tapping opens the evidence page when the
+                  check recorded one. Mutually exclusive with (estimated) by design — an
+                  estimated date is verified:false. */}
+              {e.m.verified === true && !e.m.estimated && (
+                <Text
+                  style={styles.dateRowVerified}
+                  onPress={e.m.sourceUrl ? () => Linking.openURL(e.m.sourceUrl as string) : undefined}
+                >
+                  {e.m.sourceUrl ? '  ✓ verified ↗' : '  ✓ verified'}
+                </Text>
+              )}
             </Text>
           </View>
         ),
@@ -1050,6 +1084,9 @@ const styles = StyleSheet.create({
   dateRowDate: { fontFamily: fonts.bodyBold, fontSize: 14, color: '#0F1C33', width: 52 },
   dateRowLabel: { fontFamily: fonts.bodyMed, fontSize: 14, color: '#33404F', flex: 1 },
   dateRowEstimated: { fontFamily: fonts.bodyMed, fontSize: 12, color: '#92400E' },
+  // Same green as the official-tier source chip — the shared "checked against the source"
+  // colour (T4).
+  dateRowVerified: { fontFamily: fonts.bodyBold, fontSize: 11, color: '#166534' },
   detailsToggle: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.indigo600 },
   detailsBox: { backgroundColor: colors.slate50, borderWidth: 1, borderColor: colors.slate200, borderRadius: radius.md, padding: 12, gap: 4 },
   detailsText: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500 },

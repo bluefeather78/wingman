@@ -10,9 +10,10 @@ import {
   peekTrackerSaved,
   saveTrackerData,
   syncTrackerFromCatalog,
-  isPageBackedTask,
   isSetAsideTask,
+  taskTrustTier,
   type ActionItem,
+  type TaskTrustTier,
   type SavedState,
   type TrackerData,
 } from '@/api/trackerStore';
@@ -44,24 +45,63 @@ interface StoredProfile {
   synthesized?: string;
 }
 
+// The per-task source chip — the P7 trust gradient's per-row half. Colour is FIXED per
+// tier (green Program page / blue Guide·{domain} / grey Typical step), never positional,
+// for the same reason the console's provider colours are fixed: a colour that changes
+// meaning between rows reads backwards. The chip links the EVIDENCE (`sourceUrl`, the
+// fetched page the quote was verified against) — a different link from the trailing ↗,
+// which stays the step's ACTION url. Legacy official tasks (pre-P6b) have no sourceUrl,
+// so their chip renders without a link rather than not at all.
+const CHIP_STYLE: Record<TaskTrustTier, { box: object; text: object }> = {
+  official: { box: { backgroundColor: '#DCFCE7', borderColor: '#166534' }, text: { color: '#166534' } },
+  trusted: { box: { backgroundColor: '#DBEAFE', borderColor: '#1E40AF' }, text: { color: '#1E40AF' } },
+  generic: { box: { backgroundColor: '#F1F5F9', borderColor: '#94A3B8' }, text: { color: '#64748B' } },
+};
+
+function SourceChip({ ai }: { ai: ActionItem }) {
+  const tier = taskTrustTier(ai);
+  const label = tier === 'official'
+    ? 'Program page'
+    : tier === 'trusted'
+      ? `Guide · ${ai.sourceDomain || 'approved source'}`
+      : 'Typical step';
+  const evidenceUrl = tier !== 'generic' ? ai.sourceUrl : null;
+  const c = CHIP_STYLE[tier];
+  return (
+    <Pressable
+      onPress={evidenceUrl ? () => Linking.openURL(evidenceUrl) : undefined}
+      disabled={!evidenceUrl}
+      style={[styles.sourceChip, c.box]}
+    >
+      <Text style={[styles.sourceChipText, c.text]}>
+        {label}
+        {evidenceUrl ? ' ↗' : ''}
+      </Text>
+    </Pressable>
+  );
+}
+
 // One task row. Extracted when the list split into page-backed and generic groups, so the
-// two cannot drift in how a row actually renders — only the heading above them differs.
+// groups cannot drift in how a row actually renders — only the heading above them differs.
 function TaskRow({ ai, onPress }: {
   ai: ActionItem;
   onPress: () => void;
 }) {
   return (
     <View style={styles.taskRow}>
-      <Text style={[styles.taskText, (ai.state === 'completed' || isSetAsideTask(ai)) && styles.taskDone]}>
-        {ai.text}
-        {/* extractTrackerInfo already stores a per-step url; the old app rendered
-            it as a trailing arrow titled "Go to this step". */}
-        {!!ai.url && (
-          <Text style={styles.taskStepLink} onPress={() => Linking.openURL(ai.url as string)}>
-            {'  ↗'}
-          </Text>
-        )}
-      </Text>
+      <View style={styles.taskLeft}>
+        <Text style={[styles.taskText, (ai.state === 'completed' || isSetAsideTask(ai)) && styles.taskDone]}>
+          {ai.text}
+          {/* The step-action url; the old app rendered it as a trailing arrow titled
+              "Go to this step". Distinct from the SourceChip's evidence link. */}
+          {!!ai.url && (
+            <Text style={styles.taskStepLink} onPress={() => Linking.openURL(ai.url as string)}>
+              {'  ↗'}
+            </Text>
+          )}
+        </Text>
+        <SourceChip ai={ai} />
+      </View>
       {/* Tapping cycles the state, and "Not Needed" is the last stop before it wraps back
           round — a step that does not apply to THIS student, set aside rather than deleted.
           The checklist is shared catalog data and is re-pulled on every refresh, so a
@@ -318,13 +358,20 @@ export default function Home() {
                 </Pressable>
               </View>
               {upcoming.map(({ item, nextDate, nextLabel }) => {
-                // Tasks split by whether anything actually backs them. `isPageBackedTask`
-                // is the only test — a task with no `basis` (everything written before
-                // 2026-08-24) counts as generic, because those came from a prompt that was
-                // told to fill gaps with "what's typical", i.e. to make something up.
+                // Tasks grouped by trust tier — the P7 gradient. `taskTrustTier` is the only
+                // test (it builds on isPageBackedTask): a task with no `basis` counts as
+                // generic, because those came from a prompt told to fill gaps with "what's
+                // typical", i.e. to make something up. A page-backed task verified against
+                // an operator-approved guide gets its own middle group, labelled by the
+                // guide's domain — verified the same way as official, trusted less.
                 const allTasks = item.actionItems ?? [];
-                const grounded = allTasks.filter(isPageBackedTask);
-                const generic = allTasks.filter((ai) => !isPageBackedTask(ai));
+                const official = allTasks.filter((ai) => taskTrustTier(ai) === 'official');
+                const trusted = allTasks.filter((ai) => taskTrustTier(ai) === 'trusted');
+                const generic = allTasks.filter((ai) => taskTrustTier(ai) === 'generic');
+                const trustedDomains = [...new Set(trusted.map((ai) => ai.sourceDomain).filter(Boolean))];
+                const trustedHeading = trustedDomains.length === 1
+                  ? `From a trusted guide · ${trustedDomains[0]}`
+                  : 'From trusted guides';
                 return (
                 <View key={item.id} style={styles.taskCard}>
                   <View style={styles.taskCardHead}>
@@ -352,15 +399,26 @@ export default function Home() {
                   </Text>
                   {allTasks.length ? (
                     <View style={styles.taskRows}>
-                      {/* Two groups, and the heading is the whole point: a step we can point
-                          at a line of the program's page for, and a step that is merely how
-                          applications usually work. Rendering them alike is what let an
-                          invented "Algebra 2" prerequisite read as fact. The dates next to
-                          these already carry "(est.)" for exactly this reason. */}
-                      {grounded.length > 0 && (
+                      {/* Three groups, highest trust first, and the heading is the whole
+                          point: a step we can point at a line of the program's OWN page
+                          for, a step a trusted guide said (verified the same way, trusted
+                          less — logistics only, never eligibility, enforced server-side),
+                          and a step that is merely how applications usually work.
+                          Rendering them alike is what let an invented "Algebra 2"
+                          prerequisite read as fact. The dates next to these carry
+                          "(estimated)"/verified markers for exactly this reason. */}
+                      {official.length > 0 && (
                         <>
-                          <Text style={styles.taskGroupLabel}>From the program page</Text>
-                          {grounded.map((ai) => (
+                          <Text style={styles.taskGroupLabel}>From the program's own page</Text>
+                          {official.map((ai) => (
+                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} />
+                          ))}
+                        </>
+                      )}
+                      {trusted.length > 0 && (
+                        <>
+                          <Text style={styles.taskGroupLabel}>{trustedHeading}</Text>
+                          {trusted.map((ai) => (
                             <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} />
                           ))}
                         </>
@@ -453,7 +511,12 @@ const styles = StyleSheet.create({
   taskGroupLabel: { fontFamily: fonts.bodyMed, fontSize: 10, letterSpacing: 0.4,
     textTransform: 'uppercase', color: colors.slate400, marginTop: 2 },
   taskRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  taskText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: '#334155', flex: 1 },
+  // flexShrink+minWidth keep the text column from pushing the status pill off a phone —
+  // the same RN-web flex-shrink:0 default the navbar fix documents.
+  taskLeft: { flex: 1, flexShrink: 1, minWidth: 0, gap: 3, alignItems: 'flex-start' },
+  taskText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: '#334155' },
+  sourceChip: { borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 6, paddingVertical: 1 },
+  sourceChipText: { fontFamily: fonts.bodyBold, fontSize: 9, lineHeight: 13, letterSpacing: 0.2 },
   taskDone: { textDecorationLine: 'line-through', color: colors.slate400 },
   taskCardNameLink: { textDecorationLine: 'underline' },
   taskStepLink: { fontFamily: fonts.bodyBold, color: colors.indigo600 },

@@ -124,6 +124,13 @@ export interface Milestone {
   // guessed opening pass as fact — and the opening is exactly the date that decides whether
   // the card reads "Happening Now".
   estimated: boolean;
+  // P6c: this date was found on a page the deadline check actually fetched, and sourceUrl is
+  // that page — the per-date evidence link. undefined = unknown (written before the check
+  // existed), which renders as nothing: absence of proof is never shown as proof. A
+  // client-projected date (shift > 0) is forced false — the page carried LAST cycle's date,
+  // not the one shown.
+  verified?: boolean;
+  sourceUrl?: string | null;
 }
 
 // script.js getDisplayMilestones — dedupe (date,label), sort, flag past.
@@ -145,6 +152,10 @@ export function getDisplayMilestones(item: TrackerItem): Milestone[] {
       isPast: false,
       projected: shift > 0,
       estimated: shift > 0 || (d as { estimated?: boolean }).estimated === true,
+      // A projected date is by construction not the date any page carried, so the verified
+      // marker (and its evidence link) must not survive the year-shift.
+      verified: shift > 0 ? false : (d as { verified?: boolean }).verified,
+      sourceUrl: shift > 0 ? null : ((d as { sourceUrl?: string | null }).sourceUrl ?? null),
     });
   });
   milestones.sort((a, b) => a.date.localeCompare(b.date));

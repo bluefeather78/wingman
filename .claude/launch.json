@@ -25,6 +25,34 @@
       "env": {
         "EXPO_PUBLIC_API_BASE": "http://127.0.0.1:8000"
       }
+    },
+    {
+      "name": "wingman-api-8002",
+      "runtimeExecutable": "C:\\Users\\shama\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+      "runtimeArgs": [
+        "server.py"
+      ],
+      "port": 8002,
+      "env": {
+        "PORT": "8002"
+      }
+    },
+    {
+      "name": "wingman-web-8083",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "frontend",
+        "run",
+        "web",
+        "--",
+        "--port",
+        "8083"
+      ],
+      "port": 8083,
+      "env": {
+        "EXPO_PUBLIC_API_BASE": "http://127.0.0.1:8002"
+      }
     }
   ]
 }

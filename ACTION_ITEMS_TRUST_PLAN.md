@@ -1,5 +1,11 @@
 # Action-item source trust — trusted aggregators & confidence tiers
 
+> **⛔ SUPERSEDED (2026-08-25) — do not edit. Merged into
+> [`DEADLINE_AND_TASK_PLAN.md`](DEADLINE_AND_TASK_PLAN.md), the single main plan for the
+> deadline and task creators.** This file is kept only as history / detailed rationale for the
+> trust-tier + aggregator design. Open task-trust decisions and the unified phased plan now
+> live in the merged doc.
+
 **Status:** planning (do NOT implement yet — nothing in this plan is built). Five decisions
 are open (see "Open issues & decisions"); build starts only after they are answered.
 **Owner:** _tbd_  **Started:** 2026-08-25
@@ -91,6 +97,27 @@ whoever implements must build on the Claude version. The deltas:
 - **Verification is unchanged and remains model-agnostic** — `page_text.claim_is_supported` /
   `quote_is_on_page` are the guarantee regardless of which model proposed the task, so the
   entire tier/allowlist design is unaffected by the model swap.
+- **Core task pass stays search-OFF, but the reason changes.** The "no web search because
+  JSON-suppresses-search" rationale was Gemini-specific. On Claude the core pass is search-off
+  *by design* (page fetched by us, quotes verified against it); D1 discovery is the deliberate
+  search-ON exception, operator-run and cost-quoted.
+- **`extractTrackerInfo`'s browser-side task guess (Tier 2) is dropped.** The client no longer
+  produces its own tasks — they come only from the `/action-items` endpoint. This bites only
+  the unresolvable-submission (`id:null`) path; see the note in *Generation timing* step 3.
+- **TTL: the failure-handling half is settled, the length is not.** Adopt now the
+  **stamp-only-on-success / no-stamp-on-failure** rule (a failed/unfetchable run leaves the row
+  due to auto-retry instead of freezing a `generic-fallback` for 90 days — which also fixes the
+  "user-added inactive rows never retried" gap in *Generation timing*). The TTL **length** (7
+  days vs this plan's 90-day rationale) is open and must be the same for on-demand and batch —
+  see `DEADLINE_CREATION_PLAN.md` open decision 7.
+- **Reverse dependency:** this plan's fetch fixes A/B/C are shared infrastructure the deadline
+  pass also needs; Playwright (C) is **DECIDED: deferred** in both docs (2026-08-25).
+- **The `trusted_aggregators` allowlist is now shared with deadlines (2026-08-25 decision).**
+  The deadline escalation loop's 4th (off-domain) rung draws dates ONLY from operator-approved
+  domains in this same table — so `trusted_aggregators` + `aggregators_common.py` (read side)
+  + the console Sources tab are joint infrastructure, not task-only. The deadline side needs
+  only the read/classify path; this plan still owns the full park-and-approve flywheel. Build
+  the table + read side once; whichever plan lands first creates it, the other consumes it.
 - **Sequencing:** the Gemini→Claude task migration should land FIRST (it is simpler and the
   deadline thread owns it); the aggregator/tier work builds on top. Do not do both in one
   change. Tracked as build-order step 0 below.
@@ -387,6 +414,11 @@ New `.vtab` **Sources** (`view-sources`), between Mailing lists and Cost per use
 2. Genuinely new row → created `is_active=false`, id returned; `resolve()` generates ONCE
    on-demand at add time and caches.
 3. Unresolvable (`id:null`) → browser model output, forced all-generic.
+   **Changes under the Claude decision:** `extractTrackerInfo`'s browser task guess (Tier 2)
+   is dropped, so there is no model output to force-generic here. Replacement: an
+   unresolvable add shows a **static per-type generic checklist built client-side** (no model
+   call) — honest and free, and the same content the server's `generic_items()` would produce.
+   It carries no page-backed items by construction, which is correct: nothing read a page.
 **Pre-existing gap:** the batch selects `is_active=eq.true`, so it NEVER re-touches
 user-added inactive rows. They get exactly one on-demand attempt; a `generic-fallback` from
 an unfetchable page is never retried until an operator activates the row.
@@ -434,11 +466,12 @@ are unresolved as of 2026-08-25.
    headings only. — _undecided_
 5. **Seed `lumiere-education.com` as trusted on day one**, or start empty and populate the
    allowlist from the pending queue after the first run? — _undecided_
-6. **Fetch fix C (Playwright) — build or not?** Shared with the deadline work. It is the only
-   thing that fixes SPA-only official sources (THINK's own page and dates). Heavy dep +
-   departs from stdlib-only-agents. Aggregators do NOT remove the need for it (they cannot
-   carry eligibility or feed the deadline pass). — _undecided_ (also open in
-   `DEADLINE_CREATION_PLAN.md`)
+6. **Fetch fix C (Playwright) — DECIDED (2026-08-25): DEFER.** Not built now. SPA-only
+   official sources (THINK's own page) stay unreadable; deadlines recover dates via the
+   escalation loop's prior-cycle + trusted-third-party rungs. Consequence for THIS plan:
+   THINK's official *task requirements* also stay unreadable, so its checklist relies on the
+   aggregator tier (trusted third-party) — which is exactly what this plan adds. Revisit if
+   SPA-only sites prove common. (Resolved identically in `DEADLINE_CREATION_PLAN.md`.)
 
 ### Technical unknowns (need design, not policy)
 

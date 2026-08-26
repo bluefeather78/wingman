@@ -60,7 +60,11 @@ export function addYearsISO(iso: string, years: number): string {
 // and the intervals between opens/deadline/event, which a per-date roll can distort when a
 // cycle straddles a year boundary.
 export function cycleYearShift(item: TrackerItem): number {
-  if (item.status === 'not_running') return 0;
+  // Neither a discontinued nor a rolling program gets a projected next cycle: not_running
+  // has genuinely ended, and rolling has no cycle at all (it carries no dates to roll). A
+  // rolling row has an empty date list so this returns 0 regardless, but naming it keeps the
+  // intent explicit alongside not_running.
+  if (item.status === 'not_running' || item.status === 'rolling') return 0;
   const dates = rawDates(item);
   if (!dates.length) return 0;
   const last = [...dates].sort()[dates.length - 1];
@@ -88,6 +92,12 @@ function itemDates(item: TrackerItem): string[] {
 // discontinued (`not_running`) program is ever completed.
 export function computeProgressStatus(item: TrackerItem): OppStatus {
   if (item.status === 'not_running') return 'completed';
+  // A rolling / always-open program is open RIGHT NOW with no cycle — it maps to in_progress
+  // ("Happening Now" / apply anytime) rather than not_started, which is what a dateless row
+  // would otherwise read as. This sits beside the not_running case deliberately: rolling has
+  // no dates, so without this line it would fall through to the `!dates.length` → not_started
+  // branch below and read as "not started yet", the exact backwards reading G3 fixes.
+  if (item.status === 'rolling') return 'in_progress';
   const dates = itemDates(item);
   if (!dates.length) return 'not_started';
   dates.sort();

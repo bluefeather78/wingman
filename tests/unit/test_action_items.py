@@ -284,3 +284,39 @@ def test_a_full_verified_list_is_not_padded():
     d = action_items_write_decision(kept, OPP, page_ok=True, model_ok=True, existing=[])
     assert len(d.items) == 4
     assert all(i["basis"] == "page" for i in d.items)
+
+
+# ---------- on-demand 7-day TTL (P1) ----------
+
+def _iso(days_ago):
+    import datetime
+    return (datetime.datetime.now(datetime.timezone.utc)
+            - datetime.timedelta(days=days_ago)).isoformat()
+
+
+def test_fresh_stamp_reads_fresh():
+    from app.services.action_items import _is_fresh
+    assert _is_fresh(_iso(1)) is True
+    assert _is_fresh(_iso(6.9)) is True
+
+
+def test_stale_stamp_reads_stale():
+    from app.services.action_items import _is_fresh
+    assert _is_fresh(_iso(8)) is False
+
+
+def test_missing_or_garbage_stamp_reads_stale():
+    # A NULL stamp is the never-verified case (generic-fallback / unparsed never stamp), and
+    # must read stale so the row is retried rather than serving an unverified list forever.
+    from app.services.action_items import _is_fresh
+    assert _is_fresh(None) is False
+    assert _is_fresh("") is False
+    assert _is_fresh("not-a-date") is False
+
+
+def test_z_suffixed_stamp_parses():
+    from app.services.action_items import _is_fresh
+    import datetime
+    z = (datetime.datetime.now(datetime.timezone.utc)
+         - datetime.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert _is_fresh(z) is True

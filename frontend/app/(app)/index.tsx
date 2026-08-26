@@ -9,6 +9,7 @@ import {
   peekTrackerData,
   peekTrackerSaved,
   saveTrackerData,
+  syncTrackerFromCatalog,
   isPageBackedTask,
   isSetAsideTask,
   type ActionItem,
@@ -126,6 +127,14 @@ export default function Home() {
         setProfile(p?.synthesized ?? '');
         setLoaded(true);
       });
+      // Free catalog sync (throttled, shared with the Quest Log): Home Base also renders
+      // status/next-moves from the tracker snapshot, so it must pick up catalog updates too.
+      // No paid check.
+      syncTrackerFromCatalog()
+        .then((r) => {
+          if (alive && r.updated && r.data) setData(r.data);
+        })
+        .catch(() => null);
       return () => {
         alive = false;
       };

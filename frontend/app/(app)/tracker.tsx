@@ -19,6 +19,7 @@ import {
   refreshTrackerDeadlines,
   removeTrackerItem,
   saveTrackerSaved,
+  syncTrackerFromCatalog,
   type SavedState,
   type TrackerData,
   type TrackerItem,
@@ -180,6 +181,25 @@ export default function Tracker() {
           setSaved(s);
         })
         .catch((e) => alive && setError((e as Error).message));
+      // Free catalog sync (throttled): pull any deadline/task updates the catalog has picked
+      // up since this snapshot was written, and re-render if anything changed. Runs after the
+      // fast local load above so the screen paints immediately, then quietly updates. No paid
+      // check — that stays on "Check for updates".
+      syncTrackerFromCatalog()
+        .then((r) => {
+          if (!alive) return;
+          if (r.updated && r.data) setData(r.data);
+          // Stamp "Last checked" with when the CATALOG last verified these deadlines
+          // (dates_last_checked_at), NOT the sync's wall-clock — the sync only mirrors. This
+          // is why the line no longer reads "never" on a fresh load of already-verified data.
+          if (r.lastCheckedAt) {
+            const stamp = new Date(r.lastCheckedAt).toLocaleString('en-US', {
+              month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+            });
+            setLastCheckedLabel(`Last checked: ${stamp}`);
+          }
+        })
+        .catch(() => null);
       return () => {
         alive = false;
         // Matches script.js showPage(): navigating away from the Quest Log ends the batch,
@@ -397,7 +417,7 @@ export default function Tracker() {
         type: extracted.category || '',
         bucket,
         progressStatus: 'not_started',
-        status: ['running', 'not_running', 'unknown'].includes(extracted.status) ? extracted.status : 'unknown',
+        status: ['running', 'not_running', 'rolling', 'unknown'].includes(extracted.status) ? extracted.status : 'unknown',
         meta,
         fit,
         // applyDeadlineCheckToInfo may have replaced `note` with the check's own
@@ -763,6 +783,10 @@ function ListCard({
   const projected = milestones.some((m) => m.projected);
   const progress = computeProgressStatus(item);
   const notRunning = item.status === 'not_running';
+  // Rolling / always-open: no cycle, no dates — the deadline checker's "apply anytime"
+  // answer (G3). It reads as Happening Now via computeProgressStatus; the badge and note
+  // below make the "no dates is correct here" explicit so an empty card doesn't look broken.
+  const rolling = item.status === 'rolling';
 
   // Group milestone rows by year, split into two balanced columns past 5 entries.
   const entries: ({ kind: 'tag'; year: string; cont?: boolean } | { kind: 'date'; m: Milestone })[] = [];
@@ -835,6 +859,7 @@ function ListCard({
         <View style={styles.badgeRow}>
           <MiniBadge label={BUCKET_LABELS[bucket]} bg={colors.violet200} fg={colors.violet900} />
           {notRunning && <MiniBadge label="Not running" bg="#FFE4E6" fg="#881337" />}
+          {rolling && <MiniBadge label="Open now" bg="#DCFCE7" fg="#166534" />}
           <ReviewBadge
             status={item.reviewStatus}
             summary={item.reviewSummary}
@@ -870,6 +895,14 @@ function ListCard({
         <View style={[styles.estimatedNote, styles.staleBad]}>
           <Text style={[styles.estimatedText, styles.staleBadText]}>
             ⚠ No upcoming dates — this program's last cycle has ended.
+          </Text>
+        </View>
+      )}
+
+      {rolling && (
+        <View style={[styles.estimatedNote, styles.rollingNote]}>
+          <Text style={[styles.estimatedText, styles.rollingText]}>
+            Open now — rolling admission, apply anytime.
           </Text>
         </View>
       )}
@@ -1008,6 +1041,8 @@ const styles = StyleSheet.create({
   estimatedText: { fontFamily: fonts.bodyBold, fontSize: 12, color: '#92400E' },
   staleBad: { backgroundColor: '#FFE4E6' },
   staleBadText: { color: '#9F1239' },
+  rollingNote: { backgroundColor: '#DCFCE7' },
+  rollingText: { color: '#166534' },
   dateCols: { flexDirection: 'row', gap: 24 },
   yearTag: { backgroundColor: '#EEE9DD', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, alignSelf: 'flex-start', marginTop: 10, marginBottom: 6 },
   yearTagText: { fontFamily: fonts.bodyXBold, fontSize: 10, color: '#0F1C33', letterSpacing: 0.3 },

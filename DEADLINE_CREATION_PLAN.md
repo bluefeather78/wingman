@@ -1,6 +1,12 @@
 # Deadline creation — gap analysis and fix plan
 
-**Status:** planning (do NOT implement yet — this doc is being reviewed).
+> **⛔ SUPERSEDED (2026-08-25) — do not edit. Merged into
+> [`DEADLINE_AND_TASK_PLAN.md`](DEADLINE_AND_TASK_PLAN.md), the single main plan for the
+> deadline and task creators.** This file is kept only as history / detailed rationale for the
+> deadline gaps (G1–G4). All decisions and the unified phased plan now live in the merged doc.
+
+**Status:** planning — **all open decisions resolved 2026-08-25**; ready to implement on the
+operator's go-ahead (phased plan below). Do NOT start coding until told to.
 **Owner:** _tbd_  **Started:** 2026-08-25
 
 > **See also `ACTION_ITEMS_TRUST_PLAN.md`.** THINK Scholars (`ec17921`) appears in both
@@ -103,13 +109,12 @@ writes dates.)
   the code-side quote verification is unchanged — but that doc's cost figures, `call_gemini`
   references, and the D1 discovery-phase design need updating to Claude. **Neither doc should
   claim a model the other contradicts.**
-- **Staleness.** That plan uses **90-day** batch staleness and serve-forever on-demand,
-  reasoning "requirements don't move weekly." This decision introduces a **7-day** on-demand
-  TTL. As written they now disagree (7-day on-demand vs 90-day batch). Options to resolve:
-  (i) adopt 7-day everywhere; (ii) keep tasks on a longer TTL than deadlines (they change far
-  less) and adopt only the *stamp-on-success / no-stamp-on-failure* half of this decision —
-  which is the clearly-correct part regardless of TTL length. **Flagged for the operator; the
-  failure-handling rule is adopted now, the exact TTL length is an open decision (below).**
+- **Staleness — DECIDED (2026-08-25): on-demand task TTL = 7 days, matching deadlines.** The
+  `resolve()` view path re-verifies a task list older than 7 days, exactly like the deadline
+  endpoint (`DEADLINE_STALE_DAYS`). The batch agent's own staleness window in
+  `ACTION_ITEMS_TRUST_PLAN.md` (90-day) is a **separate operator knob** for bulk pre-warming
+  and does not need to match — for deadlines the batch likewise ignores the interactive TTL.
+  They don't conflict: the view path is the freshness driver, the batch is a bulk backstop.
 
 ## Evidence — the three traced rows (real data, checked 2026-08-25)
 
@@ -136,10 +141,10 @@ result and stamped**, caching the hole for 7 days.
   (cap 5, free) can't rescue it because fetch only reaches URLs a search already surfaced.
   → THINK. **Compounding cause (shared with `ACTION_ITEMS_TRUST_PLAN.md`):** `think.mit.edu`
   is a client-side-rendered SPA whose served HTML is ~490 bytes, so a plain fetch reads
-  nothing off the official page at all. The escalation loop partly routes around this — its
-  prior-cycle and third-party rounds land on *other*, server-rendered pages — but the only
-  fix that reads THINK's own page/PDF is the shared **Playwright headless render (fetch fix
-  C)**. See Open decisions / that doc's decision 6.
+  nothing off the official page at all. **Playwright (fetch fix C) is DEFERRED (decision 8)**,
+  so THINK's own page stays unreadable; its dates are instead recovered via the escalation
+  loop's prior-cycle and trusted-third-party rungs, which land on *other*, server-rendered
+  pages. If SPA-only sites later prove common, revisit fetch fix C.
 - **G2 — Unreachable site = give up + freeze.** When the program's own site is inaccessible,
   the agent gives up (`status=unknown`, empty) with no fallback (prior cycle, third-party,
   general knowledge). Worse, that empty `unknown` is treated as a confident verified write —
@@ -183,7 +188,17 @@ Strategy ladder (each rung = one round = one new search angle):
 | 1 | given URL + current/next cycle (`site:root <year>`) | the normal case |
 | 2 | **+ prior cycle** (`site:root <lastyear> deadline`) | estimation basis (fixes THINK) |
 | 3 | + FAQ / "key dates" / timeline subpages | dates hidden on subpages |
-| 4 | + broader / third-party (`"<name>" deadline <year>`) | last resort (see risk) |
+| 4 | + third-party, **TRUSTED domains only** (`"<name>" deadline <year>`) | last resort (DECIDED) |
+
+**Rung 4 is restricted to operator-approved trusted domains (DECIDED 2026-08-25).** It draws
+only from a domain the operator has approved, using the **same `trusted_aggregators` allowlist
+and admin-console Sources tab that `ACTION_ITEMS_TRUST_PLAN.md` defines** — this is now shared
+infrastructure across both plans, like the fetch layer. A date sourced only from a rung-4
+domain is written `estimated: true` with the source domain named in the note, never as a
+confirmed date. A third-party result on a domain NOT in the allowlist is ignored for dates
+(it may still be *parked* for the task/aggregator flow, but it never sets a deadline). This
+resolves open decision 2 (third-party sourcing): allowed, but trusted-only and always
+estimated-and-noted.
 
 **Found-signal (cheap, no extra call):** each phase-1 prose round ends with a small
 structured tail, e.g. `FOUND_CONFIRMED_DATES: yes/no` and `FOUND_PRIOR_CYCLE_BASIS: yes/no`.
@@ -194,8 +209,9 @@ per round.
 - dates on the page → 1 search (~today's cost).
 - recurring, needs prior cycle (THINK) → 2 searches (+~$0.01).
 - genuinely hard row → up to 4 (+~$0.03), only those rows.
-- The one real added cost is **repeated system-prompt tokens per round** — mitigate with
-  Anthropic **prompt caching** (system prompt is byte-identical across rounds).
+- The one real added cost is **repeated system-prompt tokens per round** — mitigated with
+  Anthropic **prompt caching** (system prompt is byte-identical across rounds), wired in with
+  Phase 2 (decision 6).
 
 **Consistency to preserve:** keep prose-phase-1 (searches) + single JSON-phase-2 (no tools)
 at the end; accumulate `sources` (actually-fetched URLs) across all rounds and pass the
@@ -210,10 +226,11 @@ path and the interactive endpoint inherit it (they share `check_one`).
 Two parts, and the escalation loop from G1 already does half the work.
 
 **(a) Stop giving up.** The escalation ladder *is* the fallback. If round 1 can't reach the
-primary site, rounds 2–4 (prior cycle, FAQ, third-party) still run — an annual conference
-like HSRC surfaces its spring date from an off-site search even when its own site is down.
-Anything sourced only off-domain is written `estimated: true` with the basis in the note,
-never as a confirmed date.
+primary site, rounds 2–4 (prior cycle, FAQ, **trusted** third-party) still run — an annual
+conference like HSRC surfaces its spring date from a trusted off-site listing even when its own
+site is down. Per decision 1, rung 4 draws only from operator-approved trusted domains
+(`trusted_aggregators`), and anything sourced only off-domain is written `estimated: true` with
+the source domain in the note, never as a confirmed date.
 
 **(b) Stop freezing the hole.** Add a phase-1 signal `SITE_REACHED: yes/no` (did any
 `web_fetch`/search of the program's own domain succeed?) and thread it into
@@ -233,7 +250,7 @@ decisions.
 
 ---
 
-## Fix G3 — represent "always open" honestly (PROPOSAL)
+## Fix G3 — represent "always open" honestly (DECIDED: first-class `rolling` status)
 
 Introduce an explicit rolling/always-open status rather than inventing a fake deadline.
 
@@ -309,7 +326,7 @@ decided in one place:
 | searched, JSON unreadable | — | don't write/stamp (`unparsed-fallback`) | unchanged |
 | searched, empty, row HAS dates | keep existing (`kept-existing`) | unchanged |
 | **searched, empty, site NOT reached** | write+stamp | **don't stamp (`unreachable-fallback`)** |
-| searched, empty, site reached, `unknown` | write+stamp | write+stamp (real absence) — _or_ short TTL (open) |
+| searched, empty, site reached, `unknown` | write+stamp | write+stamp, standard 7-day (DECIDED: real absence, not re-billed every view) |
 | `not_running` / `rolling`, empty | write+stamp | unchanged (real answer) |
 | dates found | write+stamp | unchanged |
 
@@ -326,35 +343,144 @@ extra calls):
 - `FOUND_PRIOR_CYCLE_BASIS: yes/no` — whether estimation is possible (G1).
 - `SITE_REACHED: yes/no` — drives the `unreachable-fallback` write branch (G2).
 
-## Open decisions (need input)
+## User-added opportunities — deadline & task creation
 
-1. **Ladder depth / N.** Cap escalation at 3 (own-domain only, safest) or 4 (include
-   third-party, more coverage, higher fabrication risk)?
-2. **Third-party sourcing.** Allow round-4 off-domain dates at all? If yes, force
-   `estimated:true` + source note, never confirmed. (This repo has been burned by
-   model-typed / off-site URLs before.)
-3. **Unknown TTL.** For a written `unknown` (site reached, real absence), keep the 7-day
-   cache, or re-check sooner (e.g. 1 day)? Needs a way to express a per-status TTL.
-4. **`rolling` as a first-class status** vs. a client-only rendering heuristic off the note.
-   First-class is cleaner but ripples through every status reader.
+How a hand-added opportunity gets dates and tasks, and why the architecture decision makes it
+identical to a Fresh Finds add.
+
+**Flow today.** The Quest Log "Add Opportunity" form posts to
+`/api/user-submitted-opportunities`, which runs **inline** and returns a resolved
+`catalogId`:
+- **Deduped into an existing row** → returns that row's id (may already carry a verified,
+  cached answer — a free hit).
+- **Genuinely new** → writes an `is_active=false`, `source='user-submitted'` row and returns
+  its new id.
+- **Unresolvable** → returns `id: null`.
+
+The tracker item is created under the returned id, so both endpoints resolve by id (**neither
+filters on `is_active`**, unlike `/api/opportunities`): `getDeadlineCheck(id)` runs the same
+cached/on-demand Claude deadline check, and `getActionItems(id)` runs the same cached/on-demand
+Claude task check. **So a user-added opportunity uses the identical Claude pipelines as a
+catalog add** — this is the whole reason the submission endpoint was made to return an id.
+
+**The one gap, and how the TTL closes it.** The batch agents select `is_active=eq.true`, so
+they **never re-touch** an inactive user-added row. Today that means a user-added row gets
+exactly one on-demand attempt ever; a transient `generic-fallback` / unreachable result is
+frozen until an operator activates the row. The **7-day TTL on both endpoints** (stamp only on
+success) closes this: a failed attempt leaves the row due, so the next "Check for updates" or
+re-open re-rolls it. This is the same failure-handling rule the deadline path already uses,
+now extended to tasks — it is what makes user-added rows self-heal without operator action.
+
+**`id: null` (unresolvable).** No catalog row exists, so `getDeadlineCheck`/`getActionItems`
+404. Handled honestly: the deadline refresh counts a 404 as *skipped* (not failed — there is
+nothing to check), and tasks fall back to a **static per-type generic checklist built
+client-side** (no model call) after the Tier-2 drop. Such a row shows no confirmed dates and
+only generic tasks until it is resolved/activated — correct, because nothing has read a page.
+
+## "Check for updates" — now refreshes deadlines AND tasks
+
+**Requirement:** the Quest Log's "Check for updates" button must refresh both deadlines and
+tasks. It is **partly built already** and partly blocked by the missing task TTL.
+
+**Today** (`refreshTrackerDeadlines`, `trackerStore.ts`): per tracked item it runs the deadline
+check, and *then* re-pulls the shared checklist (`getActionItems`) and `mergeActionItems` —
+so tasks DO refresh. But two things stop it being a real task re-check:
+1. **Coupled to the deadline check.** The task re-pull sits after the deadline check's
+   `continue`, so if the deadline cache is fresh (skip), tasks are not re-pulled at all — even
+   if the task list is stale.
+2. **No fresh verification.** `getActionItems` → `resolve()` serves the stored list *forever*
+   (no TTL), so the re-pull only ever surfaces changes the **batch agent** already made; it
+   never triggers a fresh on-demand task re-verification.
+
+**Change (depends on the task 7-day TTL):**
+- **Decouple** the two checks in the refresh loop: run the deadline check and the task check
+  independently, each honouring **its own** staleness window, so a fresh deadline no longer
+  suppresses a stale task re-check (and vice versa).
+- Once `resolve()` has a TTL, a stale item's `getActionItems` triggers a **fresh Claude task
+  verification** — which is exactly "check for task updates".
+- **Report them distinctly.** Extend the result counts so the UI can say "N deadlines updated,
+  M tasks updated" instead of one blended `updated`. The four-outcome accounting
+  (checked/updated/skipped/blocked/failed) applies to each stream.
+- **Cost note:** a stale item now triggers up to **two** Claude calls (deadline + task) on a
+  refresh. Consistent with the "Claude owns both core features" decision; surfaced here so it
+  is not a surprise.
+
+## Future: per-user task delete & user-added tasks (design, not this pass)
+
+Both are **per-user** (this student only, never the shared catalog), and both live entirely in
+the per-user tracker item (`users.data` → `hs-tracker-data` → `item.actionItems`) — **no
+catalog schema change**. The catalog `opportunities.action_items` stays the shared, regenerated
+source of truth; the per-user item is the source of truth for what the student has *done* with
+it. `mergeActionItems` already reconciles the two on the **task text** key (ids are positional
+and unstable). The two features extend that reconciliation.
+
+**The central constraint:** `mergeActionItems` today maps over `incoming` (the catalog list)
+only, so **anything not in the incoming list is dropped on refresh**. That is fine for
+completion state but fatal for both features below — a user-added task or a per-user deletion
+must *survive* regeneration. So both hinge on extending the merge, not on new storage.
+
+**Per-user task delete.** There is precedent: the retired `dismissed` flag became the
+`not_needed` **state** (visible, reversible, excluded from the progress bar). A true *delete*
+(hide entirely) needs a **tombstone** so the regenerated catalog list doesn't re-add it:
+- Record removed tasks by text-key on the item (a `removedTaskKeys` set, or a `removed` state).
+- `mergeActionItems` drops an incoming catalog task whose key is tombstoned.
+- Keyed on text for the same reason completion is — positional ids can't be trusted.
+- Reversible (un-delete = clear the tombstone), per the same "listened-to" principle that
+  turned dismiss into `not_needed`.
+
+**User-added tasks.** A task the student writes themselves:
+- New field `origin?: 'catalog' | 'user'` on `ActionItem` (absent ⇒ `catalog`, the back-compat
+  rule). A stable client-generated id, `basis` absent (never page-backed — nothing verified
+  it), rendered in its own group ("Your own tasks").
+- **`mergeActionItems` must be extended** to append surviving `origin:'user'` tasks from
+  `existing` that have no catalog match, instead of dropping them. This is the one real code
+  change; everything else is UI + the field.
+- Never written back to the catalog row (it is this student's, not everyone's) and never sent
+  to the calendar unless the student gives it a date (out of scope for v1).
+
+Both compose cleanly with the trust tiers in `ACTION_ITEMS_TRUST_PLAN.md`: `origin:'user'` is
+simply another source that is never page-backed, sorted below verified/trusted and above
+nothing. Neither feature is in the current pass; captured here so the merge change is designed
+with them in mind rather than retrofitted.
+
+## Decisions (ALL RESOLVED 2026-08-25)
+
+1. **Ladder depth — DECIDED (2026-08-25): 4 rungs, rung 4 TRUSTED-domains-only.** Off-domain
+   escalation is allowed but only from operator-approved domains in the shared
+   `trusted_aggregators` allowlist, maintained in the admin-console Sources tab (shared with
+   `ACTION_ITEMS_TRUST_PLAN.md`). Rung-4 dates are always `estimated:true` + source-noted.
+2. **Third-party sourcing — DECIDED (folded into decision 1):** allowed, trusted-only, always
+   estimated-and-noted, never confirmed. A non-trusted domain never sets a deadline.
+3. **Unknown TTL — DECIDED (2026-08-25): standard 7 days.** A genuine `unknown` (site reached,
+   all rungs searched, nothing found) is treated like any verified answer — write + stamp,
+   7-day cache. No per-status TTL. Only the *unreachable* case (network failure) skips the
+   stamp and auto-retries; a real absence does not, to avoid re-billing a dateless row on
+   every view.
+4. **`rolling` status — DECIDED (2026-08-25): first-class status.** Add `"rolling"` to
+   `VALID_STATUS`, prompts emit it, `computeProgressStatus` maps it to `in_progress`. The Fix
+   G3 section is the spec; the status-reader ripple list there MUST be enumerated during build.
 5. **(G4 — now has a proposed fix above.)** Confirm the status-aware overwrite: keep the
    client estimate on `running`/`unknown` + verified-empty, clear only on
    `not_running`/`rolling`. Alternative if you'd rather not preserve unverified guesses at
    all: keep today's behaviour and rely solely on G1 to stop the authoritative check from
    returning empty.
-6. **Prompt caching** for the escalation loop — wire it in now or defer?
-7. **Task TTL length.** The stamp-on-success / no-stamp-on-failure rule is adopted. The TTL
-   *length* is open: 7 days (matches deadlines, re-bills weekly) vs a longer window (tasks
-   change far less than dates — the `ACTION_ITEMS_TRUST_PLAN.md` 90-day rationale). Must be
-   reconciled with that plan's batch staleness so on-demand and batch don't disagree.
-8. **Fetch fix C (Playwright).** Shared with `ACTION_ITEMS_TRUST_PLAN.md` (its decision 6).
-   The only fix that reads SPA-only official pages (THINK's own page + dates). Heavy dep,
-   departs from stdlib-only agents. Build or not?
+6. **Prompt caching — DECIDED (2026-08-25): wire in with Phase 2.** Add `cache_control` to the
+   escalation loop's system prompt so repeated rounds pay minimal token cost.
+7. **Task TTL length — DECIDED (2026-08-25): 7 days on-demand**, matching deadlines. The
+   batch's 90-day staleness stays a separate bulk-pre-warm knob (see the reconcile note above).
+8. **Fetch fix C (Playwright) — DECIDED (2026-08-25): DEFER.** Do not build Playwright now.
+   SPA official pages (THINK's own page) stay unreadable; their dates are recovered instead via
+   the escalation loop's prior-cycle and trusted-third-party rungs (decision 1). Revisit only
+   if SPA-only sites prove common. Also resolves that doc's decision 6 the same way. Lightweight
+   fetch fixes A (PDF) + B (same-domain link discovery) are NOT part of this decision and were
+   not requested — treat them as optional low-cost future wins, not current scope.
 
 ## Risks & non-goals
 
-- **Fabrication risk rises with ladder depth.** Off-domain dates are the classic failure
-  mode; keep them estimated-and-noted, never confirmed.
+- **Fabrication risk rises with ladder depth — mitigated by the trusted-only rule (decision
+  1).** Off-domain dates are the classic failure mode; rung 4 draws only from the operator's
+  `trusted_aggregators` allowlist and its dates are always estimated-and-noted, never
+  confirmed. A non-trusted domain never sets a deadline.
 - **Non-determinism remains.** The loop makes the *strategy sequence* deterministic, but the
   model still decides whether to actually search within a round; keep silent-search retry.
 - **Status ripple (G3).** A new status value touches many client readers; enumerate before
@@ -365,17 +491,110 @@ extra calls):
 
 ## Tentative touch list (subject to plan approval)
 
+Deadlines / status (G1–G3, G-cross):
 - `check_deadlines.py` — escalation loop in `research_deadlines`/`check_one`; `MAX_SEARCHES`
-  → per-round budget + ladder; phase-1 signal tail; `VALID_STATUS`; `deadline_write_decision`
-  + `SOURCE_UNREACHED`; phase-2 prompt (rolling).
+  → per-round budget + ladder; phase-1 signal tail; `VALID_STATUS` (+`rolling`);
+  `deadline_write_decision` + `SOURCE_UNREACHED`; phase-2 prompt (rolling).
 - `app/routes/opportunities.py` — inherits `check_one`; confirm the `source`/stamp handling
   for the new outcomes; TTL if decision 3 changes it.
 - `frontend/src/lib/status.ts` — `rolling` in `computeProgressStatus` + the deadline-list
   readers.
-- `frontend/src/lib/tracker.ts` — `extractTrackerInfo` / `intakeExtractAndClassify` prompts
-  (rolling); possibly the empty-verified overwrite guard (decision 5).
+
+Tasks → Claude (architecture decision):
+- `generate_action_items.py` — swap `call_gemini`→`call_claude` (Haiku 4.5 pin); cost via
+  `claude_common.estimate_cost`; keep `page_text` fetch + `claim_is_supported`/
+  `quote_is_on_page` verification unchanged.
+- `app/services/action_items.py` — gate on `ANTHROPIC_API_KEY`; add the 7-day (or agreed)
+  staleness check on `action_items_checked_at`.
+- cost attribution — `classify_feature` signature for action items; import the Claude model
+  pin so `provider_for_model` attributes Anthropic.
+
+Client — collapse the redundant Gemini producer:
+- `frontend/src/lib/tracker.ts` — slim `extractTrackerInfo` to `meta`/`fit` (drop its date &
+  task outputs); `intakeExtractAndClassify` still classifies custom adds; `rolling` in the
+  status-accept list; the empty-verified overwrite guard becomes moot (G4 superseded).
+- `frontend/app/(app)/finder.tsx` + `tracker.tsx` — dates from `getDeadlineCheck`, tasks from
+  `getActionItems`, `applyUrl = opp.url` (static label); stop trusting Gemini dates/tasks.
 - rendering (Quest Log / Home Base) — rolling badge + empty-state suppression.
-- tests — `test_check_deadlines_helpers.py` (write-decision matrix), status logic, mocks.
+- tests — `test_check_deadlines_helpers.py` (write-decision matrix), `test_action_items.py`
+  (Claude path), status logic, mocks.
+
+**Cross-doc:** several of these files also appear in `ACTION_ITEMS_TRUST_PLAN.md`
+(`generate_action_items.py`, `app/services/action_items.py`, `tracker.ts`). Sequence the two
+so the Gemini→Claude move lands before/with the aggregator work, not against it.
+
+## Phased implementation plan
+
+Each phase is shippable on its own and ordered so dependencies land first. Phases 0–1 are the
+task-engine foundation; 2–4 are deadline quality; 5–6 collapse the redundant producer and wire
+the refresh; 7 is a future per-user layer. The shared fetch-layer track (A/B/C) runs alongside.
+
+**Phase 0 — Tasks move to Claude (foundation).** _(build-order step 0, shared with
+`ACTION_ITEMS_TRUST_PLAN.md`)_
+- `generate_action_items.py`: `call_gemini` → `call_claude` (Haiku 4.5 pin); cost via
+  `claude_common.estimate_cost`. Keep `page_text` fetch + `claim_is_supported`/
+  `quote_is_on_page` verification untouched.
+- `app/services/action_items.py`: gate on `ANTHROPIC_API_KEY`; keep the free `generic-fallback`.
+- Cost attribution: `classify_feature` signature for action items; import the Claude model pin
+  for `provider_for_model`.
+- **User-visible change:** none beyond model quality. **Tests:** `test_action_items.py` on the
+  Claude path.
+
+**Phase 1 — Task caching TTL + failure handling.**
+- `resolve()`: add a staleness check on `action_items_checked_at` (length per decision 7);
+  **stamp only on a successful run, no stamp on failure** (leave the row due to auto-retry).
+- Closes the "user-added inactive rows never retried" gap; enables real task re-checks in
+  Phase 6.
+
+**Phase 2 — Deadline estimation: G1 escalation loop.**
+- `check_deadlines.py`: escalation loop in `research_deadlines`/`check_one`; per-round
+  `max_uses:1` + strategy ladder; `FOUND_*` signal tail; accumulate `sources` across rounds;
+  prompt caching (decision 6). Batch + interactive inherit via `check_one`.
+- **Rung 4 (trusted third-party) depends on the shared `trusted_aggregators` allowlist** (see
+  Parallel track). Ship rungs 1–3 first; gate rung 4 on the allowlist existing, so a filter
+  reads the operator-approved domains and drops any off-domain date not on it. Until the
+  allowlist exists, the loop simply runs rungs 1–3 (degrade-not-break).
+- **Tests:** re-run `--ids ec17921 ec18286 ec18392 --preview`; confirm THINK gains estimated
+  dates; watch escalation-depth / silent-search counters for early exit.
+
+**Phase 3 — Deadline write-decision: G2 + G-cross.**
+- `SITE_REACHED` signal; `SOURCE_UNREACHED` outcome (don't stamp); revised
+  `deadline_write_decision` matrix; per-status unknown TTL if decision 3 changes it.
+- **Tests:** the full write-decision matrix in `test_check_deadlines_helpers.py`.
+
+**Phase 4 — Rolling status: G3.**
+- `VALID_STATUS` + `rolling`; teach the three prompts; write-decision carve-out (rolling writes
+  empty). Client: `computeProgressStatus` maps `rolling` → `in_progress`; enumerate every
+  `status` reader (ripple list above); rolling badge + empty-state suppression.
+
+**Phase 5 — Collapse the redundant Gemini producer (client).**
+- Slim `extractTrackerInfo` to `meta`/`fit` (drop its date & task outputs); `applyUrl = opp.url`
+  + static label. `finder.tsx`/`tracker.tsx`: dates from `getDeadlineCheck`, tasks from
+  `getActionItems`. `id:null` → static client generic checklist. **G4 becomes moot** here.
+
+**Phase 6 — "Check for updates" refreshes both, independently.**
+- Decouple the deadline and task checks in `refreshTrackerDeadlines` so each honours its own
+  TTL; report deadline vs task updates as distinct counts; surface "N deadlines, M tasks
+  updated". Depends on Phase 1 (task TTL) and Phase 5 (single source per stream).
+
+**Phase 7 — Per-user task delete & user-added tasks (FUTURE, separate).**
+- `ActionItem.origin`; extend `mergeActionItems` to preserve `origin:'user'` tasks and honour
+  per-user tombstones; removal state/undo; add/delete UI. No catalog schema change.
+
+**Parallel track — shared infrastructure (with `ACTION_ITEMS_TRUST_PLAN.md`).**
+- **Trusted-domain allowlist** — `trusted_aggregators` table + `aggregators_common.py` +
+  admin-console Sources tab (approve/block/park). Defined in `ACTION_ITEMS_TRUST_PLAN.md`;
+  now **also gates the deadline loop's rung 4** (decision 1). Build once, shared. Deadline
+  rung 4 needs only the read side (which domains are trusted); the task side needs the full
+  park-and-approve flywheel.
+- **Fetch layer** — **C (Playwright SPA render): DEFERRED (decision 8).** SPA official pages
+  stay unreadable; dates come from the escalation loop's trusted third-party rung instead.
+  **A (PDF)** + **B (same-domain link discovery)** are optional low-cost future wins, not
+  current scope (not requested in decision 8).
+
+**Dependency order:** 0 → 1 → 2 → 3 → 4 → 5 → 6, then 7 later. A/B parallel from Phase 1; C
+gated. Deadline quality (2–4) and the task foundation (0–1) are independent until Phase 5,
+so they can proceed in parallel if two people are working.
 
 ## Testing considerations
 

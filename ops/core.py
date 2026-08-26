@@ -138,7 +138,7 @@ AGENT_CONFIGS_SCHEMA = {
         # verify the answer against, so it gets a locally-built generic checklist for free.
         # ~1 page in 10 refuses our client, so the paid population is smaller than the row
         # count and the per-row average is pulled below what a fetchable row really costs.
-        "api": "Gemini 3.5-flash-lite (no web search); unfetchable pages resolve locally for free",
+        "api": "Claude Haiku 4.5 (no web search); unfetchable pages resolve locally for free",
         "defaults": {"min_delay": 5, "timeout": 120},
     },
     "mailinglist": {

@@ -555,6 +555,20 @@ export const httpClient: ApiClient = {
     }
   },
 
+  // FREE batch mirror of the catalog's cached deadline+task data for tracked ids. One GET,
+  // no paid check, never throws — a failed sync leaves the snapshot untouched to retry later.
+  async syncTracker(ids) {
+    if (!ids.length) return {};
+    try {
+      const data = await request<{ items: Record<string, Partial<TrackerInfo>> }>(
+        `/api/tracker/sync?ids=${encodeURIComponent(ids.join(','))}`,
+      );
+      return data?.items ?? {};
+    } catch {
+      return {};
+    }
+  },
+
   // `maxTokens` is optional and clamped server-side into [MESSAGES_MAX_TOKENS, ceiling], so
   // it can only ever RAISE a call's headroom. Sent by callers whose answer length scales
   // with their input — profile-tag extraction and enrichment both return one item per thing

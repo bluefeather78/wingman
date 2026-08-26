@@ -15,17 +15,30 @@ a user-submitted opportunity resolved minutes ago, or a row whose page was refus
 client the last time the agent ran. Without this, tracking any of those means falling back
 to a task list nothing verified — which is the state the whole fix exists to leave behind.
 """
+import datetime
 import json
 import urllib.parse
 import urllib.request
 
-from app.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY
+from app.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY
 from generate_action_items import (
     SELECT as ACTION_ITEM_FIELDS,
     STAMPING_SOURCES,
     generic_items,
     process_one,
 )
+
+# On-demand staleness window. Deliberately SHORTER than the batch agent's 90-day
+# STALE_AFTER_DAYS: the batch is a bulk-coverage knob over the whole catalog, this is the
+# per-view freshness a student actually experiences. Two things hinge on it (P1, 2026-08-25):
+#   * A row whose last write did NOT stamp action_items_checked_at (a generic-fallback from
+#     an unreachable page, or an unparsed model reply) has checked_at = NULL, reads as stale,
+#     and so is retried on the next view — which is how a user-added / newly-scraped / then-
+#     -unreachable row self-heals instead of serving an unverified list forever.
+#   * A genuinely verified list (page-verified / page-empty, which DO stamp) is served free
+#     for 7 days, then re-verified once. Requirements move ~annually, so the churn is only on
+#     rows a student is actively looking at, and the cost is accepted (decision 7).
+TASK_TTL_DAYS = 7
 
 # PostgREST 400s an entire select on one unknown column, so a catalog that has not had
 # action_items_schema.sql run against it would break the read outright. Latched after the
@@ -84,34 +97,56 @@ def payload(items, source):
     return {"action_items": items or [], "source": source}
 
 
+def _is_fresh(checked_at):
+    """True when a stamp exists and is within TASK_TTL_DAYS. A NULL/blank/unparseable stamp
+    reads as stale so the row is retried — the same direction check_deadlines errs, since a
+    missing stamp means the last write never verified the page."""
+    if not checked_at:
+        return False
+    try:
+        stamped = datetime.datetime.fromisoformat(str(checked_at).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if stamped.tzinfo is None:
+        stamped = stamped.replace(tzinfo=datetime.timezone.utc)
+    age = datetime.datetime.now(datetime.timezone.utc) - stamped
+    return age <= datetime.timedelta(days=TASK_TTL_DAYS)
+
+
 def resolve(opp_id):
-    """(payload, cost). Serves the stored list when there is one, otherwise runs the same
+    """(payload, cost). Serves the stored list while it is fresh, otherwise re-runs the same
     fetch-verify-decide pipeline the batch uses and caches the result on the row.
 
-    Deliberately NOT re-checked on a schedule here. A stored list is served as-is however
-    old it is: the batch agent owns freshness (its own staleness window), and re-billing a
-    student's page load to re-verify a list that is almost certainly unchanged is the
-    trade the deadline endpoint's 7-day cache already decided in the other direction, for
-    data that actually moves weekly. Requirements do not.
+    Freshness is TASK_TTL_DAYS on action_items_checked_at, the on-demand twin of the
+    deadline endpoint's cache. A stamped, in-window list is served free; a stale or never-
+    stamped one is re-verified (a re-verify writes nothing and does not stamp when the page
+    cannot be read, so an unreachable row stays due rather than freezing an unverified list).
     """
     opp = get_opportunity_for_action_items(opp_id)
     if not opp:
         return None, 0.0
 
     stored = opp.get("action_items")
-    if isinstance(stored, list) and stored:
+    has_stored = isinstance(stored, list) and bool(stored)
+    if has_stored and _is_fresh(opp.get("action_items_checked_at")):
         return payload(stored, opp.get("action_items_source") or "stored"), 0.0
 
-    # Nothing stored. With no key we cannot call a model, but we can still give the student
-    # an honest checklist for free rather than nothing — generic items assert nothing about
-    # the program, so producing them without reading anything is defensible.
-    if not GEMINI_API_KEY:
+    # Stale, or nothing stored. With no key we cannot call a model — keep an existing list
+    # rather than replacing it with generic (it is at least what the batch last verified),
+    # and otherwise give the student an honest generic checklist for free. Generic items
+    # assert nothing about the program, so producing them without reading anything is safe.
+    if not ANTHROPIC_API_KEY:
+        if has_stored:
+            return payload(stored, opp.get("action_items_source") or "stored"), 0.0
         return payload(generic_items(opp), "generic-fallback"), 0.0
 
     try:
-        decision, cost, _stats, _reason = process_one(opp, GEMINI_API_KEY)
+        decision, cost, _stats, _reason = process_one(opp, ANTHROPIC_API_KEY)
     except Exception as e:
         print(f"[WARN] action-item generation failed for {opp_id}: {e}")
+        # Never blank a verified list because a re-verify raised. Keep what we have.
+        if has_stored:
+            return payload(stored, opp.get("action_items_source") or "stored"), 0.0
         return payload(generic_items(opp), "generic-fallback"), 0.0
 
     if decision.write:

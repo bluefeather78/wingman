@@ -99,17 +99,20 @@ def handle_deadline_check(opp_id: str, request: Request,
         # retry_on_silent (check_one's default) costs one extra round-trip when Claude
         # answers without searching. Worth it: the answer is cached for 7 days, so a
         # single silent set of dates would be served to every student for a week.
-        info, _cost, searches, _attempts = check_deadline_one(opp, ANTHROPIC_API_KEY)
+        info, _cost, searches, _attempts, site_reached = check_deadline_one(opp, ANTHROPIC_API_KEY)
 
         # One shared decision with the batch loop (check_deadlines.deadline_write_decision),
         # so the two can never disagree about when a row may be overwritten. Three of its
         # four outcomes write NOTHING and, just as importantly, do NOT stamp
         # dates_last_checked_at — the row stays due and the next request re-rolls, instead of
         # a hole being served to every student for 7 days:
-        #   silent   phase 1 never searched
-        #   unparsed phase 1 searched but phase 2's JSON was unreadable
-        #   kept     verified, but found no dates while the row already has some
-        decision = deadline_write_decision(info, searches, opp.get("important_dates"))
+        #   silent      phase 1 never searched
+        #   unparsed    phase 1 searched but phase 2's JSON was unreadable
+        #   kept        verified, but found no dates while the row already has some
+        #   unreachable searched, empty, but never reached the program's own page (SPA/down) —
+        #               leaves the row due so the next view retries rather than caching a hole
+        decision = deadline_write_decision(info, searches, opp.get("important_dates"),
+                                           site_reached=site_reached)
         if not decision.write:
             print(f"[WARN] Deadline check for {opp_id} not written ({decision.reason}); "
                   f"keeping the cached value and NOT stamping dates_last_checked_at, so the "
@@ -162,6 +165,33 @@ def handle_deadline_check(opp_id: str, request: Request,
         return json_response(200, payload)
 
 
+@router.get("/api/tracker/sync")
+def handle_tracker_sync(ids: str = "", user: AuthedUser = Depends(require_subscription)):
+    """FREE, read-only mirror of the catalog's CURRENT cached deadline+task data for a set of
+    tracked ids, in ONE round trip. This is the SYNC half of the tracker's freshness model
+    (2026-08-25): the per-user snapshot in users.data is frozen at add-time, so without this
+    an already-tracking student never sees a catalog update (an agent run, another student's
+    on-demand check) until they pay to re-verify. This endpoint NEVER triggers a paid check —
+    that stays on `/deadline`, `/action-items` and the Update-now button (the VERIFY half).
+
+    Fired by the client on app-open/login and on Quest Log / Home Base focus (throttled), so
+    it must stay cheap: it is a single PostgREST read, no model call, no write. Gated by
+    require_subscription like the rest of the app data — a lapsed account is paywalled here
+    too, which is fine because it is paywalled everywhere else.
+    """
+    touch_user_activity(user.id, "tracker_sync")
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return json_error(500, "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured.")
+    id_list = [i for i in (ids or "").split(",") if i.strip()]
+    if not id_list:
+        return json_response(200, {"items": {}})
+    try:
+        items = deadlines.get_cached_tracker_data(id_list)
+    except Exception as e:
+        return json_error(502, f"Could not read tracker sync data: {e}")
+    return json_response(200, {"items": items})
+
+
 @router.get("/api/opportunities/{opp_id}/action-items")
 def handle_action_items(opp_id: str, user: AuthedUser = Depends(require_subscription)):
     """The application checklist for one opportunity, shared by every student tracking it.
@@ -188,6 +218,6 @@ def handle_action_items(opp_id: str, user: AuthedUser = Depends(require_subscrip
         # refreshTrackerDeadlines distinguishes not-found from failed.
         return json_error(404, "No catalog row for that opportunity.")
     if cost:
-        record_user_cost_async(user.id, "gemini", "action_items", cost=cost,
+        record_user_cost_async(user.id, "claude", "action_items", cost=cost,
                                searches=0, model=ACTION_ITEM_MODEL)
     return json_response(200, payload)

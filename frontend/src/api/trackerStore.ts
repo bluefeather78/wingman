@@ -1,7 +1,7 @@
 import type { Bucket } from '@/lib/constants';
 import { ALL_BUCKETS } from '@/lib/constants';
 import { httpClient } from './httpClient';
-import { isVerifiedDeadlineSource, normalizeVerifiedActionItems } from '@/lib/tracker';
+import { isVerifiedDeadlineSource, normalizeVerifiedActionItems, type TrackerInfo } from '@/lib/tracker';
 
 // The tracker is shared with the original web app: it persists under the SAME data key
 // (`hs-tracker-data`) in the SAME shape — a JSON *string* of a 6-bucket object, each bucket
@@ -94,7 +94,7 @@ export interface TrackerItem {
   type?: string | null;
   bucket: Bucket;
   progressStatus?: string;
-  status?: 'running' | 'not_running' | 'unknown' | string;
+  status?: 'running' | 'not_running' | 'rolling' | 'unknown' | string;
   reviewStatus?: string | null;
   reviewSummary?: string | null;
   meta?: string;
@@ -234,6 +234,147 @@ export interface DeadlineRefreshResult {
   total: number;
 }
 
+// ---------- Applying catalog deadline/task data onto a tracked item ----------
+// Shared by the PAID refresh (refreshTrackerDeadlines, the button) and the FREE catalog sync
+// (syncTrackerFromCatalog) so the two apply IDENTICAL merge rules — the same reason
+// deadline_write_decision() is one shared function server-side. Both preserve per-user state
+// (ticked-off tasks, Google Calendar event ids carried forward by index); neither wipes good
+// data on an unverified empty payload.
+
+// Overlay one catalog deadline payload onto a tracked item IN PLACE. Returns whether anything
+// changed. `info` is either a /deadline result (paid path) or one entry of the /api/tracker/sync
+// batch (free path) — both carry the same {status, important_dates, was_estimated,
+// important_date_note, source} shape, and the `source` gate is what lets a verified empty list
+// (e.g. a rolling program with no dates) clear a stale snapshot while a mock/fallback echo
+// never can.
+export function applyDeadlineToTrackerItem(item: TrackerItem, info: Partial<TrackerInfo>): boolean {
+  let changed = false;
+  if (info.status && ['running', 'not_running', 'rolling', 'unknown'].includes(info.status)
+      && info.status !== item.status) {
+    item.status = info.status;
+    changed = true;
+  }
+  if (Array.isArray(info.important_dates)
+      && (isVerifiedDeadlineSource(info.source) || info.important_dates.length)) {
+    const previous = item.importantDates ?? [];
+    const mapped = info.important_dates
+      .filter((d) => d && d.date_iso)
+      .map((d, idx) => ({
+        label: d.label || 'Date',
+        dateISO: d.date_iso,
+        type: d.type || 'deadline',
+        estimated: d.estimated,
+        // Carry the Google Calendar event id forward by index. Dropping it made the next
+        // sync POST a NEW event while the old one (same index-based wingmanId) survived the
+        // sweep, so the student's real calendar gained a duplicate on every refresh.
+        googleEventId: previous[idx]?.googleEventId ?? null,
+      }));
+    if (JSON.stringify(mapped) !== JSON.stringify(previous)) changed = true;
+    item.importantDates = mapped;
+  }
+  if (typeof info.was_estimated === 'boolean') item.wasEstimated = info.was_estimated;
+  if (info.important_date_note) item.note = info.important_date_note;
+  return changed;
+}
+
+// Merge a catalog action-item list onto a tracked item IN PLACE, keeping per-user state
+// (mergeActionItems keys on task TEXT, not positional id, and honours tombstones). Returns
+// whether anything changed. An empty/absent incoming list is a no-op — it never wipes tasks,
+// so a row the task agent has not reached keeps whatever it had.
+export function applyTasksToTrackerItem(
+  item: TrackerItem,
+  actionItems: TrackerInfo['action_items'] | undefined,
+): boolean {
+  const incoming = normalizeVerifiedActionItems(actionItems, item.id);
+  if (!incoming.length) return false;
+  const merged = mergeActionItems(item.actionItems, incoming);
+  if (JSON.stringify(merged) === JSON.stringify(item.actionItems ?? [])) return false;
+  item.actionItems = merged;
+  return true;
+}
+
+// ---------- FREE catalog sync (the SYNC half of the freshness model, 2026-08-25) ----------
+// The per-user snapshot in users.data is frozen at add-time. Without this, an already-tracking
+// student never sees a catalog update — an agent run, or another student's on-demand check
+// populating the cache — until they pay to re-verify (the button). This pulls the catalog's
+// CURRENT cached deadline+task values for every tracked id in ONE free request and merges them
+// in, so the snapshot stops drifting. It NEVER triggers a paid check (that is the button and
+// the passive 7-day on-view path). Fired on app-open/login and on Quest Log / Home Base focus.
+//
+// Throttled: the focus triggers fire often (expo-router remounts on every visit), so a sync
+// runs at most once per SYNC_MIN_INTERVAL_MS unless forced (login forces, to always pick up
+// what changed while the app was closed).
+const SYNC_MIN_INTERVAL_MS = 5 * 60 * 1000;
+let _lastCatalogSyncAt = 0;
+// The freshest opportunities.dates_last_checked_at seen across tracked items on the last real
+// sync. Held so a THROTTLED call can still hand the "Last checked" line a stamp (the line must
+// not blank just because the 5-minute window has not elapsed).
+let _lastCatalogStamp: string | null = null;
+
+export interface CatalogSyncResult {
+  /** The updated tracker data, or null when nothing was fetched (throttled / failed). */
+  data: TrackerData | null;
+  updated: number;
+  /** Freshest catalog dates_last_checked_at across tracked items, for the "Last checked"
+   *  line — this is when the DATA was verified, not when the mirror ran. Null if unknown. */
+  lastCheckedAt: string | null;
+}
+
+export async function syncTrackerFromCatalog(
+  opts?: { force?: boolean },
+): Promise<CatalogSyncResult> {
+  const now = Date.now();
+  if (!opts?.force && now - _lastCatalogSyncAt < SYNC_MIN_INTERVAL_MS) {
+    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp };
+  }
+  let data: TrackerData;
+  try {
+    data = await loadTrackerData();
+  } catch {
+    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp };
+  }
+  const items = flattenItems(data);
+  const ids = items.map((i) => i.id).filter(Boolean);
+  if (!ids.length) {
+    _lastCatalogSyncAt = now;
+    return { data, updated: 0, lastCheckedAt: _lastCatalogStamp };
+  }
+  const catalog = await httpClient.syncTracker(ids); // never throws; {} on failure
+  // Stamp the throttle only after a real answer, so a failed/empty sync (network down, signed
+  // out) is retried on the next trigger instead of being throttled out for 5 minutes.
+  if (!Object.keys(catalog).length) {
+    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp };
+  }
+  _lastCatalogSyncAt = now;
+  // The "Last checked" line means "when was this deadline data verified against the source".
+  // That is the catalog's dates_last_checked_at, not now() — the sync only mirrors. Take the
+  // freshest across tracked items (ISO strings compare lexicographically for the same offset;
+  // the server writes them all in UTC +00:00, so a plain string max is correct here).
+  let freshest: string | null = null;
+  for (const info of Object.values(catalog)) {
+    const t = info.dates_last_checked_at;
+    if (t && (!freshest || t > freshest)) freshest = t;
+  }
+  if (freshest) _lastCatalogStamp = freshest;
+  let updated = 0;
+  for (const item of items) {
+    const info = catalog[item.id];
+    if (!info) continue; // user-added row with no catalog match — keep its own snapshot
+    let changed = applyDeadlineToTrackerItem(item, info);
+    if (applyTasksToTrackerItem(item, info.action_items)) changed = true;
+    if (changed) updated++;
+  }
+  if (updated) {
+    try {
+      await saveTrackerData(data);
+    } catch {
+      // The in-memory data is still updated for the caller to render; it just was not
+      // persisted. The next sync will re-derive and retry the write.
+    }
+  }
+  return { data, updated, lastCheckedAt: _lastCatalogStamp };
+}
+
 // Quest Log's "Check for updates" button — ported from script.js's refreshTracker(), minus
 // the extractTrackerInfo() re-classification pass (a separate, heavier AI call this RN port
 // never wired up elsewhere). This overlays the same shared on-demand deadline check
@@ -279,53 +420,15 @@ export async function refreshTrackerDeadlines(
       continue;
     }
     checked++;
-    const info = res.info;
-    let changed = false;
-    if (info.status && ['running', 'not_running', 'unknown'].includes(info.status) && info.status !== item.status) {
-      item.status = info.status;
-      changed = true;
-    }
-    // Same source gate as applyDeadlineCheckToInfo: an empty list may only overwrite when
-    // the answer was actually verified, so a discontinued program's dates can be cleared
-    // while a mock or fallback echo can never wipe good ones.
-    if (Array.isArray(info.important_dates)
-        && (isVerifiedDeadlineSource(info.source) || info.important_dates.length)) {
-      const previous = item.importantDates ?? [];
-      const mapped = info.important_dates
-        .filter((d) => d && d.date_iso)
-        .map((d, idx) => ({
-          label: d.label || 'Date',
-          dateISO: d.date_iso,
-          type: d.type || 'deadline',
-          estimated: d.estimated,
-          // Carry the Google Calendar event id forward. Dropping it made the next sync
-          // POST a NEW event, while the old one — still carrying the same index-based
-          // wingmanId — was not an orphan the sweep would remove, so the student's real
-          // calendar gained a duplicate entry on every single refresh. Matching by index
-          // is what keeps this consistent: the wingmanId IS `${item.id}::${index}`, so
-          // slot N's event is by definition the event for slot N's date.
-          googleEventId: previous[idx]?.googleEventId ?? null,
-        }));
-      if (JSON.stringify(mapped) !== JSON.stringify(previous)) changed = true;
-      item.importantDates = mapped;
-    }
-    if (typeof info.was_estimated === 'boolean') item.wasEstimated = info.was_estimated;
-    if (info.important_date_note) item.note = info.important_date_note;
-
-    // Re-pull the shared checklist. Until now a refresh updated dates and never touched
+    let changed = applyDeadlineToTrackerItem(item, res.info);
+    // Re-pull the shared checklist. Until 2026-08-24 a refresh updated dates and never touched
     // tasks, so a wrong task — the invented "Algebra 2" prerequisite among them — was
     // permanent: there was no code path anywhere that could ever replace one. Almost always
     // free (the catalog row already holds a verified list), and the merge keeps whatever the
-    // student has ticked off.
+    // student has ticked off. The button re-pulls tasks from the paid endpoint; the free sync
+    // (below) uses the batch payload's own action_items instead of a per-item call.
     const shared = await httpClient.getActionItems(item.id);
-    const incoming = normalizeVerifiedActionItems(shared?.action_items, item.id);
-    if (incoming.length) {
-      const merged = mergeActionItems(item.actionItems, incoming);
-      if (JSON.stringify(merged) !== JSON.stringify(item.actionItems ?? [])) {
-        item.actionItems = merged;
-        changed = true;
-      }
-    }
+    if (applyTasksToTrackerItem(item, shared?.action_items)) changed = true;
     if (changed) updated++;
   }
   onProgress?.(items.length, items.length);

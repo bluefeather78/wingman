@@ -57,6 +57,12 @@ export interface ApiClient {
   // a missing checklist must not stop an opportunity being tracked, and the caller falls
   // back to the model's own items, which are forced generic because nothing verified them.
   getActionItems(oppId: string): Promise<ActionItemsResponse | null>;
+  // FREE, read-only batch mirror of the catalog's CURRENT cached deadline+task data for a set
+  // of tracked ids, in one round trip (GET /api/tracker/sync). NEVER triggers a paid check —
+  // it is the cheap "keep the snapshot in step with the catalog" half of the freshness model,
+  // fired on app-open/login and screen focus. Returns {} on failure (never rejects): a sync
+  // that cannot run must leave the snapshot exactly as it was, to retry later.
+  syncTracker(ids: string[]): Promise<Record<string, Partial<TrackerInfo>>>;
   callGemini(system: string, userContent: string, useWebSearch?: boolean, maxTokens?: number): Promise<string>;
   callClaude(
     system: string,

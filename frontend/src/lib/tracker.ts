@@ -49,7 +49,7 @@ export interface ImportantDate {
 }
 
 export interface TrackerInfo {
-  status: 'running' | 'not_running' | 'unknown';
+  status: 'running' | 'not_running' | 'rolling' | 'unknown';
   meta?: string;
   fit?: string;
   note?: string;
@@ -68,6 +68,11 @@ export interface TrackerInfo {
   // Only ever set by GET /api/opportunities/<id>/deadline — how trustworthy this payload
   // is. See VERIFIED_DEADLINE_SOURCES below; never present on an extractTrackerInfo result.
   source?: string;
+  // When the CATALOG last verified this row's deadlines (opportunities.dates_last_checked_at).
+  // Returned by the deadline endpoint and the batch /api/tracker/sync. The free sync uses the
+  // freshest of these across tracked items to stamp the Quest Log's "Last checked" line — so
+  // the line reflects when the DATA was actually verified, not when the mirror ran.
+  dates_last_checked_at?: string | null;
 }
 
 // Which `source` values on a deadline payload represent an answer somebody actually
@@ -104,7 +109,7 @@ export function applyDeadlineCheckToInfo(
   const verified = isVerifiedDeadlineSource(deadlineInfo.source);
   if (
     deadlineInfo.status &&
-    ['running', 'not_running', 'unknown'].includes(deadlineInfo.status)
+    ['running', 'not_running', 'rolling', 'unknown'].includes(deadlineInfo.status)
   ) {
     info.status = deadlineInfo.status;
   }

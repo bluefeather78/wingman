@@ -681,7 +681,7 @@ export default function Finder() {
         type,
         bucket,
         progressStatus: 'not_started',
-        status: ['running', 'not_running', 'unknown'].includes(info.status) ? info.status : 'unknown',
+        status: ['running', 'not_running', 'rolling', 'unknown'].includes(info.status) ? info.status : 'unknown',
         reviewStatus,
         reviewSummary,
         meta: info.meta || [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · '),

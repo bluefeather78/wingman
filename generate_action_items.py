@@ -60,7 +60,7 @@ import sys
 import urllib.error
 
 from agent_common import add_agent_args, apply_timing, emit_preview, snapshot_stamp
-from gemini_common import call_gemini, extract_json, estimate_cost
+from claude_common import call_claude, extract_json, estimate_cost
 import page_text
 from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
 
@@ -72,11 +72,13 @@ DB_AGENT = "action_item_generator"
 # scheduler, every run is started by hand.
 STALE_AFTER_DAYS = 90
 
-# Model pin. Deliberately the cheap interactive-tier model rather than gemini_common's
-# default: this is a structured-extraction job over text we already supply, not research,
-# and the input (a whole page) is what costs. Keep in step with nothing — this agent's
-# quality is enforced by page_text's verification, not by model tier.
-MODEL = "gemini-3.5-flash-lite"
+# Model pin. Claude Haiku 4.5, promoted off gemini-3.5-flash-lite (2026-08-25) so tasks and
+# deadlines — the product's two core surfaces — run on the same reasoning tier. The actual
+# call model is claude_common.MODEL (call_claude takes no model arg); this constant is what
+# the cost-attribution layer records as user_costs.model, so provider_for_model() resolves
+# it to Anthropic. It must stay in step with claude_common.MODEL. This agent never searches
+# and its quality is enforced by page_text's verification, not by model tier.
+MODEL = "claude-haiku-4-5-20251001"
 
 # A whole page in, five short tasks out. The ceiling is for the OUTPUT; page text is input.
 MAX_TOKENS = 1400
@@ -380,9 +382,9 @@ def process_one(opp, api_key, timeout=None):
         # takes the usage dict, not three numbers) and reported it as the model producing
         # unreadable output — a programming error wearing a model failure's clothes, while
         # also throwing away the cost of a call that had already been billed.
-        out, usage = call_gemini(SYSTEM, build_user_content(opp, text), api_key,
+        out, usage = call_claude(SYSTEM, build_user_content(opp, text), api_key,
                                  use_web_search=False, max_tokens=MAX_TOKENS,
-                                 timeout=timeout, model=MODEL)
+                                 timeout=timeout)
         # Banked immediately, before anything that can raise. Same rule the two-phase agents
         # learned: an exception downstream must not discard money already spent.
         cost = estimate_cost(usage)
@@ -428,14 +430,14 @@ def main():
                              "the paid API at full cost.")
     add_agent_args(parser, default_timeout=120)
     args = parser.parse_args()
-    apply_timing(args, gemini=True)
+    apply_timing(args, claude=True)
 
     load_dotenv()
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     service_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
-    gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    if not supabase_url or not service_key or not gemini_key:
-        print("[ERROR] SUPABASE_URL / SUPABASE_SERVICE_KEY / GEMINI_API_KEY not set in .env.")
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not supabase_url or not service_key or not anthropic_key:
+        print("[ERROR] SUPABASE_URL / SUPABASE_SERVICE_KEY / ANTHROPIC_API_KEY not set in .env.")
         sys.exit(1)
 
     params = {"select": SELECT, "is_active": "eq.true", "order": "id"}
@@ -497,7 +499,7 @@ def main():
     for i, opp in enumerate(items):
         print(f"[{i + 1}/{len(items)}] {(opp.get('name') or '?')[:55]}...", end=" ")
         try:
-            decision, cost, stats, reason = process_one(opp, gemini_key, timeout=args.timeout)
+            decision, cost, stats, reason = process_one(opp, anthropic_key, timeout=args.timeout)
             total_cost += cost
             for k in totals:
                 totals[k] += stats.get(k, 0)

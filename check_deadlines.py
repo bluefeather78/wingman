@@ -59,8 +59,17 @@ manual bulk-backfill/cleanup tool — e.g. after a large scraper pass adds many 
 once, or a deliberate full-catalog refresh — just run it with awareness that a full --all
 pass on a large catalog can still exhaust the same shared quota the on-demand endpoint uses.
 
+ESCALATION LOOP (2026-08-25, G1): phase 1 is now a LOOP of up to ESCALATION_RUNGS rounds
+(current cycle -> prior cycle -> subpages), each capped at one web_search, each injecting a
+distinct strategy, stopping as soon as a self-reported found-signal is satisfied, then running
+phase 2 once over the UNION of everything fetched. This fixes the old single-call cap where
+MAX_SEARCHES=1 meant only the FIRST of the prompt's ordered searches (current cycle) ever ran,
+so the prior-cycle estimation basis never did. check_one() now returns a 5-tuple ending in
+`site_reached`; deadline_write_decision() gained an `unreachable-fallback` outcome and a
+`rolling` status carve-out. See DEADLINE_AND_TASK_PLAN.md P2-P4.
+
 SETUP:
-    .env needs SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY.
+    .env needs SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY.
     Run this SQL once in the Supabase SQL editor before first use:
 
         alter table opportunities
@@ -111,7 +120,18 @@ from gemini_common import extract_json
 from claude_common import estimate_cost
 from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
 
-VALID_STATUS = {"running", "not_running", "unknown"}
+# "rolling" (2026-08-25, G3): a genuine continuous-admission / always-open program, for
+# which an EMPTY important_dates is the CORRECT answer — there is no cycle to find. It is
+# distinct from "running" (has or will have dated cycles) and from "unknown" (we could not
+# find out). The client maps it to an "open now — apply anytime" state; deadline_write_decision
+# writes it even with zero dates, the same carve-out "not_running" gets, because the empty
+# list is the answer rather than a search miss. See G3 in DEADLINE_AND_TASK_PLAN.md.
+VALID_STATUS = {"running", "not_running", "rolling", "unknown"}
+
+# Statuses whose CORRECT answer is an empty important_dates, so the "found nothing, keep the
+# existing dates" guard must NOT swallow them — an empty list from one of these is a real
+# finding, not a search miss.
+EMPTY_IS_VALID_STATUS = {"not_running", "rolling"}
 
 # ---------- Claude Haiku API call (for deadline checking) ----------
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -193,7 +213,7 @@ def extract_source_urls(response_data):
 
 
 def call_claude(system, user_content, api_key, use_web_search=False, max_searches=None,
-                return_sources=False):
+                return_sources=False, cache_system=False):
     """Call Claude Haiku with web search AND web fetch enforced for deadline extraction.
     web_search finds candidate pages (e.g. an org's FAQ/key-dates subpage); web_fetch then
     retrieves the FULL text of a specific known URL (the given opportunity URL, or a URL
@@ -204,10 +224,22 @@ def call_claude(system, user_content, api_key, use_web_search=False, max_searche
     this doesn't change per-check pricing model.
     Returns (text, usage) tuple matching the shape of call_gemini() for compatibility."""
     _enforce_rate_limit()
+    # Prompt caching (2026-08-25, escalation loop): the escalation loop makes up to 3 phase-1
+    # calls for ONE opportunity, seconds apart, with a BYTE-IDENTICAL system prompt (only the
+    # per-round user_content differs). Marking the system block ephemeral lets rounds 2-3 read
+    # it from cache instead of re-billing ~1500 tokens each. A single-round early-exit pays a
+    # small (~25%) cache-WRITE premium on the system tokens only, which is dwarfed by the
+    # saving whenever a second round runs. Anthropic silently declines to cache a prompt below
+    # the model's minimum cacheable length, so this can only help or no-op, never error.
+    # estimate_cost() already folds cache_creation/cache_read tokens into the bill.
+    system_field = system
+    if cache_system:
+        system_field = [{"type": "text", "text": system,
+                         "cache_control": {"type": "ephemeral"}}]
     body = {
         "model": CLAUDE_MODEL,
         "max_tokens": CLAUDE_MAX_TOKENS,
-        "system": system,
+        "system": system_field,
         "messages": [{"role": "user", "content": user_content}],
     }
     if use_web_search:
@@ -309,7 +341,13 @@ confirm the pattern behind a found date or to construct an estimate when nothing
 accepted," etc. DISTINGUISH between: (a) current cycle is closed but program recurs (e.g., "2026 closed, 2027 \
 opening Fall") → status="running" (the program itself is ongoing), still extract dates for the next cycle; \
 (b) program is permanently discontinued (e.g., "no longer offered," "program ended") → status="not_running", \
-do not estimate future dates. Evidence of recurrence ("Next cycle in Fall", "2027 details TBA", "Check back \
+do not estimate future dates; (c) the program admits CONTINUOUSLY with no application cycle or deadline at \
+all — a rolling or always-open program (e.g., "join anytime", "rolling admissions with no deadline", a \
+standing club/advisory board/volunteer role that is simply always open) → status="rolling", with an EMPTY \
+important_dates, because there genuinely is no date to find. Use "rolling" ONLY when the page positively \
+says applications are continuously open with no deadline — NOT when you merely failed to find a deadline \
+(that is "unknown"), and NOT when a deadline exists but the opening is rolling (that is "running" with the \
+deadline you found). Evidence of recurrence ("Next cycle in Fall", "2027 details TBA", "Check back \
 for 2027") → treat as "running" with forward-dated important_dates.
 
 ESTIMATION LOGIC (single source of truth — apply in this order):
@@ -377,7 +415,22 @@ instead if you cannot work out the real one.
 Write this up in plain prose. State the status and why, list every date you found or estimated \
 with its label and whether it is confirmed or estimated, and name the pages you actually \
 fetched. No JSON, no schema, no markdown fences — just write it. Stay well within a \
-1000-token response."""
+1000-token response.
+
+END your response with EXACTLY these three lines and nothing after them (they are read by a \
+machine to decide whether more searching is needed — answer only about what YOU did THIS \
+round):
+SITE_REACHED: yes|no
+FOUND_CONFIRMED_DATES: yes|no
+FOUND_PRIOR_CYCLE_BASIS: yes|no
+where SITE_REACHED is whether you successfully fetched the program's OWN web page this round \
+(no = it was unreachable, an empty JS-only shell, or you only reached third-party pages); \
+FOUND_CONFIRMED_DATES is "yes" only when you found the current/upcoming cycle's dates \
+EXPLICITLY posted AND they include the registration/application OPENING date (or the program \
+has no application step, e.g. it is rolling/always-open) — a confirmed deadline with NO opening \
+date is "no", because the opening still has to be recovered from a prior cycle; and \
+FOUND_PRIOR_CYCLE_BASIS is whether you found a prior cycle's real dates that can be used as an \
+estimation basis. Say "no" honestly rather than guessing — a "no" simply runs one more search."""
 
 
 # PHASE 2. Notes plus the real fetched URLs in, strict JSON out, no tools. The schema and the
@@ -469,13 +522,23 @@ per-date flags above, not a substitute for them.
 report no future dates. If they say the current cycle is closed but the program recurs, \
 status is "running" with forward-dated entries — the ones the notes give if they give them, \
 otherwise the projection described above.
+- If the notes say the program admits CONTINUOUSLY with no application cycle or deadline at \
+all (rolling/always-open — e.g. "join anytime", "rolling with no deadline", a standing club or \
+advisory board), status is "rolling" with an EMPTY important_dates: there is genuinely no date \
+to report, and materialising one would be a fabrication. Use "rolling" ONLY when the notes \
+positively say admission is continuous with no deadline — if the notes merely found no date, \
+that is "unknown", and if they found a deadline, that is "running" with the deadline.
 - If the notes found nothing at all — no current dates AND no past-cycle dates to project \
 from — status is "unknown" with an empty important_dates. That is a valid outcome; never invent \
 one to fill the schema. It does NOT apply when the notes carry a past cycle's real dates: those \
 get projected, per the rule above.
 
+The notes may end with three machine lines (SITE_REACHED / FOUND_CONFIRMED_DATES / \
+FOUND_PRIOR_CYCLE_BASIS). They are search-progress flags for another system — ignore them \
+entirely; they are NOT dates and NOT status.
+
 Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text after the JSON, \
-matching exactly this schema: {{"status": "running, not_running, or unknown", \
+matching exactly this schema: {{"status": "running, not_running, rolling, or unknown", \
 "important_dates": [{{"label": "short specific label", "date_iso": "YYYY-MM-DD", "type": \
 "opens, deadline, event_start, event_end, or other", "estimated": true or false}}], \
 "was_estimated": true or false, \
@@ -489,33 +552,140 @@ def build_extract_system():
     return EXTRACT_SYSTEM.format(today=today_label())
 
 
-def research_deadlines(opp, api_key, retry_on_silent=True):
-    """PHASE 1 — prose out, tools on. (notes, cost, searches, sources, attempts).
+# ---------- the escalation loop ("program source finder") ----------
+# G1: MAX_SEARCHES caps web_search at ONE query per call, but a single call was told to run
+# current-cycle, prior-cycle AND subpage searches in sequence — so only the first ever ran,
+# and the prior-cycle search (the estimation basis, the thing that recovers an opening date)
+# never happened. The fix is a LOOP of up to N rounds, each capped at one search, each
+# injecting a DISTINCT strategy, reading a cheap self-reported found-signal to stop as soon
+# as it is satisfied, then running phase 2 ONCE over the union of everything fetched.
+#
+# max_uses is a CEILING, not a target, and Anthropic bills per search PERFORMED (~$0.01), so
+# early-exit already means "pay only until found" — a row whose current cycle is posted stops
+# after one round at roughly the old single-call price. Only the hard rows (SPA, unposted
+# cycle) climb the ladder, and those are exactly the rows that returned nothing before.
+#
+# Built deliberately as a reusable seam: P6 (task aggregator discovery) reuses this same
+# prose-search-ON, per-round-max_uses:1, grounding-resolved-sources machinery — only the
+# phase-2 EXTRACT differs (dates here, verified tasks there). Rung 4 (trusted third-party
+# listings) lands with P5, drawing from the trusted_aggregators allowlist.
+RUNGS = [
+    ("current cycle",
+     "FOCUS THIS ROUND: fetch the given URL and search the program's OWN site for the CURRENT "
+     "or upcoming cycle's dates. This is the normal case."),
+    ("prior cycle",
+     "FOCUS THIS ROUND: search the program's OWN site specifically for the MOST RECENT PAST "
+     "cycle's real dates — last cycle's opening AND deadline. These are the estimation basis "
+     "when the current cycle is not yet posted, and this is the round that recovers an opening "
+     "date via the prior cycle's opens-to-deadline interval."),
+    ("subpages",
+     "FOCUS THIS ROUND: search the program's OWN site for a FAQ, 'How to Apply', 'Key Dates', "
+     "'Timeline' or 'Deadlines' subpage and fetch the best hit — deadline details usually live "
+     "on a subpage that a top-level search snippet never shows."),
+    # Rung 4 (trusted third-party listings) — P5. Draws ONLY from the operator's
+    # trusted_aggregators allowlist and forces every date it yields to estimated=true. Not
+    # wired until that table and aggregators_common exist.
+]
+ESCALATION_RUNGS = 3  # rungs 1-3 for now; rung 4 lands with P5.
 
-    Retries once on a zero-search answer. Re-rolling, not re-prompting: the search decision
-    is non-deterministic and cannot be forced. Cost is banked per attempt so an exception on
-    the retry cannot discard what the first call already spent.
+_SIGNAL_RE = {
+    "site_reached": ("SITE_REACHED",),
+    "confirmed": ("FOUND_CONFIRMED_DATES",),
+    "prior_basis": ("FOUND_PRIOR_CYCLE_BASIS",),
+}
+
+
+def _parse_signals(notes):
+    """(prose_without_signal_lines, {site_reached, confirmed, prior_basis}).
+
+    The three machine lines phase 1 is told to append are read here and STRIPPED, so phase 2
+    never sees them (it is told to ignore them too, as defense in depth). A missing line reads
+    as False — a silent/garbled round is treated as 'not satisfied', which just runs one more
+    rung; the cost of a false 'no' is one extra search, of a false 'yes' a missed date, so we
+    err toward 'no'.
     """
+    signals = {"site_reached": False, "confirmed": False, "prior_basis": False}
+    kept = []
+    for line in (notes or "").splitlines():
+        stripped = line.strip()
+        matched = False
+        for key, prefixes in _SIGNAL_RE.items():
+            for prefix in prefixes:
+                if stripped.upper().startswith(prefix + ":"):
+                    value = stripped.split(":", 1)[1].strip().lower()
+                    signals[key] = value.startswith("y")
+                    matched = True
+                    break
+            if matched:
+                break
+        if not matched:
+            kept.append(line)
+    return "\n".join(kept).strip(), signals
+
+
+def _search_round(opp, api_key, focus, retry_on_silent):
+    """One phase-1 rung — prose out, tools on, ONE search. (notes, cost, searches, sources,
+    attempts). Retries once on a zero-search answer (re-rolling, not re-prompting: the search
+    decision is non-deterministic and cannot be forced). Cost is banked per attempt so an
+    exception on the retry cannot discard what the first call already spent."""
     system = build_system(opp)
     user_content = (f"Opportunity: {opp['name']} ({opp.get('org') or 'unknown org'})\n"
                     f"URL: {opp['url']}\nKnown info: {opp.get('summary') or ''}\n\n"
-                    f"Fetch this URL directly, then search and fetch subpages of the org's "
-                    f"site (FAQ, how to apply, key dates) if needed, and report the current "
-                    f"status and every relevant date — registration open/close, event dates, "
-                    f"notifications — not just a single deadline.")
+                    f"{focus}\n\n"
+                    f"Report the current status and every relevant date — registration "
+                    f"open/close, event dates, notifications — not just a single deadline.")
     cost = 0.0
     notes, usage, sources = "", {}, []
     attempts = 2 if retry_on_silent else 1
     for attempt in range(1, attempts + 1):
         notes, usage, sources = call_claude(system, user_content, api_key,
                                             use_web_search=True, max_searches=MAX_SEARCHES,
-                                            return_sources=True)
+                                            return_sources=True, cache_system=True)
         cost += estimate_cost(usage)
         searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
         if searches or attempt == attempts:
             return notes, cost, searches, sources, attempt
         print("  [SILENT] no search invoked — retrying once", flush=True)
     return notes, cost, 0, sources, attempts
+
+
+def research_deadlines(opp, api_key, retry_on_silent=True):
+    """PHASE 1 as an ESCALATION LOOP — up to ESCALATION_RUNGS rounds, each a distinct strategy,
+    stopping as soon as a found-signal is satisfied. Returns
+    (combined_notes, cost, total_searches, union_sources, total_attempts, site_reached).
+
+    site_reached is the OR across rounds of whether the program's OWN page was fetched — the
+    G2/G3 signal that separates "we looked and there is nothing" (write a real answer) from
+    "we could not reach the site" (leave the row due, do not freeze a hole for 7 days).
+    """
+    all_notes, all_sources = [], []
+    total_cost, total_searches, total_attempts = 0.0, 0, 0
+    site_reached = False
+    for idx, (name, focus) in enumerate(RUNGS[:ESCALATION_RUNGS]):
+        notes, cost, searches, sources, attempts = _search_round(
+            opp, api_key, focus, retry_on_silent)
+        total_cost += cost
+        total_searches += searches
+        total_attempts += attempts
+        clean, sig = _parse_signals(notes)
+        if clean:
+            all_notes.append(f"[Round {idx + 1} — {name}]\n{clean}")
+        all_sources.extend(sources)
+        site_reached = site_reached or sig["site_reached"]
+        # Confirmed current-cycle dates INCLUDING the opening are the best case — stop.
+        if sig["confirmed"]:
+            print(f"  [rung {idx + 1}/{name}] confirmed dates found — stopping early",
+                  flush=True)
+            break
+        # Once the prior-cycle rung has run, a prior-cycle basis is enough to ESTIMATE the
+        # opening from the interval; no need to climb further.
+        if idx >= 1 and sig["prior_basis"]:
+            print(f"  [rung {idx + 1}/{name}] prior-cycle basis found — stopping early",
+                  flush=True)
+            break
+    combined = "\n\n".join(all_notes)
+    union_sources = list(dict.fromkeys(all_sources))
+    return combined, total_cost, total_searches, union_sources, total_attempts, site_reached
 
 
 def extract_deadlines(opp, notes, sources, api_key):
@@ -534,7 +704,7 @@ def extract_deadlines(opp, notes, sources, api_key):
 
 
 def check_one(opp, api_key, retry_on_silent=True):
-    """Both phases. (info, cost, searches, attempts).
+    """Both phases. (info, cost, searches, attempts, site_reached).
 
     `info` carries THREE distinguishable outcomes, and every caller must tell them apart
     before writing anything (use deadline_write_decision below rather than re-deriving it):
@@ -542,6 +712,10 @@ def check_one(opp, api_key, retry_on_silent=True):
         None  phase 1 searched but phase 2's JSON could not be parsed — we looked, but we
               cannot read what came back.
         dict  a real answer, which may still legitimately be status=unknown with no dates.
+
+    `site_reached` (G2/G3) is whether any rung fetched the program's OWN page. It is passed to
+    deadline_write_decision so an empty result on a row whose site we could NOT reach leaves
+    the row due (unreachable-fallback) instead of stamping a hole for 7 days.
 
     TWO CALLS, and the split is the accuracy design — see check_reviews.py and
     gemini_common.py's SEVENTH finding. Demanding JSON collapses the search rate; measured
@@ -561,11 +735,12 @@ def check_one(opp, api_key, retry_on_silent=True):
     Phase 2 is SKIPPED when phase 1 stayed silent — notes written without looking are not
     worth converting, and the caller can see `searches == 0` and label the result.
     """
-    notes, cost, searches, sources, attempts = research_deadlines(opp, api_key, retry_on_silent)
+    notes, cost, searches, sources, attempts, site_reached = research_deadlines(
+        opp, api_key, retry_on_silent)
     if not searches:
-        return {}, cost, 0, attempts
+        return {}, cost, 0, attempts, site_reached
     info, extract_cost = extract_deadlines(opp, notes, sources, api_key)
-    return info, cost + extract_cost, searches, attempts
+    return info, cost + extract_cost, searches, attempts, site_reached
 
 
 # ---------- What to do with a check's result ----------
@@ -577,6 +752,7 @@ SOURCE_VERIFIED = "fresh, real search"
 SOURCE_SILENT = "unverified-fallback"       # phase 1 never searched
 SOURCE_UNPARSED = "unparsed-fallback"       # searched, but phase 2's JSON was unreadable
 SOURCE_KEPT = "kept-existing"               # searched, found nothing, row already had dates
+SOURCE_UNREACHABLE = "unreachable-fallback"  # searched, empty, program's OWN site not reached
 
 
 class DeadlineDecision:
@@ -620,10 +796,10 @@ def missing_opens_date(dates):
     return "deadline" in types and "opens" not in types
 
 
-def deadline_write_decision(info, searches, existing_dates=None):
+def deadline_write_decision(info, searches, existing_dates=None, site_reached=True):
     """Decide whether a check's result may be written over the catalog row.
 
-    Four outcomes, three of which write nothing and leave the row DUE for a re-check:
+    Five outcomes, four of which write nothing and leave the row DUE for a re-check:
 
       searches == 0        phase 1 never looked. check_one returns {}, so writing it blanks
                            the row's real dates. Long-standing guard; unchanged.
@@ -631,19 +807,30 @@ def deadline_write_decision(info, searches, existing_dates=None):
                            fall through to `{}` and be written as an authoritative
                            status=unknown with no dates — a garbled response silently wiping
                            good deadlines, then locked in for 7 days by the stamp.
-      nothing found, but   a verified "found nothing" is far more often a search miss than a
-      the row has dates    program actually withdrawing its dates (a genuinely dead program
-                           comes back as not_running, which is handled below). Keep what is
-                           there and leave the row due so the next pass re-rolls.
+      empty, site NOT      G2: we searched but never reached the program's OWN page (SPA, site
+      reached              down, only third-party hits) and found no dates. Writing an empty
+                           `unknown` here freezes a hole for 7 days over a transient outage.
+                           Leave the row due so the next view auto-retries — the same reasoning
+                           the silent-search guard uses, extended to "we could not read the
+                           page" from "we never looked". Applies even with NO existing dates:
+                           an unreachable site is not evidence of absence.
+      empty, site reached, a verified "found nothing" ON A REACHED SITE is more often a search
+      the row has dates    miss than a program withdrawing its dates (a genuinely dead program
+                           comes back as not_running, a genuinely open-ended one as rolling —
+                           both handled below). Keep what is there and leave the row due.
       anything else        write and stamp.
 
-    Two deliberate exceptions to the "nothing found" rule:
-      * status == not_running writes even with zero dates. "This program is discontinued"
-        is real, student-visible information, and it is exactly the case where an empty
-        important_dates is the correct answer rather than a failure.
-      * a row that has NO existing dates has nothing to preserve, so an empty result is
-        written and stamped. Not stamping there would re-bill that row on every single
-        view, forever, to re-learn the same nothing.
+    Exceptions to the "empty" rules (these write even with zero dates):
+      * status in EMPTY_IS_VALID_STATUS (not_running / rolling). "Discontinued" and
+        "always-open, no deadline" are real, student-visible answers for which an empty
+        important_dates is CORRECT, not a failure — so neither the unreachable nor the
+        keep-existing guard may swallow them.
+      * an empty `unknown` on a REACHED site with NO existing dates is written and stamped:
+        there is nothing to preserve, the page really was read, and not stamping would re-bill
+        that row on every single view forever to re-learn the same nothing.
+
+    `site_reached` defaults True so a caller that cannot supply it (or a genuinely-empty row)
+    behaves exactly as before; only an explicit False routes to the unreachable branch.
     """
     if not searches:
         return DeadlineDecision(False, SOURCE_SILENT,
@@ -653,9 +840,15 @@ def deadline_write_decision(info, searches, existing_dates=None):
                                 "the search ran but the extracted JSON was unreadable")
 
     status, dates, was_estimated, note = normalize_deadline_info(info)
-    if not dates and status != "not_running" and (existing_dates or []):
-        return DeadlineDecision(False, SOURCE_KEPT,
-                                "found no dates; keeping the ones already on the row")
+    empty_is_valid = status in EMPTY_IS_VALID_STATUS
+    if not dates and not empty_is_valid:
+        if not site_reached:
+            return DeadlineDecision(False, SOURCE_UNREACHABLE,
+                                    "found no dates and never reached the program's own page; "
+                                    "leaving the row due to retry rather than freezing a hole")
+        if existing_dates or []:
+            return DeadlineDecision(False, SOURCE_KEPT,
+                                    "found no dates; keeping the ones already on the row")
     return DeadlineDecision(True, SOURCE_VERIFIED, "verified by a real search",
                             status=status, important_dates=dates,
                             was_estimated=was_estimated, note=note)
@@ -750,6 +943,7 @@ def main():
     silent_search_count = 0
     unparsed_count = 0
     kept_count = 0
+    unreachable_count = 0
     missing_opens_count = 0
     retried = 0
     dry_run_results = []
@@ -757,7 +951,7 @@ def main():
     for i, opp in enumerate(items):
         print(f"[{i + 1}/{len(items)}] {opp['name'][:60]}...", end=" ")
         try:
-            info, cost, searches, attempts = check_one(opp, anthropic_key)
+            info, cost, searches, attempts, site_reached = check_one(opp, anthropic_key)
             total_cost += cost
             total_searches += searches
             retried += attempts - 1
@@ -772,12 +966,15 @@ def main():
             # important_dates AND stamp last_checked_at — destroying good data and then
             # hiding the damage behind the staleness filter. Leaving the row untouched keeps
             # what is there and leaves it due, so the next pass re-rolls.
-            decision = deadline_write_decision(info, searches, opp.get("important_dates"))
+            decision = deadline_write_decision(info, searches, opp.get("important_dates"),
+                                               site_reached=site_reached)
             if not decision.write:
                 if decision.source == SOURCE_SILENT:
                     silent_search_count += 1
                 elif decision.source == SOURCE_UNPARSED:
                     unparsed_count += 1
+                elif decision.source == SOURCE_UNREACHABLE:
+                    unreachable_count += 1
                 else:
                     kept_count += 1
                 print(f"[{decision.source}] nothing written ({decision.reason}); row keeps "
@@ -832,6 +1029,7 @@ def main():
           f"silent (no-search) checks after retry: {silent_search_count}/{len(items)}, "
           f"unreadable extractions: {unparsed_count}/{len(items)}, "
           f"searched-but-empty (row kept its dates): {kept_count}/{len(items)}, "
+          f"empty + site unreachable (left due): {unreachable_count}/{len(items)}, "
           f"deadline but no opens date: {missing_opens_count}, "
           f"silent-search retries: {retried}, cost: ${total_cost:.4f}")
     if mode == "sample" and items:

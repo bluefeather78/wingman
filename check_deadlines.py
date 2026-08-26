@@ -827,6 +827,15 @@ def find_program_sources(opp, api_key, want_dates=True, want_requirements=False,
         captured = _merge_captured(captured, req_sources)
         if reason == "ok":
             site_reached = True
+        # Re-tier EVERY captured page against this opportunity's own domain. The date half
+        # captures pages without tier context (it does not read tiers), so they default to
+        # 'pending' — and first-wins in the merge, a date-fetched copy of the program's OWN
+        # page would shadow the requirements half's correct 'official', which the serve filter
+        # would then WITHHOLD from students. Making tier a pure function of (url, own_domain,
+        # policy) here removes that ordering dependency.
+        own_domain = aggregators_common.normalize_domain(opp.get("url"))
+        for c in captured:
+            c.tier = source_capture.tier_for(c.url, own_domain, policy)
 
     result = (notes, cost, searches, urls, attempts, site_reached, captured)
     if full and opp_id:

@@ -602,3 +602,20 @@ def test_finder_single_goal_is_not_cached(monkeypatch):
     cd.find_program_sources(opp, "k", want_dates=True, want_requirements=False)
     cd.find_program_sources(opp, "k", want_dates=True, want_requirements=False)
     assert calls["n"] == 2              # dates-only calls never touch the read-once cache
+
+
+def test_finder_retiers_captured_by_own_domain(monkeypatch):
+    """The date half captures pages untiered (pending); after the finder merges, every page is
+    re-tiered by the opportunity's own domain, so its OWN page reads 'official' and is not
+    wrongly withheld from students. Regression guard for the T6 tier bug."""
+    _clear_cache()
+    _fake_finder_halves(
+        monkeypatch,
+        date_captured=[_src("https://prog.example/apply", "own page")],   # tier=None
+        req_captured=[_src("https://lumiere-education.com/g", "third-party guide")])
+    *_rest, captured = cd.find_program_sources(
+        {"id": "x6", "url": "https://prog.example"}, "k",
+        want_dates=True, want_requirements=True)
+    tiers = {c.domain: c.tier for c in captured}
+    assert tiers["prog.example"] == "official"           # own page, re-tiered from pending
+    assert tiers["lumiere-education.com"] == "pending"   # no allowlist in the test env

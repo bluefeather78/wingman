@@ -867,8 +867,16 @@ deadline."
   widened prompt (How-to-Apply / FAQ / Key-Dates / Timeline / Guidelines-PDF); captures merge.
   The FULL result is cached per-opportunity 120s so the two interactive endpoints firing together
   read the program ONCE (`check_one(want_requirements=True)` + `process_one(full_capture=True)`).
-  Batches stay single-goal (deadline dates-only unchanged; task requirements-only). 1044 pytest
-  green. Live read-once + FAQ-coverage proof still pending (paid). Task-batch note: interactive
+  Batches stay single-goal (deadline dates-only unchanged; task requirements-only). 1045 pytest
+  green. **PROVEN LIVE 2026-08-26 on THINK ($0.115 both steps, read-only):** deadline check
+  fetched+cached the program; the task check REUSED it (fetch cost $0.0106 — just the extract),
+  so the program was read ONCE; tasks came back `page/official` from the guidelines PDF; deadline
+  dates unregressed (2 verified against the PDF via P6c); no fabrication. **Tier-merge bug found
+  and fixed in the same session:** the date half captures pages untiered (pending), and first-wins
+  merge let a date-fetched copy of the program's OWN page shadow the requirements half's `official`
+  — which the serve filter would have WITHHELD from students. Fixed by re-tiering every captured
+  page against the opportunity's own domain in `find_program_sources` (tier is now a pure function
+  of url+own_domain+policy, order-independent); regression-tested. Task-batch note: interactive
   reads once, but a program viewed for deadlines only still fetches requirement pages (the cost of
   "one read feeds both" — accepted, client fires both together).
 - **2026-08-26** — **P6b PROVEN LIVE + P6c DONE.** P6b E2E on THINK ($0.088, read-only): 4

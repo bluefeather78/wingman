@@ -65,6 +65,11 @@ export interface ActionItem {
   // countable — and parseTrackerData migrates this flag into it on load. Nothing writes
   // it any more; it stays declared so the migration has a typed field to read.
   dismissed?: boolean;
+  // P10: where this task came from. Absent ⇒ 'catalog' (everything written before user
+  // tasks existed). A 'user' task is the student's own: never page-backed by construction
+  // (nothing verified it), rendered in its own group, and PRESERVED by mergeActionItems —
+  // the catalog list regenerates and would otherwise drop it on every refresh.
+  origin?: 'catalog' | 'user';
 }
 
 // The ONLY way to ask whether a task is page-backed. A bare `ai.basis === 'page'` scattered
@@ -99,24 +104,47 @@ export function isSetAsideTask(ai: Pick<ActionItem, 'state'>): boolean {
   return ai.state === 'not_needed';
 }
 
+// The text-normalised identity every per-user task decision keys on — merge, tombstones,
+// duplicate checks. Text is the key because there is no stable task id: catalog ids are
+// positional (`${oppId}-t0`), so a re-generated list that drops one task shifts every id
+// after it and would hand slot 2's completion to slot 3's task. The same positional-id trap
+// the Google Calendar sync hit with importantDates.
+export function taskKey(text: string): string {
+  return (text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
 // Refreshing pulls the shared, re-verified checklist off the catalog row — which means the
-// incoming list is the source of truth for what the tasks ARE, and the stored one is the
-// source of truth for what the student has DONE with them. Merge on the task text: reset a
-// student's ticked-off progress on every refresh and the feature becomes something they
-// stop touching.
+// incoming list is the source of truth for what the CATALOG tasks are, and the stored one is
+// the source of truth for what the student has DONE: their ticked-off state, the tasks they
+// removed (`removedKeys`, the per-user tombstones on the tracker item), and the tasks they
+// added themselves (`origin: 'user'`). Merge on task text via taskKey.
 //
-// Text is the key because there is no stable task id — the ids are positional
-// (`${oppId}-t0`), so a re-generated list that drops one task shifts every id after it and
-// would hand slot 2's completion to slot 3's task. The same positional-id trap the Google
-// Calendar sync hit with importantDates.
-export function mergeActionItems(existing: ActionItem[] | undefined, incoming: ActionItem[]): ActionItem[] {
-  const key = (t: string) => t.trim().toLowerCase().replace(/\s+/g, ' ');
-  const previous = new Map((existing ?? []).map((ai) => [key(ai.text), ai]));
-  return incoming.map((ai) => {
-    const was = previous.get(key(ai.text));
-    // State alone now carries "not needed", so there is nothing else to preserve.
-    return was ? { ...ai, state: was.state } : ai;
-  });
+// The two P10 rules, both here so every refresh path (paid button, free sync, add-time
+// overlay) enforces them identically:
+//  - a tombstoned catalog task is dropped from the incoming list — deleting is a per-user
+//    tombstone precisely because the shared list regenerates, so a plain splice would come
+//    straight back on the next refresh;
+//  - surviving `origin:'user'` tasks are APPENDED — they are not in any catalog list, so the
+//    old map-over-incoming silently deleted them on the first refresh.
+export function mergeActionItems(
+  existing: ActionItem[] | undefined,
+  incoming: ActionItem[],
+  removedKeys?: Iterable<string>,
+): ActionItem[] {
+  const tombstoned = new Set(removedKeys ?? []);
+  const previous = new Map((existing ?? []).map((ai) => [taskKey(ai.text), ai]));
+  const merged = incoming
+    .filter((ai) => !tombstoned.has(taskKey(ai.text)))
+    .map((ai) => {
+      const was = previous.get(taskKey(ai.text));
+      // State alone now carries "not needed", so there is nothing else to preserve.
+      return was ? { ...ai, state: was.state } : ai;
+    });
+  const mergedKeys = new Set(merged.map((ai) => taskKey(ai.text)));
+  const userTasks = (existing ?? []).filter(
+    (ai) => ai.origin === 'user' && !mergedKeys.has(taskKey(ai.text)),
+  );
+  return [...merged, ...userTasks];
 }
 
 export interface TrackerItem {
@@ -139,6 +167,11 @@ export interface TrackerItem {
   applyUrl?: string | null;
   applyLabel?: string | null;
   actionItems?: ActionItem[];
+  // P10: taskKey()s of CATALOG tasks this student removed. A tombstone, not a splice,
+  // because the shared list regenerates on every refresh and a spliced task would come
+  // straight back. User tasks are never tombstoned — deleting one is a real splice, since
+  // nothing regenerates it.
+  removedTasks?: string[];
 }
 
 export type TrackerData = Record<Bucket, TrackerItem[]>;
@@ -320,16 +353,16 @@ export function applyDeadlineToTrackerItem(item: TrackerItem, info: Partial<Trac
 }
 
 // Merge a catalog action-item list onto a tracked item IN PLACE, keeping per-user state
-// (mergeActionItems keys on task TEXT, not positional id, and honours tombstones). Returns
-// whether anything changed. An empty/absent incoming list is a no-op — it never wipes tasks,
-// so a row the task agent has not reached keeps whatever it had.
+// (mergeActionItems keys on task TEXT, honours the item's tombstones, and preserves the
+// student's own tasks). Returns whether anything changed. An empty/absent incoming list is a
+// no-op — it never wipes tasks, so a row the task agent has not reached keeps whatever it had.
 export function applyTasksToTrackerItem(
   item: TrackerItem,
   actionItems: TrackerInfo['action_items'] | undefined,
 ): boolean {
   const incoming = normalizeVerifiedActionItems(actionItems, item.id);
   if (!incoming.length) return false;
-  const merged = mergeActionItems(item.actionItems, incoming);
+  const merged = mergeActionItems(item.actionItems, incoming, item.removedTasks);
   if (JSON.stringify(merged) === JSON.stringify(item.actionItems ?? [])) return false;
   item.actionItems = merged;
   return true;
@@ -556,4 +589,101 @@ export async function updateTrackerItem(id: string, patch: Partial<TrackerItem>)
   });
   await saveTrackerData(data);
   return data;
+}
+
+// ---------- P10: per-user task delete + user-added tasks ----------
+// All three run load-modify-save like the item mutators above, so the persisted shape is the
+// single source of truth and a stale in-memory copy can never clobber another screen's write.
+
+function mutateItem(
+  data: TrackerData,
+  itemId: string,
+  fn: (item: TrackerItem) => TrackerItem,
+): boolean {
+  let hit = false;
+  ALL_BUCKETS.forEach((b) => {
+    data[b] = data[b].map((i) => {
+      if (i.id !== itemId) return i;
+      hit = true;
+      return fn(i);
+    });
+  });
+  return hit;
+}
+
+// Delete one task. A catalog task gets a TOMBSTONE (its taskKey lands in removedTasks) so
+// the regenerated shared list cannot bring it back; a user task is a plain splice, since
+// nothing regenerates it. Reversible via restoreRemovedTasks below.
+export async function deleteTrackerTask(itemId: string, actionId: string): Promise<TrackerData> {
+  const data = await loadTrackerData();
+  mutateItem(data, itemId, (item) => {
+    const target = (item.actionItems ?? []).find((ai) => ai.id === actionId);
+    if (!target) return item;
+    const rest = (item.actionItems ?? []).filter((ai) => ai.id !== actionId);
+    if (target.origin === 'user') return { ...item, actionItems: rest };
+    const key = taskKey(target.text);
+    const removed = item.removedTasks ?? [];
+    return {
+      ...item,
+      actionItems: rest,
+      removedTasks: removed.includes(key) ? removed : [...removed, key],
+    };
+  });
+  await saveTrackerData(data);
+  return data;
+}
+
+// Clear an item's tombstones. The tasks themselves come back on the next refresh/free sync
+// (the merge stops dropping them); restoring does not need to reconstruct them locally —
+// but when the current list still holds them nothing changes, so this is always safe.
+export async function restoreRemovedTasks(itemId: string): Promise<TrackerData> {
+  const data = await loadTrackerData();
+  mutateItem(data, itemId, (item) => ({ ...item, removedTasks: [] }));
+  await saveTrackerData(data);
+  return data;
+}
+
+// Add the student's own task. Never page-backed by construction — nothing verified it — so
+// it carries basis 'generic' and no tier, exactly like every other claim nothing has proven.
+// Refused (returning { added: false }) when a task with the same text already exists on the
+// item, because the text IS the identity everything merges on: a duplicate key would make
+// state-preservation and tombstoning ambiguous between the two copies.
+export async function addUserTask(
+  itemId: string,
+  text: string,
+): Promise<{ data: TrackerData; added: boolean }> {
+  const data = await loadTrackerData();
+  const trimmed = text.trim();
+  let added = false;
+  if (trimmed) {
+    mutateItem(data, itemId, (item) => {
+      const existing = item.actionItems ?? [];
+      if (existing.some((ai) => taskKey(ai.text) === taskKey(trimmed))) return item;
+      // Random suffix rather than a positional index: user ids must stay stable while
+      // catalog regenerations shuffle the `-tN` ids around them.
+      const id = `${itemId}-u${Math.random().toString(36).slice(2, 8)}`;
+      added = true;
+      return {
+        ...item,
+        actionItems: [...existing, {
+          id,
+          text: trimmed,
+          url: null,
+          state: 'not_started',
+          basis: 'generic' as const,
+          evidence: null,
+          sourceTier: null,
+          sourceUrl: null,
+          sourceDomain: null,
+          origin: 'user' as const,
+        }],
+        // Adding back a task the student previously removed should also lift its tombstone,
+        // or the merge would silently delete the re-added task if it ever matches a
+        // regenerated catalog line.
+        removedTasks: (item.removedTasks ?? []).filter((k) => k !== taskKey(trimmed)),
+      };
+    });
+  }
+  if (added) await saveTrackerData(data);
+  return { data, added };
 }

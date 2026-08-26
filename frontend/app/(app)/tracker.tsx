@@ -683,13 +683,26 @@ function CalendarCard({
     return ALL_BUCKETS.filter((b) => byBucket.has(b)).map((b) => ({ bucket: b, rows: byBucket.get(b)! }));
   }, [entries]);
 
+  // P11: rolling / always-open programs. They carry NO dates by design (G3 — a genuinely
+  // continuous program has no deadline to place on a month lane), so without this band the
+  // Calendar view simply never shows them and a student scanning "what can I apply to right
+  // now" misses every always-open program. The band lists them OUTSIDE the month lanes and
+  // the date sort — deliberately no placeholder date is invented to force them onto a lane
+  // ("never anchor a date"). Saved-for-later is already excluded upstream (entries), and
+  // not_running has no business here. Dated programs whose window is currently open are NOT
+  // duplicated into the band: they already sit on a month lane with their real dates.
+  const openNow = useMemo(
+    () => entries.filter(({ item }) => item.status === 'rolling'),
+    [entries],
+  );
+
   const colorMap = useMemo(() => {
     const ids: string[] = [];
     lanes.forEach((l) => l.rows.forEach((r) => r.milestones.forEach(() => ids.push(r.item.id))));
     return assignCalendarColors(ids);
   }, [lanes]);
 
-  if (!lanes.length) {
+  if (!lanes.length && !openNow.length) {
     return (
       <SoftCard>
         <Text style={styles.emptyState}>Nothing on the calendar yet — add opportunities via the Finder or the button above.</Text>
@@ -704,6 +717,20 @@ function CalendarCard({
 
   return (
     <SoftCard style={{ gap: 20 }}>
+      {openNow.length > 0 && (
+        <View style={styles.openNowBand}>
+          <Text style={styles.openNowHead}>OPEN NOW — APPLY ANYTIME</Text>
+          <View style={styles.openNowRow}>
+            {openNow.map(({ item }) => (
+              <Pressable key={item.id} onPress={() => onEntryPress(item.id)} style={styles.openNowPill}>
+                <Text style={styles.openNowPillText} numberOfLines={1}>
+                  {item.name.length > 32 ? item.name.slice(0, 30) + '…' : item.name}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      )}
       {lanes.map(({ bucket, rows }) => {
         const byMonth = new Map<string, { day: number; label: string; text: string; type: string; isPast: boolean; venueId: string }[]>();
         rows.forEach(({ item, milestones }) => {
@@ -1028,6 +1055,13 @@ const styles = StyleSheet.create({
   emptyState: { color: '#94A3B8', fontStyle: 'italic', fontSize: 13, fontFamily: fonts.bodyMed },
 
   laneHead: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate500, letterSpacing: 0.6, textTransform: 'uppercase' },
+  // P11: the rolling-programs band. Same green family as the card's "Open now" badge and
+  // the rolling note — one visual language for "open right now".
+  openNowBand: { backgroundColor: '#DCFCE7', borderWidth: 2, borderColor: '#166534', borderRadius: radius.lg, padding: 12, gap: 8 },
+  openNowHead: { fontFamily: fonts.bodyXBold, fontSize: 11, color: '#166534', letterSpacing: 0.55 },
+  openNowRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  openNowPill: { backgroundColor: colors.white, borderWidth: 2, borderColor: '#166534', borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 5, maxWidth: '100%' },
+  openNowPillText: { fontFamily: fonts.bodyBold, fontSize: 12, color: '#166534' },
   strip: { gap: 16, paddingBottom: 8 },
   monthCard: { width: 200, backgroundColor: colors.slate50, borderWidth: 2, borderColor: '#CBD5E1', borderRadius: radius.lg, padding: 12 },
   monthCurrent: { borderWidth: 3, borderColor: colors.indigo, backgroundColor: '#EEF2FF' },

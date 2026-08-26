@@ -1,13 +1,16 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import {
+  addUserTask,
+  deleteTrackerTask,
   loadTrackerData,
   loadTrackerSaved,
   peekTrackerData,
   peekTrackerSaved,
+  restoreRemovedTasks,
   saveTrackerData,
   syncTrackerFromCatalog,
   isSetAsideTask,
@@ -59,6 +62,15 @@ const CHIP_STYLE: Record<TaskTrustTier, { box: object; text: object }> = {
 };
 
 function SourceChip({ ai }: { ai: ActionItem }) {
+  // A student's own task gets its own neutral chip — it is never page-backed by
+  // construction, but "Typical step" would misdescribe something they wrote themselves.
+  if (ai.origin === 'user') {
+    return (
+      <View style={[styles.sourceChip, styles.chipUser]}>
+        <Text style={[styles.sourceChipText, styles.chipUserText]}>Added by you</Text>
+      </View>
+    );
+  }
   const tier = taskTrustTier(ai);
   const label = tier === 'official'
     ? 'Program page'
@@ -83,9 +95,10 @@ function SourceChip({ ai }: { ai: ActionItem }) {
 
 // One task row. Extracted when the list split into page-backed and generic groups, so the
 // groups cannot drift in how a row actually renders — only the heading above them differs.
-function TaskRow({ ai, onPress }: {
+function TaskRow({ ai, onPress, onDelete }: {
   ai: ActionItem;
   onPress: () => void;
+  onDelete: () => void;
 }) {
   return (
     <View style={styles.taskRow}>
@@ -104,13 +117,18 @@ function TaskRow({ ai, onPress }: {
       </View>
       {/* Tapping cycles the state, and "Not Needed" is the last stop before it wraps back
           round — a step that does not apply to THIS student, set aside rather than deleted.
-          The checklist is shared catalog data and is re-pulled on every refresh, so a
-          deleted task would come straight back; the state survives, via mergeActionItems. */}
+          The delete ✕ beside it is the P10 remove: for a catalog task it writes a per-user
+          tombstone (the shared list regenerates, so a plain splice would come straight
+          back), for the student's own task it deletes outright. Reversible via the Restore
+          line under the list. */}
       <StatusPill
         status={(ai.state as TaskStatus) in ACTION_ITEM_STATUS_LABEL ? (ai.state as TaskStatus) : 'not_started'}
         kind="task"
         onPress={onPress}
       />
+      <Pressable onPress={onDelete} hitSlop={8}>
+        <Text style={styles.taskDelete}>✕</Text>
+      </Pressable>
     </View>
   );
 }
@@ -151,6 +169,30 @@ export default function Home() {
     }
     setData(next);
     await saveTrackerData(next);
+  }
+
+  // ---------- P10: per-user task delete / restore / add ----------
+  // Draft text for each item's "add a task" input, keyed by item id.
+  const [taskDrafts, setTaskDrafts] = useState<Record<string, string>>({});
+
+  async function deleteTask(itemId: string, actionId: string) {
+    setData(await deleteTrackerTask(itemId, actionId));
+  }
+
+  async function restoreTasks(itemId: string) {
+    setData(await restoreRemovedTasks(itemId));
+    // The restored catalog tasks come back through the merge on the next task pull; force a
+    // free sync now so the student watches them return instead of wondering if it worked.
+    const r = await syncTrackerFromCatalog({ force: true }).catch(() => null);
+    if (r?.data) setData(r.data);
+  }
+
+  async function submitTask(itemId: string) {
+    const text = (taskDrafts[itemId] ?? '').trim();
+    if (!text) return;
+    const { data: next, added } = await addUserTask(itemId, text);
+    setData(next);
+    if (added) setTaskDrafts((d) => ({ ...d, [itemId]: '' }));
   }
 
   useFocusEffect(
@@ -365,13 +407,19 @@ export default function Home() {
                 // an operator-approved guide gets its own middle group, labelled by the
                 // guide's domain — verified the same way as official, trusted less.
                 const allTasks = item.actionItems ?? [];
-                const official = allTasks.filter((ai) => taskTrustTier(ai) === 'official');
-                const trusted = allTasks.filter((ai) => taskTrustTier(ai) === 'trusted');
-                const generic = allTasks.filter((ai) => taskTrustTier(ai) === 'generic');
+                // The student's own tasks are their own group (P10) — they'd otherwise
+                // classify as generic, and "Typical steps" is not what "my own reminder to
+                // email my counselor" is.
+                const userTasks = allTasks.filter((ai) => ai.origin === 'user');
+                const catalogTasks = allTasks.filter((ai) => ai.origin !== 'user');
+                const official = catalogTasks.filter((ai) => taskTrustTier(ai) === 'official');
+                const trusted = catalogTasks.filter((ai) => taskTrustTier(ai) === 'trusted');
+                const generic = catalogTasks.filter((ai) => taskTrustTier(ai) === 'generic');
                 const trustedDomains = [...new Set(trusted.map((ai) => ai.sourceDomain).filter(Boolean))];
                 const trustedHeading = trustedDomains.length === 1
                   ? `From a trusted guide · ${trustedDomains[0]}`
                   : 'From trusted guides';
+                const removedCount = (item.removedTasks ?? []).length;
                 return (
                 <View key={item.id} style={styles.taskCard}>
                   <View style={styles.taskCardHead}>
@@ -411,7 +459,7 @@ export default function Home() {
                         <>
                           <Text style={styles.taskGroupLabel}>From the program's own page</Text>
                           {official.map((ai) => (
-                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} />
+                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} onDelete={() => deleteTask(item.id, ai.id)} />
                           ))}
                         </>
                       )}
@@ -419,7 +467,7 @@ export default function Home() {
                         <>
                           <Text style={styles.taskGroupLabel}>{trustedHeading}</Text>
                           {trusted.map((ai) => (
-                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} />
+                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} onDelete={() => deleteTask(item.id, ai.id)} />
                           ))}
                         </>
                       )}
@@ -429,7 +477,15 @@ export default function Home() {
                             Typical steps — confirm on the site
                           </Text>
                           {generic.map((ai) => (
-                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} />
+                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} onDelete={() => deleteTask(item.id, ai.id)} />
+                          ))}
+                        </>
+                      )}
+                      {userTasks.length > 0 && (
+                        <>
+                          <Text style={styles.taskGroupLabel}>Your own tasks</Text>
+                          {userTasks.map((ai) => (
+                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} onDelete={() => deleteTask(item.id, ai.id)} />
                           ))}
                         </>
                       )}
@@ -437,6 +493,31 @@ export default function Home() {
                   ) : (
                     <Text style={styles.taskNone}>No sub-tasks generated for this one.</Text>
                   )}
+                  {/* P10: the undo for deleted catalog tasks. The tombstones are per-user,
+                      so restoring only clears them — the tasks themselves come back through
+                      the shared-list merge (restoreTasks forces a free sync so it happens
+                      while the student is looking). */}
+                  {removedCount > 0 && (
+                    <Pressable onPress={() => restoreTasks(item.id)}>
+                      <Text style={styles.restoreLine}>
+                        {removedCount} removed task{removedCount > 1 ? 's' : ''} — restore
+                      </Text>
+                    </Pressable>
+                  )}
+                  {/* P10: the student's own task. Enter or the + submits. */}
+                  <View style={styles.addTaskRow}>
+                    <TextInput
+                      style={styles.addTaskInput}
+                      value={taskDrafts[item.id] ?? ''}
+                      onChangeText={(t) => setTaskDrafts((d) => ({ ...d, [item.id]: t }))}
+                      onSubmitEditing={() => submitTask(item.id)}
+                      placeholder="Add your own task…"
+                      placeholderTextColor="#94A3B8"
+                    />
+                    <Pressable onPress={() => submitTask(item.id)} hitSlop={8}>
+                      <Text style={styles.addTaskBtn}>＋</Text>
+                    </Pressable>
+                  </View>
                 </View>
                 );
               })}
@@ -517,6 +598,13 @@ const styles = StyleSheet.create({
   taskText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: '#334155' },
   sourceChip: { borderWidth: 1, borderRadius: radius.pill, paddingHorizontal: 6, paddingVertical: 1 },
   sourceChipText: { fontFamily: fonts.bodyBold, fontSize: 9, lineHeight: 13, letterSpacing: 0.2 },
+  chipUser: { backgroundColor: colors.lavender, borderColor: colors.navy },
+  chipUserText: { color: colors.navy },
+  taskDelete: { fontFamily: fonts.bodyBold, fontSize: 12, lineHeight: 16, color: colors.slate400, paddingHorizontal: 2 },
+  restoreLine: { fontFamily: fonts.bodyBold, fontSize: 11, color: colors.indigo600, textDecorationLine: 'underline', marginTop: 6 },
+  addTaskRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+  addTaskInput: { flex: 1, borderWidth: 1, borderColor: colors.slate200, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, fontFamily: fonts.bodyMed, fontSize: 12, color: '#334155', backgroundColor: colors.white },
+  addTaskBtn: { fontFamily: fonts.bodyBold, fontSize: 16, color: colors.indigo600 },
   taskDone: { textDecorationLine: 'line-through', color: colors.slate400 },
   taskCardNameLink: { textDecorationLine: 'underline' },
   taskStepLink: { fontFamily: fonts.bodyBold, color: colors.indigo600 },

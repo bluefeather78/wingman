@@ -37,7 +37,7 @@ G6b staleness detection — both deferred pending operator approval. Full detail
 | **G-task-1** | Rich steps page never discovered — Congressional Award (ec18244): 2 throwaway tasks while `/the-program/` carries a full verifiable step list. | §4 **G-task-1a/b/c** | ✅ **ADDRESSED** by D1/D2 (discovery) + D3 (no-stamp); durable fix pending PAID D4 validation on the real row. |
 | **G-D1 / D0–D3** | **Sitemap-first page discovery** (shared free helper) + shallow-capture no-stamp. | §9 D0–D3 | ✅ **BUILT** — `sitemap_common.py` + fixtures/tests (D0/D1), wired into `fetch_and_capture` behind the `web_search` fallback (D2), furniture no-stamp signal (D3). |
 | **D4** | PAID validation on 4 real rows. | §9 D4 | ✅ **DONE 2026-08-28 ($0.1781, read-only)** — proof row ec18244 fixed (furniture CTA → real $35-fee/Record-Book tasks); 0→3 page-backed on ec18676; no-sitemap control OK; SLIYS demotion-rate signal noted. A ranker bug was caught & fixed FREE first. |
-| **D5** | Deadline-ladder adoption + optional backfill (PAID). | §9 D5 | PLANNED — operator-approval-gated. |
+| **D5** | Deadline-ladder adoption + optional backfill. | §9 D5 | ✅ **CODE DONE + VALIDATED 2026-08-28 ($0.2358, read-only)** — sitemap fires + reaches site on all 3, no regression; search-count drop did NOT show on off-season rows (climb to rung 2 for estimation regardless), so benefit here is recall not cost. Optional backfill still deferred. |
 
 **Suggested entry point next:** two independent threads, both PAID/approval-gated. **(a)** A live
 WRITING pass to actually improve the tested/real rows for students — D4 was read-only, so ec18244
@@ -1082,11 +1082,24 @@ now — sitemap-first only ADDS recall.
   sitemap probe) is the cost driver. **Read-only: the improved lists were NOT written — the tested
   rows still serve their cached lists to students until a live (writing) pass or TTL lapse.**
 
-- **D5 — Deadline-ladder adoption + optional backfill (paid, after D4).** Apply sitemap-first to
-  the deadline ladder's own-site `site:` search rungs (§3 G1 rungs 1–3), measuring the search-count
-  drop and any recall change. Optionally a **targeted re-generation sweep** of rows generated
-  before D2 (the G-task-3 backfill) — but that is proactive coverage, which §13 item 1 defers, so
-  it stays gated on the operator un-deferring it.
+- **D5 — Deadline-ladder adoption. ✅ CODE DONE + VALIDATED 2026-08-28 ($0.2358, 3 rows,
+  READ-ONLY).** Sitemap-first now feeds the deadline ladder's own-site rungs 1–3
+  (`research_deadlines(discover=…)`, wired at the `find_program_sources` entry point; `web_search`
+  stays the in-round fallback; rung 4 stays off-site). `discover` defaults OFF so the ladder's unit
+  tests never touch the network. **Live read-only validation:**
+  - Sitemap discovery FIRED on all 3 rows (`[discovery] sitemap: 5 candidate page(s)`), all
+    reached the site (`site_reached=True`), no regression: ec18676 & ec18687 went 0 → full
+    estimated date sets (`running`), ec18244 correctly stayed `rolling`/no-dates. G6a held (no
+    today-anchored dates).
+  - **The hoped-for search-count DROP did NOT materialize here — still 2 searches/row.** All three
+    are OFF-SEASON rows (current cycle unposted), so the ladder climbs to rung 2 for prior-cycle
+    estimation regardless of having the sitemap pages, and each rung still spends its one search.
+    On these rows the benefit is **recall** (the model fetches the right pages), not cost. The
+    search drop would show on a row whose CURRENT cycle is posted (rung 1 fetches the key-dates
+    page and stops early) — these three weren't that case. ~$0.079/row, in line with the deadline
+    baseline. A larger sample spanning in-season rows would be needed to measure the search drop.
+  - **Optional backfill** of rows generated before D2 (the G-task-3 backfill) is proactive
+    coverage, which §13 item 1 defers, so it stays gated on the operator un-deferring it.
 
 **Order:** D0 → D1 → D2 → D3 → (free to here) → D4 → D5. D3 can land in parallel with D1/D2 (it
 touches the write decision, not discovery). Nothing here is a schema change — `sitemap_common.py`
@@ -1336,6 +1349,16 @@ deadline."
 
 ## Change log
 
+- **2026-08-28 (later still)** — **D5 built + validated ($0.2358, 3 rows, READ-ONLY); 4 tested
+  task rows written LIVE ($0.174, agent_runs id=72).** D5: sitemap-first wired into the deadline
+  ladder's own-site rungs (`research_deadlines(discover=…)` default OFF for network-free tests;
+  `find_program_sources` passes the real helper; rung 4 stays off-site). Validation: discovery
+  FIRED + `site_reached` on all 3, no regression (ec18676/ec18687 0→estimated date sets, ec18244
+  stayed `rolling`), **but the search-count drop did NOT show — all 3 are off-season rows that
+  climb to rung 2 for prior-cycle estimation regardless; benefit here is recall, not cost.** Also:
+  after D4's read-only proof, the operator approved WRITING the 4 tested task rows live —
+  ec18244's furniture CTA is now replaced in the catalog by the real "$35 registration fee" /
+  "Record Book" tasks; ec18676 went 0→page-backed. 1171 pytest green.
 - **2026-08-28 (later)** — **D4 live validation DONE ($0.1781, 4 rows, READ-ONLY) + a ranker bug
   fixed FREE before spending.** The free discovery half on ec18244's real 414-page sitemap caught
   the ranker dropping `/the-program/` & `/prospective-participants/` entirely: the old 400-page

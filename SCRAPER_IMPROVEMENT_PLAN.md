@@ -1,9 +1,91 @@
 # Opportunity Scraper v2 — self-learning pipeline plan
 
-*Rewritten 2026-08-26 (supersedes the 08-25 draft in this file's history). Self-contained:
-a fresh session can pick this up with no other context. Status: design APPROVED by the
-operator through the tenets and decisions below; Phase 0 shipped; Phases 1-5 await
-review of this document.*
+*Rewritten 2026-08-26. Self-contained: a fresh session can pick this up with no other
+context. Design APPROVED by the operator (tenets + decisions below). **All phases P1-P5
+BUILT and P4 code shipped 2026-08-27 — see the Implementation Status section immediately
+below before reading the phase specs, which are now the historical design record.***
+
+---
+
+## Implementation status — pick-up-here (last worked 2026-08-27)
+
+**Branch `scraper-v2`** (operator directive: NOT deadline-email-alerts). Branched off main
+(== origin/main == 6a7e186). Commits, newest last, ALL atop the email session's commit
+`6f9ab2f` which shares this working tree:
+- `63979dd` P1-P3 (attribution ledger, URL truth, uniqueness+merge)
+- `afb7551` P5 (compounding loop)
+- `ebcd50e` P4 discovery-channel code (paid runs deferred)
+- `f5d1521` propose_angles fix (697 noise proposals → 18 curated)
+- `38ae6b7` P4 live-preview fixes (fetch_page_text unpack; refind ec-id minting)
+
+**Nothing merged to main.** The working tree is SHARED with an active deadline-email
+session (app/services/email*.py, send_lifecycle_emails.py, app/config.py) — when
+committing, stage ONLY scraper files. The email commit `6f9ab2f` sits in scraper-v2's
+history; reorganize branches later if you want them fully separate.
+
+**State: all phases built, 1263 tests green, grading harness SAFE. `0 regressions` on
+`python grade_scraper_batch.py` is the merge bar for any future change.**
+
+### DDL run by the operator (live): `scraper_attribution_schema.sql`, `scraper_seeds` ALTER (disabled_reason/at). `moderation_reason` was already live.
+
+### What actually RAN this session (live, on real data)
+- **seed_id backfill DONE**: `backfill_seed_attribution.py` stamped **143/159** Aug-23 rows
+  (16 honest `(no seed)`: 14 unmatched, 2 ambiguous). Idempotent; match is same-run-date +
+  unambiguous. → the console seed funnel is now populated with real Appr/$-per-approved.
+- **Console verified live** at /admin → Scraper angles: funnel columns (Appr/Rej/Dup/Waste %/
+  $/appr/Diagnosis) render; every angle shows `small sample` (each has 1 run; needs ≥2 + ≥10
+  found to diagnose or auto-disable). "Recent merges" card wired ("No merges yet").
+- **18 gap angles written as DISABLED seeds** (`propose_angles.py --commit`). Review + enable
+  the worthwhile ones in the console.
+- **Refind pilot RAN (PAID, $0.4091)**: `refind_dead_links.py --limit 20`. 20 searched, **4
+  re-found** → review queue (is_active=false): Kenyon Review ✅, Red Cross Youth Council ✅,
+  Immerse "Academic Insights" ⚠ (mill product), UVA Creative Writing ❌ (matched
+  northern.virginia.edu — a WRONG-institution false positive). 16 found nothing (wrote
+  nothing). All 20 old rows stamped `refind_attempted 20260827` (never re-paid).
+
+### Measured findings that refined the plan (each is a real, accepted result)
+- **P2 free offsite rescue = 0/27 on Aug-23.** Those rows are true search-misses (the model
+  wrote a listicle URL because its search never surfaced the real page); nothing to rescue TO
+  for free → they are refind targets. P2's real value is PREVENTION (mills never stored,
+  title-proof, canonical page), not repairing this batch.
+- **P3 match_key merge is NOT unconditionally safe** — it would drop 2 approved rows. Safe
+  rule = **bare-domain vs dedicated-page** + treating a merge as PRESERVE (program survives in
+  the incumbent), never a drop. build_fixture independently CONFIRMED the merge: Harvard AI
+  (auto-merged) was later marked `duplicate` by the operator.
+- **P3 name-replace only when the incumbent is junk** (<2 identity words). Strict title-proof
+  ("Mathematics" vs "Math") must not trade a good specific name for a shorter one.
+- **P4 refind precision ~50-75%** on found rows (below the 80% target): `domain_matches_org`
+  substring-matches too loosely (northern.virginia.edu ⊃ "virginia") and title-proof is weak
+  on generic names ("Creative Writing"). Operator review catches it; TIGHTEN before a full run.
+- **P4 hub mining needs a fetchable PROGRAM-INDEX page.** Org roots yield chaff (CEISMC root:
+  62 links → 12 mostly-nav candidates) and the real index (`ceismc.gatech.edu/programs`) 403s
+  our client — the same partial-block the original pilot hit on medicine.illinois.
+
+### OPEN / do next (nothing here is started)
+1. **Review the 4 refound rows** in the console Review queue — reject the UVA mis-find, decide
+   on Immerse. (Refind is ON-DEMAND, not periodic: each row is stamped once; the script drains
+   the 167-row backlog then does nothing until check_links deactivates a fresh batch.)
+2. **Tighten refind's domain match** (require the org's REGISTRABLE domain, not a substring;
+   consider a title-proof floor of ≥2 non-generic identity words) BEFORE draining the full
+   167-row backlog (~$4-8 paid). Then run in batches, reviewing as you go.
+3. **Hub mining**: point `mine_hub_pages.py` at real program-index URLs, not org roots — the
+   pilot umbrellas (USNA /Admissions/Programs/, business.wisc.edu /precollege/,
+   medicine.illinois SpHEREs). Some 403 our client (fact about the client, not the program).
+   `--preview` is free; extraction is PAID (~$0.003/page, gated).
+4. **Exercise the full live pipeline**: enable a few of the 18 disabled angles and run the
+   scraper (PAID, per-run approval). A 2nd run per angle gives the funnel a real diagnosis;
+   same-URL re-finds populate the merges card; a mined-out angle can auto-disable.
+5. **Merge scraper-v2 → main** when ready (coordinate re: the email commit in its history).
+
+### Every script, and its money tier (all `--preview` is FREE)
+- `python grade_scraper_batch.py` — FREE gate. `0 regressions` required to ship any change.
+- `python build_fixture.py --batch B --snapshot F1 F2 --out tests/fixtures/X.json` — FREE.
+- `python backfill_seed_attribution.py [--commit]` — FREE (done; idempotent).
+- `python propose_angles.py [--commit]` — FREE (18 written).
+- `python mine_hub_pages.py --hubs URL --preview` FREE / live = PAID.
+- `python refind_dead_links.py --preview` FREE / `--limit N` = PAID search.
+- `python scrape_opportunities.py --mode national --seed-ids IDS` — PAID (preview via console).
+- **Every paid run needs fresh explicit chat approval (the ~$30-overspend rule).**
 
 ## North star
 

@@ -488,6 +488,7 @@ tr.disabled-seed { opacity: .48; }
       <div class="section-label">Run the scout</div>
       <div class="agents" id="wf-newopp"></div>
       <div class="section-label">What it searches</div>
+      <div class="agents" id="tools-newopp-angles"></div>
       <div id="slot-newopp-angles"></div>
       <div class="section-label">Trusted sources <span class="count hidden" id="sourcesTabCount"></span></div>
       <div id="slot-newopp-allowlist"></div>
@@ -2376,6 +2377,7 @@ const WORKFLOW_AGENTS = {
 // Tool cards that share a grid with the agent above them, so they sit side by side rather
 // than dropping to their own row. Appended after the agent cards in the same container.
 const WORKFLOW_INLINE_TOOLS = {
+  'wf-newopp': ['minehub'],
   'wf-lists': ['mlgrader'],
   'wf-utils': ['dupfinder', 'refind'],
 };
@@ -4255,6 +4257,7 @@ let TOOLS = {};
 // a grid with their neighbouring agent (see WORKFLOW_INLINE_TOOLS).
 const TOOL_SLOTS = {
   'slot-inspect': ['inspect'],
+  'tools-newopp-angles': ['proposeangles'],
   'tools-core': ['refreshprog'],
   'tools-upkeep': ['__forcerecheck'],
   'tools-utils-backfill': ['contactemail'],

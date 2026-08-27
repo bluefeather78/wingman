@@ -3200,6 +3200,44 @@ MAINTENANCE_TOOLS = {
         "script": "find_catalog_dups.py",
         "free": True, "writes": False, "params": [],
     },
+    "minehub": {
+        # Hub-first discovery: one page that LISTS many programs yields many real rows without
+        # a per-search fee. Preview (discover + dedup) is free; extraction is one no-search
+        # model call per surviving page (~$0.003) and inserts inactive rows for review.
+        "name": "Mine Hub Pages",
+        "description": "Discover programs by mining a hub page that lists many — a university "
+                       "pre-college index, a city teen page, a listicle. Preview is free; a real "
+                       "run extracts (~$0.003/page) and inserts inactive rows for review.",
+        "script": "mine_hub_pages.py",
+        "free": False, "writes": True,
+        "params": [
+            {"key": "url", "label": "Hub page URL", "required": True,
+             "placeholder": "https://ceismc.gatech.edu/programs"},
+            {"key": "offDomain", "type": "check",
+             "label": "Listicle — follow off-site links, not same-domain"},
+            {"key": "mode", "type": "select", "label": "Mode", "options": [
+                ["preview", "Preview — free, no model call, no writes"],
+                ["run", "Run — PAID: extracts and inserts rows for review"]]},
+        ],
+    },
+    "proposeangles": {
+        # Finds thin catalog cells (under-served type/season/subject) and proposes angles to
+        # fill them. Both exposed actions are free — commit writes DISABLED seeds a person must
+        # still enable, so nothing runs or spends on its own.
+        "name": "Propose Search Angles",
+        "description": "Analyse where the catalog is thin and propose new scraper angles. "
+                       "Preview prints them; Commit writes them as DISABLED seeds for you to "
+                       "review and enable. Both are free.",
+        "script": "propose_angles.py",
+        "free": True, "writes": True,
+        "params": [
+            {"key": "mode", "type": "select", "label": "Scope", "options": [
+                ["national", "National"], ["seattle", "Local (Seattle)"]]},
+            {"key": "action", "type": "select", "label": "Action", "options": [
+                ["preview", "Preview — print proposals"],
+                ["commit", "Commit — write as disabled seeds"]]},
+        ],
+    },
     "refind": {
         # The counterpart to the Link Checker: check_links deactivates dead-link rows, this
         # tries to resurrect the real ones by finding where the page moved. Paid + gated, and
@@ -3280,6 +3318,20 @@ def build_tool_args(tool_key, params):
         # Default to the free preview; a paid run must be chosen explicitly.
         if str(params.get("mode") or "preview") == "run":
             args += ["--limit", str(_int_or_none(params.get("limit")) or 20)]
+        else:
+            args.append("--preview")
+    elif tool_key == "minehub":
+        url = str(params.get("url") or "").strip()
+        if url:
+            args += ["--hubs", url]
+        if params.get("offDomain"):
+            args.append("--off-domain")
+        if str(params.get("mode") or "preview") != "run":
+            args.append("--preview")
+    elif tool_key == "proposeangles":
+        args += ["--mode", str(params.get("mode") or "national")]
+        if str(params.get("action") or "preview") == "commit":
+            args.append("--commit")
         else:
             args.append("--preview")
     elif tool_key == "contactemail":

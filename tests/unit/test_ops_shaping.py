@@ -554,9 +554,24 @@ class TestMaintenanceTools:
         assert core.build_tool_args("export", {})[2:] == ["export_json.py"]
 
     def test_paid_tools(self):
-        # The paid tools: the contact-email backfill and the dead-link re-finder (web search).
+        # The paid tools: the contact-email backfill, the dead-link re-finder, and hub mining
+        # (its extraction call). Angle proposing and the hub PREVIEW are free.
         paid = {k for k, c in core.MAINTENANCE_TOOLS.items() if not c.get("free")}
-        assert paid == {"contactemail", "refind"}
+        assert paid == {"contactemail", "refind", "minehub"}
+
+    def test_minehub_args(self):
+        # Needs a url; defaults to the free preview; a paid run drops --preview.
+        prev = core.build_tool_args("minehub", {"url": "https://x.edu/programs"})
+        assert prev[2:] == ["mine_hub_pages.py", "--hubs", "https://x.edu/programs", "--preview"]
+        run = core.build_tool_args("minehub", {"url": "https://x.edu/programs", "mode": "run",
+                                               "offDomain": True})
+        assert "--preview" not in run and "--off-domain" in run and "--hubs" in run
+
+    def test_proposeangles_args(self):
+        assert core.build_tool_args("proposeangles", {})[2:] == [
+            "propose_angles.py", "--mode", "national", "--preview"]
+        commit = core.build_tool_args("proposeangles", {"mode": "seattle", "action": "commit"})
+        assert commit[2:] == ["propose_angles.py", "--mode", "seattle", "--commit"]
 
     def test_refind_defaults_to_free_preview(self):
         # A paid run must be chosen explicitly; anything else previews (free, no writes).

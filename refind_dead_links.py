@@ -28,22 +28,11 @@ import url_validate
 _REFIND_STAMP = "refind_attempted"
 # At most this many grounding siblings are fetched per row to find a proven page.
 _MAX_SIBLING_FETCH = 3
-# A page under one of these path segments is an editorial post ABOUT a program, never the
-# program's own page. Measured live 2026-08-27: the UVA "Creative Writing" re-find landed on
-# `northern.virginia.edu/blog/inspire-spotlight-creative-writing/` — same registrable domain as
-# the (already mis-attributed) dead URL and carrying the name's words, so registrable + identity
-# proof alone accept it. The /blog/ segment is the one signal that catches it.
-_EDITORIAL_SEGMENTS = {"blog", "blogs", "news", "in-the-news", "press", "press-releases",
-                       "stories", "story", "article", "articles"}
-
-
-def _is_editorial_url(url):
-    """True if the URL's path sits under a blog/news/press segment — an article, not a page."""
-    try:
-        path = (urllib.parse.urlsplit(url or "").path or "").lower()
-    except ValueError:
-        return False
-    return bool({s for s in path.split("/") if s} & _EDITORIAL_SEGMENTS)
+# The editorial-post test (the live UVA /blog/ mis-find that motivated it) now lives in
+# url_validate, shared with harvest_names — the same question, asked of the same kind of
+# search result. Kept as a module alias so this file's callers and tests read unchanged.
+_EDITORIAL_SEGMENTS = url_validate.EDITORIAL_SEGMENTS
+_is_editorial_url = url_validate.is_editorial_url
 
 
 def is_dead_link_reject(row):

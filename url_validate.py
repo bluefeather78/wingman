@@ -301,6 +301,31 @@ def is_bare_domain(url):
     return bool(parts.hostname) and parts.path.strip("/") == "" and not parts.query
 
 
+# A page under one of these path segments is an editorial post ABOUT a program, never the
+# program's own page. Measured live 2026-08-27: the UVA "Creative Writing" re-find landed on
+# `northern.virginia.edu/blog/inspire-spotlight-creative-writing/` — same registrable domain as
+# the dead URL and carrying the name's words, so domain and identity proof alone accept it. The
+# /blog/ segment is the one signal that catches it.
+EDITORIAL_SEGMENTS = {"blog", "blogs", "news", "in-the-news", "press", "press-releases",
+                      "stories", "story", "article", "articles"}
+
+
+def is_editorial_url(url):
+    """True if the URL's path sits under a blog/news/press segment — an article, not a page.
+
+    Shared by every caller that has to decide whether a search result is a program's OWN page:
+    `refind_dead_links` (a moved program) and `harvest_names` (a named one). Note
+    `mine_hub_pages` keeps its own broader pre-fetch drop list, which folds these segments in
+    among adult/degree and civic ones and answers a different question — whether a harvested
+    link is worth fetching at all.
+    """
+    try:
+        path = (urllib.parse.urlsplit(url or "").path or "").lower()
+    except ValueError:
+        return False
+    return bool({s for s in path.split("/") if s} & EDITORIAL_SEGMENTS)
+
+
 # Words that carry no identifying signal when matching a domain against an organisation
 # name. "University", "Institute" and friends appear in hundreds of org names and in
 # almost no registrable domain, so leaving them in makes every comparison look related.

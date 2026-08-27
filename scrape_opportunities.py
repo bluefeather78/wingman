@@ -65,6 +65,7 @@ import url_dedupe
 import url_repair
 import url_validate
 from agent_common import add_agent_args, apply_timing, clean_email, emit_preview, snapshot_stamp
+from contact_email_common import resolve_contact_email
 from gemini_common import call_gemini, extract_json, estimate_cost
 from seeds_common import load_seeds, record_seed_result, select_seeds
 from supabase_common import load_dotenv, supabase_get, supabase_post, supabase_insert_one, supabase_patch
@@ -846,6 +847,9 @@ def main():
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     service_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    # Optional: contact-email resolution is regex-first and works without it; a key only lets
+    # the rare multi-address page be disambiguated by one cheap Haiku call.
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
     if not supabase_url or not service_key or not gemini_key:
         print("[ERROR] SUPABASE_URL / SUPABASE_SERVICE_KEY / GEMINI_API_KEY not set in .env.")
         sys.exit(1)
@@ -1027,6 +1031,23 @@ def main():
                     invalid_skipped += 1
                     rejected.append({"reason": "row could not be built", "raw": candidate})
                     continue
+                # Actively resolve the program's OWN contact email from its page instead of
+                # only keeping one that happened to appear in the search notes. Reuses the
+                # shared regex-first helper (a model call only on a page with several
+                # addresses, so almost always free), rides the same free-HTTP switch as URL
+                # truth, and is best-effort: a fetch failure keeps the notes value build_row
+                # already set. This is why the standalone find_contact_emails.py is only a
+                # backfill for OLD rows — new rows now arrive email-complete.
+                if not args.no_verify_urls:
+                    try:
+                        email, email_cost, _m, _f = resolve_contact_email(
+                            {"url": url, "name": row["name"], "org": row.get("org")}, anthropic_key)
+                        seed_cost += email_cost
+                        total_cost += email_cost
+                        if email:
+                            row["contact_email"] = clean_email(email)
+                    except Exception:
+                        pass
                 # Attribute the row to the angle that found it, so the reviewer's verdict on
                 # it becomes live feedback on this seed (seed_ledger.py). None for fallback
                 # angles, which have no stable id — the correct "unknown" value.

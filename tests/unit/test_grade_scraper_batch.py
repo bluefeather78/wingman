@@ -56,6 +56,33 @@ def test_strong_dup_probe_reads_candidates():
     assert result["kept_negative"] == 1
 
 
+# ------------------------------------------------------------ Phase-5 loop guarantees
+def test_suppress_all_gate_fails_loudly():
+    # A deliberately-broken policy that drops everything MUST register as regressions, or the
+    # harness would rubber-stamp a bad change instead of catching it (Phase 5 criterion 2).
+    rows = [_row("a"), _row("b")]
+    verdicts = {"a": {"verdict": "approved"}, "b": {"verdict": "approved"}}
+    result = gb.evaluate(rows, verdicts, gb.decide_suppress_all)
+    assert len(result["regressions"]) == 2
+
+
+def test_url_dup_uses_real_rule_and_scores_merge_non_harmful():
+    # decide_url_dup calls the SAME classify_same_url the live scraper runs. A same-URL dup on a
+    # dedicated page -> merge; an approved row merged is PRESERVED, never a regression.
+    row = _row("a", dups=[{"id": "ec1", "reason": "identical URL but a different name"}])
+    result = gb.evaluate([row], {"a": {"verdict": "approved"}}, gb.decide_url_dup)
+    assert result["regressions"] == []
+    assert [m["id"] for m in result["merges"]] == ["a"]
+
+
+def test_url_dup_keeps_bare_domain_shared_homepage():
+    row = {"id": "y", "name": "R", "url": "https://example.org",   # bare domain
+           "review": {"quality_flags": [],
+                      "dup_candidates": [{"id": "ec1", "reason": "identical URL but a different name"}]}}
+    action, _ = gb.decide_url_dup(row)
+    assert action == "insert"   # kept for review, not merged
+
+
 # ------------------------------------------------------------------ snapshot loading
 def test_load_snapshot_rows_dict_and_bare_list_shapes(tmp_path):
     (tmp_path / "new.json").write_text(json.dumps(

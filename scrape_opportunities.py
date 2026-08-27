@@ -119,6 +119,31 @@ MERGE_FILL_FIELDS = ("org", "summary", "eligibility", "grade_min", "grade_max",
                      "subject_tags", "contact_email")
 
 
+def classify_same_url(url, exact, dup_candidates):
+    """The Phase-3 disposition of a candidate that may share its URL with an existing row.
+
+    Returns (action, target): action is 'merge' | 'reject' | 'flag' | 'insert', target is the
+    existing row/candidate dict (or None). This is the SINGLE source of truth for the same-URL
+    rule, shared by the live scrape loop AND grade_scraper_batch's decider — so a change to the
+    rule is graded against every accumulated fixture automatically (Phase 5), never drifting
+    between a reimplementation and the real thing.
+
+      - same URL on a DEDICATED page  -> merge into the incumbent (same program)
+      - same URL, name-similar, BARE   -> reject (a homepage + matching name is almost surely a dup)
+      - same URL, name-different, BARE -> flag (may be distinct programs sharing a homepage, tenet 6)
+      - no same-URL match              -> insert normally
+    """
+    same_url = exact or next(
+        (c for c in (dup_candidates or []) if "identical URL" in (c.get("reason") or "")), None)
+    if same_url and not url_validate.is_bare_domain(url):
+        return "merge", same_url
+    if exact:
+        return "reject", exact
+    if same_url:
+        return "flag", same_url
+    return "insert", None
+
+
 def merge_row(candidate, existing, page_title):
     """Best-copy-wins merge of a re-found candidate INTO an existing row. Returns (patch, notes).
 
@@ -970,34 +995,32 @@ def main():
                 # url_dedupe.py's measurements show URL-alone rejects shared application portals
                 # and name-alone rejects 257 genuinely distinct catalog pairs.
                 exact, dup_candidates = url_dedupe.find_duplicates(url, candidate.get("name"), existing)
-                # Phase 3: a candidate on the SAME normalized URL as an existing row (name aside)
-                # is a same-URL match. On a DEDICATED page that means the same program — merge the
-                # better fields into the incumbent instead of inserting a duplicate (Round 2: the
-                # incumbent won 27/28). On a BARE DOMAIN the two may be distinct programs that both
-                # landed on the org homepage (tenet 6), so keep + flag for a human, never auto-merge.
-                same_url = exact or next(
-                    (c for c in dup_candidates if "identical URL" in (c.get("reason") or "")), None)
-                if same_url and not url_validate.is_bare_domain(url):
+                # Phase 3, via the one shared rule (classify_same_url) the harness also grades:
+                # a same-URL candidate on a DEDICATED page is the same program -> merge into the
+                # incumbent (Round 2: incumbent won 27/28); on a BARE DOMAIN it is rejected if the
+                # name matches, else flagged as a possible distinct program on a shared homepage.
+                action, target = classify_same_url(url, exact, dup_candidates)
+                if action == "merge":
                     duplicates_skipped += 1
                     seed_dupes += 1
                     if args.dry_run or args.no_verify_urls:
-                        merged.append({"id": same_url["id"], "from_name": candidate.get("name"),
-                                       "into_name": same_url.get("name"), "changed": False,
+                        merged.append({"id": target["id"], "from_name": candidate.get("name"),
+                                       "into_name": target.get("name"), "changed": False,
                                        "dry": True})
                     else:
-                        m = apply_merge(supabase_url, service_key, candidate, same_url["id"],
+                        m = apply_merge(supabase_url, service_key, candidate, target["id"],
                                         url, url_validate.DEFAULT_TIMEOUT)
                         if m:
                             merged.append(m)
                     continue
-                if exact:  # bare-domain homepage AND a matching name -> almost certainly a dup
+                if action == "reject":
                     duplicates_skipped += 1
                     seed_dupes += 1
-                    rejected.append({"reason": f"exact duplicate of {exact.get('id')} "
-                                               f"({exact.get('name')})", "raw": candidate})
+                    rejected.append({"reason": f"exact duplicate of {target.get('id')} "
+                                               f"({target.get('name')})", "raw": candidate})
                     continue
-                if same_url:  # bare-domain homepage, DIFFERENT name -> may be a distinct program
-                    flags.append(FLAG_SHARES_HOMEPAGE.format(id=same_url["id"]))
+                if action == "flag":
+                    flags.append(FLAG_SHARES_HOMEPAGE.format(id=target["id"]))
 
                 row = build_row(candidate, next(mint_id), source, url, flags)
                 if not row:

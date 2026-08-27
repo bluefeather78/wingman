@@ -64,6 +64,38 @@ def test_merge_empty_patch_when_nothing_improves():
     assert patch == {} and notes == []
 
 
+# ---- classify_same_url (the rule shared with the harness) -----------------------------
+
+def _iddup(rid="ec1"):
+    return [{"id": rid, "reason": "identical URL but a different name — renamed or shared portal"}]
+
+
+def test_classify_dedicated_same_url_merges():
+    action, target = so.classify_same_url("https://x.edu/program", None, _iddup())
+    assert action == "merge" and target["id"] == "ec1"
+
+
+def test_classify_bare_same_url_different_name_flags():
+    action, _ = so.classify_same_url("https://x.edu", None, _iddup())  # bare homepage
+    assert action == "flag"
+
+
+def test_classify_exact_on_dedicated_page_merges():
+    action, _ = so.classify_same_url("https://x.edu/program", {"id": "ec1", "name": "X"}, [])
+    assert action == "merge"
+
+
+def test_classify_exact_on_bare_domain_rejects():
+    action, _ = so.classify_same_url("https://x.edu", {"id": "ec1", "name": "X"}, [])
+    assert action == "reject"
+
+
+def test_classify_no_same_url_inserts():
+    weak = [{"id": "ec1", "reason": "same site (2 existing entries)"}]
+    action, target = so.classify_same_url("https://x.edu/program", None, weak)
+    assert action == "insert" and target is None
+
+
 # ---- collapse_intra_run_twins ---------------------------------------------------------
 
 def _r(rid, name, url):

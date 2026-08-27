@@ -28,7 +28,7 @@ import argparse
 import json
 import os
 
-import url_validate  # is_bare_domain, for the Phase-3 merge/keep discriminator (pure, no net)
+import scrape_opportunities  # classify_same_url — the SAME rule the live scraper runs (Phase 5)
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures",
@@ -36,8 +36,9 @@ DEFAULT_FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures",
 
 # Verdicts that mean "a human did not want this row" — suppressing one is a win. A DELETED
 # row is graded like a rejected one: the operator removed it by hand (duplicate or junk),
-# which is the strongest possible "should never have been inserted" signal.
-NEGATIVE_VERDICTS = {"rejected", "deleted"}
+# which is the strongest possible "should never have been inserted" signal. `duplicate` is
+# the moderation status future batches use where the old batch used a hand deletion.
+NEGATIVE_VERDICTS = {"rejected", "deleted", "duplicate"}
 
 
 def load_fixture(path):
@@ -103,30 +104,24 @@ def decide_strong_dup(row):
     return "insert", ""
 
 
-def _has_identical_url_dup(row):
-    """A dup candidate that is the SAME normalized URL (match_key equality), name aside."""
-    for cand in _dup_candidates(row):
-        if cand.get("ratio") == 1.0 or "identical URL" in (cand.get("reason") or ""):
-            return cand
-    return None
-
-
 def decide_url_dup(row):
-    """Phase-3 rule: a candidate whose match_key equals an existing row's is never inserted as
-    a NEW row. If the shared URL is a DEDICATED page it is MERGED into that row — the program
-    survives in the incumbent and the best fields flow in, so this is not a lost row. If the
-    shared URL is a BARE DOMAIN the two may be distinct programs that both landed on the org
-    homepage (tenet 6: "both need their dedicated pages found"), so it is kept + flagged for
-    review, never auto-merged. The rule is match_key EQUALITY plus a bare-domain guard, never
-    name similarity — which is why it drops ZERO approved rows where the strong-dup probe,
-    keyed on name similarity, drops 18. Measured discriminator on the 08-23 batch: the one
-    genuinely-distinct same-URL approval (YoungArts) is the only bare-domain one."""
-    cand = _has_identical_url_dup(row)
-    if not cand:
-        return "insert", ""
-    if url_validate.is_bare_domain(row.get("url") or ""):
-        return "insert", f"shares homepage URL with {cand.get('id')} — kept for review"
-    return "merge", f"merge into {cand.get('id')} ({cand.get('reason')})"
+    """Phase-3 same-URL rule, evaluated by the ACTUAL scraper function (classify_same_url), not a
+    reimplementation — so this decider grades whatever the live rule currently is. A snapshot row
+    was inserted, so `exact` is None here; the row's own dup_candidates carry any identical-URL
+    match. 'merge' means the program survives in the incumbent (not a lost row); 'flag' keeps it."""
+    action, target = scrape_opportunities.classify_same_url(
+        row.get("url"), None, _dup_candidates(row))
+    if action == "merge":
+        return "merge", f"merge into {target.get('id')}"
+    if action == "flag":
+        return "insert", f"shares homepage URL with {target.get('id')} — kept for review"
+    return "insert", ""
+
+
+def decide_suppress_all(row):
+    """GATE PROBE: suppress everything. Must fail loudly — it drops every approved row — proving
+    the harness actually catches a broken policy rather than rubber-stamping it (Phase 5)."""
+    return "suppress", "suppress-all gate probe"
 
 
 DECIDERS = {
@@ -134,6 +129,7 @@ DECIDERS = {
     "flag-offsite": decide_flag_offsite,
     "strong-dup": decide_strong_dup,
     "url-dup": decide_url_dup,
+    "suppress-all": decide_suppress_all,
 }
 
 

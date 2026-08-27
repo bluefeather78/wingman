@@ -377,6 +377,30 @@ Success criteria:
 2. A deliberately-broken decider (suppress-all) fails the gate loudly.
 3. The next real batch's review produces a fixture with zero manual steps.
 
+### The compounding loop — how it runs (shipped 2026-08-27)
+
+    scrape ──▶ review (verdict + reason code land on each row in the catalog)
+      ▲                                   │
+      │                                   ▼
+    next scrape ◀── angles retire/spawn ◀── diagnose (seed_ledger funnel per angle)
+      ▲                                   │
+      └──────── gate: grade_scraper_batch ◀── build_fixture.py (verdicts → frozen fixture)
+
+- **One rule, graded automatically.** `classify_same_url` (the Phase-3 same-URL disposition) is
+  imported by BOTH the live scraper and `grade_scraper_batch.decide_url_dup` — a change to the
+  rule is re-graded against every accumulated fixture with no reimplementation to drift.
+- **`build_fixture.py`** turns any reviewed batch into a fixture from the live
+  `moderation_status`/`moderation_reason`, so ground truth grows per review session at zero manual
+  effort. Verified 2026-08-27 on the 08-23 batch: it reproduces a **grading-equivalent** fixture;
+  the 12 id-level differences from the hand-built one are all real ground-truth evolution (7
+  tombstone deleted→rejected relabels, plus 5 approved→duplicate/rejected re-moderations from
+  Round 2 — including ec18681 Harvard AI, which the operator later marked duplicate, independently
+  confirming Phase 3's auto-merge of that row). The hand-built 08-23 fixture stays frozen; new
+  batches add fixtures, never overwrite.
+- **The gate has teeth.** The `suppress-all` decider drops every approved row and the harness
+  reports it UNSAFE (110–115 regressions) — proving a broken policy cannot pass. `0 regressions`
+  remains the merge bar for every future pipeline change.
+
 ---
 
 ## Capability diff (before → after, for review)

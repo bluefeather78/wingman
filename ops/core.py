@@ -28,6 +28,8 @@ import agent_common
 import aggregators_common
 import dryrun_common
 import mailing_list_common
+import seed_ledger
+from supabase_common import supabase_get
 from agent_common import PREVIEW_PREFIX as AGENT_PREVIEW_PREFIX
 from app.config import *  # noqa: F401,F403
 from app import config
@@ -3173,6 +3175,10 @@ SEED_FIELDS = ("mode", "angle", "is_enabled", "sort_order")
 SEED_CATEGORY_PLACEHOLDER = "unused"
 SEED_SELECT = ("id,mode,angle,is_enabled,sort_order,total_runs,total_found,"
                "total_added,total_dupes,total_cost,last_run_at,created_at")
+# disabled_reason/disabled_at arrived after the table (scraper_seeds_schema.sql ALTER block).
+# Selected on top of SEED_SELECT, with a degrade rung so a DB migrated before them keeps a
+# working grid — the moderation_reason pattern for opportunities, one table over.
+SEED_DISABLE_COLS = "disabled_reason,disabled_at"
 
 
 def list_seeds(mode=None):
@@ -3181,10 +3187,14 @@ def list_seeds(mode=None):
     Adds derived productivity figures the UI ranks by — added_per_dollar is the one that
     actually answers "is this angle worth paying for every month".
     """
-    params = {"select": SEED_SELECT, "order": "mode.asc,sort_order.asc,id.asc"}
+    params = {"order": "mode.asc,sort_order.asc,id.asc"}
     if mode:
         params["mode"] = f"eq.{mode}"
-    rows = _supabase_request("scraper_seeds", params=params)
+    # Try with the disable-reason columns; fall back if that migration is still pending.
+    rows = _supabase_request("scraper_seeds",
+                             params={**params, "select": f"{SEED_SELECT},{SEED_DISABLE_COLS}"})
+    if rows is None:
+        rows = _supabase_request("scraper_seeds", params={**params, "select": SEED_SELECT})
     if rows is None:
         return None
     for r in rows:
@@ -3194,6 +3204,62 @@ def list_seeds(mode=None):
         r["added_per_dollar"] = round(added / cost, 1) if cost > 0 else None
         r["dupe_rate"] = round((r.get("total_dupes") or 0) / found, 3) if found else None
     return rows
+
+
+def get_seed_yield(seed_rows):
+    """Per-seed funnels for the console grid — a live GROUP BY over the reviewer's verdicts.
+
+    The catalog IS the ledger: each scraped row carries the seed_id of the angle that found
+    it and the verdict a reviewer later records, so an angle's funnel is computed on read,
+    not stored — a changed verdict corrects it on the next refresh with nothing to recompute.
+    `seed_rows` is the already-loaded list_seeds() result (avoids a second read of the small
+    seeds table). seed_id arrived with scraper_attribution_schema.sql; a DB migrated before
+    that reads seed_ready=false and the grid hides the funnel columns rather than erroring.
+
+    Uses the paginating supabase_get, not _supabase_request: this is a GROUP BY and must see
+    every attributed row, not just the first PostgREST page.
+    """
+    if not seed_rows:
+        return {"seed_ready": False, "funnels": {}}
+    try:
+        opp_rows = supabase_get(SUPABASE_URL, "opportunities",
+                                {"select": "seed_id,moderation_status,moderation_reason,is_active",
+                                 "seed_id": "not.is.null"}, SUPABASE_SERVICE_KEY)
+    except Exception as e:
+        # Tell the migration-pending case apart from a transient blip: only the former should
+        # point the operator at the .sql file, and a timeout on an already-migrated DB must
+        # not tell them to run a migration that is already in place.
+        if _is_missing_column_error(e):
+            print("[WARN] seed_id column missing — funnel disabled until "
+                  "scraper_attribution_schema.sql is run.")
+        else:
+            print(f"[WARN] Could not read seed attribution ({e}); funnel temporarily "
+                  f"unavailable.")
+        return {"seed_ready": False, "funnels": {}}
+    return {"seed_ready": True, "funnels": seed_ledger.build_seed_funnels(opp_rows, seed_rows)}
+
+
+def list_recent_merges(limit=50):
+    """Rows the scraper auto-merged into (Phase 3), newest first — the console's merge audit.
+
+    A merge stamps `merged <date>: <what changed>` into the survivor's quality_flags, so this
+    is just the rows carrying such a flag. Audit only (not an approval queue); every entry is
+    hand-reversible from quality_flags. Returns [] cleanly if nothing has merged yet."""
+    rows = _supabase_request("opportunities", params={
+        "select": "id,name,url,is_active,quality_flags,updated_at",
+        "quality_flags": "not.is.null", "order": "updated_at.desc", "limit": "300"})
+    if rows is None:
+        return {"ok": False, "merges": []}
+    out = []
+    for r in rows:
+        notes = [str(f) for f in (r.get("quality_flags") or []) if str(f).startswith("merged ")]
+        if notes:
+            out.append({"id": r["id"], "name": r.get("name"), "url": r.get("url"),
+                        "is_active": r.get("is_active"), "updated_at": r.get("updated_at"),
+                        "notes": notes})
+        if len(out) >= limit:
+            break
+    return {"ok": True, "merges": out}
 
 
 def seed_yield_state(rows):
@@ -3254,9 +3320,25 @@ def update_seed(seed_id, payload):
     patch = {k: payload[k] for k in SEED_FIELDS if k in payload}
     if not patch:
         return None, "No editable fields supplied"
-    updated = _supabase_request("scraper_seeds", method="PATCH",
-                                 params={"id": f"eq.{seed_id}"}, data=patch,
+    # Re-enabling an angle (the manual toggle and the auto-disabled "Re-enable" button both
+    # land here) clears the auto-disable reason, so the badge disappears and the angle reads
+    # as a clean producer again. Manual disabling leaves disabled_reason NULL, which is how a
+    # hand-disabled angle is told apart from an auto-retired one.
+    if patch.get("is_enabled") is True:
+        patch["disabled_reason"] = None
+        patch["disabled_at"] = None
+
+    def _patch(body):
+        return _supabase_request("scraper_seeds", method="PATCH",
+                                 params={"id": f"eq.{seed_id}"}, data=body,
                                  extra_headers={"Prefer": "return=representation"})
+
+    updated = _patch(patch)
+    if updated is None and ("disabled_reason" in patch or "disabled_at" in patch):
+        # Those columns may not exist yet (scraper_seeds_schema.sql pending) — retry the
+        # toggle without them so enabling/disabling still works.
+        updated = _patch({k: v for k, v in patch.items()
+                          if k not in ("disabled_reason", "disabled_at")})
     if updated is None:
         return None, "Supabase update failed"
     return (updated[0] if updated else {}), None
@@ -3293,7 +3375,7 @@ def preview_lifecycle_email(kind, userid=None):
 def send_test_lifecycle_email(kind, to_email, userid=None):
     """Mimic the email a real user would receive, sent to an operator address on demand.
 
-    When a userid is given the FULL account (data included) is loaded via email_service â€”
+    When a userid is given the FULL account (data included) is loaded via email_service —
     get_user_account omits the `data` blob, and the deadline-alert digest is rendered from
     the tracker that lives there, so mimicking that kind needs the whole row. No userid falls
     back to the sample record inside send_test.

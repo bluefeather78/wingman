@@ -571,14 +571,30 @@ tr.disabled-seed { opacity: .48; }
             <th class="num sortable" data-sort="total_runs">Runs</th>
             <th class="num sortable" data-sort="total_found">Found</th>
             <th class="num sortable" data-sort="total_added">Added</th>
-            <th class="num sortable" data-sort="dupe_rate">Dupe&nbsp;%</th>
+            <th class="num sortable" data-sort="approved" title="Rows a human approved">Appr</th>
+            <th class="num sortable" data-sort="rejected" title="Rows a human rejected">Rej</th>
+            <th class="num sortable" data-sort="duplicate" title="Rows a human marked duplicate">Dup</th>
+            <th class="num sortable" data-sort="waste_rate" title="Internal discards + rejects + dups, over found">Waste&nbsp;%</th>
             <th class="num sortable" data-sort="total_cost">Cost</th>
-            <th class="num sortable" data-sort="added_per_dollar">Added&nbsp;/&nbsp;$</th>
+            <th class="num sortable" data-sort="cost_per_approved" title="Cost per approved row — lower is better">$/appr</th>
+            <th>Diagnosis</th>
             <th></th>
           </tr></thead>
-          <tbody id="seedBody"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
+          <tbody id="seedBody"><tr><td colspan="13" class="empty">Loading…</td></tr></tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <!-- Recent merges (Phase-3 audit) -->
+  <div class="card">
+    <div class="card-head">
+      <h2>Recent merges</h2>
+      <div class="spacer"></div>
+      <div class="hint">Same-URL re-finds folded into the surviving row — audit only, reversible from quality_flags</div>
+    </div>
+    <div class="card-body tight">
+      <div id="mergeBody" class="hint" style="padding:10px 14px">Loading…</div>
     </div>
   </div>
 
@@ -1193,7 +1209,7 @@ tr.disabled-seed { opacity: .48; }
 =========================================================================== */
 const S = {
   config: {}, status: {}, history: [], summary: null,
-  seeds: [], seedMode: 'national', seedSort: 'added_per_dollar',
+  seeds: [], seedMode: 'national', seedSort: 'cost_per_approved', seedReady: false,
   userCosts: null, userCostSort: 'cost_usd', expandedUsers: new Set(), view: 'metrics',
   metrics: null, metricPanel: 'funnel', metricSort: 'stage', expandedStage: null,
   lastRefresh: null, seedYield: null, userPanel: 'provider',
@@ -3178,34 +3194,98 @@ async function loadSeeds() {
     const d = await api('/api/seeds');
     S.seeds = d.seeds || [];
     S.seedYield = d.yield || null;
+    S.seedReady = !!d.seed_ready;
     renderSeeds();
   } catch (e) {
-    $('seedBody').innerHTML = `<tr><td colspan="10" class="empty">
+    $('seedBody').innerHTML = `<tr><td colspan="13" class="empty">
       Could not load angles: ${esc(e.message)}<br>
       <span style="font-size:12px">Run <span class="mono">scraper_seeds_schema.sql</span> in the Supabase SQL editor,
       then <span class="mono">python migrate_seeds_to_supabase.py</span>.</span></td></tr>`;
   }
+  loadMerges();
+}
+
+async function loadMerges() {
+  const el = $('mergeBody');
+  if (!el) return;
+  try {
+    const d = await api('/api/agents/merges');
+    const merges = d.merges || [];
+    if (!merges.length) {
+      el.textContent = 'No merges yet. Same-URL re-finds fold into the existing row on the next scrape.';
+      return;
+    }
+    el.innerHTML = merges.map(m => `<div style="padding:7px 0;border-top:1px solid var(--border)">
+      <div><span class="pill ${m.is_active ? 'ok' : ''}">${m.is_active ? 'active' : 'inactive'}</span>
+        <a href="#" onclick="return false" class="mono" title="${esc(m.url || '')}">${esc(m.id)}</a>
+        <b>${esc(m.name || '')}</b></div>
+      <div style="font-size:12px;color:var(--text-3)">${(m.notes || []).map(esc).join(' · ')}</div>
+    </div>`).join('');
+  } catch (e) {
+    el.textContent = 'Could not load merges: ' + e.message;
+  }
+}
+
+// Per-angle diagnosis → pill class + label + a one-line "what this means" tooltip. The
+// colours are fixed per diagnosis, not positional: mined_out/thin (the two that auto-disable)
+// read as problems; pipeline_limited is neutral because its fix is the URL/refind pipeline,
+// not the angle.
+const DIAG = {
+  healthy:             { cls: 'ok',     label: 'healthy',      tip: 'producing approved rows' },
+  mined_out:           { cls: 'danger', label: 'mined out',    tip: 'mostly re-finds rows we already have' },
+  thin:                { cls: 'warn',   label: 'thin',         tip: 'real programs, but low quality' },
+  mis_aimed:           { cls: 'warn',   label: 'mis-aimed',    tip: 'wrong audience/kind for this app' },
+  pipeline_limited:    { cls: 'info',   label: 'pipeline',     tip: 'real finds lost to URL/dead-link issues — fix is elsewhere, not the angle' },
+  insufficient_sample: { cls: '',       label: 'small sample', tip: 'not enough runs/verdicts to judge yet' },
+};
+// Funnel metrics live under s.funnel; these keys sort from there. Lower is better for
+// $/approved and waste, so they sort ascending.
+const SEED_FUNNEL_KEYS = new Set(['approved', 'rejected', 'duplicate', 'waste_rate',
+                                  'cost_per_approved', 'queue_total', 'adjudicated']);
+const SEED_ASC_KEYS = new Set(['cost_per_approved', 'waste_rate']);
+function seedSortVal(s, k) { return SEED_FUNNEL_KEYS.has(k) ? (s.funnel ? s.funnel[k] : null) : s[k]; }
+function fnum(s, k) { const v = s.funnel ? s.funnel[k] : null; return (v === null || v === undefined) ? '—' : num(v); }
+function seedDiagCell(s) {
+  let out = '';
+  const f = s.funnel;
+  if (S.seedReady && f && f.diagnosis) {
+    const d = DIAG[f.diagnosis] || { cls: '', label: f.diagnosis, tip: '' };
+    const tip = `${d.tip} — ${f.approved || 0} appr / ${f.rejected || 0} rej / ${f.duplicate || 0} dup of ${f.adjudicated || 0} judged`;
+    out += `<span class="pill ${d.cls}" title="${esc(tip)}">${d.label}</span>`;
+  }
+  // Auto-retired angles carry a reason; a hand-disabled one does not, and shows only as an
+  // off toggle. The reason is the tooltip; Re-enable is the one-click undo (it clears it).
+  if (!s.is_enabled && s.disabled_reason) {
+    out += ` <span class="pill danger" title="${esc(s.disabled_reason)}">auto-off</span>`
+         + ` <button class="btn btn-ghost btn-sm" onclick="toggleSeed(${s.id}, true)">Re-enable</button>`;
+  }
+  return out || '—';
 }
 
 function renderSeeds() {
   const rows = S.seeds.filter(s => s.mode === S.seedMode).sort((a, b) => {
-    const k = S.seedSort;
-    const av = a[k], bv = b[k];
-    if (av === null || av === undefined) return 1;
+    const k = S.seedSort, asc = SEED_ASC_KEYS.has(k);
+    const av = seedSortVal(a, k), bv = seedSortVal(b, k);
+    if (av === null || av === undefined) return 1;   // nulls last, either direction
     if (bv === null || bv === undefined) return -1;
-    return bv - av;
+    return asc ? (av - bv) : (bv - av);
   });
   if (!rows.length) {
-    $('seedBody').innerHTML = `<tr><td colspan="10" class="empty">No ${S.seedMode} angles yet.</td></tr>`;
+    $('seedBody').innerHTML = `<tr><td colspan="13" class="empty">No ${S.seedMode} angles yet.</td></tr>`;
     return;
   }
   // A grid of zeros reads as a broken feature, and it usually isn't: dry runs add nothing
-  // so they credit nothing, and the hardcoded fallback angles have no id to credit. Say
-  // which it is rather than leaving the operator to guess.
+  // so they credit nothing, the hardcoded fallback angles have no id to credit, and the
+  // approval funnel needs its own migration. Say which it is rather than leaving the operator
+  // to guess.
   const y = S.seedYield;
   const note = $('seedYieldNote');
   if (note) {
-    if (y && !y.ever_credited && y.reason) {
+    if (!S.seedReady) {
+      note.textContent = 'Per-angle approval funnels appear once scraper_attribution_schema.sql '
+        + 'is run (Appr/Rej/Dup, waste, $/approved and the diagnosis are blank until then).';
+      note.classList.remove('hidden');
+    } else if (y && !y.ever_credited && y.reason) {
       note.textContent = y.reason;
       note.classList.remove('hidden');
     } else {
@@ -3219,9 +3299,13 @@ function renderSeeds() {
     <td class="num mono">${num(s.total_runs)}</td>
     <td class="num mono">${num(s.total_found)}</td>
     <td class="num mono" ${s.total_added ? 'style="color:var(--ok);font-weight:600"' : ''}>${num(s.total_added)}</td>
-    <td class="num mono">${pct(s.dupe_rate)}</td>
+    <td class="num mono">${fnum(s, 'approved')}</td>
+    <td class="num mono">${fnum(s, 'rejected')}</td>
+    <td class="num mono">${fnum(s, 'duplicate')}</td>
+    <td class="num mono">${s.funnel && s.funnel.waste_rate != null ? pct(s.funnel.waste_rate) : '—'}</td>
     <td class="num mono">${money(s.total_cost)}</td>
-    <td class="num mono" ${s.added_per_dollar === 0 ? 'style="color:var(--danger)"' : ''}>${s.added_per_dollar === null ? '—' : s.added_per_dollar}</td>
+    <td class="num mono">${s.funnel && s.funnel.cost_per_approved != null ? money(s.funnel.cost_per_approved) : '—'}</td>
+    <td>${seedDiagCell(s)}</td>
     <td class="num"><button class="btn btn-ghost btn-sm" onclick="editSeed(${s.id})">Edit</button></td>
   </tr>`).join('');
 }

@@ -34,3 +34,19 @@ create index if not exists scraper_seeds_mode_order_idx
     on scraper_seeds (mode, sort_order, id);
 
 alter table scraper_seeds enable row level security;
+
+-- ---------------------------------------------------------------------------------------
+-- ALTER block (Phase 1 of the scraper v2 plan). Columns added AFTER the table shipped go
+-- here as well as in the CREATE above, because `create table if not exists` is a no-op
+-- against an existing table — so a column added only to the CREATE never lands on a live
+-- DB. Idempotent; safe to re-run.
+--
+-- disabled_reason / disabled_at describe WHY and WHEN an angle was switched off. When the
+-- run-end sweep retires an angle it diagnoses mined-out or thin, it stamps
+-- disabled_reason = 'auto: <diagnosis> — N found, N approved, ...' (see seed_ledger.py) so
+-- the console can show an "auto-disabled" badge with the reason and a one-click re-enable.
+-- A hand-disabled angle leaves disabled_reason NULL, which is how the two are told apart.
+-- Re-enabling (auto or manual) clears both. Until this runs the scraper still auto-decides,
+-- but drops these two keys from its PATCH and only flips is_enabled.
+alter table scraper_seeds add column if not exists disabled_reason text;
+alter table scraper_seeds add column if not exists disabled_at     timestamptz;

@@ -309,6 +309,82 @@ def repair_url(url, name, org, timeout=DEFAULT_TIMEOUT):
     return out
 
 
+# ---------------------------------------------------------------------------------------
+# Phase-2 URL truth (scrape_opportunities.resolve_url_truth): prove a stored URL names the
+# program, and recover a program's OWN page from a page written ABOUT it.
+
+def title_proof_url(url, name, org, timeout=DEFAULT_TIMEOUT):
+    """(verdict, title) for a stored URL:
+        True  — the page title proves this is the program's page,
+        False — the page loaded but its title does not prove it (a PDF/non-HTML counts here),
+        None  — the page could not be fetched (blocked/timeout), or the name has fewer than
+                two words of its own to verify against; either way the URL stays approvable.
+
+    A blocked fetch is a fact about our HTTP client (~10-20% of sites refuse us), never about
+    the program, so it must not read as a failed proof. A non-HTML 200 (a PDF) DID load and
+    still cannot be the landing page, so that is a real failure worth flagging.
+    """
+    if len(identity_words(name, org)) < 2:
+        return None, ""
+    page, final = _fetch(url, timeout)
+    if page is None:
+        # _fetch gives (None, final_url) for a non-HTML 200 (PDF), (None, None) when nothing
+        # loaded at all (blocked / 4xx / 5xx / timeout).
+        return (False if final is not None else None), ""
+    title = page_title(page)
+    ok, _why = title_proves(title, name, org)
+    return bool(ok), title
+
+
+def extract_primary_link(page_html, name, org, base_url="", timeout=DEFAULT_TIMEOUT, max_fetch=5):
+    """The program's OWN page, linked from a page ABOUT it (a listicle/blog/off-site article).
+
+    Harvest <a> links, rank by how many of the program's identity words land in the anchor
+    text and slug, then fetch the top few and accept the FIRST whose page is on the org's own
+    domain AND whose title proves the program. BOTH gates are required: an SEO mill's most
+    prominent outbound links are its own signup funnels — on the mill's domain, or not naming
+    the program. Returns (url, title) or (None, None). Free HTTP; at most `max_fetch` fetches.
+    """
+    ident = identity_words(name, org)
+    if len(ident) < 2:
+        return None, None
+    scored, seen = [], set()
+    for href, raw_label in _LINK_RE.findall(page_html or ""):
+        try:
+            cand = urllib.parse.urljoin(base_url, html.unescape(href.strip())).split("#")[0]
+        except ValueError:
+            continue
+        if not cand.lower().startswith(("http://", "https://")) or cand in seen:
+            continue
+        seen.add(cand)
+        if uv.is_bare_domain(cand) or uv.is_content_mill(cand):
+            continue                       # a homepage or another mill is never the page
+        slug = _slug(cand)
+        readable = slug.replace("-", " ").replace("_", " ")
+        hay = f"{slug} {readable} {_text(raw_label)[:200].lower()}"
+        overlap = sum(1 for w in ident if w in hay)
+        if overlap:
+            scored.append((cand, overlap, url_dedupe.name_similarity(readable, name)))
+    scored.sort(key=lambda c: (-c[1], -c[2]))
+    fetched = 0
+    for cand, _ov, _sim in scored:
+        if fetched >= max_fetch:
+            break
+        if not uv.domain_matches_org(cand, org, name):
+            continue                       # cheap gate before paying for a fetch
+        page, final = _fetch(cand, timeout)
+        fetched += 1
+        if not page:
+            continue
+        final = final or cand
+        if uv.is_bare_domain(final) or uv.is_content_mill(final):
+            continue
+        title = page_title(page)
+        if title_proves(title, name, org)[0]:
+            return final, title
+    return None, None
+
+
 def repair_many(rows, timeout=DEFAULT_TIMEOUT, workers=8):
     """{row_id: repair_url(...)} for rows shaped {"id", "url", "name", "org"}.
 

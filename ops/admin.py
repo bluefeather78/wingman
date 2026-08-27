@@ -311,7 +311,7 @@ async def handle_email_test(request: Request):
         (body.get("to") or "").strip(),
         body.get("userid"))
     # 'skipped' is the honest "nothing to send" case (e.g. mimicking a user's deadline digest
-    # when they have nothing due) â€” informational, not a failure.
+    # when they have nothing due) — informational, not a failure.
     return json_response(200 if result.get("state") in ("sent", "mock", "skipped") else 400,
                          result, default=str)
 
@@ -333,8 +333,21 @@ def handle_seeds_list(request: Request):
     if rows is None:
         return json_error(502, "Could not read scraper_seeds. Has the table been created? "
                                "See scraper_seeds_schema.sql.")
-    return json_response(200, {"ok": True, "seeds": rows, "yield": core.seed_yield_state(rows)},
-                         default=str)
+    # Attach each angle's live verdict funnel (a GROUP BY over opportunities.seed_id). Absent
+    # until scraper_attribution_schema.sql is run, in which case seed_ready is false and the
+    # grid simply hides the funnel columns.
+    yld = core.get_seed_yield(rows)
+    if yld["seed_ready"]:
+        for r in rows:
+            r["funnel"] = yld["funnels"].get(r.get("id"))
+    return json_response(200, {"ok": True, "seeds": rows, "seed_ready": yld["seed_ready"],
+                               "yield": core.seed_yield_state(rows)}, default=str)
+
+
+@router.get("/api/agents/merges")
+def handle_merges_list(request: Request):
+    return json_response(200, core.list_recent_merges(
+        limit=_qs_int(request, "limit", 50) or 50), default=str)
 
 
 @router.post("/api/seeds")

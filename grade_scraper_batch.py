@@ -28,6 +28,8 @@ import argparse
 import json
 import os
 
+import url_validate  # is_bare_domain, for the Phase-3 merge/keep discriminator (pure, no net)
+
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures",
                                "scraper_grading_20260823.json")
@@ -101,10 +103,37 @@ def decide_strong_dup(row):
     return "insert", ""
 
 
+def _has_identical_url_dup(row):
+    """A dup candidate that is the SAME normalized URL (match_key equality), name aside."""
+    for cand in _dup_candidates(row):
+        if cand.get("ratio") == 1.0 or "identical URL" in (cand.get("reason") or ""):
+            return cand
+    return None
+
+
+def decide_url_dup(row):
+    """Phase-3 rule: a candidate whose match_key equals an existing row's is never inserted as
+    a NEW row. If the shared URL is a DEDICATED page it is MERGED into that row — the program
+    survives in the incumbent and the best fields flow in, so this is not a lost row. If the
+    shared URL is a BARE DOMAIN the two may be distinct programs that both landed on the org
+    homepage (tenet 6: "both need their dedicated pages found"), so it is kept + flagged for
+    review, never auto-merged. The rule is match_key EQUALITY plus a bare-domain guard, never
+    name similarity — which is why it drops ZERO approved rows where the strong-dup probe,
+    keyed on name similarity, drops 18. Measured discriminator on the 08-23 batch: the one
+    genuinely-distinct same-URL approval (YoungArts) is the only bare-domain one."""
+    cand = _has_identical_url_dup(row)
+    if not cand:
+        return "insert", ""
+    if url_validate.is_bare_domain(row.get("url") or ""):
+        return "insert", f"shares homepage URL with {cand.get('id')} — kept for review"
+    return "merge", f"merge into {cand.get('id')} ({cand.get('reason')})"
+
+
 DECIDERS = {
     "baseline": decide_baseline,
     "flag-offsite": decide_flag_offsite,
     "strong-dup": decide_strong_dup,
+    "url-dup": decide_url_dup,
 }
 
 
@@ -115,29 +144,35 @@ def evaluate(rows, verdicts, decide):
     Rows without a verdict are counted as `ungraded` and excluded from wins/regressions —
     they are a fixture gap to report, never silently a pass or a fail.
     """
-    wins, regressions, ungraded = [], [], []
+    wins, regressions, ungraded, merges = [], [], [], []
     kept_negative = 0
     for row in rows:
         entry = verdicts.get(row["id"])
         action, reason = decide(row)
-        suppressed = action != "insert"
+        # A "merge" removes the row from the NEW-queue but preserves the program in the row it
+        # merges into; a "suppress" drops it entirely. Only the latter can lose an approved row.
+        removed = action in ("suppress", "merge")
         if entry is None:
             ungraded.append(row["id"])
             continue
         verdict = entry.get("verdict")
-        if suppressed and verdict == "approved":
-            regressions.append({"id": row["id"], "name": row.get("name"),
-                                "reason": reason})
-        elif suppressed and verdict in NEGATIVE_VERDICTS:
-            wins.append({"id": row["id"], "name": row.get("name"),
-                         "verdict": verdict, "reason": reason})
-        elif not suppressed and verdict in NEGATIVE_VERDICTS:
-            kept_negative += 1
+        if verdict == "approved":
+            if action == "suppress":
+                regressions.append({"id": row["id"], "name": row.get("name"), "reason": reason})
+            elif action == "merge":
+                merges.append({"id": row["id"], "name": row.get("name"), "reason": reason})
+        elif verdict in NEGATIVE_VERDICTS:
+            if removed:
+                wins.append({"id": row["id"], "name": row.get("name"),
+                             "verdict": verdict, "reason": reason})
+            else:
+                kept_negative += 1
     graded = len(rows) - len(ungraded)
     return {
         "graded": graded,
         "wins": wins,
         "regressions": regressions,
+        "merges": merges,                 # approved rows consolidated into a survivor (not lost)
         "kept_negative": kept_negative,   # human-rejected rows the policy still inserts
         "ungraded": ungraded,
     }
@@ -145,12 +180,16 @@ def evaluate(rows, verdicts, decide):
 
 def print_report(name, result, verbose=False):
     n_win, n_reg = len(result["wins"]), len(result["regressions"])
+    n_merge = len(result.get("merges", []))
     verdict = "SAFE" if n_reg == 0 else f"UNSAFE — {n_reg} approved row(s) lost"
+    merge_note = f", {n_merge} approved row(s) merged (preserved)" if n_merge else ""
     print(f"\n[{name}] graded {result['graded']} rows: "
-          f"{n_win} win(s), {n_reg} regression(s), "
+          f"{n_win} win(s), {n_reg} regression(s){merge_note}, "
           f"{result['kept_negative']} rejected row(s) still inserted -> {verdict}")
     if result["ungraded"]:
         print(f"  ungraded (no verdict in fixture): {len(result['ungraded'])}")
+    for m in result.get("merges", []):
+        print(f"  merge (approved, preserved) {m['id']}  {m['name']}  [{m['reason']}]")
     for r in result["regressions"]:
         print(f"  REGRESSION {r['id']}  {r['name']}")
         print(f"             would suppress because: {r['reason']}")

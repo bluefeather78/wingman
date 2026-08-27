@@ -60,7 +60,9 @@ import re
 import sys
 import urllib.error
 
+import seed_ledger
 import url_dedupe
+import url_repair
 import url_validate
 from agent_common import add_agent_args, apply_timing, clean_email, emit_preview, snapshot_stamp
 from gemini_common import call_gemini, extract_json, estimate_cost
@@ -99,6 +101,88 @@ FLAG_URL_REPLACED = "URL replaced with the page the search returned — confirm 
 # flag that catches them. See url_validate.domain_matches_org().
 FLAG_OFFSITE = "URL is on an unrelated site — may be an article about it, not its own page"
 FLAG_NO_TYPE = "no valid type returned — set one before activating"
+# Phase-2 URL truth. A rescued URL was moved off a listicle/mill onto the program's own page
+# (verified on-domain + title-proven); a reviewer still confirms it matches. An unproven title
+# is never a rejection — false negatives like "Algebra II" vs "Algebra 2" are the accepted cost.
+FLAG_URL_RESCUED = "URL rescued to the program's own page (was on {domain}) — confirm it matches"
+FLAG_TITLE_UNPROVEN = "page title does not clearly name this program — confirm it's the right page"
+# Phase-3 uniqueness. A row sharing a program's HOMEPAGE with another may be a genuinely
+# distinct program that just has no page of its own (tenet 6), so it is kept + flagged rather
+# than auto-merged — a person confirms it's distinct or a duplicate.
+FLAG_SHARES_HOMEPAGE = "shares a homepage URL with {id} — confirm distinct program vs duplicate"
+
+# Scraper-owned fields a merge may FILL on the surviving row when they are empty there. Name
+# is handled separately (title evidence decides it). Deliberately excludes everything owned by
+# other agents (important_dates/status/was_estimated/dates_last_checked_at, review_*, link_*)
+# and all provenance (id/source/created_at/seed_id) and visibility (is_active/moderation_*).
+MERGE_FILL_FIELDS = ("org", "summary", "eligibility", "grade_min", "grade_max",
+                     "subject_tags", "contact_email")
+
+
+def merge_row(candidate, existing, page_title):
+    """Best-copy-wins merge of a re-found candidate INTO an existing row. Returns (patch, notes).
+
+    Only ever IMPROVES the survivor: the name changes only when the shared page's title proves
+    the candidate's name and NOT the incumbent's (evidence, never length — Round 2 measured the
+    incumbent winning 27/28, so the default is to keep it); every other scraper-owned field
+    fills only where the incumbent is empty. `notes` are the old values, for the survivor's
+    quality_flags, so the merge is auditable and hand-reversible. `patch` is {} when nothing
+    would change (a merge that improves nothing still suppresses the duplicate, it just writes
+    no columns).
+    """
+    patch, notes = {}, []
+    cname = (candidate.get("name") or "").strip()
+    ename = (existing.get("name") or "").strip()
+    org = existing.get("org") or candidate.get("org") or ""
+    # Replace the name ONLY when the incumbent's is genuinely junk — fewer than two identifying
+    # words of its own, e.g. "Columbia" / "Pre-College" — AND the candidate's name is proven by
+    # the page. A more-specific incumbent name is never traded for a shorter one just because
+    # strict title-proof spells a word differently ("Mathematics" vs "Math", "Algebra II" vs
+    # "Algebra 2"); that false negative must not decide the name.
+    if cname and cname != ename and len(url_repair.identity_words(ename, org)) < 2:
+        if url_repair.title_proves(page_title, cname, org)[0]:
+            patch["name"] = cname
+            notes.append(f"name was '{ename}'")
+    for field in MERGE_FILL_FIELDS:
+        ev, cv = existing.get(field), candidate.get(field)
+        if ev in (None, "", [], {}) and cv not in (None, "", [], {}):
+            patch[field] = cv
+            notes.append(f"filled {field}")
+    return patch, notes
+
+
+_MERGE_SELECT = ("id,name,org,summary,eligibility,grade_min,grade_max,"
+                 "subject_tags,contact_email,url,quality_flags")
+
+
+def apply_merge(supabase_url, service_key, candidate, target_id, url, timeout):
+    """Fetch the surviving row, merge the candidate's better fields in, and PATCH it. Auto-applies
+    (operator decision), active rows included; old values are appended to the survivor's
+    quality_flags so the edit is auditable and hand-reversible. Returns a dict for the snapshot
+    `merged` list, or None if the survivor can't be read. Never touches another agent's columns."""
+    rows = supabase_get(supabase_url, "opportunities",
+                        {"select": _MERGE_SELECT, "id": f"eq.{target_id}", "limit": "1"},
+                        service_key)
+    existing = (rows or [None])[0]
+    if not existing:
+        return None
+    page, _final = url_repair._fetch(url, timeout)
+    patch, notes = merge_row(candidate, existing, url_repair.page_title(page or ""))
+    result = {"id": target_id, "from_name": candidate.get("name"),
+              "into_name": existing.get("name"), "notes": notes, "changed": bool(patch)}
+    if not patch:
+        return result
+    day = datetime.date.today().strftime("%Y-%m-%d")
+    patch["quality_flags"] = list(existing.get("quality_flags") or []) + \
+        [f"merged {day}: {n}" for n in notes]
+    patch["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    try:
+        supabase_patch(supabase_url, "opportunities", {"id": f"eq.{target_id}"}, patch, service_key)
+    except Exception as e:
+        print(f"  [WARN] merge PATCH of {target_id} failed: {e}")
+        result["changed"] = False
+        result["error"] = str(e)[:160]
+    return result
 
 # Angles only. The seed's `category` was dropped 2026-08-23: it was never sent to the model
 # (it is not interpolated into either prompt), nothing in the student-facing app reads the
@@ -281,42 +365,6 @@ def next_id_generator(existing_ids):
         n += 1
 
 
-TOMBSTONES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               "scraper_tombstones.json")
-
-
-def load_tombstones(path=TOMBSTONES_PATH):
-    """Rows deliberately DELETED from the catalog by an operator, as dedupe-pool entries.
-
-    A DELETE removes the row from url_dedupe's pool, so the next run that finds the same
-    URL re-inserts it — the operator then re-reviews a row they already killed
-    (conradchallenge.org and girlswhocode.com's program page were both left in exactly
-    that state by the 2026-08-23/24 consolidation). These entries rejoin the pool under
-    tomb-* ids: same normalized-URL-AND-similar-name matching as everything else, so a
-    program re-found at a NEW url is never blocked, and next_id_generator ignores the
-    ids (no "ec" prefix). Missing or unreadable file degrades to no tombstones, loudly.
-    """
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        return []
-    except (OSError, ValueError) as e:
-        print(f"[WARN] {os.path.basename(path)} unreadable ({e}) — running without "
-              f"tombstones; previously deleted rows may be re-inserted.")
-        return []
-    entries = []
-    for entry in data.get("entries", []):
-        if isinstance(entry, dict) and entry.get("url") and entry.get("name"):
-            entries.append({"id": entry.get("id") or "tomb-?",
-                            "name": entry["name"], "url": entry["url"]})
-    return entries
-
-
-def is_tombstone(row):
-    return bool(row) and str(row.get("id", "")).startswith("tomb-")
-
-
 def clean_value(value, valid_set):
     return value if value in valid_set else None
 
@@ -412,6 +460,108 @@ def url_flags(check):
     return []
 
 
+def _netloc(url):
+    try:
+        return urllib.parse.urlsplit(url or "").netloc
+    except ValueError:
+        return ""
+
+
+# At most this many grounding siblings are fetched to find a proven alternative, so a candidate
+# with many same-domain source pages can't blow the per-row fetch budget.
+_MAX_SIBLING_FETCH = 3
+
+
+def _first_proven_sibling(resolved_urls, url, name, org, timeout, require_landing=False):
+    """A grounding source URL, on the org's domain, that title-proves — or None.
+
+    require_landing skips low-value sub-pages (faq/apply/rules/PDF), used when we already have
+    a working URL and only want to trade UP to the canonical landing page.
+    """
+    fetched = 0
+    for sib in resolved_urls:
+        if fetched >= _MAX_SIBLING_FETCH:
+            break
+        if not sib or sib == url or url_validate.is_content_mill(sib):
+            continue
+        if not url_validate.domain_matches_org(sib, org, name):
+            continue
+        if require_landing and url_dedupe.is_low_value_path(sib):
+            continue
+        fetched += 1
+        verdict, _title = url_repair.title_proof_url(sib, name, org, timeout)
+        if verdict is True:
+            return sib
+    return None
+
+
+def _rescue_offsite(url, name, org, resolved_urls, timeout):
+    """The program's own page for a candidate whose URL is a content mill or off-site article.
+
+    Ladder: (a) another grounding URL on the org domain that title-proves, then (b) the primary
+    program link ON the off-site page itself (listicles link out to the real page). None if
+    neither yields — the caller keeps the URL and lets FLAG_OFFSITE stand.
+    """
+    sib = _first_proven_sibling(resolved_urls, url, name, org, timeout)
+    if sib:
+        return sib
+    page, final = url_repair._fetch(url, timeout)
+    if page:
+        link, _title = url_repair.extract_primary_link(
+            page, name, org, base_url=final or url, timeout=timeout)
+        if link:
+            return link
+    return None
+
+
+def resolve_url_truth(candidate, url, flags, resolved_urls, timeout):
+    """Phase-2 URL truth (free HTTP). Improve the URL a row will be stored under:
+
+      1. A content mill or off-site page-about-the-program is rescued to the program's OWN page
+         (a proven grounding sibling, else the page's primary program link). FLAG_URL_RESCUED.
+      2. A low-value sub-page (apply/faq/rules/PDF) yields to a proven canonical landing page
+         when the grounding offers one.
+      3. The final URL is title-proven; a proof FAILURE trades to a proven sibling, else lands
+         FLAG_TITLE_UNPROVEN (never a rejection — a blocked fetch or "Algebra II" vs "Algebra 2"
+         is the accepted false-negative cost). PDFs/non-HTML fail the proof.
+
+    Returns (url, flags). Offsite/mill detection itself stays in the caller's free flag phase,
+    so this only ever ADDS the rescued/unproven markers and swaps the URL — it never flags
+    offsite (which would double up with the flag phase).
+    """
+    name = (candidate.get("name") or "").strip()
+    org = (candidate.get("org") or "").strip()
+    flags = list(flags)
+
+    # 1. A content mill / off-site page-about-the-program is rescued to the program's own page.
+    if url_validate.is_content_mill(url) or not url_validate.domain_matches_org(url, org, name):
+        rescued = _rescue_offsite(url, name, org, resolved_urls, timeout)
+        if rescued:
+            was = url_dedupe.registrable_domain(_netloc(url)) or _netloc(url) or "another site"
+            flags.append(FLAG_URL_RESCUED.format(domain=was))
+            return rescued, flags
+        # Couldn't rescue: keep the URL; the free flag phase adds FLAG_OFFSITE. No point
+        # title-proving a page we already know is off the program's site.
+        return url, flags
+
+    # 2. On the org's own domain: trade a low-value sub-page (apply/faq/rules/PDF) for a proven
+    #    canonical landing page when the grounding offers one.
+    if url_dedupe.is_low_value_path(url):
+        better = _first_proven_sibling(resolved_urls, url, name, org, timeout, require_landing=True)
+        if better:
+            return better, flags
+
+    # 3. Title-proof the stored URL; a failure trades to a proven sibling, else flags (never a
+    #    rejection — a blocked fetch or "Algebra II" vs "Algebra 2" is the accepted cost).
+    verdict, _title = url_repair.title_proof_url(url, name, org, timeout)
+    if verdict is False:
+        better = _first_proven_sibling(resolved_urls, url, name, org, timeout)
+        if better:
+            return better, flags
+        flags.append(FLAG_TITLE_UNPROVEN)
+    return url, flags
+
+
 def build_row(candidate, mint_id, source, url, flags):
     """One catalog row, or None if it has no name/url to be identified by.
 
@@ -497,22 +647,142 @@ def extract_candidates(notes, resolved_urls, gemini_key, args):
     return candidates, estimate_cost(usage)
 
 
-def insert_rows(supabase_url, service_key, rows, review_by_id):
-    """Insert with the review columns, retrying without them if that migration is pending.
+ATTRIBUTION_KEYS = ("seed_id", "found_via")
 
-    PostgREST rejects an entire insert on one unknown key, so a missing column would mean
-    the whole scrape wrote nothing — reading as "the agent found nothing" rather than
-    "every insert 400'd". See user_submissions_schema.sql.
+
+def _without(rows, keys):
+    drop = set(keys)
+    return [{k: v for k, v in r.items() if k not in drop} for r in rows]
+
+
+def insert_rows(supabase_url, service_key, rows, review_by_id):
+    """Insert with the review + attribution columns, degrading if either migration is pending.
+
+    PostgREST rejects an entire insert on one unknown key, so a single missing column would
+    mean the whole scrape wrote NOTHING — reading as "the agent found nothing" rather than
+    "every insert 400'd". Two INDEPENDENT migrations can be missing here: the review columns
+    (moderation_status/dup_candidates/quality_flags — user_submissions_schema.sql) and the
+    attribution columns (seed_id/found_via — scraper_attribution_schema.sql). Either can be
+    present without the other, so the ladder tries all four combinations widest-first and
+    keeps the maximal set the DB actually supports — a live DB with both applied always takes
+    the full path. Returns the tier that succeeded. `rows` carry seed_id/found_via on the base
+    dict, so the attribution-dropping tiers strip them explicitly.
     """
     full = [{**row, **review_by_id.get(row["id"], {})} for row in rows]
+    attempts = [
+        ("full", full),                                 # both migrations present
+        ("no-attribution", _without(full, ATTRIBUTION_KEYS)),  # review present, attribution not
+        ("no-review", rows),                            # attribution present, review not
+        ("minimal", _without(rows, ATTRIBUTION_KEYS)),  # neither present
+    ]
+    for i, (tier, payload) in enumerate(attempts):
+        try:
+            supabase_post(supabase_url, "opportunities", payload, service_key)
+            return tier
+        except Exception as e:
+            if i == len(attempts) - 1:
+                raise  # the minimal write is base columns only — a failure here is real
+            print(f"[WARN] Insert tier '{tier}' failed ({e}); trying a narrower column set. "
+                  f"Run user_submissions_schema.sql and scraper_attribution_schema.sql to "
+                  f"keep review flags and seed attribution.")
+
+
+def auto_disable_mined_seeds(supabase_url, service_key, ran_seeds):
+    """After a run, switch off angles the ledger diagnoses mined-out or thin.
+
+    The diagnosis is over an angle's LIFETIME verdicts (seed_ledger.diagnose), not just this
+    run — an angle that added nothing new because every candidate was a dupe is exactly the
+    thing to retire. Sample-guarded (>=10 found across >=2 runs) and reversible with one
+    click in the console, which is what makes auto-disabling safe (operator decision
+    2026-08-26). Only seeds that just ran are considered, and they were enabled by definition,
+    so a manually-disabled angle is never touched. A mis-aimed or pipeline-limited angle is
+    never disabled — its fix is a better angle or the URL/refind pipeline, not silence.
+
+    Returns the list of (seed_id, reason) disabled. Every failure is logged and swallowed:
+    retiring an angle must never abort a scrape that already spent money on real results.
+    """
+    ids = [s["id"] for s in ran_seeds if s.get("id") is not None]
+    if not ids:
+        return []
+    id_list = ",".join(str(i) for i in ids)
     try:
-        supabase_post(supabase_url, "opportunities", full, service_key)
-        return True
+        seed_rows = supabase_get(supabase_url, "scraper_seeds", {
+            "select": "id,is_enabled,total_runs,total_found,total_added,total_dupes,total_cost",
+            "id": f"in.({id_list})"}, service_key) or []
+        opp_rows = supabase_get(supabase_url, "opportunities", {
+            "select": "seed_id,moderation_status,moderation_reason,is_active",
+            "seed_id": f"in.({id_list})"}, service_key) or []
     except Exception as e:
-        print(f"[WARN] Insert with review columns failed ({e}). Retrying without them — "
-              f"run user_submissions_schema.sql to get flags into the review queue.")
-        supabase_post(supabase_url, "opportunities", rows, service_key)
-        return False
+        print(f"[WARN] Skipping auto-disable — could not read the ledger ({e}). "
+              f"Have you run scraper_attribution_schema.sql?")
+        return []
+
+    funnels = seed_ledger.build_seed_funnels(opp_rows, seed_rows)
+    enabled_by_id = {s.get("id"): s.get("is_enabled") for s in seed_rows}
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    disabled = []
+    for sid, funnel in funnels.items():
+        if not funnel.get("auto_disable") or not enabled_by_id.get(sid):
+            continue
+        reason = seed_ledger.disable_reason(funnel)
+        try:
+            supabase_patch(supabase_url, "scraper_seeds", {"id": f"eq.{sid}"},
+                           {"is_enabled": False, "disabled_reason": reason,
+                            "disabled_at": now}, service_key)
+        except Exception as e:
+            # disabled_reason/disabled_at migration may be pending — still retire the angle,
+            # just without recording why (the console degrades to a bare disable).
+            print(f"  [WARN] Could not record the auto-disable reason for seed {sid} ({e}); "
+                  f"disabling anyway. Run scraper_seeds_schema.sql to keep reasons.")
+            try:
+                supabase_patch(supabase_url, "scraper_seeds", {"id": f"eq.{sid}"},
+                               {"is_enabled": False}, service_key)
+            except Exception as e2:
+                print(f"  [WARN] Could not disable seed {sid}: {e2}")
+                continue
+        disabled.append((sid, reason))
+        print(f"  [AUTO-DISABLE] seed {sid}: {reason}")
+    return disabled
+
+
+def _url_rank(url, flags):
+    """Phase-2 URL quality, higher is better: title-proven > not-low-value > shallower path.
+    Uses the flags already computed for the row (FLAG_TITLE_UNPROVEN as the proof proxy) so it
+    needs no extra fetch."""
+    proven = 0 if FLAG_TITLE_UNPROVEN in (flags or []) else 1
+    not_low = 0 if url_dedupe.is_low_value_path(url) else 1
+    try:
+        depth = len([s for s in urllib.parse.urlsplit(url or "").path.split("/") if s])
+    except ValueError:
+        depth = 99
+    return (proven, not_low, -depth)
+
+
+def collapse_intra_run_twins(rows, flags_by_id):
+    """Collapse rows minted THIS run that are same-registrable-domain AND name_similarity >= 0.9
+    down to the copy whose URL wins the Phase-2 ranking. Returns (kept_rows, collapsed), where
+    collapsed is [{"loser","winner","name"}]. This is a LOOSER rule than the catalog dedupe and
+    is applied to in-run rows ONLY — it never touches the real catalog, so a false collapse
+    costs at most one freshly-scraped row, not a curated one."""
+    kept, collapsed = [], []
+    for row in rows:
+        dom = url_dedupe.registrable_domain(_netloc(row.get("url")))
+        twin = None
+        for k in kept:
+            if (dom and url_dedupe.registrable_domain(_netloc(k.get("url"))) == dom
+                    and url_dedupe.name_similarity(row.get("name") or "", k.get("name") or "") >= 0.9):
+                twin = k
+                break
+        if not twin:
+            kept.append(row)
+            continue
+        if _url_rank(row.get("url"), flags_by_id.get(row["id"])) > \
+                _url_rank(twin.get("url"), flags_by_id.get(twin["id"])):
+            kept[kept.index(twin)] = row          # new row's URL wins; it replaces the twin
+            collapsed.append({"loser": twin["id"], "winner": row["id"], "name": twin.get("name")})
+        else:
+            collapsed.append({"loser": row["id"], "winner": twin["id"], "name": row.get("name")})
+    return kept, collapsed
 
 
 def main():
@@ -582,12 +852,13 @@ def main():
     source = f"scraper-{args.mode}-{datetime.date.today().strftime('%Y%m%d')}"
 
     print(f"[OK] Fetching existing catalog from Supabase for dedup...")
+    # The whole table, rejected rows included — a rejected row is the permanent record
+    # that a person said no, and its URL blocking re-submission is the point. (Operator
+    # deletions from 2026-08 were backfilled as source='tombstone-backfill' rejected
+    # rows, so the table is the ONLY dedupe memory. Never SQL-DELETE a row; reject it.)
     existing = supabase_get(supabase_url, "opportunities", {"select": "id,name,url"}, service_key)
     mint_id = next_id_generator({r["id"] for r in existing})
-    tombstones = load_tombstones()
-    existing.extend(tombstones)
-    print(f"[OK] {len(existing) - len(tombstones)} existing rows loaded"
-          f" (+{len(tombstones)} tombstones of operator-deleted rows).")
+    print(f"[OK] {len(existing)} existing rows loaded.")
 
     # Dry runs are logged too: they skip DATABASE writes, not the paid Gemini calls, so a
     # dry scrape costs the same as a real one. The "-dryrun" mode suffix marks them.
@@ -605,6 +876,7 @@ def main():
     inserted_rows = []
     review_by_id = {}
     rejected = []          # everything NOT inserted, with the reason and the raw candidate
+    merged = []            # same-URL candidates merged into an existing row instead of inserted
     total_cost = 0.0
     raw_found = duplicates_skipped = invalid_skipped = errors = 0
     total_searches = silent_search_count = flagged_rows = dead_links = 0
@@ -669,6 +941,12 @@ def main():
                     rejected.append({"reason": "no name or no URL — a row cannot be identified "
                                                "without both", "raw": candidate})
                     continue
+                # Phase-2 URL truth: rescue a content-mill/off-site URL to the program's own
+                # page and title-prove what we store. Free HTTP, so it rides the same
+                # --no-verify-urls switch as the liveness check.
+                if not args.no_verify_urls:
+                    url, flags = resolve_url_truth(
+                        candidate, url, flags, resolved_urls, url_validate.DEFAULT_TIMEOUT)
                 staged.append((candidate, url, list(flags)))
 
             checks = {}
@@ -681,35 +959,55 @@ def main():
                     flags.append(FLAG_BARE_DOMAIN)
                 if url_dedupe.is_low_value_path(url):
                     flags.append(FLAG_LOW_VALUE)
-                if not url_validate.domain_matches_org(
-                        url, candidate.get("org"), candidate.get("name")):
+                if (url_validate.is_content_mill(url)
+                        or not url_validate.domain_matches_org(
+                            url, candidate.get("org"), candidate.get("name"))):
                     flags.append(FLAG_OFFSITE)
                 if silent:
                     flags.append(FLAG_NOT_SEARCHED)
 
-                # Only an exact duplicate (same normalized URL AND matching name) is ever
-                # rejected. Everything weaker becomes a hint on the row: url_dedupe.py's
-                # measurements show URL-alone rejects shared application portals and
-                # name-alone rejects 257 genuinely distinct catalog pairs.
+                # Everything weaker than an exact/same-URL match becomes a hint on the row:
+                # url_dedupe.py's measurements show URL-alone rejects shared application portals
+                # and name-alone rejects 257 genuinely distinct catalog pairs.
                 exact, dup_candidates = url_dedupe.find_duplicates(url, candidate.get("name"), existing)
-                if exact:
+                # Phase 3: a candidate on the SAME normalized URL as an existing row (name aside)
+                # is a same-URL match. On a DEDICATED page that means the same program — merge the
+                # better fields into the incumbent instead of inserting a duplicate (Round 2: the
+                # incumbent won 27/28). On a BARE DOMAIN the two may be distinct programs that both
+                # landed on the org homepage (tenet 6), so keep + flag for a human, never auto-merge.
+                same_url = exact or next(
+                    (c for c in dup_candidates if "identical URL" in (c.get("reason") or "")), None)
+                if same_url and not url_validate.is_bare_domain(url):
                     duplicates_skipped += 1
                     seed_dupes += 1
-                    if is_tombstone(exact):
-                        # Not in the catalog — an operator deliberately DELETED this row.
-                        # Skipping keeps it from coming back through the review queue.
-                        reason = (f"previously deleted by operator — tombstone for "
-                                  f"{exact.get('name')} ({exact.get('url')})")
+                    if args.dry_run or args.no_verify_urls:
+                        merged.append({"id": same_url["id"], "from_name": candidate.get("name"),
+                                       "into_name": same_url.get("name"), "changed": False,
+                                       "dry": True})
                     else:
-                        reason = f"exact duplicate of {exact.get('id')} ({exact.get('name')})"
-                    rejected.append({"reason": reason, "raw": candidate})
+                        m = apply_merge(supabase_url, service_key, candidate, same_url["id"],
+                                        url, url_validate.DEFAULT_TIMEOUT)
+                        if m:
+                            merged.append(m)
                     continue
+                if exact:  # bare-domain homepage AND a matching name -> almost certainly a dup
+                    duplicates_skipped += 1
+                    seed_dupes += 1
+                    rejected.append({"reason": f"exact duplicate of {exact.get('id')} "
+                                               f"({exact.get('name')})", "raw": candidate})
+                    continue
+                if same_url:  # bare-domain homepage, DIFFERENT name -> may be a distinct program
+                    flags.append(FLAG_SHARES_HOMEPAGE.format(id=same_url["id"]))
 
                 row = build_row(candidate, next(mint_id), source, url, flags)
                 if not row:
                     invalid_skipped += 1
                     rejected.append({"reason": "row could not be built", "raw": candidate})
                     continue
+                # Attribute the row to the angle that found it, so the reviewer's verdict on
+                # it becomes live feedback on this seed (seed_ledger.py). None for fallback
+                # angles, which have no stable id — the correct "unknown" value.
+                row["seed_id"] = seed.get("id")
                 # build_row substitutes a placeholder type rather than failing; flagging it
                 # is this loop's job, so the reviewer is told to set a real one.
                 row_flags = list(flags)
@@ -746,6 +1044,15 @@ def main():
         # No explicit sleep: gemini_common enforces --min-delay (default 5s) between calls
         # and stamps its timestamp at call start, so a shorter sleep here did nothing.
 
+    # Collapse in-run twins (two seeds finding the same program at different URLs on one site).
+    flags_by_id = {rid: (rv.get("quality_flags") or []) for rid, rv in review_by_id.items()}
+    inserted_rows, collapsed_twins = collapse_intra_run_twins(inserted_rows, flags_by_id)
+    for c in collapsed_twins:
+        rejected.append({"reason": f"intra-run duplicate of {c['winner']}",
+                         "raw": {"id": c["loser"], "name": c.get("name")}})
+    if collapsed_twins:
+        print(f"[OK] Collapsed {len(collapsed_twins)} in-run twin(s) to their best-URL copy.")
+
     print(f"\n[SUMMARY] seeds run: {len(seeds)}, raw candidates: {raw_found}, "
           f"duplicates skipped: {duplicates_skipped}, invalid skipped: {invalid_skipped}, "
           f"errors: {errors}, new rows: {len(inserted_rows)} "
@@ -756,10 +1063,13 @@ def main():
     review_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 f"scrape_review_{args.mode}_{run_stamp}.json")
     with open(review_path, "w", encoding="utf-8") as f:
+        # `merged` is additive — dryrun_common reads only `inserted`; do not reshape those two.
         json.dump({"inserted": [{**r, "review": review_by_id.get(r["id"], {})} for r in inserted_rows],
-                   "rejected": rejected}, f, indent=2, ensure_ascii=False)
+                   "rejected": rejected, "merged": merged}, f, indent=2, ensure_ascii=False)
+    applied_merges = sum(1 for m in merged if m.get("changed"))
     print(f"[OK] Wrote review snapshot: {review_path} "
-          f"({len(inserted_rows)} inserted, {len(rejected)} rejected with reasons)")
+          f"({len(inserted_rows)} inserted, {len(rejected)} rejected with reasons, "
+          f"{len(merged)} merged into existing rows — {applied_merges} changed a field)")
 
     if args.dry_run:
         print(f"[DRY RUN] No opportunities were written. The run itself is still logged to "
@@ -767,6 +1077,13 @@ def main():
     elif inserted_rows:
         insert_rows(supabase_url, service_key, inserted_rows, review_by_id)
         print(f"[OK] Inserted {len(inserted_rows)} row(s) into opportunities (is_active=false).")
+
+    # Retire angles the ledger now diagnoses mined-out or thin. Live runs only: a dry run
+    # never touches the catalog, and disabling an angle is a catalog config change. The
+    # decision reads the reviewer's accumulated verdicts, so it is meaningful even on a run
+    # that inserted nothing new.
+    if not args.dry_run:
+        auto_disable_mined_seeds(supabase_url, service_key, seeds)
 
     if run_id is not None:
         supabase_patch(supabase_url, "agent_runs", {"id": f"eq.{run_id}"}, {

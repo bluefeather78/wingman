@@ -76,6 +76,46 @@ LIVE = "live"
 DEAD = "dead"
 UNVERIFIED = "unverified"
 
+# Hosts that write ABOUT programs but are never a program's OWN page — SEO listicles, blogs,
+# video, forums, encyclopedias. Measured round 1 (2026-08-23): every URL on these hosts that
+# reached review was rejected ~100% of the time. A mill URL can never be the stored URL; the
+# real page it links to is recovered by url_repair.extract_primary_link instead. Compared on
+# the registrable domain, so www./blog./old. subdomains all match.
+CONTENT_MILL_HOSTS = {
+    "lumiere-education.com", "admissionsight.com", "scholarships360.org", "nshss.org",
+    "borderless.so", "aralia.com", "indigoresearch.org", "ladderinternships.com",
+    "opportunitiesforyouth.org", "youtube.com", "youtu.be", "reddit.com",
+    "wikipedia.org", "lithub.com",
+}
+# Path-aware: a host that is a mill ONLY under a sub-path. immerse.education is a legitimate
+# provider at /summer-schools/ but a content mill at /knowledge-base/, so a bare host match
+# would wrongly reject its real program pages.
+CONTENT_MILL_PATH_PREFIXES = {
+    "immerse.education": ("/knowledge-base/",),
+}
+
+
+def is_content_mill(url):
+    """True if the URL is a page ABOUT programs (listicle/blog/video/forum), never one's own.
+
+    Registrable-domain match against CONTENT_MILL_HOSTS, plus the path-aware entries for hosts
+    that are a mill only under a sub-path. A mill URL must never be stored as a row's URL.
+    """
+    if not url:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url if "//" in url else "//" + url)
+    except ValueError:
+        return False
+    host = (parts.hostname or "").lower().strip(".")
+    if not host:
+        return False
+    reg = url_dedupe.registrable_domain(host)
+    for mill_host, prefixes in CONTENT_MILL_PATH_PREFIXES.items():
+        if reg == mill_host or host == mill_host:
+            return (parts.path or "/").startswith(prefixes)
+    return reg in CONTENT_MILL_HOSTS or host in CONTENT_MILL_HOSTS
+
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Turn a 3xx into an HTTPError so the Location header can be read instead of followed."""

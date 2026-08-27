@@ -43,7 +43,12 @@ LOW_VALUE_SEGMENTS = {
     "faq", "faqs", "about", "about-us", "contact", "contact-us", "apply", "application",
     "register", "registration", "signup", "sign-up", "login", "signin", "sign-in",
     "news", "blog", "privacy", "terms", "sitemap", "search", "donate", "support",
+    "admissions", "admission", "cost", "costs", "tuition", "pricing", "rules", "eligibility",
 }
+
+# Document extensions that are never a program's canonical landing page — a rules PDF or an
+# application form is a sub-resource, not the page a student should be sent to.
+_LOW_VALUE_EXTENSIONS = (".pdf", ".doc", ".docx")
 
 # Second-level labels that are part of a public suffix rather than the registrable name,
 # so "cam.ac.uk" and "med.stanford.edu" resolve to the right owner.
@@ -167,7 +172,10 @@ def is_low_value_path(url):
     """
     _, _, path, _ = split_url(url)
     segments = [s.lower() for s in path.split("/") if s]
-    return bool(segments) and segments[-1] in LOW_VALUE_SEGMENTS
+    if not segments:
+        return False
+    last = segments[-1]
+    return last.endswith(_LOW_VALUE_EXTENSIONS) or last in LOW_VALUE_SEGMENTS
 
 
 def _prefix_relation(path_a, path_b):

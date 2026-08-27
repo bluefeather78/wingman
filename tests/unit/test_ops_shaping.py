@@ -511,3 +511,48 @@ def test_moderation_updates_duplicate_explicit_reason_wins():
 def test_moderation_updates_reason_is_capped():
     u = core._moderation_updates("rejected", "", "x" * 2000, NOW)
     assert len(u["moderation_reason"]) == core.MODERATION_REASON_MAX_LEN
+
+
+# --------------------------------------------------------------------------- #
+# Maintenance tools — the runnable standalone scripts in the Run view. Pure over
+# the registry + argv builder; no subprocess is launched here.
+# --------------------------------------------------------------------------- #
+class TestMaintenanceTools:
+    def test_public_registry_hides_script_paths(self):
+        pub = core.maintenance_tools_public()
+        assert set(pub) == set(core.MAINTENANCE_TOOLS)
+        for entry in pub.values():
+            assert "script" not in entry
+            assert {"name", "description", "free", "writes", "params"} <= set(entry)
+
+    def test_every_tool_script_exists(self):
+        import os
+        for key, cfg in core.MAINTENANCE_TOOLS.items():
+            path = os.path.join(core.REPO_ROOT, cfg["script"])
+            assert os.path.exists(path), f"{key} -> missing {cfg['script']}"
+
+    def test_inspect_accepts_commas_or_spaces(self):
+        args = core.build_tool_args("inspect", {"ids": "ec1, ec2 ec3"})
+        assert args[2:] == ["check_opp_data.py", "ec1", "ec2", "ec3"]
+
+    def test_contactemail_all_and_force(self):
+        args = core.build_tool_args("contactemail", {"scope": "all", "force": True})
+        assert args[2:] == ["find_contact_emails.py", "--all", "--force"]
+
+    def test_contactemail_ids_limit_dryrun(self):
+        args = core.build_tool_args(
+            "contactemail", {"scope": "ids", "ids": "ec9", "limit": "5", "dryRun": True})
+        assert args[2:] == ["find_contact_emails.py", "--ids", "ec9", "--limit", "5", "--dry-run"]
+
+    def test_contactemail_defaults_to_all_without_ids(self):
+        # scope=ids but no ids given must not emit a bare --ids; falls back to --all.
+        args = core.build_tool_args("contactemail", {"scope": "ids"})
+        assert "--all" in args and "--ids" not in args
+
+    def test_fixed_args_and_no_params(self):
+        assert core.build_tool_args("mlgrader", {})[2:] == ["grade_mailing_lists.py", "--sample"]
+        assert core.build_tool_args("export", {})[2:] == ["export_json.py"]
+
+    def test_only_contact_email_is_paid(self):
+        paid = [k for k, c in core.MAINTENANCE_TOOLS.items() if not c.get("free")]
+        assert paid == ["contactemail"]

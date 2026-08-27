@@ -152,17 +152,49 @@ def test_score_penalizes_chrome_and_rewards_apply():
     assert apply > 0 > chrome
 
 
+def test_name_tokens_excludes_host_derived_words():
+    """The org name repeats across a single-program host's slugs, so a host-derived token
+    discriminates nothing and would reward chrome (the ec18244 bug). It is dropped."""
+    toks = sm.name_tokens({"name": "Congressional Award", "org": "Congressional Award Foundation",
+                           "url": "https://www.congressionalaward.org/"})
+    assert "congressional" not in toks       # in the host -> dropped
+    assert "foundation" in toks              # not in the host -> kept
+
+
+def test_exact_nav_slug_beats_program_partnership_and_news():
+    """The ec18244 regression, at the scoring level: /the-program/ (canonical nav) must outrank
+    /program-partners/ (chrome that also contains 'program') and a news-headline slug."""
+    toks = sm.name_tokens({"name": "Congressional Award",
+                           "url": "https://www.congressionalaward.org/"})
+    program = sm.score_slug("https://c.org/the-program/", toks)
+    partners = sm.score_slug("https://c.org/program-partners/", toks)
+    news = sm.score_slug(
+        "https://c.org/the-congressional-award-foundation-honors-170-texas-youth-for-service/",
+        toks)
+    gala = sm.score_slug("https://c.org/2025-golf-tournament-registration/", toks)
+    assert program > partners
+    assert program > news
+    assert program > gala
+
+
 # ---------------- scope ----------------
 
-def test_scope_keeps_all_for_small_host():
-    entries = [("https://h.org/a", None), ("https://h.org/b", None)]
-    assert sm.scope({"url": "https://h.org/"}, entries) == entries
+def test_scope_bare_homepage_keeps_all_regardless_of_size():
+    """A bare-homepage stored URL means the whole host IS the program — keep everything however
+    large, so the real content pages (which do NOT repeat the org name) are not filtered out.
+    This is the ec18244 regression: filtering congressionalaward.org by 'congressional' dropped
+    /the-program/ and kept the news/gala pages."""
+    big = [(f"https://congressionalaward.org/news-item-{i}", None) for i in range(600)]
+    content = [("https://congressionalaward.org/the-program/", None)]
+    opp = {"name": "Congressional Award", "url": "https://www.congressionalaward.org/"}
+    kept = sm.scope(opp, big + content)
+    assert ("https://congressionalaward.org/the-program/", None) in kept
+    assert len(kept) == 601                                             # nothing filtered
 
 
-def test_scope_filters_large_multiprogram_host_by_name_and_prefix():
-    # Build a >SINGLE_PROGRAM_MAX_URLS tree: mostly unrelated program pages + a few ours.
-    big = [(f"https://nyu.edu/other-{i}/page", None)
-           for i in range(sm.SINGLE_PROGRAM_MAX_URLS + 50)]
+def test_scope_filters_deep_path_multiprogram_host_by_name_and_prefix():
+    # A DEEP-path stored URL on a large host is scoped to the program's section.
+    big = [(f"https://nyu.edu/other-{i}/page", None) for i in range(450)]
     ours = [("https://nyu.edu/tisch/future-artists/apply", None),
             ("https://nyu.edu/steinhardt/summer/tisch-future-artists", None)]
     opp = {"name": "Tisch Future Artists", "org": "NYU",

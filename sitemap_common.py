@@ -37,10 +37,6 @@ MAX_BYTES = 5_000_000          # K — per-file read cap
 MAX_CHILD_SITEMAPS = 25        # N — children of a <sitemapindex> we will fetch
 MAX_TOTAL_URLS = 20_000        # M — total <url> entries we will hold
 TOP_N = 5                      # candidates returned by default
-# A host whose full page list is at or under this many URLs is treated as a single-program
-# site (keep everything); above it, scope to the program. congressionalaward.org is 271 pages
-# (kept whole); an nyu.edu-scale host is filtered. See scope().
-SINGLE_PROGRAM_MAX_URLS = 400
 
 _COMMON_SITEMAP_PATHS = ("/sitemap.xml", "/sitemap_index.xml", "/wp-sitemap.xml")
 
@@ -54,9 +50,24 @@ _POS = ("program", "appl", "regist", "how-to", "howto", "prospective", "particip
 _NEG = ("leadership", "donor", "giving", "sponsor", "news", "blog", "press", "event",
         "summit", "alumni", "staff", "board", "photos", "gallery", "podcast", "job",
         "career", "contact", "privacy", "terms", "cookie", "login", "account", "cart",
-        "shop", "store", "history", "mission", "about-us")
+        "shop", "store", "history", "mission", "about-us",
+        # fundraiser / gala event chrome — these carry "register" but are not the program
+        # (golf/poker tournaments, galas, luncheons). ec18244's sitemap is full of them.
+        "tournament", "golf", "poker", "gala", "luncheon", "banquet", "auction", "raffle",
+        "fundraiser", "reunion", "confirmation", "thank-you")
 
 # Generic words dropped when deriving name tokens — they match half a catalog and cannot scope.
+# A page whose slug's LAST segment IS one of these is a canonical application-nav page — the
+# strongest signal there is, and it cleanly separates `/the-program/` from `/program-partners/`
+# without hand-blocking every chrome variant. Universal names, not overfit to one site.
+_EXACT_SLUGS = {
+    "the-program", "program", "the-programs", "programs", "how-to-apply", "howtoapply",
+    "how-to-participate", "how-it-works", "apply", "application", "applications", "applying",
+    "register", "registration", "how-to-register", "eligibility", "requirements", "prospective",
+    "prospective-participants", "prospective-students", "participants", "participate", "steps",
+    "get-started", "getting-started", "overview", "timeline", "key-dates", "dates", "deadline",
+    "deadlines", "guidelines", "faq", "faqs", "admissions", "admission", "join", "enroll"}
+
 _NAME_STOP = {"the", "a", "an", "of", "and", "for", "to", "in", "on", "at", "program",
               "programs", "summer", "high", "school", "students", "student", "national",
               "international", "academy", "institute", "center", "centre", "project",
@@ -261,10 +272,17 @@ def collect_urls(sitemap_urls, fetch):
 
 def name_tokens(opp):
     """Distinctive lowercased tokens from the opportunity's name (and org), generic words
-    dropped — the same idea url_repair uses to separate a program's identity from its category."""
+    dropped — the same idea url_repair uses to separate a program's identity from its category.
+
+    Tokens already present in the HOST are also dropped: on a single-program site the org name
+    repeats across its slugs (congressionalaward.org has "congressional" in its news, gala and
+    ceremony URLs but NOT in `/the-program/`), so keeping it would reward chrome and starve the
+    real content pages. A host-derived token discriminates nothing between pages of that host."""
     text = f"{opp.get('name') or ''} {opp.get('org') or ''}".lower()
+    host_concat = (aggregators_common.normalize_domain(opp.get("url")) or "").replace(".", "")
     toks = re.findall(r"[a-z0-9]+", text)
-    return {t for t in toks if len(t) > 2 and t not in _NAME_STOP}
+    return {t for t in toks
+            if len(t) > 2 and t not in _NAME_STOP and t not in host_concat}
 
 
 def _path_prefix(url):
@@ -275,19 +293,27 @@ def _path_prefix(url):
 
 
 def scope(opp, entries):
-    """A single-program host (few pages) keeps everything; a big multi-program host is filtered
-    to the stored URL's path prefix OR the opportunity's name tokens, so ranking is not run over
-    a 50k-page tree. Falls back to keeping all if filtering would empty the set (better to rank
-    broadly than to discover nothing)."""
-    if len(entries) <= SINGLE_PROGRAM_MAX_URLS:
-        return entries
+    """Narrow a big host's page list to THIS program before ranking.
+
+    The deciding signal is the stored URL's PATH, not the page count. A **bare-homepage** stored
+    URL (path "" or "/") means the host is dedicated to this program — the whole site IS the
+    program (congressionalaward.org) — so keep everything and let the ranker sort content from
+    chrome. Filtering such a host by its own name would drop the real content pages, which do
+    NOT repeat the org name, and keep the news/gala pages, which do (the ec18244 bug).
+
+    A **deep-path** stored URL is a program section of a larger, possibly multi-program host
+    (nyu.edu/tisch/…): scope to that path prefix OR the opportunity's (host-stripped) name tokens.
+    Falls back to keeping all if filtering would empty the set — better to rank broadly than to
+    discover nothing. A hard size cap still bounds collection upstream (MAX_TOTAL_URLS)."""
     prefix = _path_prefix(opp.get("url") or "")
+    if not prefix:
+        return entries
     toks = name_tokens(opp)
     kept = []
     for loc, lastmod in entries:
         path = urlparse(loc).path.lower()
         slug_words = set(re.findall(r"[a-z0-9]+", path))
-        if (prefix and path.startswith(prefix.lower())) or (toks & slug_words):
+        if path.startswith(prefix.lower()) or (toks & slug_words):
             kept.append((loc, lastmod))
     return kept or entries
 
@@ -299,6 +325,9 @@ def score_slug(url, toks):
     shallow-depth bonus, and a name-token-overlap bonus. lastmod recency is added by rank()."""
     path = urlparse(url).path.lower()
     score = 0.0
+    segs = [s for s in path.split("/") if s]
+    if segs and segs[-1] in _EXACT_SLUGS:
+        score += 3.0                        # canonical application-nav page
     for stem in _POS:
         if stem in path:
             score += 2.0
@@ -307,8 +336,12 @@ def score_slug(url, toks):
             score -= 3.0
     depth = len([s for s in path.split("/") if s])
     score += max(0.0, 3.0 - depth)          # shallow pages preferred
-    slug_words = set(re.findall(r"[a-z0-9]+", path))
-    score += 1.5 * len(toks & slug_words)   # this program's own name in the slug
+    words = re.findall(r"[a-z0-9]+", path)
+    # A slug that reads like a SENTENCE is a news headline / press release, not a navigation
+    # page ("the-congressional-award-foundation-honors-170-texas-youth-for-achievements-in-
+    # service"). Nav pages are terse (/the-program/, /apply/). Penalize length beyond a few words.
+    score -= 0.6 * max(0, len(words) - 4)
+    score += 1.5 * len(toks & set(words))   # this program's own (host-stripped) name in the slug
     return score
 
 

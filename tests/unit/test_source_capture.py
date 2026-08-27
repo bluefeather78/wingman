@@ -118,3 +118,60 @@ def test_parse_applies_tier_per_source():
     assert tiers == {"think.mit.edu": "official",
                      "lumiere-education.com": "trusted",
                      "random.org": "pending"}
+
+
+# --------------------------------------------------------------- D2 sitemap-first injection
+
+class _Cand:
+    def __init__(self, url):
+        self.url = url
+
+
+def test_discovery_injects_sitemap_urls_into_fetch_prompt(monkeypatch):
+    """When the sitemap helper returns candidates, their URLs are injected into the web_fetch
+    prompt and the discovery source is 'sitemap'."""
+    seen = {}
+
+    def fake_capture(user_content, api_key, timeout):
+        seen["user"] = user_content
+        return {"content": [_html_block("https://p.org/the-program/", "step text")]}
+
+    monkeypatch.setattr(sc, "_capture_call", fake_capture)
+    fake_discover = lambda opp, top_n=5: [_Cand("https://p.org/the-program/"),
+                                          _Cand("https://p.org/prospective/")]
+    opp = {"name": "P", "url": "https://p.org/", "id": "x"}
+    srcs, cost, reason = sc.fetch_and_capture(opp, "k", discover=fake_discover)
+    assert "https://p.org/the-program/" in seen["user"]
+    assert "https://p.org/prospective/" in seen["user"]
+    assert "OWN sitemap" in seen["user"]
+    assert reason == "ok"
+
+
+def test_discovery_no_sitemap_leaves_prompt_unchanged(monkeypatch):
+    """No sitemap -> no injected block -> byte-identical to the pre-sitemap prompt (no
+    regression on a no-sitemap host)."""
+    seen = {}
+
+    def fake_capture(user_content, api_key, timeout):
+        seen["user"] = user_content
+        return {"content": []}
+
+    monkeypatch.setattr(sc, "_capture_call", fake_capture)
+    opp = {"name": "P", "url": "https://p.org/"}
+    sc.fetch_and_capture(opp, "k", discover=lambda opp, top_n=5: [])
+    assert "sitemap" not in seen["user"].lower()
+    assert seen["user"].endswith("Start from the program URL above.")
+
+
+def test_discovery_swallows_helper_error(monkeypatch):
+    """A crashing sitemap helper must degrade to search, never break the fetch."""
+    def fake_capture(user_content, api_key, timeout):
+        return {"content": []}
+
+    def boom(opp, top_n=5):
+        raise RuntimeError("sitemap on fire")
+
+    monkeypatch.setattr(sc, "_capture_call", fake_capture)
+    srcs, cost, reason = sc.fetch_and_capture({"name": "P", "url": "https://p.org/"}, "k",
+                                              discover=boom)
+    assert reason == "no-fetch"   # no sources, but no crash

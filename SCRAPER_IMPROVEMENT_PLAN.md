@@ -427,40 +427,65 @@ Success criteria (pilot-sized, then scale):
 
 ### Phase 4L — Local opportunities, Seattle-first (rides Phase 4; paid runs gated)
 
-**Current state: dormant.** `--mode seattle` exists (hyperlocal `SEATTLE_SEEDS` +
+**Current state: dormant, and REDESIGNED 2026-08-27 after a measured Seattle preview
+overturned the original premise.** `--mode seattle` exists (hyperlocal `SEATTLE_SEEDS` +
 `SEATTLE_ADDENDUM` in scrape_opportunities.py, console National/Seattle switch, `mode`
-column on `scraper_seeds`), ran once 2026-08-18, ~nothing survived review. Local is the
-worst case for search-first discovery (small orgs, no SEO, link rot) and the BEST case
-for hub-first discovery — every local institution publishes a program index that never
-ranks in search.
+column on `scraper_seeds`), ran once 2026-08-18, ~nothing survived review. Search-first is
+dead for local (small orgs, no SEO, link rot). The obvious replacement — "hub-first, every
+local institution publishes a program index" — was **tested and found only half true.**
 
-- **Strategy: depth in ONE metro as the template, not shallow local coverage
-  everywhere.** Seattle first (where the users are); replicate the pattern per metro
-  only when account locations warrant it (`/api/account/location` data exists).
-- **A curated hub registry per metro** (~20-30 pages: Parks & Rec teen programs,
-  SPL/KCLS, Pacific Science Center, Woodland Park Zoo, Seattle Aquarium, Seattle
-  Children's youth volunteering, UW outreach/pre-college, district CTE, YMCAs, MoPOP,
-  city youth commissions) fed to `mine_hub_pages.py`. A full metro sweep is ~$0.10-0.30
-  and re-runnable seasonally. Search-mode seattle angles stay only for what hubs can't
-  reach (regional competition rounds, county youth boards).
-- Rows carry `state`/`location` as today; the finder already filters on them. Angles
-  and hubs carry the metro so the Phase-1 ledger diagnoses local yield separately.
-- **The creative-reasoning addendum ("a student could set up a farmers-market booth")
-  is quarantined, not deleted** — and the boundary is precise (operator-confirmed
-  2026-08-26): **the program must exist on a page; the PITCH for why it matters may be
-  as creative as it likes.** A farmers market that actually hosts an "Emerging
-  Entrepreneurs" event IS in scope — the market's events/programs page belongs in the
-  hub registry, the row title-proves against that page, and its summary can say "sell
-  to real customers, beta-test your product." What stays quarantined is inventing rows
-  for opportunities no page describes ("a student *could* ask for a booth" where no
-  program exists) — unverifiable by construction, same failure family as the invented
-  Algebra-2 prerequisite. If run at all, that mode runs as a clearly labeled experiment
-  whose rows say so — never mixed into the verified local sweep.
+**MEASURED (2026-08-27, `hubs_seattle.json`, 8 fetchable Seattle hubs, free preview):**
+`mine_hub_pages.py` harvested/filtered to **54 candidates → 42 after new local chaff
+filters → still ~75% chaff.** The chaff was structural, not incidental: **civic/nonprofit
+sites are built differently from university program indexes.** A university links to a
+dedicated page *per program* (`STEM.php`, `badger-summer-scholars`); a library/museum/city
+dept links to **branch locations and service categories** — SPL yielded 23
+`/hours-and-locations/<branch>` pages, then `donatebutton`/`whats-popular`/research
+databases; KCLS yielded `/ebooks/`, `/volunteer/`, `learnenglish`, and a literal `{{url}}`
+template artifact. Their actual teen programs live in **event calendars and prose, which
+link-harvest cannot see.** The ONLY real yield (~10 programs) came from the two orgs that
+happen to structure programs as linked pages — **YMCA camps** (`bold-gold`,
+`overnight-camp`) and **WSU 4-H** (`4-h-clubs`, `4-h-stem`). Libraries and museums returned
+~0 programs by link-harvest. Also **7 of 16 candidate hub URLs 403'd/404'd our client** —
+the ~40% civic-site block rate is much higher than the national ~10-20%.
 
-Success criteria: pilot sweep over ~10 Seattle hubs lands ≥15 local candidates in the
-review queue at their own pages with `found_via` set, ≤$0.30, wrong-audience chaff
-filtered; operator approval rate on the batch ≥60%; a `(metro)` cut appears in the seed
-grid so local yield is diagnosable like any angle.
+**So local discovery needs THREE parts, and only the first two exist:**
+
+1. **Curated per-metro hub registry** — `hubs_seattle.json`-shaped (SPL/KCLS, Pacific
+   Science Center, Seattle Aquarium, MoPOP, YMCA, WSU 4-H King County, city youth services,
+   + Parks & Rec / UW outreach / district CTE where fetchable). This is the local analogue
+   of "angles". Curation is heavy and must point at the real program-list page; expect ~40%
+   of civic sites to block our client or render in JS.
+2. **Local chaff filters** — SHIPPED 2026-08-27 in `mine_hub_pages.is_nonprogram_link`:
+   `_CIVIC_PATH_SEGMENTS` (hours-and-locations/locations/branches/ebooks/databases/donate/…)
+   and an unrendered-template drop (`{{ }}`). Necessary but NOT sufficient — it removes
+   noise, it does not find programs (proved: 54→42 was almost all still service/nav).
+3. **`name-harvest → search` — THE LOAD-BEARING, UNBUILT piece.** Because local programs are
+   *named in prose/calendars, not linked*, the only way to reach them is: pull the program
+   NAMES from the hub page's text (one cheap no-search model call), dedup against the
+   catalog, then search-resolve each name to its own page via the refind primitive
+   (grounding-resolved + title-proven). This is the SAME feature national JS-listicles need
+   (College Transitions' 70 named-but-unlinked competitions) — **it is the common unlock,
+   and for local it is not optional.** Without it, "local hub mining" returns branch pages.
+
+- **Strategy: depth in ONE metro as the template.** Seattle first (where the users are);
+  replicate per metro only when account locations warrant it (`/api/account/location`).
+- Rows carry `state`/`location`; the finder already filters on them. Hubs carry the metro so
+  the Phase-1 ledger diagnoses local yield separately (a `(metro)` cut).
+- **The creative-reasoning addendum stays quarantined** (operator-confirmed 2026-08-26):
+  **the program must exist on a page (title-proven); the PITCH may be as creative as it
+  likes.** A farmers market that actually hosts an "Emerging Entrepreneurs" event is in
+  scope — its events page goes in the registry, the row title-proves against it, the summary
+  may say "beta-test your product on real customers." Inventing rows for opportunities no
+  page describes stays out — unverifiable by construction, the invented-Algebra-2 family.
+
+Success criteria (revised): (1) `name-harvest → search` built and unit-tested; (2) a Seattle
+sweep = registry → hub mine (link-harvest for the YMCA/4-H-shaped orgs) + name-harvest→search
+(for the library/museum/calendar orgs) lands ≥15 REAL local programs in the review queue at
+their own title-proven pages, `found_via` set, operator approval ≥60%; (3) the `(metro)` cut
+appears in the seed grid so local yield is diagnosable like any angle. The old "≤$0.30, hubs
+alone" target is retired — hubs alone cannot hit it on civic sites, and name-harvest is paid
+per name.
 
 ### Phase 5 — The compounding loop (free)
 

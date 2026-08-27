@@ -87,7 +87,14 @@ _NONHTML_EXT = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip
 _ADULT_PATH_SEGMENTS = {"degrees", "degree", "graduate", "phd", "mba", "faculty", "alumni"}
 _EDITORIAL_PATH_SEGMENTS = {"blog", "blogs", "news", "in-the-news", "press", "press-releases",
                             "stories", "story", "article", "articles", "media"}
-_DROP_PATH_SEGMENTS = _ADULT_PATH_SEGMENTS | _EDITORIAL_PATH_SEGMENTS
+# Civic/nonprofit local sites (libraries, museums, city depts) link mostly to branch LOCATIONS
+# and service categories, not programs. Measured 2026-08-27 on a Seattle registry: SPL's teen
+# page yielded 23 /hours-and-locations/<branch> pages and KCLS yielded /ebooks//volunteer/.
+# These are the local analogue of a university's nav chaff.
+_CIVIC_PATH_SEGMENTS = {"hours-and-locations", "hours-locations", "locations", "location",
+                        "hours", "branches", "directions", "parking", "rentals", "donate",
+                        "ebooks", "audiobooks", "databases", "catalog"}
+_DROP_PATH_SEGMENTS = _ADULT_PATH_SEGMENTS | _EDITORIAL_PATH_SEGMENTS | _CIVIC_PATH_SEGMENTS
 # Hosts that are never a program's OWN page — social networks, share widgets, commerce, and
 # email-list signup providers. In off-domain (listicle) mode these leak heavily: measured
 # 2026-08-27 a CS-programs blog linked out to its own Facebook/Twitter/TikTok/LinkedIn, an NYU
@@ -111,6 +118,8 @@ def is_nonprogram_link(url, hub_url):
         return True
     if url_dedupe.match_key(url) == url_dedupe.match_key(hub_url):
         return True                       # the hub links to itself
+    if "{{" in url or "}}" in url or "%7b%7b" in url.lower():
+        return True                       # an unrendered template placeholder (e.g. kcls .../{{url}})
     host = (parts.hostname or "").lower()
     if url_dedupe.registrable_domain(host) in _NONPROGRAM_HOSTS:
         return True                       # social / share / commerce / list-signup host

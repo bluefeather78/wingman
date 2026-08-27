@@ -72,6 +72,7 @@ _NAV_SLUGS = url_repair.GENERIC_SLUGS | {
     "current-students", "student-life", "visit", "quicklinks", "contact-us", "about-us",
     "our-team", "team", "history", "mission", "accessibility", "privacy", "terms",
     "gallery", "photos", "media", "international-student-resources", "employment-opportunities",
+    "wp-admin", "wp-login", "wp-json",   # WordPress internals — never a program page
 }
 # A non-HTML target (a viewbook PDF, a flyer image) can never be a program's landing page.
 _NONHTML_EXT = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip",
@@ -87,23 +88,42 @@ _ADULT_PATH_SEGMENTS = {"degrees", "degree", "graduate", "phd", "mba", "faculty"
 _EDITORIAL_PATH_SEGMENTS = {"blog", "blogs", "news", "in-the-news", "press", "press-releases",
                             "stories", "story", "article", "articles", "media"}
 _DROP_PATH_SEGMENTS = _ADULT_PATH_SEGMENTS | _EDITORIAL_PATH_SEGMENTS
+# Hosts that are never a program's OWN page — social networks, share widgets, commerce, and
+# email-list signup providers. In off-domain (listicle) mode these leak heavily: measured
+# 2026-08-27 a CS-programs blog linked out to its own Facebook/Twitter/TikTok/LinkedIn, an NYU
+# Mailchimp signup (list-manage.com), and an Amazon book. Matched on the registrable domain.
+# (is_content_mill already covers youtube/reddit/wikipedia; this is the social/commerce/list
+# complement, kept here so the graded scraper's mill list is untouched.)
+_NONPROGRAM_HOSTS = {
+    "twitter.com", "x.com", "facebook.com", "fb.com", "instagram.com", "tiktok.com",
+    "linkedin.com", "pinterest.com", "threads.net", "snapchat.com", "whatsapp.com",
+    "t.me", "telegram.me", "amazon.com", "list-manage.com", "mailchi.mp", "eventbrite.com",
+}
 
 
 def is_nonprogram_link(url, hub_url):
-    """True if a harvested link is the hub's own page, a non-HTML file, page nav, an
-    adult/degree page, or an editorial post — i.e. never worth a paid extraction call.
-    Pure, free, pre-fetch."""
+    """True if a harvested link is the hub's own page, a social/commerce/list-signup host, a
+    non-HTML file, page nav, an adult/degree page, an editorial post, or a page whose URL names
+    a non-high-school audience — i.e. never worth a paid extraction call. Pure, free, pre-fetch."""
     try:
         parts = urllib.parse.urlsplit(url)
     except ValueError:
         return True
     if url_dedupe.match_key(url) == url_dedupe.match_key(hub_url):
         return True                       # the hub links to itself
+    host = (parts.hostname or "").lower()
+    if url_dedupe.registrable_domain(host) in _NONPROGRAM_HOSTS:
+        return True                       # social / share / commerce / list-signup host
     path = (parts.path or "").lower()
     if path.endswith(_NONHTML_EXT):
         return True
     segs = {s for s in path.split("/") if s}
     if segs & _DROP_PATH_SEGMENTS:
+        return True
+    # Wrong audience named only in the URL — the anchor text may omit it. Measured: Stanford's
+    # "…/stanford-middle-school-scholars-program" whose anchor read "Scholars Program" passed the
+    # anchor-level is_wrong_audience but its slug names the middle-school audience.
+    if _WRONG_AUDIENCE.search(re.sub(r"[/_-]+", " ", path)):
         return True
     slug = url_repair._slug(url)
     return (not slug) or slug in _NAV_SLUGS

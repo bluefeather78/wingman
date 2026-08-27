@@ -113,6 +113,18 @@ _HUBU = "https://precollege.wisc.edu/"
     "https://online.wisc.edu/degrees/marketing/",                    # adult degree path
     "https://precollege.wisc.edu/blog/alinas-precollege-experience/", # editorial post
     "https://business.wisc.edu/news/some-headline/",                 # editorial post
+    # social / share / commerce / list-signup hosts (off-domain listicle leaks, 2026-08-27)
+    "https://www.facebook.com/CollegeTransitions",
+    "https://twitter.com/eduTransitions",
+    "https://www.tiktok.com/@nyu_k12stem",
+    "https://www.linkedin.com/company/nyu-k12-stem/",
+    "https://nyu.us10.list-manage.com/subscribe?u=77d1&id=f766",
+    "https://www.amazon.com/Colleges-Worth-Your-Money/dp/B0F4RP8NB9",
+    "https://www.facebook.com/dialog/send?app_id=140&link=https://blog.collegevine.com/x",
+    # wrong audience named only in the URL (anchor omitted it)
+    "https://spcs.stanford.edu/programs/stanford-middle-school-scholars-program",
+    "https://example.edu/programs/elementary-science-camp",
+    "https://example.edu/graduate-certificate-in-data",
 ])
 def test_is_nonprogram_link_true(url):
     assert hub.is_nonprogram_link(url, _HUBU) is True

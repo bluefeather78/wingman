@@ -3200,6 +3200,23 @@ MAINTENANCE_TOOLS = {
         "script": "find_catalog_dups.py",
         "free": True, "writes": False, "params": [],
     },
+    "refind": {
+        # The counterpart to the Link Checker: check_links deactivates dead-link rows, this
+        # tries to resurrect the real ones by finding where the page moved. Paid + gated, and
+        # inserts inactive rows into the review queue like the scraper — Preview is free.
+        "name": "Re-find Dead Links",
+        "description": "Resurrect real programs whose stored link died — one narrow web search "
+                       "per row, inserting a fresh inactive row for review. Preview is free; a "
+                       "real run is PAID (~$0.02–0.05/row) and needs approval.",
+        "script": "refind_dead_links.py",
+        "free": False, "writes": True,
+        "params": [
+            {"key": "mode", "type": "select", "label": "Mode", "options": [
+                ["preview", "Preview — free, no search, no writes"],
+                ["run", "Run — PAID: searches and inserts rows for review"]]},
+            {"key": "limit", "type": "number", "label": "Max rows to re-find (paid run)"},
+        ],
+    },
     "mlgrader": {
         "name": "Mailing-List Accuracy Grader",
         "description": "Pick the deterministic pilot sample and print the finder --ids string "
@@ -3259,6 +3276,12 @@ def build_tool_args(tool_key, params):
     if tool_key == "inspect":
         # check_opp_data.py takes positional ids; accept commas or spaces from the one field.
         args += str(params.get("ids") or "").replace(",", " ").split()
+    elif tool_key == "refind":
+        # Default to the free preview; a paid run must be chosen explicitly.
+        if str(params.get("mode") or "preview") == "run":
+            args += ["--limit", str(_int_or_none(params.get("limit")) or 20)]
+        else:
+            args.append("--preview")
     elif tool_key == "contactemail":
         if str(params.get("scope") or "") == "ids" and params.get("ids"):
             args += ["--ids", str(params["ids"])]

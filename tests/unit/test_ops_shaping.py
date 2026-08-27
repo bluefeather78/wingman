@@ -553,6 +553,16 @@ class TestMaintenanceTools:
         assert core.build_tool_args("mlgrader", {})[2:] == ["grade_mailing_lists.py", "--sample"]
         assert core.build_tool_args("export", {})[2:] == ["export_json.py"]
 
-    def test_only_contact_email_is_paid(self):
-        paid = [k for k, c in core.MAINTENANCE_TOOLS.items() if not c.get("free")]
-        assert paid == ["contactemail"]
+    def test_paid_tools(self):
+        # The paid tools: the contact-email backfill and the dead-link re-finder (web search).
+        paid = {k for k, c in core.MAINTENANCE_TOOLS.items() if not c.get("free")}
+        assert paid == {"contactemail", "refind"}
+
+    def test_refind_defaults_to_free_preview(self):
+        # A paid run must be chosen explicitly; anything else previews (free, no writes).
+        assert core.build_tool_args("refind", {})[2:] == ["refind_dead_links.py", "--preview"]
+        assert core.build_tool_args("refind", {"mode": "preview"})[-1] == "--preview"
+        run = core.build_tool_args("refind", {"mode": "run", "limit": 15})
+        assert run[2:] == ["refind_dead_links.py", "--limit", "15"]
+        # missing limit on a paid run falls back to the script's own default of 20.
+        assert core.build_tool_args("refind", {"mode": "run"})[-1] == "20"

@@ -519,6 +519,48 @@ def test_verify_dates_handles_no_capture_and_no_dates():
     assert cd.verify_dates_against_capture(info, []) == 1
 
 
+# --------------------------------------------------------------- G6a today-anchoring backstop
+
+def test_g6a_demotes_today_anchored_unverified_date():
+    """A non-estimated date equal to the check date that is NOT on any page is the anchoring
+    fingerprint -> demote to estimated, do NOT count as a confirmed miss, add a caveat."""
+    info = {"important_dates": [{"date_iso": "2026-08-27", "type": "opens",
+                                 "estimated": False}]}
+    unverified = cd.verify_dates_against_capture(
+        info, [_src("https://p/x", "no opening date on this page")], today="2026-08-27")
+    d = info["important_dates"][0]
+    assert d["estimated"] is True          # demoted, not confirmed
+    assert d["verified"] is False
+    assert "source_url" not in d
+    assert unverified == 0                  # a flagged estimate, not a confirmed miss
+    assert "estimate" in (info.get("important_date_note") or "").lower()
+
+
+def test_g6a_leaves_a_genuinely_today_date_that_verifies():
+    """A real same-day date verifies against the page, so the fingerprint never fires on it."""
+    info = {"important_dates": [{"date_iso": "2026-08-27", "type": "opens",
+                                 "estimated": False}]}
+    unverified = cd.verify_dates_against_capture(
+        info, [_src("https://p/apply", "Applications open August 27, 2026.")],
+        today="2026-08-27")
+    d = info["important_dates"][0]
+    assert d["verified"] is True and d.get("estimated") is False
+    assert d["source_url"] == "https://p/apply"
+    assert unverified == 0
+    assert not info.get("important_date_note")   # nothing demoted -> no caveat
+
+
+def test_g6a_does_not_touch_an_unverified_non_today_date():
+    """An unconfirmed date that is NOT today stays a counted confirmed miss (unchanged path)."""
+    info = {"important_dates": [{"date_iso": "2027-01-15", "type": "deadline",
+                                 "estimated": False}]}
+    unverified = cd.verify_dates_against_capture(
+        info, [_src("https://p/x", "no dates here")], today="2026-08-27")
+    d = info["important_dates"][0]
+    assert d.get("estimated") is False and d["verified"] is False
+    assert unverified == 1
+
+
 # ------------------------------------------------- status evidence gate (2026-08-26)
 # A not_running verdict must be proven against a fetched page or it downgrades to unknown.
 # Born from ec18599 (Impact Internships): the off-season of an annual program — "2026 cycle

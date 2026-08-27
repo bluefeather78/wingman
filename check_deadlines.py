@@ -982,7 +982,7 @@ def verify_status_evidence(info, captured):
     return "downgraded"
 
 
-def verify_dates_against_capture(info, captured):
+def verify_dates_against_capture(info, captured, today=None):
     """Mark each date in `info` verified/unverified against the captured page content, and
     attach the URL it was found on. Returns the count of NON-estimated dates that could NOT be
     found — the quality signal (the deadline analogue of the task demotion rate).
@@ -991,14 +991,27 @@ def verify_dates_against_capture(info, captured):
     and a matcher false negative must not lose a real deadline. So an unverifiable confirmed
     date is only MARKED (`verified: false`), left in place for the client to render and for the
     summary to count.
+
+    G6a (2026-08-27) — the today-anchoring backstop. A NON-estimated date that fails to verify
+    AND equals the check date is the anchoring fingerprint: the model, unable to find the real
+    date on a stale/pre-JS capture, substituted "now" for the arithmetic (documented live on
+    ec17543, where an unconfirmed `opens` was stamped as the check date and flipped the card to
+    HAPPENING NOW). A GENUINELY same-day date would verify `true` against the page, so it is
+    untouched; only the unverified-and-today case is demoted to `estimated:true` (never dropped,
+    per T7) with a caveat in the note. This is the code backstop for the prompt rule the model
+    keeps violating (build_extract_system's "never anchor an estimate to today"). `today` is
+    injectable for tests; it defaults to the real check date.
     """
     if not isinstance(info, dict):
         return 0
     dates = info.get("important_dates")
     if not isinstance(dates, list):
         return 0
+    if today is None:
+        today = datetime.date.today().isoformat()
     pages = [(c.url, c.text) for c in (captured or []) if getattr(c, "text", "")]
     unverified = 0
+    anchored_types = []
     for d in dates:
         if not isinstance(d, dict) or not d.get("date_iso"):
             continue
@@ -1011,8 +1024,23 @@ def verify_dates_against_capture(info, captured):
         d["verified"] = hit is not None
         if hit:
             d["source_url"] = hit
-        else:
-            unverified += 1
+            continue
+        if d.get("date_iso") == today:
+            # Today-anchoring fingerprint (G6a). Demote rather than count as a confirmed miss:
+            # it is no longer a "confirmed date not found", it is a flagged estimate. `opens` is
+            # the type that flips "Happening Now", so it is the one this most protects.
+            d["estimated"] = True
+            d.pop("source_url", None)
+            anchored_types.append(d.get("type") or "date")
+            continue
+        unverified += 1
+    if anchored_types:
+        caveat = ("A " + "/".join(dict.fromkeys(anchored_types)) + " date matched the check "
+                  "date but could not be confirmed on any fetched page - shown as an estimate, "
+                  "not a confirmed date.")
+        note = info.get("important_date_note") or ""
+        if caveat not in note:
+            info["important_date_note"] = f"{note} {caveat}".strip()
     return unverified
 
 

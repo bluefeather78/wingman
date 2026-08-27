@@ -36,14 +36,16 @@ G6b staleness detection — both deferred pending operator approval. Full detail
 | **G6b** | `verified:true` cannot detect a STALE/pre-JS `web_fetch` capture, so it can be confidently wrong. | §3 **G6b** | OPEN — needs rendered re-fetch / thin-shell detection (paid or SPA-render); DEFERRED. |
 | **G-task-1** | Rich steps page never discovered — Congressional Award (ec18244): 2 throwaway tasks while `/the-program/` carries a full verifiable step list. | §4 **G-task-1a/b/c** | ✅ **ADDRESSED** by D1/D2 (discovery) + D3 (no-stamp); durable fix pending PAID D4 validation on the real row. |
 | **G-D1 / D0–D3** | **Sitemap-first page discovery** (shared free helper) + shallow-capture no-stamp. | §9 D0–D3 | ✅ **BUILT** — `sitemap_common.py` + fixtures/tests (D0/D1), wired into `fetch_and_capture` behind the `web_search` fallback (D2), furniture no-stamp signal (D3). |
-| **D4/D5** | PAID validation on real rows + deadline-ladder adoption / optional backfill. | §9 D4–D5 | PLANNED — each `--preview`-gated; operator-approval-gated. |
+| **D4** | PAID validation on 4 real rows. | §9 D4 | ✅ **DONE 2026-08-28 ($0.1781, read-only)** — proof row ec18244 fixed (furniture CTA → real $35-fee/Record-Book tasks); 0→3 page-backed on ec18676; no-sitemap control OK; SLIYS demotion-rate signal noted. A ranker bug was caught & fixed FREE first. |
+| **D5** | Deadline-ladder adoption + optional backfill (PAID). | §9 D5 | PLANNED — operator-approval-gated. |
 
-**Suggested entry point next:** **D4** — one `--preview`-then-live check on ec18244 (Congressional
-Award, the proof row) plus 3–4 hosts spanning sitemap / no-sitemap / multi-program, measuring
-whether discovery reaches the real steps/dates page and the cost delta vs `web_search` (expected
-neutral-to-negative). This is PAID and needs fresh operator approval per run. G6b (staleness
-detection) is the other open thread and is orthogonal: G-D1 gets to the RIGHT page; G6b handles a
-STALE fetch of it.
+**Suggested entry point next:** two independent threads, both PAID/approval-gated. **(a)** A live
+WRITING pass to actually improve the tested/real rows for students — D4 was read-only, so ec18244
+et al. still serve their old cached lists until a writing run or TTL lapse (this is the G-task-3
+backfill, §13 item 1 = deferred, so it stays gated on you un-deferring it). **(b)** **D5** — apply
+sitemap-first to the deadline ladder's own-site `site:` rungs. **G6b** (staleness detection) is the
+other open thread, orthogonal to all of the above: G-D1 gets to the RIGHT page; G6b handles a STALE
+fetch of it.
 
 ---
 
@@ -1058,12 +1060,27 @@ now — sitemap-first only ADDS recall.
   later, better-discovered pass retries. A single substantive task stamps normally. Batch +
   interactive both already gate on `decision.stamp`. 3 tests in `test_action_items.py`.
 
-- **D4 — Live validation on real rows (paid, operator-approved, tiny; `--preview` first).**
-  One-row live checks on **ec18244 (Congressional Award — the proof row)** plus 3–4 spanning
-  sitemap / no-sitemap / multi-program hosts. Measure: did discovery reach the real steps/dates
-  page; task richness and page-backed count before→after; date correctness; and **cost delta vs
-  `web_search`** (expected neutral-to-negative). Gate any batch on these numbers. Record results
-  in the change log the way the P6b/G5 live proofs are.
+- **D4 — Live validation on real rows. ✅ DONE 2026-08-28 ($0.1781, 4 rows, READ-ONLY).**
+  Operator-approved. Free discovery on the real ec18244 sitemap first exposed and fixed a ranker
+  bug (see the change log) BEFORE any spend. Then `process_one` (read-only) on 4 rows spanning the
+  cases:
+  - **ec18244 Congressional Award (proof row) — WIN.** Discovery reached `/register/` +
+    `/participants/` (the pages `web_search` never found). The furniture CTA "Sign up for emails
+    from us" → real page-verified OFFICIAL tasks: "Register and pay the one-time $35 registration
+    fee", "Submit your completed Record Book for approval". 2 page-backed, $0.0525.
+  - **ec18676 Chicago Summer Business — WIN.** 0 tasks → 3 page-backed OFFICIAL from `/how-to-apply/`
+    ("Upload official transcript, resume, essay, income…"). $0.0258.
+  - **ec18691 Red Cross (no-sitemap control) — NO REGRESSION.** Correctly fell back to `search`,
+    still got 4 page-backed OFFICIAL tasks from the apply page. $0.0399.
+  - **ec18687 SLIYS — MIXED (the demotion-rate signal).** Discovery reached `/sliys-requirements`
+    + `/sliys-how-apply`, but the extract's quotes didn't match strictly → all 4 demoted to
+    generic (0 page-backed, not fabrication). A verifier-strictness case, not a discovery miss.
+    $0.0598.
+  **Cost:** ~$0.044/row — slightly ABOVE the old ~$0.002-0.004 baseline (NOT the hoped
+  cost-neutral), because sitemap-first fetches ~5 pages vs 1. We pay a little more to get real
+  tasks instead of generic filler; the no-sitemap row cost the same, so multi-page fetch (not the
+  sitemap probe) is the cost driver. **Read-only: the improved lists were NOT written — the tested
+  rows still serve their cached lists to students until a live (writing) pass or TTL lapse.**
 
 - **D5 — Deadline-ladder adoption + optional backfill (paid, after D4).** Apply sitemap-first to
   the deadline ladder's own-site `site:` search rungs (§3 G1 rungs 1–3), measuring the search-count
@@ -1319,6 +1336,23 @@ deadline."
 
 ## Change log
 
+- **2026-08-28 (later)** — **D4 live validation DONE ($0.1781, 4 rows, READ-ONLY) + a ranker bug
+  fixed FREE before spending.** The free discovery half on ec18244's real 414-page sitemap caught
+  the ranker dropping `/the-program/` & `/prospective-participants/` entirely: the old 400-page
+  scope threshold tripped multi-program filtering, which kept name-matching chrome (news/gala:
+  "congressional-award-…") and dropped the real content pages (which don't repeat the org name).
+  Fixed in `sitemap_common.py`: scope decides single-/multi-program by the stored URL's PATH not
+  page count (bare homepage → keep all); `name_tokens` drops host-derived tokens; `score_slug`
+  gains an exact-nav-slug boost (+3 for the-program/apply/eligibility/…), a long-"sentence"-slug
+  penalty (news headlines), and fundraiser NEG tokens (golf/poker/tournament/gala). Then the paid
+  read-only run: **ec18244 proof row WIN** (furniture "Sign up for emails" → real "$35 registration
+  fee" + "Record Book" from `/register/`+`/participants/`), **ec18676 WIN** (0→3 page-backed from
+  `/how-to-apply/`), **ec18691 no-sitemap control** (search fallback, 4 page-backed, no regression),
+  **ec18687 SLIYS mixed** (reached the requirement pages but all 4 demoted to generic — the
+  verifier-strictness / demotion-rate signal, not a discovery miss). Cost ~$0.044/row, slightly
+  ABOVE the old baseline (multi-page fetch, not the sitemap probe, is the driver). Read-only —
+  nothing written. Details in §9 D4. Remaining: D5 (deadline-ladder adoption + optional backfill)
+  and G6b, both deferred.
 - **2026-08-28** — **FREE CORE of the gap-hunt follow-up BUILT — G6a + D0–D3** (branch
   `sitemap-discovery-g6a`, off `main`; 1166 pytest green; zero API spend; DDL-free/stdlib-only).
   - **G6a** (`check_deadlines.verify_dates_against_capture`, +`today` param): demotes a

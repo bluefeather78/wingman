@@ -28,6 +28,22 @@ import url_validate
 _REFIND_STAMP = "refind_attempted"
 # At most this many grounding siblings are fetched per row to find a proven page.
 _MAX_SIBLING_FETCH = 3
+# A page under one of these path segments is an editorial post ABOUT a program, never the
+# program's own page. Measured live 2026-08-27: the UVA "Creative Writing" re-find landed on
+# `northern.virginia.edu/blog/inspire-spotlight-creative-writing/` — same registrable domain as
+# the (already mis-attributed) dead URL and carrying the name's words, so registrable + identity
+# proof alone accept it. The /blog/ segment is the one signal that catches it.
+_EDITORIAL_SEGMENTS = {"blog", "blogs", "news", "in-the-news", "press", "press-releases",
+                       "stories", "story", "article", "articles"}
+
+
+def _is_editorial_url(url):
+    """True if the URL's path sits under a blog/news/press segment — an article, not a page."""
+    try:
+        path = (urllib.parse.urlsplit(url or "").path or "").lower()
+    except ValueError:
+        return False
+    return bool({s for s in path.split("/") if s} & _EDITORIAL_SEGMENTS)
 
 
 def is_dead_link_reject(row):
@@ -66,6 +82,8 @@ def best_refound_url(resolved_urls, old_url, name, org, timeout):
       2. Title-proof is weak on generic names ("Creative Writing") and can land on a sibling. So
          require BOTH title_proves (tests 1+2) AND keeps_identity (test 3, the built sibling
          guard: the new page must not drop an identity word the old URL used).
+      3. An editorial post (/blog//news/) is never the program's own page — the live UVA
+         mis-find that motivated this was a same-domain blog article that passed 1 and 2.
     A malformed/empty old URL yields no registrable domain, so nothing passes — fail closed,
     which is the correct precision-first default (the row simply stays in the dead pile)."""
     old_reg = url_dedupe.registrable_domain(
@@ -76,7 +94,7 @@ def best_refound_url(resolved_urls, old_url, name, org, timeout):
     for sib in resolved_urls:
         if fetched >= _MAX_SIBLING_FETCH:
             break
-        if not sib or url_validate.is_content_mill(sib):
+        if not sib or url_validate.is_content_mill(sib) or _is_editorial_url(sib):
             continue
         sib_reg = url_dedupe.registrable_domain(
             (urllib.parse.urlsplit(sib).hostname or "").lower())

@@ -74,6 +74,16 @@ def test_refind_rejects_when_title_unproven(monkeypatch):
     assert rf.best_refound_url([sib], _OLD, _NAME, _ORG, 5) is None
 
 
+def test_refind_rejects_same_domain_editorial_post(monkeypatch):
+    # The live UVA mis-find (Aug-27): same registrable domain as the dead URL and carrying the
+    # name's words, but the re-found URL is a /blog/ article — rejected before any fetch.
+    monkeypatch.setattr(rf.url_repair, "_fetch", _no_fetch)
+    old = "https://northern.virginia.edu/programs/creative-writing/"
+    blog = "https://northern.virginia.edu/blog/inspire-spotlight-creative-writing/"
+    assert rf.best_refound_url([blog], old, "Creative Writing Program",
+                               "University of Virginia", 5) is None
+
+
 def test_refind_rejects_when_sibling_drops_identity(monkeypatch):
     # Same domain, title proves the name, but the old URL carried an org identity word the new
     # page dropped -> keeps_identity (test 3) catches the sibling.

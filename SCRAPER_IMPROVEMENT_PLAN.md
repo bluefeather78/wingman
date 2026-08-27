@@ -61,21 +61,40 @@ history; reorganize branches later if you want them fully separate.
   62 links → 12 mostly-nav candidates) and the real index (`ceismc.gatech.edu/programs`) 403s
   our client — the same partial-block the original pilot hit on medicine.illinois.
 
-### OPEN / do next (nothing here is started)
-1. **Review the 4 refound rows** in the console Review queue — reject the UVA mis-find, decide
-   on Immerse. (Refind is ON-DEMAND, not periodic: each row is stamped once; the script drains
-   the 167-row backlog then does nothing until check_links deactivates a fresh batch.)
-2. **Tighten refind's domain match** (require the org's REGISTRABLE domain, not a substring;
-   consider a title-proof floor of ≥2 non-generic identity words) BEFORE draining the full
-   167-row backlog (~$4-8 paid). Then run in batches, reviewing as you go.
-3. **Hub mining**: point `mine_hub_pages.py` at real program-index URLs, not org roots — the
-   pilot umbrellas (USNA /Admissions/Programs/, business.wisc.edu /precollege/,
-   medicine.illinois SpHEREs). Some 403 our client (fact about the client, not the program).
-   `--preview` is free; extraction is PAID (~$0.003/page, gated).
+### Session 2026-08-27b (worktree): items 1-3 DONE. Commits on `scraper-v2` (2e6f1a0..f2d0bbc)
+Worked in an ISOLATED git worktree at `C:\Users\shama\Documents\wingman-scraper-v2` (a
+concurrent session was switching branches in the main tree and clobbered edits mid-session;
+the worktree is immune). `.env` copied in (gitignored) so tests/scripts run there.
+- **Item 1 (review 4 refound rows) — recommendations delivered, operator applies in console.**
+  Kenyon `ec18693` → approve+activate (kenyonreview.org/event/young-writers-...); Red Cross
+  `ec18691` → approve+activate (redcross.org/red-cross-youth/national-youth-council.html);
+  UVA `ec18690` → REJECT `wrong-page` (re-found northern.virginia.edu/**blog**/... — wrong
+  institution AND editorial); Immerse `ec18692` → **left pending** (operator decision).
+- **Item 2 (tighten refind) — DONE, commits 2da8422 + f2d0bbc.** `best_refound_url` now:
+  (1) requires the re-found URL on the **same registrable domain as the dead URL** (not the
+  substring `domain_matches_org`), (2) requires `title_proves` AND `keeps_identity` (test 3),
+  (3) rejects same-domain **editorial** (/blog//news/) siblings — the live UVA class. +6 tests.
+- **Item 3 (hub miner at real indexes) — DONE, commit e62f061.** `hub_pilot_national.json`
+  carries the 5 named targets; free `--preview` surfaces the gems (USNA Summer STEM+Seminar,
+  Wisconsin BEL, ~13 UW pre-college programs, +recursion: engineering/pharmacy/arboretum/union)
+  and new `is_nonprogram_link()` drops nav/PDF/image/editorial/degree chaff (46→29 candidates,
+  all gems retained). CEISMC + medicine.illinois 403 our client (client fact, per plan). +12 tests.
+- Gate: full unit suite green; `grade_scraper_batch` url-dup **0 regressions, SAFE**.
+
+### OPEN / do next
+1. **Apply the 4 refind verdicts** in the console (recommendations above; Immerse still pending).
+2. **Refind is now tightened — resume draining the 167-row backlog** in small PAID batches
+   (~$4-8 total), reviewing as you go. Precision should be higher than the Aug-27 ~50-75%.
+3. **Hub extraction is PAID and still gated.** `python mine_hub_pages.py --hubs-file
+   hub_pilot_national.json` (no --preview) extracts the 29 candidates (~$0.09); rows land
+   is_active=false for review. Consider trimming to fewer hubs to hit the ≤10-call pilot bar.
+   NOTE: mine_hub_pages `main()` proves+prices extraction but does NOT insert — wiring the
+   insert is a separate approved step (see its closing comment).
 4. **Exercise the full live pipeline**: enable a few of the 18 disabled angles and run the
    scraper (PAID, per-run approval). A 2nd run per angle gives the funnel a real diagnosis;
    same-URL re-finds populate the merges card; a mined-out angle can auto-disable.
 5. **Merge scraper-v2 → main** when ready (coordinate re: the email commit in its history).
+   Then `git worktree remove C:\Users\shama\Documents\wingman-scraper-v2`.
 
 ### Every script, and its money tier (all `--preview` is FREE)
 - `python grade_scraper_batch.py` — FREE gate. `0 regressions` required to ship any change.

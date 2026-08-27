@@ -7,40 +7,81 @@ below before reading the phase specs, which are now the historical design record
 
 ---
 
-## ⭐ START HERE — session of 2026-08-27 (late) — NEW SESSION PICK-UP
+## ⭐ START HERE — session of 2026-08-27 (latest) — NEW SESSION PICK-UP
 
-**All work below this block is on branch `hub-social-audience-fix` (off `origin/main`
-`2c3c20d`), 4 commits, NOT PUSHED (the push to main was auto-approval-gated). Land it first
-next session (retry the push, or merge the branch).** Full unit suite green,
-`grade_scraper_batch` url-dup 0 regressions on every commit.
+**Branch `hub-social-audience-fix` is MERGED into local `main` (`c54fc41`), and Phase 4N is
+BUILT on top of it (`83effca`). Neither is PUSHED yet — `main` is 2 commits ahead of
+`origin/main` (`6408993`).** Gates on the merge and on 4N alike: **1392 tests green,
+`grade_scraper_batch` url-dup 0 regressions, SAFE**. (The harness also prints a
+`[suppress-all] … UNSAFE` line — that is its own self-test probe proving it can detect a
+regression, not a failure.)
 
-- `fc2a120` — hub miner chaff filters: social/commerce/list-signup hosts (`_NONPROGRAM_HOSTS`),
-  wrong-audience named only in the URL, WordPress internals. (national listicle testing)
-- `0c576cb` — **scraper now resolves each new row's contact email** actively via the shared
-  `contact_email_common.resolve_contact_email` (regex-first, ~free), instead of only keeping
-  one that happened to appear in the notes. `find_contact_emails.py` shrinks to a backfill for
-  OLD rows.
-- `c197fe4` — **local discovery redesigned** (Phase 4L rewritten, see it) + civic chaff filters
-  (`_CIVIC_PATH_SEGMENTS`, template `{{}}` drop) + `hubs_seattle.json` registry.
-- `e0fc372` — **hub miner insert step WIRED**: `mine_hub_pages.py` now writes real
-  `is_active=false`/`pending_review` rows (proper ec-ids, reuses the scraper's `insert_rows`,
-  `agent_runs agent='hub_miner'`, snapshot, new `--dry-run`). Extraction still PAID + gated.
+What landed in the merge (previously stranded on the branch):
+- hub miner chaff filters: social/commerce/list-signup hosts (`_NONPROGRAM_HOSTS`),
+  wrong-audience named only in the URL, WordPress internals.
+- **the scraper resolves each new row's contact email** via `contact_email_common.
+  resolve_contact_email` (regex-first, ~free); `find_contact_emails.py` is now a backfill for
+  OLD rows only.
+- civic chaff filters (`_CIVIC_PATH_SEGMENTS`, template `{{}}` drop) + `hubs_seattle.json`.
+- **hub miner insert step WIRED**: `mine_hub_pages.py` writes real `is_active=false`/
+  `pending_review` rows (`agent_runs agent='hub_miner'`, snapshot, `--dry-run`). Extraction is
+  still PAID and gated.
+
+### Phase 4N — BUILT this session (`harvest_names.py`, +53 tests). NOT YET RUN PAID.
+
+Reads the program NAMES off a page and resolves each to its own page through the refind
+primitive (one narrow search → grounding-resolved → title-proven). Three FREE gates run
+before a single search is paid for — `name_is_on_page`, `name_is_resolvable`,
+`is_known_name`; see the module docstring, which carries the reasoning for each.
+
+**Validated FREE against the real target and 1673 live catalog rows** (no model call, no
+spend). The College Transitions competitions table is at
+`https://www.collegetransitions.com/dataverse/academic-competitions-and-contests/` — fetches
+to **14,355 chars**, matching the figure this plan measured, and lists ~70 named competitions
+in a table with 0 harvestable program links. Feeding 35 of its names through the gates:
+**24 would be searched, 6 correctly matched to rows we already have** (Congressional App
+Challenge = ec18605, National Science Bowl = ec17913, …), and a planted off-page control
+("Telluride Association Summer Seminar") was rejected by gate 1.
+
+Two things that measurement changed, both worth not re-deriving:
+- **`is_known_name` carries the DIGITS `identity_words` discards, and NOT short alphabetic
+  tokens.** "1-Week" and "3-Week Medical Academy" both reduce to {week, medical} — the digit
+  is the whole difference, which is CLAUDE.md's measured 0.95-ratio collision. But treating
+  short ALPHA tokens as marks made "Academic Decathlon" miss the row we already hold ("US
+  Academic Decathlon", ec17937) on the "us" alone, i.e. re-paying for a program we have. A
+  digit says WHICH program; "US" says where.
+- **Known recall gap, reported per run rather than hidden: single-token brand names cannot be
+  title-proven.** `title_proves` needs two identity words, so CyberPatriot, DECA, iGEM and
+  Model UN are dropped as `unprovable`. Three of those four are already in the catalog; **iGEM
+  is a genuine miss.** The gate is not wrong — it refuses to pay for a name whose answer
+  could never be verified — but the class is real, so every dropped name is printed in full
+  (never a head slice) for a person to pick up.
+
+`--preview` is free, prices the run over the **fetchable** pages only, and prints an excerpt so
+a cookie banner and a program table are distinguishable. Measured on the national registry:
+3 of 5 hubs fetchable (CEISMC 403s, medicine.illinois URLErrors — the client fact this plan
+already records).
+
+### OPEN / do next
+1. **Push `main`** (2 commits ahead of `origin/main`). Scraper-only — no `app/`, `render.yaml`,
+   `requirements.txt` or `server.py` changes, so a Render deploy is a no-op for the web service.
+2. **Run 4N PAID over the College Transitions table** (needs fresh approval): 1 naming call
+   (~$0.001) + up to `--max-names` searches (~$0.02-0.05 each). At `--max-names 10` that is
+   **~$0.50** for the pilot; all 24 eligible names would be ~$1.20. Success bar from the spec:
+   ≥15 real competitions at title-proven pages, operator approval ≥70%.
+3. **Phase 4F (feed-forward) is still UNBUILT** and is the remaining high-value piece — see its
+   spec below. It would stop the ~71 listicles/run the search already paid to consult from being
+   discarded, and feed them to 4N and hub mining.
+4. **Phase 4L (local) is PINNED** — the operator wants to rethink local strategy from scratch
+   (2026-08-27). Do not invest further in it, and do not treat 4F as its replacement without
+   asking; the redesigned 4L spec below is kept as the measured record, not as a work item.
+5. Standing backlog, unchanged: drain the ~167-row refind backlog in small PAID batches
+   (~$4-8), review the pending scraped rows, run the gated hub extraction (~$0.09 for the 29
+   candidates already surfaced).
 
 **The visual map of all of this (live/built/unbuilt, colour-coded) is a published artifact —
-ask the operator for the "Scraper Logic Map" link if you need it.**
-
-**THE TWO PRIORITIES, both UNBUILT — new phase specs added below:**
-1. **Phase 4N — `name-harvest → search`** (the single highest-value build). Load-bearing for
-   BOTH national JS-directories (College Transitions' 70 named-but-unlinked competitions) and
-   local civic sites (library/museum calendars). Reuses the refind primitive.
-2. **Phase 4F — feed-forward** (search discovers hubs/listicles → leads queue). Measured: the
-   08-23 run consulted 660 grounding pages, kept 126 as rows, **discarded 71 listicles/mills**
-   that each name 7-15 programs — hundreds of leads thrown away per run. Capture them (free)
-   and feed hub-mining/name-harvest.
-
-**Operator is reconsidering Phase 4L (local) — measured yield was weak; Phase 4F may make a
-dedicated local mode largely unnecessary (a Seattle *search* angle would auto-spin-off local
-hubs). Do not invest more in 4L until the operator decides.**
+ask the operator for the "Scraper Logic Map" link if you need it.** It predates Phase 4N being
+built and shows it as unbuilt.
 
 ---
 
@@ -140,6 +181,7 @@ the worktree is immune). `.env` copied in (gitignored) so tests/scripts run ther
 - `python propose_angles.py [--commit]` — FREE (18 written).
 - `python mine_hub_pages.py --hubs URL --preview` FREE / live = PAID.
 - `python refind_dead_links.py --preview` FREE / `--limit N` = PAID search.
+- `python harvest_names.py --hubs URL --preview` FREE (prices the run over fetchable pages) / without `--preview` = PAID (1 naming call + up to `--max-names` searches).
 - `python scrape_opportunities.py --mode national --seed-ids IDS` — PAID (preview via console).
 - **Every paid run needs fresh explicit chat approval (the ~$30-overspend rule).**
 
@@ -462,7 +504,9 @@ Success criteria (pilot-sized, then scale):
    angles; operator judges ≥half worth enabling.
 4. Every run pre-approved in chat; every run's snapshot names everything discarded.
 
-### Phase 4L — Local opportunities, Seattle-first (rides Phase 4; paid runs gated)
+### Phase 4L — Local opportunities (**PINNED 2026-08-27 — do not build**)
+
+**The operator has pinned local discovery to rethink the strategy from scratch.** Everything below is the MEASURED RECORD of why the first two designs did not work — keep it, it is what any new strategy has to answer to — but none of it is a work item, and 4F is not automatically its replacement. Ask before resuming.
 
 **Current state: dormant, and REDESIGNED 2026-08-27 after a measured Seattle preview
 overturned the original premise.** `--mode seattle` exists (hyperlocal `SEATTLE_SEEDS` +
@@ -524,7 +568,9 @@ appears in the seed grid so local yield is diagnosable like any angle. The old "
 alone" target is retired — hubs alone cannot hit it on civic sites, and name-harvest is paid
 per name.
 
-### Phase 4N — Name-harvest → search (UNBUILT; the single highest-value build)
+### Phase 4N — Name-harvest → search (**BUILT 2026-08-27 as `harvest_names.py`**; not yet run paid)
+
+*The spec below is the design record. What shipped follows it in every respect except one: the per-name resolver is `harvest_names.best_resolved_url`, not `refind_dead_links.best_refound_url` directly — refind holds a candidate to the same registrable domain as the DEAD url, and a harvested name has no prior url to hold it to, so `title_proves` carries the whole weight there. That is exactly why free gate 2 refuses an unprovable name before any search is paid for. See the START-HERE block for what the build measured.*
 
 **The problem it solves:** link-harvest (hub mining) only works when programs are actual
 `<a>` links. Two large classes of pages NAME many programs but don't link them: national

@@ -117,8 +117,11 @@ AGENT_CONFIGS_SCHEMA = {
         "defaults": {"min_delay": 5, "timeout": 120},
     },
     "reviews": {
-        "name": "Review Checker",
-        "description": "Verify org legitimacy and reputation from independent sources",
+        # Display name only — the db_agent literal stays "review_checker" so agent_runs
+        # history is unbroken. Renamed 2026-08-28 to match the console redesign.
+        "name": "Reviews Generator",
+        "description": "Generate the reviews shown on each opportunity — org legitimacy and "
+                       "reputation, verified from independent sources",
         "script": "check_reviews.py",
         "db_agent": "review_checker",
         "unit": "rows",

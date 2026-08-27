@@ -372,6 +372,30 @@ def top_up(kept, opp):
     return out[:MAX_ITEMS]
 
 
+# D3 (G-task-1b) — the furniture / navigation-CTA vocabulary. A page-backed task whose only
+# distinctive content is newsletter / social / donate vocabulary is a nav label, not an
+# application step: "Sign up for emails from us" (ec18244) is the canonical case — a real quoted
+# phrase that passes both verifier gates yet is furniture. Singularized to match
+# distinctive_tokens' output.
+FURNITURE_TOKENS = {page_text._singular(t) for t in (
+    "email", "emails", "newsletter", "subscribe", "subscription", "sign", "signup", "follow",
+    "social", "facebook", "twitter", "instagram", "linkedin", "youtube", "tiktok", "donate",
+    "donation", "share", "learn", "updates", "notified", "notify", "mailing", "list",
+    # neutral function words that carry no claim — they must not, on their own, keep an
+    # otherwise-furniture CTA from reading as furniture ("Subscribe to our newsletter").
+    "our", "your", "their", "its", "this", "that", "here", "now", "more")}
+
+
+def is_furniture_task(text, name="", org=""):
+    """True when a page-backed task is a navigation label / CTA rather than an application step:
+    it asserts nothing beyond the program's name (no distinctive tokens) OR its distinctive
+    content is entirely furniture vocabulary. A single substantive token makes it a real step."""
+    dt = page_text.distinctive_tokens(text, name, org)
+    if not dt:
+        return True
+    return all(t in FURNITURE_TOKENS for t in dt)
+
+
 class WriteDecision:
     def __init__(self, items, source, write, stamp):
         self.items = items
@@ -394,7 +418,14 @@ def action_items_write_decision(kept, opp, page_ok, model_ok, existing):
     # failure, and it should not re-bill on every run.
     if page_ok and model_ok:
         if kept:
-            return WriteDecision(top_up(kept, opp), SOURCE_VERIFIED, True, True)
+            # D3 (G-task-1b): a "page-verified" result whose only page-backed tasks are
+            # navigation furniture/CTAs is a SHALLOW read — the pipeline landed on a marketing
+            # homepage and never reached the real steps page (ec18244). Write the list (better
+            # than nothing) but do NOT stamp, so a later, better-discovered pass retries instead
+            # of being frozen behind the TTL. A single substantive task stamps normally.
+            name, org = opp.get("name") or "", opp.get("org") or ""
+            shallow = all(is_furniture_task(i.get("text", ""), name, org) for i in kept)
+            return WriteDecision(top_up(kept, opp), SOURCE_VERIFIED, True, not shallow)
         return WriteDecision(generic_items(opp), SOURCE_PAGE_EMPTY, True, True)
 
     # Page read, model output unreadable. We know nothing new. Keep whatever the row already

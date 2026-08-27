@@ -18,6 +18,7 @@ from generate_action_items import (
     SOURCE_VERIFIED,
     action_items_write_decision,
     generic_items,
+    is_furniture_task,
     verify_items,
 )
 
@@ -273,6 +274,33 @@ VERIFIED = [{"text": "Request one recommendation letter", "url": None,
 def test_verified_result_is_written_and_stamped():
     d = action_items_write_decision(VERIFIED, OPP, page_ok=True, model_ok=True, existing=[])
     assert (d.write, d.stamp, d.source) == (True, True, SOURCE_VERIFIED)
+
+
+def test_is_furniture_task_detects_ctas_and_spares_real_steps():
+    # ec18244's canonical furniture CTA vs a substantive step.
+    assert is_furniture_task("Sign up for emails from us", "Congressional Award", "")
+    assert is_furniture_task("Subscribe to our newsletter", "X", "")
+    assert not is_furniture_task("Submit two letters of recommendation", "X", "")
+    assert not is_furniture_task("Register and pay the $35 registration fee", "X", "")
+
+
+def test_d3_shallow_furniture_only_result_writes_but_does_not_stamp():
+    """G-task-1b: when the only page-backed tasks are navigation CTAs the pipeline landed on a
+    marketing homepage (ec18244). Write the list but leave the row DUE so a better-discovered
+    pass retries, instead of freezing a shallow read behind the TTL."""
+    kept = [{"text": "Sign up for emails from us", "url": None, "basis": "page",
+             "evidence": "Sign Up for Emails from Us"}]
+    d = action_items_write_decision(kept, OPP, page_ok=True, model_ok=True, existing=[])
+    assert (d.write, d.stamp, d.source) == (True, False, SOURCE_VERIFIED)
+
+
+def test_d3_one_substantive_task_stamps_normally():
+    """A single real step among CTAs is NOT shallow — it stamps (do not re-bill a genuine row)."""
+    kept = [{"text": "Sign up for emails from us", "url": None, "basis": "page", "evidence": "x"},
+            {"text": "Submit two letters of recommendation", "url": None, "basis": "page",
+             "evidence": "two letters of recommendation"}]
+    d = action_items_write_decision(kept, OPP, page_ok=True, model_ok=True, existing=[])
+    assert (d.write, d.stamp) == (True, True)
 
 
 def test_page_read_but_nothing_specific_is_a_real_answer():

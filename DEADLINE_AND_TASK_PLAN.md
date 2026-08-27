@@ -24,21 +24,26 @@ coverage (item 1).
 
 ### ⏭️ NEXT SESSION — START HERE (open work from the 2026-08-27 gap-hunt)
 
-A live gap-hunt on real rows surfaced three findings and one chosen build. **All are recorded
-below; nothing here is built yet — pick up from these anchors.** Full detail in the change log
-(2026-08-27 entries), the section anchors named, and §9 for the phased build.
+A live gap-hunt on real rows surfaced three findings and one chosen build. **The FREE CORE is now
+BUILT (2026-08-28, branch `sitemap-discovery-g6a`, off main): G6a + D0–D3, all offline/unit-tested,
+1166 pytest green, zero API spend.** Remaining open work is the PAID validation (D4/D5) and the hard
+G6b staleness detection — both deferred pending operator approval. Full detail in the change log
+(2026-08-28 entries), the section anchors named, and §9 for the phased build.
 
 | # | Finding (live row) | Where | Status |
 |---|---|---|---|
-| **G6** | `verified:true` on WRONG dates — stale/pre-JS `web_fetch` content. Tisch (ec17543): stored Nov 13 deadline, real Nov 9; opens today-anchored. Verification "confirmed" a stale capture. | §3 **G6** (G6a cheap code guard; G6b staleness detection) | OPEN, no code |
-| **G-task-1** | Rich steps page never discovered — Congressional Award (ec18244): 2 throwaway tasks while `/the-program/` carries a full verifiable step list. Pipeline started at the homepage. | §4 **G-task-1a/b/c**, **G-task-3** | OPEN, no code |
-| **G-D1** | **CHOSEN FIX: sitemap-first page discovery** (shared free helper). Enumerate the site's real pages → rank → fetch top few; fall back to `web_search`. Measured **63% host coverage**; validated on ec18244. Beats vocabulary-broadening (search is capped at 2, non-deterministic). | §4 **G-D1** (design + measurements) | DESIGNED |
-| **Build** | **Phases D0–D5** for G-D1 — plain-English table + technical detail. Free core D0–D2, complementary D3 (shallow-capture no-stamp), paid validation D4/D5 (each `--preview`-gated). | §9 "Sitemap-first discovery — phased build" | PLANNED |
+| **G6a** | Today-anchored unverified `opens` reached the student (Tisch ec17543). | §3 **G6a** | ✅ **BUILT** — `verify_dates_against_capture` demotes an `estimated:false, verified:false` date equal to the check date to `estimated:true` + note. |
+| **G6b** | `verified:true` cannot detect a STALE/pre-JS `web_fetch` capture, so it can be confidently wrong. | §3 **G6b** | OPEN — needs rendered re-fetch / thin-shell detection (paid or SPA-render); DEFERRED. |
+| **G-task-1** | Rich steps page never discovered — Congressional Award (ec18244): 2 throwaway tasks while `/the-program/` carries a full verifiable step list. | §4 **G-task-1a/b/c** | ✅ **ADDRESSED** by D1/D2 (discovery) + D3 (no-stamp); durable fix pending PAID D4 validation on the real row. |
+| **G-D1 / D0–D3** | **Sitemap-first page discovery** (shared free helper) + shallow-capture no-stamp. | §9 D0–D3 | ✅ **BUILT** — `sitemap_common.py` + fixtures/tests (D0/D1), wired into `fetch_and_capture` behind the `web_search` fallback (D2), furniture no-stamp signal (D3). |
+| **D4/D5** | PAID validation on real rows + deadline-ladder adoption / optional backfill. | §9 D4–D5 | PLANNED — each `--preview`-gated; operator-approval-gated. |
 
-**Suggested entry point:** build **D0 → D1** (free, stdlib, fully offline-testable) to create
-`sitemap_common.py` + fixtures, then wire D2 behind the existing `web_search` fallback. G6a (drop a
-today-anchored unverified date) is an independent, cheap code guard that can land anytime. Note G6b
-and G-D1 are orthogonal: G-D1 gets to the RIGHT page; G6b handles a STALE fetch of it.
+**Suggested entry point next:** **D4** — one `--preview`-then-live check on ec18244 (Congressional
+Award, the proof row) plus 3–4 hosts spanning sitemap / no-sitemap / multi-program, measuring
+whether discovery reaches the real steps/dates page and the cost delta vs `web_search` (expected
+neutral-to-negative). This is PAID and needs fresh operator approval per run. G6b (staleness
+detection) is the other open thread and is orthogonal: G-D1 gets to the RIGHT page; G6b handles a
+STALE fetch of it.
 
 ---
 
@@ -312,15 +317,18 @@ and **anchored it to today (Aug 27)** — the documented today-anchoring failure
 
 **Two distinct gaps, one cheap and one hard:**
 
-- **G6a (cheap, code-fixable) — the today-anchored `opens` reached the student.**
-  `verify_dates_against_capture` correctly marked it `verified:false` but **never removes a
-  date**, and the write path writes every date. A non-estimated date that is `verified:false`
-  **and equals the check date** is the anchoring fingerprint (a genuinely-today real date would
-  verify `true` against the page). **Proposed guard:** in `check_one`/`verify_dates_against_capture`,
-  drop (or demote to `estimated:true` with a note) any `estimated:false` date where
-  `date_iso == today AND verified == false`. A real same-day date is unaffected because it
-  verifies. Prioritise `type=="opens"` — it is the one that flips "Happening Now". This is the
-  code backstop for the prompt rule at `check_deadlines.py:432` that keeps failing.
+- **G6a (cheap, code-fixable) — the today-anchored `opens` reached the student. ✅ BUILT
+  2026-08-28.** `verify_dates_against_capture` correctly marked it `verified:false` but **never
+  removed a date**, and the write path writes every date. A non-estimated date that is
+  `verified:false` **and equals the check date** is the anchoring fingerprint (a genuinely-today
+  real date would verify `true` against the page). **Implemented (demote, not drop):**
+  `verify_dates_against_capture(info, captured, today=None)` now demotes any `estimated:false`
+  date whose `date_iso == today AND verified == false` to `estimated:true` (never dropped, per
+  T7) and appends a caveat to `important_date_note`. A real same-day date is unaffected because
+  it verifies. Applies to any type but the `opens` case is why it matters (it flips "Happening
+  Now"). The demoted date is no longer counted as a "confirmed date not found" quality signal.
+  Code backstop for the extract prompt's "never anchor an estimate to today" rule. 3 unit tests
+  in `test_check_deadlines_helpers.py`.
 
 - **G6b (hard, strategic) — `verified:true` cannot detect staleness, so it can be confidently
   wrong.** P6c proves "this date string is in the text `web_fetch` returned", NOT "this is the
@@ -1004,17 +1012,19 @@ now — sitemap-first only ADDS recall.
 | **D4** | Try it for real on Congressional Award and a few other programs; confirm it reaches the right pages and isn't more expensive than today. | paid, tiny |
 | **D5** | Use the same page-list trick for deadline-hunting too, and — only if you approve — refresh old programs that were done the pre-sitemap way. | paid |
 
-- **D0 — Fixtures & offline harness (free, no API).** Capture real sitemaps as static test
-  fixtures spanning the cases that matter: a WordPress sitemap **index** + child (`congressionalaward.org`,
-  the proof row), a flat `<urlset>` (`tisch.nyu.edu`), a **no-sitemap / 202-empty** host
-  (`www.nyu.edu` → forces the fallback path), a gzipped `.xml.gz` sitemap, and one large
-  multi-program host (to exercise scoping + caps). These pin behaviour so D1 is pure TDD.
-  Deliverable: `tests/fixtures/sitemaps/*` + `tests/test_sitemap_common.py` skeleton.
+- **D0 — Fixtures & offline harness (free, no API). ✅ DONE 2026-08-28.** Sitemaps captured as
+  static fixtures in `tests/fixtures/sitemaps/`: a WordPress sitemap **index** + two children
+  (`congressionalaward_*.xml`, the proof row — page child carries `/the-program/` &
+  `/prospective-participants/`, post child is chrome), a flat `<urlset>` with **CDATA-wrapped
+  `<loc>`** (`tisch_sitemap.xml`), a **gzipped** `gzhost_sitemap.xml.gz`, and the no-sitemap /
+  garbage / large-multi-program cases built in-test. Deliverable landed:
+  `tests/fixtures/sitemaps/*` + `tests/unit/test_sitemap_common.py` (17 tests).
 
-- **D1 — `sitemap_common.py` core (free, stdlib only).** The whole discovery brain, no network in
-  tests (fixtures injected). Public surface: `discover_candidate_pages(opp, fetch=urlopen) ->
-  list[Candidate{url, score, lastmod}]`, returning `[]` cleanly whenever nothing usable is found
-  (the fallback trigger). Internals, each unit-tested:
+- **D1 — `sitemap_common.py` core (free, stdlib only). ✅ DONE 2026-08-28.** The whole discovery
+  brain, no network in tests (fixtures injected via a fake `fetch`). Public surface:
+  `discover_candidate_pages(opp, fetch=default_fetch, top_n=5) -> list[Candidate{url, score,
+  lastmod}]`, returning `[]` cleanly whenever nothing usable is found (the fallback trigger).
+  Internals, each unit-tested:
   - **locate:** `robots.txt` `Sitemap:` lines → else probe `/sitemap.xml`, `/sitemap_index.xml`,
     `/wp-sitemap.xml` on the stored URL's host; short timeout, bounded bytes.
   - **parse:** `<sitemapindex>` recursion **one level** into child sitemaps; handle gzip
@@ -1032,19 +1042,21 @@ now — sitemap-first only ADDS recall.
     the reasoning so it is not re-litigated.)
 
 - **D2 — Wire into the shared capture, behind the fallback (free logic; a live run costs the
-  same as today).** `source_capture.fetch_and_capture` and the deadline finder consult
-  `discover_candidate_pages` FIRST; the resolved top-N URLs are fed to the existing Claude
-  `web_fetch` step (either fetch the heuristic top-3 directly, or inject the chrome-stripped
-  shortlist into the model's `user_content` so it fetches the right 3). `web_search` stays as the
-  fallback when the helper returns `[]`. Add a `discovery_source = sitemap|search` stat + the
-  chosen URLs to the run/stat line so a graded pass can measure how often the sitemap won. **No
-  behaviour change on a no-sitemap host** — that path is byte-identical to today.
+  same as today). ✅ DONE 2026-08-28.** `source_capture.fetch_and_capture` consults
+  `discover_candidate_pages` FIRST (injectable `discover` param) and injects the ranked candidate
+  URLs into the model's `user_content` so `web_fetch` retrieves the real page. `web_search` stays
+  enabled as the in-call fallback, and a `[]` result (no sitemap) or a crashing helper degrades to
+  a **byte-identical** pre-sitemap prompt. Logs `discovery_source=sitemap|search` as a stat line.
+  3 tests in `test_source_capture.py`. **Scope note:** D2 wired the TASK capture only; the deadline
+  ladder's own-site `site:` rungs are D5 (paid). **No behaviour change on a no-sitemap host.**
 
-- **D3 — Shallow-capture no-stamp signal (G-task-1b), complementary.** Independent of discovery,
-  and it makes D2 safe against re-freezing a thin read: do NOT stamp `page-verified` when the only
-  page-backed tasks are navigation furniture/CTAs, or when the list reached `MIN_ITEMS` solely via
-  generic top-up. Leave the row due so a later (better-discovered) pass retries. Own tests in
-  `test_action_items.py`; the furniture test can reuse the run-62 `GENERIC_TOKENS` machinery.
+- **D3 — Shallow-capture no-stamp signal (G-task-1b), complementary. ✅ DONE 2026-08-28.** Makes
+  D2 safe against re-freezing a thin read: `action_items_write_decision` does NOT stamp a
+  `page-verified` result when **every** page-backed task is navigation furniture/CTA
+  (`is_furniture_task` — distinctive tokens vs a furniture vocabulary; ec18244's "Sign up for
+  emails from us"). The list is still written (better than nothing); the row stays due so a
+  later, better-discovered pass retries. A single substantive task stamps normally. Batch +
+  interactive both already gate on `decision.stamp`. 3 tests in `test_action_items.py`.
 
 - **D4 — Live validation on real rows (paid, operator-approved, tiny; `--preview` first).**
   One-row live checks on **ec18244 (Congressional Award — the proof row)** plus 3–4 spanning
@@ -1307,6 +1319,28 @@ deadline."
 
 ## Change log
 
+- **2026-08-28** — **FREE CORE of the gap-hunt follow-up BUILT — G6a + D0–D3** (branch
+  `sitemap-discovery-g6a`, off `main`; 1166 pytest green; zero API spend; DDL-free/stdlib-only).
+  - **G6a** (`check_deadlines.verify_dates_against_capture`, +`today` param): demotes a
+    `estimated:false, verified:false` date equal to the check date to `estimated:true` + a note
+    (never drops, per T7). The today-anchoring fingerprint (ec17543's `opens` → HAPPENING NOW);
+    a real same-day date verifies and is untouched. 3 tests.
+  - **D0/D1** (`sitemap_common.py` NEW + `tests/fixtures/sitemaps/*` + 17 tests): free,
+    stdlib-only sitemap-first discovery — `discover_candidate_pages(opp, fetch)` locates
+    (robots→common paths), parses (sitemapindex recursion one level, gzip, CDATA, lastmod; hard
+    caps), scopes (single-program keeps all / multi-program filters by path-prefix + name tokens),
+    ranks (slug scorer). Returns `[]` = the `web_search` fallback trigger, so it only ADDS recall.
+  - **D2** (`source_capture.fetch_and_capture`, +`discover` param): consults the sitemap FIRST and
+    injects ranked candidate URLs into the `web_fetch` prompt; no-sitemap / crashing-helper →
+    byte-identical pre-sitemap prompt. Logs `discovery_source=sitemap|search`. Wired the TASK
+    capture only; the deadline ladder's `site:` rungs stay for D5. 3 tests.
+  - **D3** (`generate_action_items.action_items_write_decision`, +`is_furniture_task`): a
+    `page-verified` result whose page-backed tasks are ALL navigation furniture/CTAs (ec18244)
+    writes but does NOT stamp — leaves the row due for a better-discovered retry. 3 tests.
+  - **Deferred (need operator approval, PAID):** D4 (`--preview`-first live validation on ec18244
+    + spanning hosts, cost-delta vs `web_search`), D5 (deadline-ladder adoption + optional
+    backfill), and **G6b** (staleness detection: rendered re-fetch / thin-shell — the hard half of
+    §3 G6; G6a is only the cheap backstop).
 - **2026-08-27** — **G-task-1 recorded (gap-hunt example 2): rich steps page never discovered.**
   ec18244 (Congressional Award) served 2 throwaway tasks ("Register…" generic + "Sign up for
   emails" CTA) while `/the-program/` carries a full, verbatim-quotable step list ($35 registration,

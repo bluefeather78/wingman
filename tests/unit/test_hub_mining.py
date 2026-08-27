@@ -96,3 +96,52 @@ def test_filter_respects_cap():
     kept, _ = hub.filter_hub_links(hub.harvest_links(many, "https://x.edu/index"),
                                    "https://x.edu/index", off_domain=False, cap=25)
     assert len(kept) <= 25
+
+
+# ---- is_nonprogram_link (nav / non-HTML / adult / editorial drop) ----------------------
+
+_HUBU = "https://precollege.wisc.edu/"
+
+
+@pytest.mark.parametrize("url", [
+    "https://precollege.wisc.edu/",                                   # the hub itself
+    "https://www.usna.edu/Admissions/_files/USNA_Viewbook.pdf",       # PDF
+    "https://precollege.wisc.edu/wp-content/uploads/x/photo.webp",    # image
+    "https://www.usna.edu/Admissions/Apply/FAQ.php",                  # nav slug (faq)
+    "https://www.usna.edu/Admissions/",                              # nav slug (admissions)
+    "https://precollege.wisc.edu/donate/",                           # nav slug (donate)
+    "https://online.wisc.edu/degrees/marketing/",                    # adult degree path
+    "https://precollege.wisc.edu/blog/alinas-precollege-experience/", # editorial post
+    "https://business.wisc.edu/news/some-headline/",                 # editorial post
+])
+def test_is_nonprogram_link_true(url):
+    assert hub.is_nonprogram_link(url, _HUBU) is True
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.usna.edu/Admissions/Programs/STEM.php",             # USNA Summer STEM
+    "https://www.usna.edu/Admissions/Programs/NASS.php",             # USNA Summer Seminar
+    "https://business.wisc.edu/precollege/business-emerging-leaders/", # Wisconsin BEL
+    "https://precollege.wisc.edu/badger-summer-scholars/",
+    "https://pharmacy.wisc.edu/pharmd/high-school-summer-program/",
+])
+def test_is_nonprogram_link_false_for_real_programs(url):
+    assert hub.is_nonprogram_link(url, _HUBU) is False
+
+
+def test_filter_drops_nav_keeps_program_and_subhub():
+    page = (
+        '<a href="/Admissions/Programs/STEM.php">Summer STEM Program (High School)</a>'
+        '<a href="/Admissions/Apply/FAQ.php">FAQ</a>'                # nav
+        '<a href="/Admissions/_files/Viewbook.pdf">Viewbook</a>'    # PDF
+        '<a href="/blog/a-post">A Student Story</a>'                 # editorial
+        '<a href="/pre-college">Pre-College Programs</a>'           # sub-hub (kept for recursion)
+    )
+    hub_url = "https://www.usna.edu/Admissions/Programs/index.php"
+    kept, subs = hub.filter_hub_links(hub.harvest_links(page, hub_url), hub_url, off_domain=False)
+    kept_urls = [u for u, _ in kept]
+    assert any("STEM.php" in u for u in kept_urls)
+    assert not any("FAQ" in u for u in kept_urls)
+    assert not any(".pdf" in u.lower() for u in kept_urls)
+    assert not any("/blog/" in u for u in kept_urls)
+    assert any("pre-college" in u for u, _ in subs)          # sub-hub survives for recursion

@@ -60,6 +60,55 @@ _SUB_HUB = re.compile(
     r"k[\s-]?12(\s+programs?)?)\b", re.I)
 
 
+# Slugs that are page furniture, never a program's own page. Reuses url_repair's vetted
+# GENERIC_SLUGS (apply/faq/about/contact/donate/news/admissions/resources/index/...) plus the
+# extra nav labels the Aug-27 real-index preview surfaced as chaff (USNA Admissions index,
+# UW-Madison pre-college footer). Kept conservative: a real program slug (stem, nass,
+# business-emerging-leaders, badger-summer-scholars, summer-music-clinic) is in none of these.
+_NAV_SLUGS = url_repair.GENERIC_SLUGS | {
+    "events", "event", "blog", "blogs", "partners", "partner", "employment", "jobs",
+    "faqs", "in-the-news", "news-events", "financial-information", "financial", "tuition",
+    "safety", "safety-commitment", "culture-belonging", "prospective-students",
+    "current-students", "student-life", "visit", "quicklinks", "contact-us", "about-us",
+    "our-team", "team", "history", "mission", "accessibility", "privacy", "terms",
+    "gallery", "photos", "media", "international-student-resources", "employment-opportunities",
+}
+# A non-HTML target (a viewbook PDF, a flyer image) can never be a program's landing page.
+_NONHTML_EXT = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip",
+                ".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mov", ".webp", ".svg", ".bmp",
+                ".tiff", ".avif", ".mp3", ".wav")
+# Path segments that mark a page never worth an extraction call, even when the SLUG is a
+# real-looking title. Two classes surfaced by the Aug-27 preview:
+#  - adult/degree: online.wisc.edu/degrees/marketing leaked past the anchor filter because its
+#    anchor text was just "Marketing".
+#  - editorial: /blog/<post-title> and /news/<headline> — the slug is the article title, so the
+#    nav-slug check (which only sees the last segment) never catches them.
+_ADULT_PATH_SEGMENTS = {"degrees", "degree", "graduate", "phd", "mba", "faculty", "alumni"}
+_EDITORIAL_PATH_SEGMENTS = {"blog", "blogs", "news", "in-the-news", "press", "press-releases",
+                            "stories", "story", "article", "articles", "media"}
+_DROP_PATH_SEGMENTS = _ADULT_PATH_SEGMENTS | _EDITORIAL_PATH_SEGMENTS
+
+
+def is_nonprogram_link(url, hub_url):
+    """True if a harvested link is the hub's own page, a non-HTML file, page nav, an
+    adult/degree page, or an editorial post — i.e. never worth a paid extraction call.
+    Pure, free, pre-fetch."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return True
+    if url_dedupe.match_key(url) == url_dedupe.match_key(hub_url):
+        return True                       # the hub links to itself
+    path = (parts.path or "").lower()
+    if path.endswith(_NONHTML_EXT):
+        return True
+    segs = {s for s in path.split("/") if s}
+    if segs & _DROP_PATH_SEGMENTS:
+        return True
+    slug = url_repair._slug(url)
+    return (not slug) or slug in _NAV_SLUGS
+
+
 def is_wrong_audience(text):
     """True if the anchor/text is plainly for a non-high-school audience."""
     return bool(_WRONG_AUDIENCE.search(text or ""))
@@ -106,6 +155,8 @@ def filter_hub_links(links, hub_url, off_domain=False, cap=25):
             continue
         if url_validate.is_bare_domain(url) or url_validate.is_content_mill(url):
             continue
+        if is_nonprogram_link(url, hub_url) and not looks_like_sub_hub(anchor):
+            continue          # page nav / PDF / degree page — but keep a labelled sub-hub index
         dom = url_dedupe.registrable_domain(urllib.parse.urlsplit(url).netloc)
         same = dom == hub_dom
         if off_domain and same:

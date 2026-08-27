@@ -458,6 +458,63 @@ def test_rung4_sources_are_trust_filtered(monkeypatch):
     assert "https://spammy.example/listicle" not in cap_urls
 
 
+# --------------------------------------------------------------- D5 sitemap-first in the ladder
+
+def test_sitemap_block_empty_and_populated():
+    assert cd._sitemap_block([]) == ""
+    assert cd._sitemap_block(None) == ""
+    block = cd._sitemap_block(["https://prog.example/key-dates", "https://prog.example/apply"])
+    assert "OWN sitemap" in block
+    assert "https://prog.example/key-dates" in block and "https://prog.example/apply" in block
+
+
+class _C:
+    def __init__(self, url):
+        self.url = url
+
+
+def test_ladder_injects_sitemap_urls_into_own_site_rungs_not_rung4(monkeypatch):
+    """D5: the own-site rungs get the program's sitemap candidate URLs in their prompt; rung 4
+    (trusted third-party, off-site) does not. discover is INJECTED, so no network."""
+    per_round_user = []
+
+    def fake(system, user_content, api_key, use_web_search=False, max_searches=None,
+             return_sources=False, return_captured=False, cache_system=False):
+        per_round_user.append(user_content)
+        notes = _signals(site="no", confirmed="no", prior="no")   # never satisfied -> climb
+        usage = {"server_tool_use": {"web_search_requests": 1}}
+        if return_captured:
+            return notes, usage, [], []
+        return (notes, usage, []) if return_sources else (notes, usage)
+
+    monkeypatch.setattr(cd, "call_claude", fake)
+    fake_discover = lambda opp, top_n=5: [_C("https://prog.example/key-dates"),
+                                          _C("https://prog.example/apply")]
+    cd.research_deadlines(OPP, "k", trusted_domains=["lumiere-education.com"],
+                          discover=fake_discover)
+    # Own-site rungs (all but the last) carry the sitemap URLs; rung 4 (last) does not.
+    own_site = per_round_user[:OWN_SITE_RUNGS]
+    rung4 = per_round_user[OWN_SITE_RUNGS]
+    assert all("https://prog.example/key-dates" in u for u in own_site)
+    assert "https://prog.example/key-dates" not in rung4
+    assert "lumiere-education.com" in rung4          # rung 4 still gets the allowlist
+
+
+def test_ladder_without_discover_is_unchanged(monkeypatch):
+    """discover=None (the default) => no sitemap block => byte-identical to the pre-D5 prompt,
+    so no row regresses and no network is touched."""
+    seen = []
+
+    def fake(system, user_content, api_key, use_web_search=False, max_searches=None,
+             return_sources=False, return_captured=False, cache_system=False):
+        seen.append(user_content)
+        return _signals(confirmed="yes"), {"server_tool_use": {"web_search_requests": 1}}, [], []
+
+    monkeypatch.setattr(cd, "call_claude", fake)
+    cd.research_deadlines(OPP, "k")   # no discover -> off
+    assert "sitemap" not in seen[0].lower()
+
+
 # --------------------------------------------------------------- date-on-page (P6c / T7)
 
 import page_text as _pt
@@ -517,6 +574,48 @@ def test_verify_dates_handles_no_capture_and_no_dates():
     info = {"important_dates": [{"date_iso": "2027-01-15", "estimated": False}]}
     # No captured pages -> nothing to verify against -> marked unverified, counted.
     assert cd.verify_dates_against_capture(info, []) == 1
+
+
+# --------------------------------------------------------------- G6a today-anchoring backstop
+
+def test_g6a_demotes_today_anchored_unverified_date():
+    """A non-estimated date equal to the check date that is NOT on any page is the anchoring
+    fingerprint -> demote to estimated, do NOT count as a confirmed miss, add a caveat."""
+    info = {"important_dates": [{"date_iso": "2026-08-27", "type": "opens",
+                                 "estimated": False}]}
+    unverified = cd.verify_dates_against_capture(
+        info, [_src("https://p/x", "no opening date on this page")], today="2026-08-27")
+    d = info["important_dates"][0]
+    assert d["estimated"] is True          # demoted, not confirmed
+    assert d["verified"] is False
+    assert "source_url" not in d
+    assert unverified == 0                  # a flagged estimate, not a confirmed miss
+    assert "estimate" in (info.get("important_date_note") or "").lower()
+
+
+def test_g6a_leaves_a_genuinely_today_date_that_verifies():
+    """A real same-day date verifies against the page, so the fingerprint never fires on it."""
+    info = {"important_dates": [{"date_iso": "2026-08-27", "type": "opens",
+                                 "estimated": False}]}
+    unverified = cd.verify_dates_against_capture(
+        info, [_src("https://p/apply", "Applications open August 27, 2026.")],
+        today="2026-08-27")
+    d = info["important_dates"][0]
+    assert d["verified"] is True and d.get("estimated") is False
+    assert d["source_url"] == "https://p/apply"
+    assert unverified == 0
+    assert not info.get("important_date_note")   # nothing demoted -> no caveat
+
+
+def test_g6a_does_not_touch_an_unverified_non_today_date():
+    """An unconfirmed date that is NOT today stays a counted confirmed miss (unchanged path)."""
+    info = {"important_dates": [{"date_iso": "2027-01-15", "type": "deadline",
+                                 "estimated": False}]}
+    unverified = cd.verify_dates_against_capture(
+        info, [_src("https://p/x", "no dates here")], today="2026-08-27")
+    d = info["important_dates"][0]
+    assert d.get("estimated") is False and d["verified"] is False
+    assert unverified == 1
 
 
 # ------------------------------------------------- status evidence gate (2026-08-26)
@@ -582,7 +681,7 @@ def test_status_evidence_other_statuses_untouched_and_stray_field_stripped():
 def _fake_finder_halves(monkeypatch, date_captured=(), req_captured=(), date_cost=0.5,
                         req_cost=0.3, date_searches=1, req_reason="ok"):
     """Patch the two halves find_program_sources composes so no network is hit."""
-    def fake_research(opp, api_key, retry_on_silent=True, trusted_domains=None):
+    def fake_research(opp, api_key, retry_on_silent=True, trusted_domains=None, discover=None):
         return ("date notes", date_cost, date_searches, [c.url for c in date_captured],
                 1, True, list(date_captured))
     monkeypatch.setattr(cd, "research_deadlines", fake_research)
@@ -632,7 +731,7 @@ def test_finder_full_result_is_cached_read_once(monkeypatch):
     calls = {"n": 0}
     orig_research = cd.research_deadlines
 
-    def counting_research(opp, api_key, retry_on_silent=True, trusted_domains=None):
+    def counting_research(opp, api_key, retry_on_silent=True, trusted_domains=None, discover=None):
         calls["n"] += 1
         return ("notes", 0.5, 1, [], 1, True, [_src("https://p/a", "dates")])
     monkeypatch.setattr(cd, "research_deadlines", counting_research)
@@ -651,7 +750,7 @@ def test_finder_single_goal_is_not_cached(monkeypatch):
     _clear_cache()
     calls = {"n": 0}
 
-    def counting_research(opp, api_key, retry_on_silent=True, trusted_domains=None):
+    def counting_research(opp, api_key, retry_on_silent=True, trusted_domains=None, discover=None):
         calls["n"] += 1
         return ("notes", 0.5, 1, [], 1, True, [])
     monkeypatch.setattr(cd, "research_deadlines", counting_research)

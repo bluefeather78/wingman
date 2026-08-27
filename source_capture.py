@@ -35,6 +35,7 @@ import urllib.request
 logging.getLogger("PyPDF2").setLevel(logging.ERROR)
 
 import aggregators_common
+import sitemap_common
 from claude_common import (
     ANTHROPIC_URL, MODEL, estimate_cost, _enforce_rate_limit, _default_timeout_secs,
 )
@@ -166,16 +167,50 @@ def _capture_call(user_content, api_key, timeout):
         return json.loads(resp.read())
 
 
-def fetch_and_capture(opp, api_key, timeout=None, policy=None):
+DISCOVER_TOP_N = 5
+
+
+def _discovery_block(opp, discover):
+    """(injected_user_text, discovery_source). D2 (G-D1): consult the program's OWN sitemap
+    FIRST and hand the model the real, ranked candidate URLs, so it web_fetches the actual
+    steps/requirements page instead of guessing page names via web_search (the ec18244 miss).
+    Returns ("", "search") when the host has no usable sitemap — that path is byte-identical to
+    the pre-sitemap behaviour, so a no-sitemap host never regresses. web_search stays enabled as
+    the in-call fallback if the injected URLs do not pan out."""
+    try:
+        cands = discover(opp, top_n=DISCOVER_TOP_N) or []
+    except Exception:
+        cands = []
+    if not cands:
+        return "", "search"
+    listing = "\n".join(f"- {c.url}" for c in cands)
+    text = ("\n\nThese pages come from the program's OWN sitemap and are the ones most likely "
+            "to carry application steps, requirements or key dates. web_fetch the relevant ones "
+            "FIRST before searching:\n" + listing)
+    return text, "sitemap"
+
+
+def fetch_and_capture(opp, api_key, timeout=None, policy=None, discover=None):
     """Fetch the program's page(s) via Claude web_fetch and return
     (sources, cost, reason). `sources` is a list of CapturedSource (tier-tagged); `reason` is
     'ok' when at least one source yielded text, else a short label the caller treats exactly
-    like page_text's fetch failure (generic fallback, no stamp, retry next run)."""
+    like page_text's fetch failure (generic fallback, no stamp, retry next run).
+
+    `discover` (default sitemap_common.discover_candidate_pages, injectable for tests) is the
+    D2 sitemap-first hook: its ranked candidate URLs are injected so the model fetches the real
+    page rather than guessing. It degrades to today's web_search discovery when no sitemap
+    exists, so it can only add recall."""
+    if discover is None:
+        discover = sitemap_common.discover_candidate_pages
     own_domain = aggregators_common.normalize_domain(opp.get("url"))
+    discovered, discovery_source = _discovery_block(opp, discover)
     user = (f"Program: {opp.get('name', '')}\nOrganization: {opp.get('org') or ''}\n"
             f"Program URL: {opp.get('url') or ''}\n\n"
             f"Find and web_fetch this program's application / requirements page (and its "
-            f"guidelines PDF if it has one). Start from the program URL above.")
+            f"guidelines PDF if it has one). Start from the program URL above." + discovered)
+    print(f"  [discovery] source={discovery_source}"
+          + (f" ({discovered.count(chr(10) + '- ')} candidate URLs)"
+             if discovery_source == "sitemap" else ""), flush=True)
     data = _capture_call(user, api_key, timeout)
     cost = estimate_cost(data.get("usage", {}) or {})
     sources = parse_captured_sources(data, own_domain=own_domain, policy=policy)

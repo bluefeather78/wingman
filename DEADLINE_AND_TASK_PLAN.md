@@ -20,6 +20,35 @@ TIMELINESS (page-verified tasks can carry past dates), the §13 coverage/measure
 coverage (item 1).
 **Owner:** _tbd_  **Started:** 2026-08-25  **Branch:** `P5-P7-deadline-and-task-tracker`
 
+---
+
+### ⏭️ NEXT SESSION — START HERE (open work from the 2026-08-27 gap-hunt)
+
+A live gap-hunt on real rows surfaced three findings and one chosen build. **The FREE CORE is now
+BUILT (2026-08-28, branch `sitemap-discovery-g6a`, off main): G6a + D0–D3, all offline/unit-tested,
+1166 pytest green, zero API spend.** Remaining open work is the PAID validation (D4/D5) and the hard
+G6b staleness detection — both deferred pending operator approval. Full detail in the change log
+(2026-08-28 entries), the section anchors named, and §9 for the phased build.
+
+| # | Finding (live row) | Where | Status |
+|---|---|---|---|
+| **G6a** | Today-anchored unverified `opens` reached the student (Tisch ec17543). | §3 **G6a** | ✅ **BUILT** — `verify_dates_against_capture` demotes an `estimated:false, verified:false` date equal to the check date to `estimated:true` + note. |
+| **G6b** | `verified:true` cannot detect a STALE/pre-JS `web_fetch` capture, so it can be confidently wrong. | §3 **G6b** | OPEN — needs rendered re-fetch / thin-shell detection (paid or SPA-render); DEFERRED. |
+| **G-task-1** | Rich steps page never discovered — Congressional Award (ec18244): 2 throwaway tasks while `/the-program/` carries a full verifiable step list. | §4 **G-task-1a/b/c** | ✅ **ADDRESSED** by D1/D2 (discovery) + D3 (no-stamp); durable fix pending PAID D4 validation on the real row. |
+| **G-D1 / D0–D3** | **Sitemap-first page discovery** (shared free helper) + shallow-capture no-stamp. | §9 D0–D3 | ✅ **BUILT** — `sitemap_common.py` + fixtures/tests (D0/D1), wired into `fetch_and_capture` behind the `web_search` fallback (D2), furniture no-stamp signal (D3). |
+| **D4** | PAID validation on 4 real rows. | §9 D4 | ✅ **DONE 2026-08-28 ($0.1781, read-only)** — proof row ec18244 fixed (furniture CTA → real $35-fee/Record-Book tasks); 0→3 page-backed on ec18676; no-sitemap control OK; SLIYS demotion-rate signal noted. A ranker bug was caught & fixed FREE first. |
+| **D5** | Deadline-ladder adoption + optional backfill. | §9 D5 | ✅ **CODE DONE + VALIDATED 2026-08-28 ($0.2358, read-only)** — sitemap fires + reaches site on all 3, no regression; search-count drop did NOT show on off-season rows (climb to rung 2 for estimation regardless), so benefit here is recall not cost. Optional backfill still deferred. |
+
+**Suggested entry point next:** two independent threads, both PAID/approval-gated. **(a)** A live
+WRITING pass to actually improve the tested/real rows for students — D4 was read-only, so ec18244
+et al. still serve their old cached lists until a writing run or TTL lapse (this is the G-task-3
+backfill, §13 item 1 = deferred, so it stays gated on you un-deferring it). **(b)** **D5** — apply
+sitemap-first to the deadline ladder's own-site `site:` rungs. **G6b** (staleness detection) is the
+other open thread, orthogonal to all of the above: G-D1 gets to the RIGHT page; G6b handles a STALE
+fetch of it.
+
+---
+
 > **This is the single source of truth for the deadline creator and the task creator.**
 > It merges and supersedes `DEADLINE_CREATION_PLAN.md` and `ACTION_ITEMS_TRUST_PLAN.md` — both
 > are retained only as history and carry a banner pointing here. Edit THIS doc going forward.
@@ -261,6 +290,70 @@ only when re-checked; a targeted sweep of `not_running` rows is a cheap candidat
 
 ---
 
+### G6 — `verified:true` on WRONG dates: stale / pre-JS `web_fetch` content (found 2026-08-27, live debug) — OPEN
+
+**Every date on a "verified" row was wrong, and three of the four carried `verified:true`.**
+ec17543 (Tisch Future Artists, NYU — `www.nyu.edu/.../tisch-future-artists.html`), checked
+today (`source: "fresh, real search"`, 1 search, `was_estimated:false`, cost $0.0707):
+
+| field | stored (shown to student) | LIVE page (rendered in-browser 2026-08-27) |
+|---|---|---|
+| opens | 2026-08-**27** — `verified:false, estimated:false` (**= the check date**) | **2026-08-17** |
+| deadline | 2026-11-**13** — **`verified:true`**, source_url = the nyu.edu landing page | **2026-11-09** |
+| event_start | 2027-02-**03** — **`verified:true`** | **2027-01-30** |
+| event_end | 2027-05-**11** — **`verified:true`** | **2027-05-08** |
+
+The student sees "Nov 13 deadline (verified)". The real deadline is Nov 9 — a **4-day error on
+the exact fact this product exists to get right**, wearing a confidence badge.
+
+**Mechanism (confirmed, not inferred).** `date_is_on_page` matches the *exact* day, and the
+live page contains **no "November 13" anywhere** (it says "November 9" twice, in body prose AND
+a structured "Schedule and Deadlines" table). Yet the P6c verifier found "November 13" in the
+captured text for that same URL and stamped `verified:true`. The only way both are true: **the
+content Anthropic's `web_fetch` returned for that URL was a DIFFERENT (older/pre-JS) version of
+the page than the live one.** Corroborating: the live "Opens August 17" and "Program Dates
+January 30 – May 8" blocks are JS-rendered (our own `urllib`/WebFetch gets an empty 202 shell
+for this host); the capture evidently lacked them, so the model could not find the opening date
+and **anchored it to today (Aug 27)** — the documented today-anchoring failure, here landing on
+`opens` and surviving into the row as `estimated:false`.
+
+**Two distinct gaps, one cheap and one hard:**
+
+- **G6a (cheap, code-fixable) — the today-anchored `opens` reached the student. ✅ BUILT
+  2026-08-28.** `verify_dates_against_capture` correctly marked it `verified:false` but **never
+  removed a date**, and the write path writes every date. A non-estimated date that is
+  `verified:false` **and equals the check date** is the anchoring fingerprint (a genuinely-today
+  real date would verify `true` against the page). **Implemented (demote, not drop):**
+  `verify_dates_against_capture(info, captured, today=None)` now demotes any `estimated:false`
+  date whose `date_iso == today AND verified == false` to `estimated:true` (never dropped, per
+  T7) and appends a caveat to `important_date_note`. A real same-day date is unaffected because
+  it verifies. Applies to any type but the `opens` case is why it matters (it flips "Happening
+  Now"). The demoted date is no longer counted as a "confirmed date not found" quality signal.
+  Code backstop for the extract prompt's "never anchor an estimate to today" rule. 3 unit tests
+  in `test_check_deadlines_helpers.py`.
+
+- **G6b (hard, strategic) — `verified:true` cannot detect staleness, so it can be confidently
+  wrong.** P6c proves "this date string is in the text `web_fetch` returned", NOT "this is the
+  current date on the live page". For JS-rendered / cache-served hosts (NYU is the canonical
+  one — CLAUDE.md already notes nyu.edu answers our client with a 202/empty body) the fetched
+  text can lag the live page, and verification then *manufactures* false confidence rather than
+  catching error — strictly worse than leaving the date unverified. Candidate mitigations, none
+  free: (i) a fresh independent re-fetch of the URL (rendered, e.g. the same path the app's own
+  browser preview uses) to cross-check any `verified:true` date, downgrading to
+  `verified:false`/`estimated` on disagreement; (ii) treat a capture whose text is a thin/pre-JS
+  shell (detectable: our `page_text` fetch returns empty for the same URL that `web_fetch`
+  "verified") as **not** a verification substrate; (iii) fingerprint the "status=running +
+  deadline present + opens unverified-and-today" contradiction and force prior-cycle estimation
+  instead of trusting the capture. This is the same family as §13 item 5 (Playwright/SPA) and
+  item 4 (a provenance/recency surface must not overclaim). **Until mitigated, "(verified)" in
+  the UI overstates certainty on JS-heavy hosts** — see §11.
+
+**Immediate corrective:** ec17543's stored dates are live-wrong now; clearing
+`dates_last_checked_at` only re-rolls the same stale capture. A durable fix needs G6a + at least
+one G6b mitigation before a re-check helps.
+
+---
+
 ## 4. Task creation — gaps & fixes
 
 Task *accuracy* is already strong: the code-side quote verification (`claim_is_supported` /
@@ -278,6 +371,123 @@ that substrate plus the trust tiers:
 - **The richest description often sits on a third-party aggregator** (e.g.
   `lumiere-education.com`). The substrate's fetch may surface it and the trust tier decides
   whether it ships — the aggregator content is verified the same way, then tier-gated (below).
+
+### G-task-1 — the steps page is never discovered; the pipeline settles for the homepage (found 2026-08-27, live debug) — OPEN
+
+**A program with a rich, verifiable steps page got two throwaway tasks.** ec18244 (Congressional
+Award), `action_items_source: page-verified`, checked 2026-08-24, stored list:
+1. "Register for the program online" — `basis:generic`
+2. "Sign up for emails from us" — `basis:page`, evidence "Sign Up for Emails from Us"
+
+The stored `opp.url` is the **bare homepage** (`congressionalaward.org`) — marketing copy whose
+only task-shaped string is the email-signup CTA. The actual application steps live on
+**`/the-program/`**, and that page is **fully readable even by our free `urllib` fetch** (~5 KB,
+reason `ok`): "Register and submit your one-time **$35.00 registration fee**… minimum age 13½",
+"Sign up for a **Submittable account**", "Study the guidelines in the **Program Book**", "Select
+a **Validator** for each goal", "complete all parts of your **Record Book** and ask your Advisor
+to sign". Rich, program-specific, verbatim-quotable — everything the extract needs. The pipeline
+started from `opp.url`, never reached `/the-program/`, and fell to homepage-furniture + a generic
+top-up. (This row predates the substrate — generated 2026-08-24, pre-2026-08-26 — and is still
+inside the 7-day TTL, so it is served from cache and has not re-run; see G-task-3.)
+
+Three distinct gaps:
+
+- **G-task-1a (primary) — sub-page discovery guesses page NAMES instead of reading the site's
+  map.** `source_capture.FETCH_SYSTEM` and the shared finder hunt for pages named *How to Apply /
+  Application / Requirements / Eligibility / FAQ / Key Dates / Timeline / Guidelines* via
+  `web_search`. Programs routinely file the same content under *The Program / How It Works / Get
+  Started / Participate / Overview / Steps / Participant Timeline*, so the guess misses and the
+  hunt stops at the homepage. **CHOSEN FIX — sitemap-first discovery (operator direction
+  2026-08-27), superseding "broaden the vocabulary".** Vocabulary-widening only trades one guess
+  list for a longer one; enumerating the site's OWN pages removes the guess. See G-D1 below — a
+  new shared free helper that both features call.
+
+- **G-task-1b — a marketing-homepage capture still counts as `page-verified` and STAMPS.** The
+  write decision cannot tell "read A page" from "read THE steps page": one recovered page-backed
+  task (even a `Sign Up for Emails` CTA) → `page-verified` → stamped, suppressing re-discovery for
+  7/90 days. There is no shallow-capture signal. **Candidate:** when the only page-backed tasks
+  are navigation labels / CTAs (the run-62 furniture class — `page_text` could score this), OR
+  when a `page-verified` result is `MIN_ITEMS` only because of the generic top-up, do not stamp —
+  leave the row due so a broader discovery pass retries. Weaker than the deadline `site_reached`
+  signal but the same idea: don't freeze a shallow read behind the TTL.
+
+- **G-task-1c — the CTA task itself is low value.** "Sign up for emails from us" is a real,
+  quoted phrase that passes both verifier gates yet is not an application step — exactly the
+  navigation-label class the extract prompt names as non-steps (`generate_action_items.py:203`).
+  On a marketing homepage the CTA is the *only* quotable "step", so it survives. Fixing G-task-1a
+  (fetch the real steps page) mostly moots this; a stricter furniture filter is the backstop.
+
+**Unlike G6, this row is FIXABLE by a re-run** — the content is there, readable, and verifiable —
+**provided discovery reaches `/the-program/`.** The durable fix is G-D1. A forced re-check today,
+on the current substrate, may or may not reach it; that uncertainty is exactly the gap.
+
+### G-D1 — Sitemap-first page discovery (shared, free) — DESIGNED & VALIDATED 2026-08-27
+
+**Principle: enumerate the site's real pages, then choose; never guess page names.** A new free,
+stdlib-only helper (proposed `sitemap_common.py`) that both the deadline finder and the task
+capture call BEFORE spending a `web_search`:
+
+1. **Locate the sitemap (free HTTP).** Read `robots.txt` for `Sitemap:` lines; else probe
+   `/sitemap.xml`, `/sitemap_index.xml`, `/wp-sitemap.xml` on the stored URL's host. Resolve a
+   `<sitemapindex>` one level into its child sitemaps (bounded: ≤ N children, ≤ M total URLs,
+   ≤ K bytes each, short timeout). Carry each URL's `<lastmod>` as a freshness signal.
+2. **Scope to THIS program.** For a single-program host (`congressionalaward.org`) take all pages;
+   for a multi-program host (`nyu.edu` hosting dozens) filter to URLs sharing the stored URL's
+   **path prefix** or the opportunity's **name/slug tokens**, so ranking isn't over 50k pages.
+3. **Rank by slug (free, deterministic).** Positive tokens (program, apply, application, register,
+   how-to, prospective, participant, eligibility, requirements, deadline, dates, guidelines,
+   admission, get-started, steps, timeline, overview, faq); negative chrome tokens (leadership,
+   donor, giving, sponsor, news, blog, event, summit, alumni, staff, board, photos, podcast,
+   job-posting); prefer shallow paths; boost name/slug-token overlap and recent `lastmod`.
+4. **Fetch the top few.** Hand the shortlist to the existing Claude `web_fetch` step — either the
+   heuristic top-3 directly, or the shortlist (top ~15, chrome stripped) for the model to pick the
+   3 most relevant and fetch. Both extracts (dates + tasks) read that one capture (T6, unchanged).
+5. **Fallback preserved.** No sitemap / empty (JS) sitemap / nothing survives scoping → today's
+   `web_search` discovery, unchanged. So this can only ADD recall, never regress a working row.
+
+**Why not just broaden the discovery vocabulary? (decided 2026-08-27, with the operator's
+search-cap objection).** Vocabulary is not discarded — it becomes the ranker's token table and the
+picker prompt. The question is only WHERE it is applied. Task discovery is capped at
+`MAX_SEARCH = 2` non-deterministic, engine-ranked searches; broadening the prompt adds no search
+budget and cannot change what the engine ranks, and the current prompt ALREADY lists 8 page-type
+synonyms (How-to-Apply/Application/Requirements/Eligibility/FAQ/Key-Dates/Timeline/Guidelines) and
+still missed `/the-program/`. So the same vocabulary applied to the site's real, complete page list
+(one free GET) strictly dominates the same vocabulary applied to 2 capped searches. **Conclusion:
+sitemap-first is PRIMARY; broadened vocabulary survives only as the ranker tokens + the search
+FALLBACK's query terms for the ~37% of hosts with no sitemap.**
+
+**Coverage measured 2026-08-27 (free, no API): 63% of hosts expose a usable sitemap.** Probed a
+random 120-host sample of the 862 distinct hosts across 1,261 active rows (robots.txt `Sitemap:` +
+`/sitemap.xml` `/sitemap_index.xml` `/wp-sitemap.xml`, 8 s timeout): **76/120 = 63%** had a
+sitemap. This is a FLOOR — the probe skipped sibling subdomains (the `tisch.nyu.edu` case), longer
+timeouts, and gzip variants. The other ~37% fall back to today's `web_search`, unchanged (no
+regression). Necessary-but-not-sufficient: "has a sitemap" → "sitemap lists the useful deep page" →
+"the ranker picks it" is the full chain — **D4 measures that conversion; 63% is the addressable
+ceiling, not the guaranteed win.**
+
+**Validated live 2026-08-27 (free, no API):** `congressionalaward.org` exposes a WordPress
+`page-sitemap.xml` of 271 pages; a naive slug scorer ranked **`/prospective-participants/`** and
+**`/the-program/`** as the top two (the steps page `web_search` never reached), with `/register/`
+close behind — one job-application false positive, trivially filtered. Contrast the fallback case:
+`www.nyu.edu/sitemap.xml` returns 202/empty, but `tisch.nyu.edu/sitemap.xml` is a clean sitemap
+listing `.../graduate-application-requirements` — i.e. sitemap-first would also have surfaced the
+Tisch program's real subdomain home, the same place its dates live (§3 G6). **This is discovery
+only; it does not touch the G6 stale-`web_fetch` verification problem** — a page still has to be
+fetched fresh and verified in code.
+
+**Cost:** the sitemap probe + ranking is free HTTP + string work; it REPLACES ~1–2 `web_search`
+calls ($0.01 each) with a fetch of pages we already know are right, so it is cost-neutral-to-
+negative. Applies identically to the deadline ladder's own-site rungs (§3 G1 rungs 1–3), which
+today issue `site:` searches that a sitemap makes unnecessary on hosts that publish one.
+
+### G-task-3 — a pipeline upgrade does not backfill existing rows (noted 2026-08-27)
+
+ec18244 was generated by the pre-substrate (urllib) pipeline on 2026-08-24 and will keep serving
+its 2-item list until its TTL lapses (interactive 7 d; batch stamp 90 d), even though the
+2026-08-26 substrate is strictly better at this row. There is no "regenerate rows written before
+version X" mechanism. This is the same family as §13 item 1 (proactive coverage, deliberately
+deferred) — recorded here so it is a known consequence of shipping accuracy fixes incrementally,
+not a surprise: **improving the pipeline does not improve already-cached rows until they age out.**
 
 ### Fix — trusted-aggregator tiers (built P5/P6; operator decisions resolved in §8)
 
@@ -786,6 +996,115 @@ calendar; and a `not_running` verdict now requires proof. Next work items live i
 - Cosmetic: `deadlines.mock_deadline_check_payload` note still says "set GEMINI_API_KEY" though
   the gate is `ANTHROPIC_API_KEY` (pre-existing, out of P0–P4 scope).
 
+### Sitemap-first discovery — phased build (G-D1, planned 2026-08-27)
+
+New phase series **D0–D5**, deliberately numbered apart from the completed P0–P11 so it reads as
+the post-plan follow-up it is. The design and its live validation are in §4 **G-D1**; this is the
+build order. **The whole free core (D0–D2 logic) can be built and tested with zero API spend**;
+only D4/D5 touch paid calls, and each is gated on a free `--preview` first. Guiding rule: every
+phase must **degrade to today's `web_search` discovery**, so no phase can regress a row that works
+now — sitemap-first only ADDS recall.
+
+| Phase | In plain English | Cost |
+|---|---|---|
+| **D0** | Save real sitemaps from a handful of programs as test data, so the logic can be built and checked offline without calling anything. | free |
+| **D1** | Write the helper that reads a site's own page list, throws out the junk (staff bios, galas, news), and ranks which pages most likely hold the apply-steps and dates. | free |
+| **D2** | Plug that helper in so the app looks at the real page list FIRST, and only falls back to blind web search when a site has no usable map. | free logic |
+| **D3** | Stop the app from "locking in" a weak result — if all it found was a homepage button, don't mark the program done; let a later run try again. | free |
+| **D4** | Try it for real on Congressional Award and a few other programs; confirm it reaches the right pages and isn't more expensive than today. | paid, tiny |
+| **D5** | Use the same page-list trick for deadline-hunting too, and — only if you approve — refresh old programs that were done the pre-sitemap way. | paid |
+
+- **D0 — Fixtures & offline harness (free, no API). ✅ DONE 2026-08-28.** Sitemaps captured as
+  static fixtures in `tests/fixtures/sitemaps/`: a WordPress sitemap **index** + two children
+  (`congressionalaward_*.xml`, the proof row — page child carries `/the-program/` &
+  `/prospective-participants/`, post child is chrome), a flat `<urlset>` with **CDATA-wrapped
+  `<loc>`** (`tisch_sitemap.xml`), a **gzipped** `gzhost_sitemap.xml.gz`, and the no-sitemap /
+  garbage / large-multi-program cases built in-test. Deliverable landed:
+  `tests/fixtures/sitemaps/*` + `tests/unit/test_sitemap_common.py` (17 tests).
+
+- **D1 — `sitemap_common.py` core (free, stdlib only). ✅ DONE 2026-08-28.** The whole discovery
+  brain, no network in tests (fixtures injected via a fake `fetch`). Public surface:
+  `discover_candidate_pages(opp, fetch=default_fetch, top_n=5) -> list[Candidate{url, score,
+  lastmod}]`, returning `[]` cleanly whenever nothing usable is found (the fallback trigger).
+  Internals, each unit-tested:
+  - **locate:** `robots.txt` `Sitemap:` lines → else probe `/sitemap.xml`, `/sitemap_index.xml`,
+    `/wp-sitemap.xml` on the stored URL's host; short timeout, bounded bytes.
+  - **parse:** `<sitemapindex>` recursion **one level** into child sitemaps; handle gzip
+    (`.xml.gz`), CDATA-wrapped `<loc>`, and `<lastmod>`. Hard caps: ≤ N child sitemaps, ≤ M total
+    URLs, ≤ K bytes/file — a 50k-URL host must not blow time or memory (truncate + log, never hang).
+  - **scope:** single-program host → keep all; multi-program host → filter to URLs sharing the
+    stored URL's **path prefix** OR the opportunity's **name/slug tokens** (this is what stops
+    nyu.edu-scale hosts ranking their whole tree).
+  - **rank:** the slug scorer validated in §4 G-D1 — POS tokens (program/apply/register/deadline/
+    dates/how-to/eligibility/requirements/…), NEG chrome tokens (leadership/donor/news/event/
+    staff/job-posting/…), shallow-depth bonus, name-token-overlap bonus, recent-`lastmod` bonus.
+  - **politeness:** obey the existing inter-call throttle for any fetch; honour an explicit
+    `Disallow` on a candidate path; we only READ pages a student's browser would. (Note the
+    content-signal `ai-train=no` some hosts set — we do not train, so it does not apply; record
+    the reasoning so it is not re-litigated.)
+
+- **D2 — Wire into the shared capture, behind the fallback (free logic; a live run costs the
+  same as today). ✅ DONE 2026-08-28.** `source_capture.fetch_and_capture` consults
+  `discover_candidate_pages` FIRST (injectable `discover` param) and injects the ranked candidate
+  URLs into the model's `user_content` so `web_fetch` retrieves the real page. `web_search` stays
+  enabled as the in-call fallback, and a `[]` result (no sitemap) or a crashing helper degrades to
+  a **byte-identical** pre-sitemap prompt. Logs `discovery_source=sitemap|search` as a stat line.
+  3 tests in `test_source_capture.py`. **Scope note:** D2 wired the TASK capture only; the deadline
+  ladder's own-site `site:` rungs are D5 (paid). **No behaviour change on a no-sitemap host.**
+
+- **D3 — Shallow-capture no-stamp signal (G-task-1b), complementary. ✅ DONE 2026-08-28.** Makes
+  D2 safe against re-freezing a thin read: `action_items_write_decision` does NOT stamp a
+  `page-verified` result when **every** page-backed task is navigation furniture/CTA
+  (`is_furniture_task` — distinctive tokens vs a furniture vocabulary; ec18244's "Sign up for
+  emails from us"). The list is still written (better than nothing); the row stays due so a
+  later, better-discovered pass retries. A single substantive task stamps normally. Batch +
+  interactive both already gate on `decision.stamp`. 3 tests in `test_action_items.py`.
+
+- **D4 — Live validation on real rows. ✅ DONE 2026-08-28 ($0.1781, 4 rows, READ-ONLY).**
+  Operator-approved. Free discovery on the real ec18244 sitemap first exposed and fixed a ranker
+  bug (see the change log) BEFORE any spend. Then `process_one` (read-only) on 4 rows spanning the
+  cases:
+  - **ec18244 Congressional Award (proof row) — WIN.** Discovery reached `/register/` +
+    `/participants/` (the pages `web_search` never found). The furniture CTA "Sign up for emails
+    from us" → real page-verified OFFICIAL tasks: "Register and pay the one-time $35 registration
+    fee", "Submit your completed Record Book for approval". 2 page-backed, $0.0525.
+  - **ec18676 Chicago Summer Business — WIN.** 0 tasks → 3 page-backed OFFICIAL from `/how-to-apply/`
+    ("Upload official transcript, resume, essay, income…"). $0.0258.
+  - **ec18691 Red Cross (no-sitemap control) — NO REGRESSION.** Correctly fell back to `search`,
+    still got 4 page-backed OFFICIAL tasks from the apply page. $0.0399.
+  - **ec18687 SLIYS — MIXED (the demotion-rate signal).** Discovery reached `/sliys-requirements`
+    + `/sliys-how-apply`, but the extract's quotes didn't match strictly → all 4 demoted to
+    generic (0 page-backed, not fabrication). A verifier-strictness case, not a discovery miss.
+    $0.0598.
+  **Cost:** ~$0.044/row — slightly ABOVE the old ~$0.002-0.004 baseline (NOT the hoped
+  cost-neutral), because sitemap-first fetches ~5 pages vs 1. We pay a little more to get real
+  tasks instead of generic filler; the no-sitemap row cost the same, so multi-page fetch (not the
+  sitemap probe) is the cost driver. **Read-only: the improved lists were NOT written — the tested
+  rows still serve their cached lists to students until a live (writing) pass or TTL lapse.**
+
+- **D5 — Deadline-ladder adoption. ✅ CODE DONE + VALIDATED 2026-08-28 ($0.2358, 3 rows,
+  READ-ONLY).** Sitemap-first now feeds the deadline ladder's own-site rungs 1–3
+  (`research_deadlines(discover=…)`, wired at the `find_program_sources` entry point; `web_search`
+  stays the in-round fallback; rung 4 stays off-site). `discover` defaults OFF so the ladder's unit
+  tests never touch the network. **Live read-only validation:**
+  - Sitemap discovery FIRED on all 3 rows (`[discovery] sitemap: 5 candidate page(s)`), all
+    reached the site (`site_reached=True`), no regression: ec18676 & ec18687 went 0 → full
+    estimated date sets (`running`), ec18244 correctly stayed `rolling`/no-dates. G6a held (no
+    today-anchored dates).
+  - **The hoped-for search-count DROP did NOT materialize here — still 2 searches/row.** All three
+    are OFF-SEASON rows (current cycle unposted), so the ladder climbs to rung 2 for prior-cycle
+    estimation regardless of having the sitemap pages, and each rung still spends its one search.
+    On these rows the benefit is **recall** (the model fetches the right pages), not cost. The
+    search drop would show on a row whose CURRENT cycle is posted (rung 1 fetches the key-dates
+    page and stops early) — these three weren't that case. ~$0.079/row, in line with the deadline
+    baseline. A larger sample spanning in-season rows would be needed to measure the search drop.
+  - **Optional backfill** of rows generated before D2 (the G-task-3 backfill) is proactive
+    coverage, which §13 item 1 defers, so it stays gated on the operator un-deferring it.
+
+**Order:** D0 → D1 → D2 → D3 → (free to here) → D4 → D5. D3 can land in parallel with D1/D2 (it
+touches the write decision, not discovery). Nothing here is a schema change — `sitemap_common.py`
+is new, additive, and stdlib-only, exactly like `page_text.py`.
+
 ---
 
 ## 10. Touch list
@@ -797,6 +1116,12 @@ calendar; and a `not_running` verdict now requires proof. Next work items live i
   (`web_fetch` blocks → `CapturedSource{url,domain,media_type,text,tier}`; HTML text/plain direct,
   PDF base64 → PyPDF2; `web_search` ignored), `tier_for`, `fetch_and_capture` (Claude web_fetch),
   widened FETCH_SYSTEM (hunts how-to-apply/FAQ/key-dates/timeline/PDF).
+- **`sitemap_common.py` (new, PLANNED — G-D1 / phases D0–D5):** free stdlib discovery helper
+  `discover_candidate_pages(opp)` — locate (robots→common paths) → parse (index recursion, gzip,
+  caps) → scope (path-prefix / name tokens) → rank (slug scorer) → top-N URLs, `[]` on nothing.
+  Consumed by `source_capture.fetch_and_capture` and `check_deadlines.find_program_sources` ahead
+  of `web_search`, which stays as the fallback. Tests in `tests/test_sitemap_common.py` +
+  `tests/fixtures/sitemaps/*`.
 - `check_deadlines.py` — **DONE:** `find_program_sources(want_dates, want_requirements)` (T6
   shared finder + `_shared_capture_cache` read-once); `call_claude(return_captured=True)`;
   `verify_dates_against_capture` (P6c) enriches each date with `verified`/`source_url`;
@@ -857,6 +1182,14 @@ calendar; and a `not_running` verdict now requires proof. Next work items live i
 - **Task TIMELINESS (open follow-up).** A page-verified task can carry an already-past date
   ("Submit your application by June 3rd, 2026" — true, quoted, stale). Verification checks
   truth, not currency; a date-aware demotion/drop for past-dated tasks is unbuilt.
+- **`verified:true` overclaims on stale/pre-JS captures (§3 G6, OPEN).** P6c proves a date is
+  in the text `web_fetch` returned, not that it matches the live page. On JS-rendered / cached
+  hosts (NYU) the capture can lag, so a wrong date gets a confidence badge (ec17543: "Nov 13
+  (verified)" vs live Nov 9). Verification here manufactures false confidence instead of
+  catching error — the one case where marking a date verified is worse than not. G6a (drop a
+  today-anchored unverified date) is the cheap backstop; G6b (staleness detection / rendered
+  cross-check) is unbuilt. Until then the UI "(verified)" marker overstates certainty on these
+  hosts.
 - **Substrate capture plumbing (T8) — RESOLVED 2026-08-26 (P6a), substrate viable.** `web_fetch`
   HTML returns clean `text/plain` (verify directly), PDF returns base64 (decode + pypdf),
   `web_search` returns `encrypted_content` (unusable — the substrate MUST `web_fetch` any page
@@ -1016,6 +1349,90 @@ deadline."
 
 ## Change log
 
+- **2026-08-28 (later still)** — **D5 built + validated ($0.2358, 3 rows, READ-ONLY); 4 tested
+  task rows written LIVE ($0.174, agent_runs id=72).** D5: sitemap-first wired into the deadline
+  ladder's own-site rungs (`research_deadlines(discover=…)` default OFF for network-free tests;
+  `find_program_sources` passes the real helper; rung 4 stays off-site). Validation: discovery
+  FIRED + `site_reached` on all 3, no regression (ec18676/ec18687 0→estimated date sets, ec18244
+  stayed `rolling`), **but the search-count drop did NOT show — all 3 are off-season rows that
+  climb to rung 2 for prior-cycle estimation regardless; benefit here is recall, not cost.** Also:
+  after D4's read-only proof, the operator approved WRITING the 4 tested task rows live —
+  ec18244's furniture CTA is now replaced in the catalog by the real "$35 registration fee" /
+  "Record Book" tasks; ec18676 went 0→page-backed. 1171 pytest green.
+- **2026-08-28 (later)** — **D4 live validation DONE ($0.1781, 4 rows, READ-ONLY) + a ranker bug
+  fixed FREE before spending.** The free discovery half on ec18244's real 414-page sitemap caught
+  the ranker dropping `/the-program/` & `/prospective-participants/` entirely: the old 400-page
+  scope threshold tripped multi-program filtering, which kept name-matching chrome (news/gala:
+  "congressional-award-…") and dropped the real content pages (which don't repeat the org name).
+  Fixed in `sitemap_common.py`: scope decides single-/multi-program by the stored URL's PATH not
+  page count (bare homepage → keep all); `name_tokens` drops host-derived tokens; `score_slug`
+  gains an exact-nav-slug boost (+3 for the-program/apply/eligibility/…), a long-"sentence"-slug
+  penalty (news headlines), and fundraiser NEG tokens (golf/poker/tournament/gala). Then the paid
+  read-only run: **ec18244 proof row WIN** (furniture "Sign up for emails" → real "$35 registration
+  fee" + "Record Book" from `/register/`+`/participants/`), **ec18676 WIN** (0→3 page-backed from
+  `/how-to-apply/`), **ec18691 no-sitemap control** (search fallback, 4 page-backed, no regression),
+  **ec18687 SLIYS mixed** (reached the requirement pages but all 4 demoted to generic — the
+  verifier-strictness / demotion-rate signal, not a discovery miss). Cost ~$0.044/row, slightly
+  ABOVE the old baseline (multi-page fetch, not the sitemap probe, is the driver). Read-only —
+  nothing written. Details in §9 D4. Remaining: D5 (deadline-ladder adoption + optional backfill)
+  and G6b, both deferred.
+- **2026-08-28** — **FREE CORE of the gap-hunt follow-up BUILT — G6a + D0–D3** (branch
+  `sitemap-discovery-g6a`, off `main`; 1166 pytest green; zero API spend; DDL-free/stdlib-only).
+  - **G6a** (`check_deadlines.verify_dates_against_capture`, +`today` param): demotes a
+    `estimated:false, verified:false` date equal to the check date to `estimated:true` + a note
+    (never drops, per T7). The today-anchoring fingerprint (ec17543's `opens` → HAPPENING NOW);
+    a real same-day date verifies and is untouched. 3 tests.
+  - **D0/D1** (`sitemap_common.py` NEW + `tests/fixtures/sitemaps/*` + 17 tests): free,
+    stdlib-only sitemap-first discovery — `discover_candidate_pages(opp, fetch)` locates
+    (robots→common paths), parses (sitemapindex recursion one level, gzip, CDATA, lastmod; hard
+    caps), scopes (single-program keeps all / multi-program filters by path-prefix + name tokens),
+    ranks (slug scorer). Returns `[]` = the `web_search` fallback trigger, so it only ADDS recall.
+  - **D2** (`source_capture.fetch_and_capture`, +`discover` param): consults the sitemap FIRST and
+    injects ranked candidate URLs into the `web_fetch` prompt; no-sitemap / crashing-helper →
+    byte-identical pre-sitemap prompt. Logs `discovery_source=sitemap|search`. Wired the TASK
+    capture only; the deadline ladder's `site:` rungs stay for D5. 3 tests.
+  - **D3** (`generate_action_items.action_items_write_decision`, +`is_furniture_task`): a
+    `page-verified` result whose page-backed tasks are ALL navigation furniture/CTAs (ec18244)
+    writes but does NOT stamp — leaves the row due for a better-discovered retry. 3 tests.
+  - **Deferred (need operator approval, PAID):** D4 (`--preview`-first live validation on ec18244
+    + spanning hosts, cost-delta vs `web_search`), D5 (deadline-ladder adoption + optional
+    backfill), and **G6b** (staleness detection: rendered re-fetch / thin-shell — the hard half of
+    §3 G6; G6a is only the cheap backstop).
+- **2026-08-27** — **G-task-1 recorded (gap-hunt example 2): rich steps page never discovered.**
+  ec18244 (Congressional Award) served 2 throwaway tasks ("Register…" generic + "Sign up for
+  emails" CTA) while `/the-program/` carries a full, verbatim-quotable step list ($35 registration,
+  Submittable account, Program Book, Validator, Record Book) — readable even by our free urllib
+  fetch. Root cause: the pipeline starts from `opp.url` (the bare homepage) and the sub-page
+  discovery vocabulary (How-to-Apply/FAQ/Requirements) misses programs that file their steps under
+  "The Program"/"How It Works"/"Participant Timeline". Filed under §4 as **G-task-1a** (broaden
+  discovery + hunt harder when the landing page is thin), **G-task-1b** (a marketing-homepage
+  capture still stamps `page-verified`, suppressing re-discovery — add a shallow-capture no-stamp
+  signal), **G-task-1c** (the CTA "step" is furniture that passed verification). Plus **G-task-3**:
+  a pipeline upgrade doesn't backfill cached rows. Fixable by re-run IF discovery reaches the page
+  — that "if" is the gap. No code change yet; logged for the operator.
+- **2026-08-27** — **G-D1 chosen: sitemap-first page discovery (operator direction), superseding
+  "expand the discovery vocabulary".** Enumerate the site's own pages (robots→sitemap→child
+  sitemaps, free HTTP), scope to the program, rank slugs, fetch the top few; fall back to the
+  current `web_search` when no usable sitemap. Validated free on real data: over
+  congressionalaward.org's 271-page sitemap a naive slug scorer put `/the-program/` and
+  `/prospective-participants/` on top (the pages web_search missed); www.nyu.edu has no sitemap
+  (202) but tisch.nyu.edu does. Shared free helper for BOTH features; cost-neutral-to-negative
+  (replaces paid searches). Designed under §4 G-D1; **phased as D0–D5 in §9** (free core D0–D2,
+  paid validation D4/D5, each `--preview`-gated). Not yet built. **Coverage measured: 63% of hosts
+  (76/120 sample of 862 distinct hosts) expose a usable sitemap — a floor; the rest fall back to
+  web_search unchanged.** Vocabulary-broadening rejected as PRIMARY (search is capped at 2,
+  non-deterministic; the prompt already lists 8 synonyms and still missed the page) but retained as
+  the ranker tokens + fallback query terms.
+- **2026-08-27** — **G6 recorded (live debug, example 1 of a gap-hunt session): `verified:true`
+  on WRONG dates.** ec17543 (Tisch Future Artists) written today with all four dates live-wrong
+  and three marked `verified:true` (deadline stored Nov 13, real Nov 9; opens today-anchored to
+  the check date). Root cause confirmed in-browser: Anthropic `web_fetch` returned stale/pre-JS
+  content for this JS-rendered NYU host, and P6c "verified" it against that stale capture. Two
+  gaps filed under §3 G6: **G6a** (drop/demote a `estimated:false, verified:false` date that
+  equals the check date — the today-anchoring fingerprint; cheap code backstop) and **G6b**
+  (verification cannot detect capture staleness → false confidence on JS/cached hosts; needs a
+  rendered cross-check or thin-shell detection). §11 risk added. No code change yet — logged for
+  the operator; ec17543 will not self-heal on a plain re-check (same stale capture).
 - **2026-08-26** — **P10 + P11 SHIPPED — the phased plan is COMPLETE** (commit e68a230, tsc
   clean, verified live in-browser at $0 against real catalog data). P10: `taskKey` text
   identity; `mergeActionItems` honours per-user tombstones (`TrackerItem.removedTasks`) and

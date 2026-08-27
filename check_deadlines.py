@@ -123,6 +123,7 @@ from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supa
 # This is the ONLY off-domain sourcing the deadline loop is permitted, and it degrades to
 # "keep nothing off-domain" when the table is absent — see _load_trusted_domains below.
 import aggregators_common
+import sitemap_common
 # P6c: capture the fetched page CONTENT (not just URLs) so a NON-estimated date can be verified
 # against it in code (page_text.date_is_on_page) — the deadline analogue of the task quote check.
 import source_capture
@@ -669,17 +670,37 @@ def _parse_signals(notes):
     return "\n".join(kept).strip(), signals
 
 
-def _search_round(opp, api_key, focus, retry_on_silent):
+def _sitemap_block(candidate_urls):
+    """The injected 'your own sitemap lists these' text for an own-site rung, or '' when there
+    are no candidates. D5 (G-D1): the ladder's own-site rungs 1-3 tell the model to
+    `search "site:{root} ..."`; handing it the program's REAL date-likely pages (from its
+    sitemap, one free GET) lets it web_fetch them directly instead of spending its one capped
+    web_search guessing the URL — the same win D2 gave tasks. web_search stays enabled as the
+    in-round fallback, so a wrong/empty sitemap never regresses the rung."""
+    if not candidate_urls:
+        return ""
+    listing = "\n".join(f"- {u}" for u in candidate_urls)
+    return ("\n\nThe program's OWN sitemap lists these likely date-bearing pages (registration, "
+            "key dates, timeline, FAQ). web_fetch the relevant ones FIRST — you may still search "
+            "if they do not carry the dates:\n" + listing)
+
+
+def _search_round(opp, api_key, focus, retry_on_silent, candidate_urls=None):
     """One phase-1 rung — prose out, tools on, ONE search. (notes, cost, searches, sources,
     attempts). Retries once on a zero-search answer (re-rolling, not re-prompting: the search
     decision is non-deterministic and cannot be forced). Cost is banked per attempt so an
-    exception on the retry cannot discard what the first call already spent."""
+    exception on the retry cannot discard what the first call already spent.
+
+    `candidate_urls` (D5) are the program's own sitemap-discovered pages, injected so the model
+    web_fetches the real date pages instead of spending its one web_search guessing. Passed only
+    for own-site rungs (not the trusted-third-party rung, whose whole point is off-site)."""
     system = build_system(opp)
     user_content = (f"Opportunity: {opp['name']} ({opp.get('org') or 'unknown org'})\n"
                     f"URL: {opp['url']}\nKnown info: {opp.get('summary') or ''}\n\n"
                     f"{focus}\n\n"
                     f"Report the current status and every relevant date — registration "
-                    f"open/close, event dates, notifications — not just a single deadline.")
+                    f"open/close, event dates, notifications — not just a single deadline."
+                    + _sitemap_block(candidate_urls))
     cost = 0.0
     notes, usage, sources, captured = "", {}, [], []
     attempts = 2 if retry_on_silent else 1
@@ -710,7 +731,20 @@ def _load_trusted_domains():
     return policy.trusted_domains()
 
 
-def research_deadlines(opp, api_key, retry_on_silent=True, trusted_domains=None):
+def _discover_sitemap_urls(opp, discover):
+    """The program's own sitemap-discovered candidate URLs (D5), best-effort and FREE — a
+    crashing/empty helper returns [], and the ladder falls back to today's `site:` search
+    exactly as before. Computed ONCE per research pass and reused across the own-site rungs."""
+    if discover is None:
+        return []
+    try:
+        return [c.url for c in (discover(opp, top_n=sitemap_common.TOP_N) or [])]
+    except Exception:
+        return []
+
+
+def research_deadlines(opp, api_key, retry_on_silent=True, trusted_domains=None,
+                       discover=None):
     """PHASE 1 as an ESCALATION LOOP — up to ESCALATION_RUNGS rounds, each a distinct strategy,
     stopping as soon as a found-signal is satisfied. Returns
     (combined_notes, cost, total_searches, union_sources, total_attempts, site_reached).
@@ -724,13 +758,24 @@ def research_deadlines(opp, api_key, retry_on_silent=True, trusted_domains=None)
     allowlist and ITS sources are trust-filtered before they join the union, so an untrusted
     page can never reach phase 2. `trusted_domains` is loaded lazily when None, so neither
     call site (batch main / interactive route) had to change.
+
+    `discover` (D5, injectable) supplies sitemap-first candidate URLs handed to the own-site
+    rungs. It defaults to None (OFF) so this function's unit tests never touch the network;
+    the production entry point (find_program_sources) passes the real
+    sitemap_common.discover_candidate_pages. None or [] falls back to today's `site:` search,
+    so no row regresses.
     """
     if trusted_domains is None:
         trusted_domains = _load_trusted_domains()
+    sitemap_urls = _discover_sitemap_urls(opp, discover)
+    if sitemap_urls:
+        print(f"  [discovery] sitemap: {len(sitemap_urls)} candidate page(s) for the ladder",
+              flush=True)
     all_notes, all_sources, all_captured = [], [], []
     total_cost, total_searches, total_attempts = 0.0, 0, 0
     site_reached = False
     for idx, (name, focus) in enumerate(RUNGS[:ESCALATION_RUNGS]):
+        rung_candidates = sitemap_urls
         if name == RUNG_TRUSTED_THIRD_PARTY:
             # No allowlist -> nothing to search -> keep nothing off-domain. Skipping (rather
             # than searching the whole web) is what makes ESCALATION_RUNGS=4 safe before the
@@ -738,8 +783,11 @@ def research_deadlines(opp, api_key, retry_on_silent=True, trusted_domains=None)
             if not trusted_domains:
                 continue
             focus = focus.format(domains=", ".join(trusted_domains))
+            # Rung 4 is deliberately OFF-site (trusted third-party listings); the own-site
+            # sitemap candidates do not belong here.
+            rung_candidates = None
         notes, cost, searches, sources, attempts, captured = _search_round(
-            opp, api_key, focus, retry_on_silent)
+            opp, api_key, focus, retry_on_silent, candidate_urls=rung_candidates)
         total_cost += cost
         total_searches += searches
         total_attempts += attempts
@@ -832,8 +880,11 @@ def find_program_sources(opp, api_key, want_dates=True, want_requirements=False,
 
     notes, cost, searches, urls, attempts, site_reached, captured = "", 0.0, 0, [], 0, False, []
     if want_dates:
+        # D5: enable sitemap-first discovery for the own-site rungs at the production entry
+        # point (research_deadlines defaults it OFF so its unit tests stay network-free).
         (notes, dcost, searches, urls, attempts, site_reached,
-         captured) = research_deadlines(opp, api_key, retry_on_silent, trusted_domains)
+         captured) = research_deadlines(opp, api_key, retry_on_silent, trusted_domains,
+                                        discover=sitemap_common.discover_candidate_pages)
         cost += dcost
     if want_requirements:
         if policy is None:
@@ -982,7 +1033,7 @@ def verify_status_evidence(info, captured):
     return "downgraded"
 
 
-def verify_dates_against_capture(info, captured):
+def verify_dates_against_capture(info, captured, today=None):
     """Mark each date in `info` verified/unverified against the captured page content, and
     attach the URL it was found on. Returns the count of NON-estimated dates that could NOT be
     found — the quality signal (the deadline analogue of the task demotion rate).
@@ -991,14 +1042,27 @@ def verify_dates_against_capture(info, captured):
     and a matcher false negative must not lose a real deadline. So an unverifiable confirmed
     date is only MARKED (`verified: false`), left in place for the client to render and for the
     summary to count.
+
+    G6a (2026-08-27) — the today-anchoring backstop. A NON-estimated date that fails to verify
+    AND equals the check date is the anchoring fingerprint: the model, unable to find the real
+    date on a stale/pre-JS capture, substituted "now" for the arithmetic (documented live on
+    ec17543, where an unconfirmed `opens` was stamped as the check date and flipped the card to
+    HAPPENING NOW). A GENUINELY same-day date would verify `true` against the page, so it is
+    untouched; only the unverified-and-today case is demoted to `estimated:true` (never dropped,
+    per T7) with a caveat in the note. This is the code backstop for the prompt rule the model
+    keeps violating (build_extract_system's "never anchor an estimate to today"). `today` is
+    injectable for tests; it defaults to the real check date.
     """
     if not isinstance(info, dict):
         return 0
     dates = info.get("important_dates")
     if not isinstance(dates, list):
         return 0
+    if today is None:
+        today = datetime.date.today().isoformat()
     pages = [(c.url, c.text) for c in (captured or []) if getattr(c, "text", "")]
     unverified = 0
+    anchored_types = []
     for d in dates:
         if not isinstance(d, dict) or not d.get("date_iso"):
             continue
@@ -1011,8 +1075,23 @@ def verify_dates_against_capture(info, captured):
         d["verified"] = hit is not None
         if hit:
             d["source_url"] = hit
-        else:
-            unverified += 1
+            continue
+        if d.get("date_iso") == today:
+            # Today-anchoring fingerprint (G6a). Demote rather than count as a confirmed miss:
+            # it is no longer a "confirmed date not found", it is a flagged estimate. `opens` is
+            # the type that flips "Happening Now", so it is the one this most protects.
+            d["estimated"] = True
+            d.pop("source_url", None)
+            anchored_types.append(d.get("type") or "date")
+            continue
+        unverified += 1
+    if anchored_types:
+        caveat = ("A " + "/".join(dict.fromkeys(anchored_types)) + " date matched the check "
+                  "date but could not be confirmed on any fetched page - shown as an estimate, "
+                  "not a confirmed date.")
+        note = info.get("important_date_note") or ""
+        if caveat not in note:
+            info["important_date_note"] = f"{note} {caveat}".strip()
     return unverified
 
 

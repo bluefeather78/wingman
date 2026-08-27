@@ -18,17 +18,29 @@ real catalog sync data). **Remaining follow-ups are outside the phased plan:** t
 TIMELINESS (page-verified tasks can carry past dates), the §13 coverage/measurement layers
 (F1 change-detection/reminders, F2 accuracy harness), and the deliberately-deferred proactive
 coverage (item 1).
-**Owner:** _tbd_  **Started:** 2026-08-25  **Branch:** `P5-P7-deadline-and-task-tracker`
+
+**GAP-HUNT FOLLOW-UP SHIPPED 2026-08-28 (origin/main `14e0b81`).** The 2026-08-27 gap-hunt's fixes
+are live: **G6a** (today-anchored deadline dates demoted to estimates) and the **sitemap-first
+discovery series D0–D5** (`sitemap_common.py`: a free stdlib helper that reads a program's own
+sitemap to reach its real steps/dates pages, wired into BOTH the task capture and the deadline
+ladder behind the `web_search` fallback; plus a shallow-capture no-stamp guard). Validated live
+read-only (D4 $0.178, D5 $0.236); 4 real task rows written live ($0.174). Code-only — no schema/env
+changes. **Only two threads remain, both deferred + paid: G6b staleness detection, and a wider
+proactive writing pass.** See the ✅ section immediately below and §9 D0–D5 / §3 G6.
+**Owner:** _tbd_  **Started:** 2026-08-25  **Branches:** `P5-P7-deadline-and-task-tracker` (P0–P11),
+`sitemap-discovery-g6a` → merged to main (G6a + D0–D5)
 
 ---
 
-### ⏭️ NEXT SESSION — START HERE (open work from the 2026-08-27 gap-hunt)
+### ✅ GAP-HUNT FOLLOW-UP — SHIPPED TO MAIN 2026-08-28 (G6a + D0–D5)
 
-A live gap-hunt on real rows surfaced three findings and one chosen build. **The FREE CORE is now
-BUILT (2026-08-28, branch `sitemap-discovery-g6a`, off main): G6a + D0–D3, all offline/unit-tested,
-1166 pytest green, zero API spend.** Remaining open work is the PAID validation (D4/D5) and the hard
-G6b staleness detection — both deferred pending operator approval. Full detail in the change log
-(2026-08-28 entries), the section anchors named, and §9 for the phased build.
+A live gap-hunt on real rows surfaced three findings and one chosen build. **All of it is now BUILT,
+VALIDATED, and MERGED TO MAIN (origin/main `14e0b81`) — Render deploys from main; no schema/env
+changes needed.** G6a + the full sitemap-first discovery series (D0–D5) shipped; D4/D5 validated live
+read-only; 4 real task rows were written live. **The ONLY remaining open items are the two
+deliberately-deferred, paid, operator-approval-gated threads:** G6b staleness detection, and a wider
+proactive WRITING pass (§13 item 1). 1315 pytest green on the merged result. Full detail in the
+change log (2026-08-28 entries), the section anchors named, and §9 for the phased build.
 
 | # | Finding (live row) | Where | Status |
 |---|---|---|---|
@@ -39,13 +51,13 @@ G6b staleness detection — both deferred pending operator approval. Full detail
 | **D4** | PAID validation on 4 real rows. | §9 D4 | ✅ **DONE 2026-08-28 ($0.1781, read-only)** — proof row ec18244 fixed (furniture CTA → real $35-fee/Record-Book tasks); 0→3 page-backed on ec18676; no-sitemap control OK; SLIYS demotion-rate signal noted. A ranker bug was caught & fixed FREE first. |
 | **D5** | Deadline-ladder adoption + optional backfill. | §9 D5 | ✅ **CODE DONE + VALIDATED 2026-08-28 ($0.2358, read-only)** — sitemap fires + reaches site on all 3, no regression; search-count drop did NOT show on off-season rows (climb to rung 2 for estimation regardless), so benefit here is recall not cost. Optional backfill still deferred. |
 
-**Suggested entry point next:** two independent threads, both PAID/approval-gated. **(a)** A live
-WRITING pass to actually improve the tested/real rows for students — D4 was read-only, so ec18244
-et al. still serve their old cached lists until a writing run or TTL lapse (this is the G-task-3
-backfill, §13 item 1 = deferred, so it stays gated on you un-deferring it). **(b)** **D5** — apply
-sitemap-first to the deadline ladder's own-site `site:` rungs. **G6b** (staleness detection) is the
-other open thread, orthogonal to all of the above: G-D1 gets to the RIGHT page; G6b handles a STALE
-fetch of it.
+**Remaining open work (both PAID + operator-approval-gated; nothing else in this series is open):**
+**(a)** a wider proactive WRITING pass to improve more of the catalog — D4/D5 validation was
+read-only and only 4 task rows were written live, so most rows still serve old cached data until a
+writing run or TTL lapse (this is the G-task-3 / §13 item 1 backfill, deferred until you un-defer
+it); ~$0.044/row tasks, ~$0.079/row deadlines. **(b)** **G6b** — staleness detection (rendered
+cross-fetch / thin-shell), orthogonal to everything above: D-series gets to the RIGHT page, G6b
+handles a STALE `web_fetch` of it (the Tisch ec17543 confidently-wrong-date case).
 
 ---
 

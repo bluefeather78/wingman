@@ -20,6 +20,31 @@ from collections import Counter
 CATALOG_TYPES = ("Program", "Internship", "Competition", "Research", "Conference",
                  "Journal", "Volunteer")
 
+# Broad subject AREAS to check coverage against. Deliberately NOT the catalog's own free-form
+# subject_tags: those are hyper-specific ("Pastry Arts", "Typography", "Adobe Creative Cloud"),
+# so nearly every one appears < a few times and would mint hundreds of noise angles. A curated
+# list keeps proposals bounded and meaningful — a thin AREA is a real gap; a rare leaf tag is not.
+CORE_SUBJECTS = (
+    "Biology", "Chemistry", "Physics", "Mathematics", "Computer Science", "Engineering",
+    "Robotics", "Medicine", "Public Health", "Neuroscience", "Environmental Science",
+    "Astronomy", "Economics", "Business", "Entrepreneurship", "Law", "Political Science",
+    "Psychology", "Sociology", "History", "Philosophy", "Creative Writing", "Journalism",
+    "Visual Arts", "Music", "Theater", "Film", "Design", "Architecture", "Debate",
+    "Linguistics", "Data Science", "Artificial Intelligence", "Cybersecurity",
+    "Marine Science", "Agriculture", "Aerospace", "Foreign Languages")
+
+
+def _subject_coverage(active, subject):
+    """How many active rows touch this broad subject area (by subject_tag, name, or summary)."""
+    needle = subject.lower()
+    n = 0
+    for r in active:
+        hay = (" ".join(r.get("subject_tags") or []) + " " + (r.get("name") or "")
+               + " " + (r.get("summary") or "")).lower()
+        if needle in hay:
+            n += 1
+    return n
+
 
 def analyze_gaps(rows, mode="national", min_per_cell=4):
     """Angle proposals for thin catalog cells. Pure, free (no model call).
@@ -32,7 +57,6 @@ def analyze_gaps(rows, mode="national", min_per_cell=4):
     by_type = Counter(r.get("type") for r in active if r.get("type"))
     by_type_season = Counter((r.get("type"), r.get("season"))
                              for r in active if r.get("type") and r.get("season"))
-    by_subject = Counter(t for r in active for t in (r.get("subject_tags") or []) if t)
 
     proposals, seen = [], set()
 
@@ -48,9 +72,10 @@ def analyze_gaps(rows, mode="national", min_per_cell=4):
     for (t, season), n in by_type_season.items():
         if n < min_per_cell and t in CATALOG_TYPES:
             add(f"{scope} {season} {t.lower()} programs for high schoolers")
-    # subjects we already touch but only barely — a standing interest under-served
-    for subject, n in sorted(by_subject.items(), key=lambda kv: kv[1]):
-        if n < min_per_cell:
+    # Broad subject AREAS the catalog barely covers — bounded to a curated list, ranked thinnest
+    # first, so the operator sees the biggest gaps at the top.
+    for subject in sorted(CORE_SUBJECTS, key=lambda s: _subject_coverage(active, s)):
+        if _subject_coverage(active, subject) < min_per_cell:
             add(f"{scope} high school {subject} programs, competitions and research opportunities")
     return proposals
 

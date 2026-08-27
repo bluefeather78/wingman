@@ -7,6 +7,43 @@ below before reading the phase specs, which are now the historical design record
 
 ---
 
+## ⭐ START HERE — session of 2026-08-27 (late) — NEW SESSION PICK-UP
+
+**All work below this block is on branch `hub-social-audience-fix` (off `origin/main`
+`2c3c20d`), 4 commits, NOT PUSHED (the push to main was auto-approval-gated). Land it first
+next session (retry the push, or merge the branch).** Full unit suite green,
+`grade_scraper_batch` url-dup 0 regressions on every commit.
+
+- `fc2a120` — hub miner chaff filters: social/commerce/list-signup hosts (`_NONPROGRAM_HOSTS`),
+  wrong-audience named only in the URL, WordPress internals. (national listicle testing)
+- `0c576cb` — **scraper now resolves each new row's contact email** actively via the shared
+  `contact_email_common.resolve_contact_email` (regex-first, ~free), instead of only keeping
+  one that happened to appear in the notes. `find_contact_emails.py` shrinks to a backfill for
+  OLD rows.
+- `c197fe4` — **local discovery redesigned** (Phase 4L rewritten, see it) + civic chaff filters
+  (`_CIVIC_PATH_SEGMENTS`, template `{{}}` drop) + `hubs_seattle.json` registry.
+- `e0fc372` — **hub miner insert step WIRED**: `mine_hub_pages.py` now writes real
+  `is_active=false`/`pending_review` rows (proper ec-ids, reuses the scraper's `insert_rows`,
+  `agent_runs agent='hub_miner'`, snapshot, new `--dry-run`). Extraction still PAID + gated.
+
+**The visual map of all of this (live/built/unbuilt, colour-coded) is a published artifact —
+ask the operator for the "Scraper Logic Map" link if you need it.**
+
+**THE TWO PRIORITIES, both UNBUILT — new phase specs added below:**
+1. **Phase 4N — `name-harvest → search`** (the single highest-value build). Load-bearing for
+   BOTH national JS-directories (College Transitions' 70 named-but-unlinked competitions) and
+   local civic sites (library/museum calendars). Reuses the refind primitive.
+2. **Phase 4F — feed-forward** (search discovers hubs/listicles → leads queue). Measured: the
+   08-23 run consulted 660 grounding pages, kept 126 as rows, **discarded 71 listicles/mills**
+   that each name 7-15 programs — hundreds of leads thrown away per run. Capture them (free)
+   and feed hub-mining/name-harvest.
+
+**Operator is reconsidering Phase 4L (local) — measured yield was weak; Phase 4F may make a
+dedicated local mode largely unnecessary (a Seattle *search* angle would auto-spin-off local
+hubs). Do not invest more in 4L until the operator decides.**
+
+---
+
 ## Implementation status — pick-up-here (last worked 2026-08-27)
 
 **Branch `scraper-v2`** (operator directive: NOT deadline-email-alerts). Branched off main
@@ -486,6 +523,73 @@ their own title-proven pages, `found_via` set, operator approval ≥60%; (3) the
 appears in the seed grid so local yield is diagnosable like any angle. The old "≤$0.30, hubs
 alone" target is retired — hubs alone cannot hit it on civic sites, and name-harvest is paid
 per name.
+
+### Phase 4N — Name-harvest → search (UNBUILT; the single highest-value build)
+
+**The problem it solves:** link-harvest (hub mining) only works when programs are actual
+`<a>` links. Two large classes of pages NAME many programs but don't link them: national
+**JS-rendered directories** (College Transitions' Dataverse — measured: 0 harvestable program
+links, but `page_text` returns 14,355 chars naming "70 academic competitions") and **local
+civic calendars** (library/museum teen programs live in event widgets/prose). For these, the
+names are in the TEXT; the URLs are not.
+
+**Mechanism** (reuses the refind primitive end-to-end):
+1. `page_text.fetch_page_text(hub_url)` (free) → one **no-search** model call: "list every
+   program/competition this page NAMES" → JSON list of names. ~$0.001/page.
+2. Dedup names against the catalog (free — skip what we already have).
+3. For each fresh name: one narrow search "official page for `<name>`", take the
+   grounding-resolved + **title-proven** URL (`refind_dead_links.best_refound_url`, same
+   evidence bar), insert `is_active=false`/`pending_review`. ~$0.02-0.05/name (PAID, per-search
+   fee — gated per run, with a per-page name cap).
+
+**Why higher precision than a broad search angle:** the page already vouched the program exists
+and is HS-relevant, so this only resolves name→URL, it doesn't discover from scratch.
+
+Build as a new mode on `mine_hub_pages.py` (`--resolve-names`) or a small `harvest_and_resolve.py`;
+free to build + unit-test, paid only when run. Confirmed feasible on the real College Transitions
+page (names ARE in the server text). Residual limit: a FULLY client-rendered page whose text is
+also empty still needs a headless browser — rarer than expected; flag, don't solve now.
+
+Success criteria: (1) name extraction + dedup + per-name resolve built and unit-tested against a
+fixture (fake page text in, resolved rows out); (2) a gated run over College Transitions'
+Dataverse lands ≥15 real competitions at title-proven pages, operator approval ≥70%; (3)
+per-name cost logged, capped, and attributed to the source page.
+
+### Phase 4F — Feed-forward: search discovers hubs/listicles → leads queue (UNBUILT)
+
+**The gap:** the search scraper, hub mining, and name-harvest are three disconnected channels.
+But WHILE searching, the scraper constantly hits hub indexes and listicles and then throws them
+away. **Measured (08-23 run, 28 seeds):** 660 grounding pages consulted → 126 became program
+rows → **71 discarded content-mill/listicle URLs** (aralia "research journals for high school",
+immerse "15 summer writing camps", lumiere "10 conferences") — each naming 7-15 programs, i.e.
+hundreds of leads discarded per run. Those listicles are exactly name-harvest/hub feedstock.
+
+**Mechanism — capture, don't inline-process** (keeps the free search run decoupled from paid
+extraction, per the repo's cost discipline):
+- In the scraper, for each resolved grounding URL that did NOT become a program row, classify
+  (free): **content-mill/listicle** (`url_validate.is_content_mill` — pure, no fetch) →
+  **name-harvest lead**; **non-mill page that LINKS ≥N HS programs** (one free
+  `mine_hub_pages.harvest_links`/`filter_hub_links` check, capped per seed) → **hub-mining
+  lead**. Everything else ignored.
+- Write leads with their **source seed/angle** (so the ledger can later credit "angle X
+  surfaced N good hubs"), deduped by URL against the catalog + prior leads.
+- Hub mining / name-harvest CONSUME the queue in their own gated (paid) step.
+
+**Storage — two tiers:**
+- **MVP (no migration):** scraper appends to `discovered_leads.jsonl` + a `leads` list in the
+  run snapshot; `mine_hub_pages.py` gains `--from-leads`. Hub leads processable NOW (insert is
+  wired); name-harvest leads wait on Phase 4N.
+- **Mature:** a `discovered_leads` table (url, kind, source_seed_id, signal, status) reviewable
+  in the console, same shape as `scraper_seeds` — with the degrade-and-retry pattern.
+
+**Why high-leverage:** the scraper already PAID to consult those 660 pages; harvesting the
+hub/listicle ones is nearly free and multiplies yield. It also means the hub registry no longer
+has to be hand-curated — search *discovers* hubs. Reframes search as a hub-DISCOVERY engine.
+
+Success criteria: (1) leads captured from a live scrape's grounding, classified + deduped +
+attributed, at ~zero added cost/wall-time (capped per seed); (2) `mine_hub_pages --from-leads`
+processes the hub leads into pending rows; (3) the run summary reports leads captured by kind so
+the operator can see the new yield channel.
 
 ### Phase 5 — The compounding loop (free)
 

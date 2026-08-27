@@ -296,6 +296,20 @@ EMAIL_POSTAL_ADDRESS = os.environ.get(
 # is due. Two days leaves a weekday to act on it without arriving so early it is forgotten.
 TRIAL_REMINDER_DAYS = int(os.environ.get("TRIAL_REMINDER_DAYS", "2") or 2)
 
+# Deadline-alert reminder rungs, in days-before-the-date. A tracked deadline is alerted once
+# per rung it passes THROUGH: each sweep assigns the date to the SMALLEST rung >= days_left
+# and fires that rung if it has not already been claimed. Window assignment (not day-exact
+# firing) is what makes the ladder self-healing — a missed cron day still fires the item at
+# T-2 under the rung-3 window, and an item tracked late lands in one rung rather than
+# replaying the whole backlog. Ordered high-to-low for readability; assign_rung sorts it.
+# See DEADLINE_EMAIL_ALERTS_PLAN.md §3. Deliberately a constant, not env-tunable: the values
+# become permanent the moment they are written into email_sends dedupe keys.
+DEADLINE_ALERT_RUNGS = (7, 3, 1)
+
+# The digest lists at most this many items, soonest first, then "and N more in your Quest
+# Log". An email that scrolls forever reads as noise; the app is where the full list lives.
+DEADLINE_ALERT_MAX_ITEMS = 10
+
 # Shared secret for POST /api/email/sweep, the endpoint a scheduler calls daily. It is on
 # the SHIPPED app (ops/ is localhost-only and never mounted on Render, so an admin button
 # cannot be what sends the trial reminder), which means it is internet-reachable and needs

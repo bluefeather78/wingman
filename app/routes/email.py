@@ -29,9 +29,13 @@ router = APIRouter()
 
 @router.post("/api/email/sweep")
 def handle_email_sweep(request: Request, body: dict = Depends(json_body)):
-    """Send the trial-ending reminders that are due. Idempotent by construction — the
-    email_sends claim is what makes a second call in the same day a no-op, so a scheduler
-    that retries, or fires twice, cannot double-mail anybody.
+    """Run the due-email sweeps. Idempotent by construction — the email_sends claim is what
+    makes a second call in the same day a no-op, so a scheduler that retries, or fires twice,
+    cannot double-mail anybody.
+
+    Runs BOTH the trial-ending reminder and the deadline-alert digest by default (one cron,
+    one secret); pass {"kind": "trial"} or {"kind": "deadline"} to run just one. The response
+    is {ok, trial?: {...}, deadline_alerts?: {...}}.
 
     The secret goes in a HEADER, never a query string: a URL with the credential in it is
     recorded by every proxy and access log between the scheduler and here.
@@ -45,14 +49,28 @@ def handle_email_sweep(request: Request, body: dict = Depends(json_body)):
     if not hmac.compare_digest(supplied, EMAIL_CRON_SECRET):
         return json_error(403, "Forbidden.")
 
-    result = email_service.run_trial_sweep(
-        days=body.get("days"),
-        dry_run=bool(body.get("dry_run")),
-    )
-    # The per-user detail list carries addresses, so it is dropped unless explicitly asked
+    kind = (body.get("kind") or "all").lower()
+    dry_run = bool(body.get("dry_run"))
+    verbose = bool(body.get("verbose"))
+    result = {"ok": True}
+
+    if kind in ("all", "trial"):
+        trial = email_service.run_trial_sweep(days=body.get("days"), dry_run=dry_run)
+        result["trial"] = trial
+        result["ok"] = result["ok"] and trial.get("ok", False)
+    if kind in ("all", "deadline", "deadline_alert"):
+        deadline = email_service.run_deadline_alert_sweep(dry_run=dry_run)
+        result["deadline_alerts"] = deadline
+        result["ok"] = result["ok"] and deadline.get("ok", False)
+    if "trial" not in result and "deadline_alerts" not in result:
+        return json_error(400, f"Unknown sweep kind {kind!r}.")
+
+    # The per-user detail lists carry addresses, so they are dropped unless explicitly asked
     # for. A scheduler's run log is not a place a roster of minors' emails belongs.
-    if not body.get("verbose"):
-        result.pop("details", None)
+    if not verbose:
+        for sub in ("trial", "deadline_alerts"):
+            if isinstance(result.get(sub), dict):
+                result[sub].pop("details", None)
     return json_response(200, result, default=str)
 
 

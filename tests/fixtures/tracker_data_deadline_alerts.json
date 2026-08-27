@@ -1,0 +1,112 @@
+{
+  "_comment": "P0 contract fixture for the deadline-alert reader. This is the shape the RN app writes to users.data['hs-tracker-data'] (a 6-bucket object; here inlined as an object rather than the JSON-string the client stores, and test_deadline_alert_reader.py json.dumps() it back to that form). Authored from frontend/src/api/trackerStore.ts + status.ts — SYNTHETIC, no real user data (this base is largely minors). Dates are RELATIVE placeholders resolved at test time by day-offset tokens like '+3' so the fixture stays valid forever; the test replaces each '${...}' token. Every item exercises one rule of the reader; the expected units are asserted item-by-item in the test. Any change to the tracker shape must update this file — that is what surfaces the server-side impact.",
+
+  "summerPrograms": [
+    {
+      "id": "confirmed-soon",
+      "name": "Bank of America Student Leaders",
+      "org": "Bank of America",
+      "status": "running",
+      "importantDates": [
+        {"label": "Applications open", "dateISO": "${-30}", "type": "opens", "estimated": false},
+        {"label": "Application deadline", "dateISO": "${+1}", "type": "deadline", "estimated": false, "verified": true}
+      ]
+    },
+    {
+      "id": "estimated-midrange",
+      "name": "Research Science Institute",
+      "org": "Center for Excellence in Education",
+      "status": "running",
+      "importantDates": [
+        {"label": "Application deadline", "dateISO": "${+3}", "type": "deadline", "estimated": true}
+      ]
+    },
+    {
+      "id": "legacy-unknown-flag",
+      "name": "Garcia Summer Research Program",
+      "org": "Stony Brook University",
+      "status": "running",
+      "importantDates": [
+        {"label": "Application deadline", "dateISO": "${+6}", "type": "deadline"}
+      ]
+    },
+    {
+      "id": "discontinued",
+      "name": "A Program That Ended",
+      "org": "Some University",
+      "status": "not_running",
+      "importantDates": [
+        {"label": "Application deadline", "dateISO": "${+2}", "type": "deadline", "estimated": false}
+      ]
+    },
+    {
+      "id": "parked-for-later",
+      "name": "Saved For Later Program",
+      "org": "Elsewhere",
+      "status": "running",
+      "importantDates": [
+        {"label": "Application deadline", "dateISO": "${+2}", "type": "deadline", "estimated": false}
+      ]
+    },
+    {
+      "id": "opens-only",
+      "name": "Just Opened Program",
+      "org": "Nowhere State",
+      "status": "running",
+      "importantDates": [
+        {"label": "Applications open", "dateISO": "${+2}", "type": "opens", "estimated": false}
+      ]
+    },
+    {
+      "id": "far-future",
+      "name": "Deadline Months Away",
+      "org": "Later University",
+      "status": "running",
+      "importantDates": [
+        {"label": "Application deadline", "dateISO": "${+45}", "type": "deadline", "estimated": false}
+      ]
+    }
+  ],
+
+  "internships": [
+    {
+      "_note": "Whole stored cycle is in the past; the app projects it a year forward and shows that. Offsets chosen so the projected deadline lands +2 days (in-window), proving projection can surface a genuinely-due next-cycle deadline — the whole point of it.",
+      "id": "past-annual-projects",
+      "name": "NASA OSTEM High School Internship",
+      "org": "NASA",
+      "status": "running",
+      "importantDates": [
+        {"label": "Applications open", "dateISO": "${-398}", "type": "opens", "estimated": false},
+        {"label": "Application deadline", "dateISO": "${-363}", "type": "deadline", "estimated": false}
+      ]
+    },
+    {
+      "id": "snake-case-source",
+      "name": "Legacy Snake Case Internship",
+      "org": "Old API",
+      "status": "running",
+      "important_dates": [
+        {"label": "Application deadline", "date_iso": "${+3}", "type": "deadline"}
+      ]
+    }
+  ],
+
+  "researchCompetitions": [
+    "this string is not an item and must be skipped without raising",
+    {
+      "id": "malformed-dates",
+      "name": "Item With Junk Dates",
+      "org": "Chaos Inc",
+      "status": "running",
+      "importantDates": [
+        "not a dict",
+        {"label": "Broken", "dateISO": "not-a-date", "type": "deadline"},
+        {"label": "Application deadline", "dateISO": "${+5}", "type": "deadline", "estimated": false}
+      ]
+    }
+  ],
+
+  "pureCompetitions": [],
+  "conferences": [],
+  "journals": []
+}

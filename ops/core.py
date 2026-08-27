@@ -3291,14 +3291,15 @@ def preview_lifecycle_email(kind, userid=None):
 
 
 def send_test_lifecycle_email(kind, to_email, userid=None):
+    """Mimic the email a real user would receive, sent to an operator address on demand.
+
+    When a userid is given the FULL account (data included) is loaded via email_service â€”
+    get_user_account omits the `data` blob, and the deadline-alert digest is rendered from
+    the tracker that lives there, so mimicking that kind needs the whole row. No userid falls
+    back to the sample record inside send_test.
+    """
     from app.services import email as email_service
-    from app.core import get_user_account
-    record = None
-    if userid:
-        try:
-            record = get_user_account(str(userid).strip())
-        except Exception:
-            record = None
+    record = email_service.load_full_record(userid) if userid else None
     return email_service.send_test(kind, to_email, record=record)
 
 

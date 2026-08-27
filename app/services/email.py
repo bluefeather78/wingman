@@ -47,7 +47,7 @@ from app.config import (
 )
 from app.core import (
     _supabase_request_strict, _missing_table_error, _error_body, get_user_account,
-    subscription_state,
+    get_user, subscription_state,
 )
 from subscription_common import TRIAL_DAYS
 from app.services import email_templates
@@ -149,7 +149,39 @@ def build_context(kind, record):
         ctx["trial_ends_display"] = _safe_display_date(state.get("trial_ends_at"))
     elif kind == "goodbye":
         ctx["access_ends_display"] = _safe_display_date(state.get("subscription_end_at"))
+    elif kind == "deadline_alert":
+        # The one digest kind: read the student's own tracker off the record and hand the
+        # template a plain, already-sorted list of due deadlines. Computed HERE, in the one
+        # place build_context owns, so the console preview and the real send cannot disagree
+        # about the dates — exactly as with the trial reminder's day count.
+        from app.services import deadline_alerts as _da
+        today = _now().date()
+        units, _stats = _da.extract_deadline_units(record or {}, today)
+        ctx["alerts"] = _format_deadline_alerts(_da.due_alerts(units))
     return ctx
+
+
+def _format_deadline_alerts(due_pairs):
+    """Turn (unit, rung) pairs into the display dicts the deadline_alert template reads.
+
+    The single formatter shared by build_context (which computes the pairs from a record) and
+    the sweep (which passes the CLAIMED-survivor pairs). Keeping it in one place is what makes
+    a preview, a full send, and a partial-digest re-render agree on how a date reads.
+    """
+    return [
+        {
+            "name": unit["item_name"],
+            "org": unit.get("org") or "",
+            "url": unit.get("url") or "",
+            "label": unit.get("label") or "Deadline",
+            "date_iso": unit["date_iso"],
+            "date_display": _safe_display_date(unit["date_iso"]) or unit["date_iso"],
+            "days_left": unit["days_left"],
+            "rung": rung,
+            "estimated": unit.get("estimated"),
+        }
+        for (unit, rung) in due_pairs
+    ]
 
 
 def render_for(kind, record):
@@ -201,10 +233,14 @@ def _claim(userid, kind, dedupe_key, email, subject):
         return None, f"error: {e}"
 
 
-def _finish(row, state, message_id=None, error=None):
+def _finish(row, state, message_id=None, error=None, subject=None):
     """Close out a claimed row. Best-effort: the mail has already gone (or failed), and
     losing the bookkeeping must not raise into a signup or a cancel. It is logged loudly
-    because a row left in 'sending' after a successful send looks like a crash."""
+    because a row left in 'sending' after a successful send looks like a crash.
+
+    `subject` backfills the digest's real subject: a deadline-alert claim is written BEFORE
+    the survivor set (and thus the subject's count) is known, so it is claimed with a blank
+    subject and stamped with the true one here."""
     row_id = (row or {}).get("id")
     if row_id is None:
         return
@@ -213,6 +249,8 @@ def _finish(row, state, message_id=None, error=None):
         updates["provider_message_id"] = message_id
     if error:
         updates["error"] = str(error)[:500]
+    if subject:
+        updates["subject"] = subject
     if state == "sent":
         updates["sent_at"] = _now().isoformat()
     try:
@@ -472,6 +510,222 @@ def run_trial_sweep(days=None, dry_run=False, limit=500):
     return result
 
 
+# ---------------- The deadline-alert sweep ----------------
+#
+# Unlike the trial sweep, this is a DIGEST: one email per student listing all their due
+# deadlines, but one email_sends claim per (opportunity, date, rung) so each reminder fires
+# exactly once. The claim is per-unit; the SEND is per-student. See
+# DEADLINE_EMAIL_ALERTS_PLAN.md §4.
+
+# The roster read needs the `data` blob (the tracker lives there) alongside the subscription
+# columns the access gate reads. get_user_account deliberately omits `data`, so this is its
+# own explicit column list — and it must paginate past PostgREST's 1000-row cap like every
+# whole-table read here.
+_DEADLINE_SWEEP_COLUMNS = (
+    "userid,first_name,last_name,email,subscription_status,trial_ends_at,"
+    "subscription_end_at,stripe_customer_id,stripe_subscription_id,"
+    "lifecycle_email_optout,data"
+)
+
+
+def due_deadline_alert_digests(limit=500):
+    """Every account with at least one due deadline alert right now.
+
+    Returns (digests, stats). Each digest is {"record": row, "due": [(unit, rung), ...]}.
+    The access / opt-out / no-email filters are applied HERE (before any claim), so the
+    "who should get one" question is answered in one place; the "sent once" question is left
+    entirely to the claim, exactly as the trial sweep leaves it. Reads the whole roster,
+    paginating past 1000 rows.
+    """
+    from app.services import deadline_alerts as _da
+    today = _now().date()
+    stats = {"accounts": 0, "skipped_optout": 0, "skipped_no_email": 0,
+             "skipped_no_access": 0, "unparseable_blobs": 0, "with_due": 0}
+    digests = []
+    page_size = 1000
+    offset = 0
+    while True:
+        rows = _supabase_request_strict(
+            "users", "GET",
+            params={"select": _DEADLINE_SWEEP_COLUMNS, "order": "userid"},
+            extra_headers={"Range": f"{offset}-{offset + page_size - 1}"}) or []
+        for record in rows:
+            stats["accounts"] += 1
+            if record.get("lifecycle_email_optout"):
+                stats["skipped_optout"] += 1
+                continue
+            if not (record.get("email") or "").strip():
+                stats["skipped_no_email"] += 1
+                continue
+            # A lapsed account cannot open the Quest Log the email points into, so "deadline
+            # in 3 days" + a paywall on click-through reads as ransom. Same gate the app uses,
+            # derived from the same function, and it FAILS the same direction: an unreadable
+            # subscription state is treated as no-access here rather than mailed on a guess.
+            try:
+                has_access = subscription_state(record).get("has_access") is True
+            except Exception:
+                has_access = False
+            if not has_access:
+                stats["skipped_no_access"] += 1
+                continue
+            units, ustats = _da.extract_deadline_units(record, today)
+            stats["unparseable_blobs"] += ustats.get("unparseable_blobs", 0)
+            due = _da.due_alerts(units)
+            if not due:
+                continue
+            stats["with_due"] += 1
+            digests.append({"record": record, "due": due})
+            if len(digests) >= limit:
+                return digests, stats
+        if len(rows) < page_size:
+            break
+        offset += page_size
+    return digests, stats
+
+
+def _send_deadline_digest(record, due):
+    """Claim each (unit, rung), send ONE digest of the survivors, finish every claimed row.
+
+    Returns a result dict whose 'state' is sent | mock | skipped | failed. 'units_sent'
+    counts what actually went out; 'units_already_sent' counts the ones an earlier run had
+    already claimed (dropped silently — the healthy repeat-run path). Never raises.
+    """
+    from app.services import deadline_alerts as _da
+    userid = record.get("userid")
+    email = (record.get("email") or "").strip()
+    if not email:
+        return {"state": "skipped", "reason": "no email address on the account"}
+    if record.get("lifecycle_email_optout"):
+        return {"state": "skipped", "reason": "opted out of lifecycle email"}
+
+    # Mock mode writes NO claim rows — a claim would suppress the real send once a key is
+    # configured, so developing offline would silently cost real users their reminder. Render
+    # the full digest so the printed line shows real content. Same rule as send_lifecycle_email.
+    if not RESEND_API_KEY:
+        ctx = {"first_name": record.get("first_name") or "", "userid": userid,
+               "alerts": _format_deadline_alerts(due)}
+        try:
+            subject, _html, _text = email_templates.render(
+                "deadline_alert", ctx, unsubscribe_url(userid))
+        except Exception as e:
+            return {"state": "failed", "reason": f"template error: {e}"}
+        print(f"[MOCK EMAIL] deadline_alert -> {email}: {subject}")
+        return {"state": "mock", "units_sent": len(due), "subject": subject, "to": email}
+
+    # Live: claim each unit; only survivors go into the digest, so the subject's count matches
+    # the body even when an earlier run already sent some of them.
+    survivors = []          # (row, unit, rung)
+    already = 0
+    for (unit, rung) in due:
+        key = _da.alert_dedupe_key(unit, rung)
+        # Subject is blank at claim time — the count isn't known until the survivor set is —
+        # and is backfilled by _finish once the real subject is rendered.
+        row, reason = _claim(userid, "deadline_alert", key, email, "")
+        if row is not None:
+            survivors.append((row, unit, rung))
+            continue
+        if reason == "already_sent":
+            already += 1
+            continue
+        if reason == "setup":
+            # The claim table is missing; nothing can send. Release anything already claimed
+            # this pass and report setup rather than a skip that reads as "nothing due".
+            for (r, _u, _rg) in survivors:
+                release_claim(r)
+            return {"state": "skipped", "reason": f"run {EMAIL_SETUP_SQL}",
+                    "table_ready": False}
+        # Any other error on one unit: skip that unit, keep the rest of the digest.
+        # Failing the whole digest for one bad claim would hold every other reminder hostage.
+
+    if not survivors:
+        # Everything already claimed by an earlier run — the idempotent no-op case.
+        return {"state": "skipped", "reason": "already_sent",
+                "units_already_sent": already}
+
+    ctx = {"first_name": record.get("first_name") or "", "userid": userid,
+           "alerts": _format_deadline_alerts([(u, rg) for (_r, u, rg) in survivors])}
+    try:
+        subject, html_body, text_body = email_templates.render(
+            "deadline_alert", ctx, unsubscribe_url(userid))
+    except Exception as e:
+        for (r, _u, _rg) in survivors:
+            _finish(r, "failed", error=f"template error: {e}")
+        return {"state": "failed", "reason": f"template error: {e}", "to": email}
+
+    message_id, error = _resend_post(email, subject, html_body, text_body)
+    if error:
+        for (r, _u, _rg) in survivors:
+            _finish(r, "failed", error=error, subject=subject)
+        print(f"[WARN] deadline_alert -> {email} failed: {error}")
+        return {"state": "failed", "reason": error, "to": email,
+                "units_already_sent": already}
+
+    for (r, _u, _rg) in survivors:
+        _finish(r, "sent", message_id=message_id, subject=subject)
+    return {"state": "sent", "units_sent": len(survivors),
+            "units_already_sent": already, "message_id": message_id,
+            "subject": subject, "to": email}
+
+
+def run_deadline_alert_sweep(dry_run=False, limit=500):
+    """One pass of the deadline-alert digest. Safe to run many times a day: the per-unit
+    claim is what makes a second pass a no-op, not the caller's restraint.
+
+    dry_run resolves exactly who is due and what each digest would contain, and sends
+    nothing — the free tier this repo's agents all offer.
+    """
+    started = _now()
+    try:
+        digests, stats = due_deadline_alert_digests(limit=limit)
+    except urllib.error.HTTPError as e:
+        if _missing_table_error(e):
+            return {"ok": False, "table_ready": False, "setup_sql_file": EMAIL_SETUP_SQL,
+                    "error": f"Run {EMAIL_SETUP_SQL} in the Supabase SQL editor."}
+        return {"ok": False, "error": f"Could not read accounts: {e}"}
+    except Exception as e:
+        return {"ok": False, "error": f"Could not read accounts: {e}"}
+
+    result = {
+        "ok": True,
+        "dry_run": bool(dry_run),
+        "accounts_with_due": len(digests),
+        "sent": 0, "skipped": 0, "failed": 0, "mock": 0,
+        "units_alerted": 0, "units_already_sent": 0,
+        "mode": "mock" if not RESEND_API_KEY else "live",
+        "stats": stats,
+        "details": [],
+        "started_at": started.isoformat(),
+    }
+    for digest in digests:
+        record = digest["record"]
+        due = digest["due"]
+        entry = {"userid": record.get("userid"), "email": record.get("email"),
+                 "units": len(due)}
+        if dry_run:
+            entry["state"] = "would_send"
+            entry["deadlines"] = [
+                {"name": u["item_name"], "date": u["date_iso"], "rung": rung,
+                 "days_left": u["days_left"], "estimated": u.get("estimated")}
+                for (u, rung) in due]
+            result["details"].append(entry)
+            continue
+        outcome = _send_deadline_digest(record, due)
+        entry.update(outcome)
+        result["details"].append(entry)
+        result[outcome["state"]] = result.get(outcome["state"], 0) + 1
+        result["units_alerted"] += outcome.get("units_sent", 0)
+        result["units_already_sent"] += outcome.get("units_already_sent", 0)
+        # A missing claim table looks the same for every account, so stop the moment the
+        # first one reports it and surface the setup step instead of a wall of skips.
+        if outcome.get("table_ready") is False:
+            result["table_ready"] = False
+            result["setup_sql_file"] = EMAIL_SETUP_SQL
+            break
+
+    result["finished_at"] = _now().isoformat()
+    return result
+
+
 # ---------------- Read side (the console) ----------------
 
 def recent_sends(limit=100, kind=None):
@@ -505,6 +759,8 @@ def email_status(limit=100):
         "stuck": 0,
         "due_now": [],
         "due_error": None,
+        "deadline_due_now": [],
+        "deadline_due_error": None,
     }
     try:
         sends = recent_sends(limit=limit)
@@ -542,6 +798,16 @@ def email_status(limit=100):
         # Reported, never silently zero: an empty list and a failed read look identical
         # otherwise, and one of them means the reminder is not going out.
         out["due_error"] = str(e)
+
+    try:
+        digests, _stats = due_deadline_alert_digests(limit=100)
+        out["deadline_due_now"] = [
+            {"userid": d["record"].get("userid"), "email": d["record"].get("email"),
+             "first_name": d["record"].get("first_name"), "units": len(d["due"])}
+            for d in digests
+        ]
+    except Exception as e:
+        out["deadline_due_error"] = str(e)
     return out
 
 
@@ -584,6 +850,12 @@ def send_test(kind, to_email, record=None):
     record = record or _sample_record(kind)
     try:
         subject, html_body, text_body = render_for(kind, record)
+    except ValueError as e:
+        if _is_empty_digest(e):
+            # Mimicking a real user's deadline digest when they have nothing due is not an
+            # error — say so plainly rather than as a raw "template error".
+            return {"state": "skipped", "reason": _EMPTY_DIGEST_REASON}
+        return {"state": "failed", "reason": f"template error: {e}"}
     except Exception as e:
         return {"state": "failed", "reason": f"template error: {e}"}
 
@@ -616,6 +888,8 @@ def _sample_record(kind=None):
                                                       window the sweep actually fires in
       goodbye       a cancelled subscription       -> paid period still running
     """
+    if kind == "deadline_alert":
+        return _sample_deadline_record()
     if kind == "trial_ending":
         trial_days = TRIAL_REMINDER_DAYS
     else:
@@ -633,17 +907,90 @@ def _sample_record(kind=None):
     }
 
 
+def _sample_deadline_record():
+    """A stand-in account for previewing the deadline digest — a staged tracker blob rather
+    than a staged date, because this template reads a LIST off the record.
+
+    The dates are positioned to land one item in each rung bucket at once (a rung-1, a
+    rung-3, and an estimated rung-7), so a single preview shows every section the digest can
+    render and the estimated label in place. Identity values are obviously fake, per the
+    sample philosophy for the other kinds. The blob shape matches what the RN app writes:
+    hs-tracker-data is a JSON *string* of a bucketed object with camelCase dates.
+    """
+    today = _now().date()
+
+    def in_days(n):
+        return (today + datetime.timedelta(days=n)).isoformat()
+
+    tracker = {
+        "summerPrograms": [
+            {"id": "sample-1", "name": "Bank of America Student Leaders",
+             "org": "Bank of America", "status": "running",
+             "url": "https://about.bankofamerica.com/en/making-an-impact/student-leaders",
+             "importantDates": [{"label": "Application deadline", "dateISO": in_days(1),
+                                 "type": "deadline", "estimated": False}]},
+            {"id": "sample-2", "name": "Research Science Institute",
+             "org": "Center for Excellence in Education", "status": "running",
+             "url": "https://www.cee.org/programs/research-science-institute",
+             "importantDates": [{"label": "Application deadline", "dateISO": in_days(3),
+                                 "type": "deadline", "estimated": False}]},
+        ],
+        "internships": [
+            {"id": "sample-3", "name": "NASA OSTEM High School Internship",
+             "org": "NASA", "status": "running",
+             "url": "https://intern.nasa.gov/",
+             "importantDates": [{"label": "Application deadline", "dateISO": in_days(6),
+                                 "type": "deadline", "estimated": True}]},
+        ],
+    }
+    from app.services.deadline_alerts import TRACKER_KEY, SAVED_KEY
+    return {
+        "userid": "sample-student",
+        "first_name": "Sample",
+        "last_name": "Student",
+        "email": "sample@example.com",
+        "subscription_status": "trial",
+        "trial_ends_at": (_now() + datetime.timedelta(days=20)).isoformat(),
+        "data": {TRACKER_KEY: json.dumps(tracker), SAVED_KEY: {}},
+    }
+
+
+# The message shown when a deadline-alert digest is mimicked for a real account that has
+# nothing due right now. Not an error — the correct, honest answer — so it is worded as one.
+_EMPTY_DIGEST_REASON = (
+    "This account has no deadlines due in the reminder window right now, so there is nothing "
+    "to send. Leave the userid blank to see the sample digest instead.")
+
+
+def _is_empty_digest(exc):
+    return "no due dates" in str(exc)
+
+
+def load_full_record(userid):
+    """The WHOLE users row for a mimic/preview, including the `data` blob — get_user_account
+    omits `data`, and the deadline digest lives there, so a mimic of that kind needs the full
+    read. Only ever called from the localhost console, so the cost of the wider select is a
+    non-issue."""
+    try:
+        return get_user(str(userid).strip())
+    except Exception:
+        return None
+
+
 def preview(kind, userid=None):
-    """Render a template for the console. Never sends, never writes."""
-    record = None
-    if userid:
-        try:
-            record = get_user_account(userid)
-        except Exception:
-            record = None
+    """Render a template for the console. Never sends, never writes.
+
+    When a userid is given the FULL account (data included) is used, so a deadline-alert
+    preview shows that student's real tracked deadlines rather than an empty digest.
+    """
+    record = load_full_record(userid) if userid else None
     record = record or _sample_record(kind)
     try:
         subject, html_body, text_body = render_for(kind, record)
+    except ValueError as e:
+        if _is_empty_digest(e):
+            return {"ok": False, "error": _EMPTY_DIGEST_REASON, "empty_digest": True}
+        return {"ok": False, "error": str(e)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
     return {

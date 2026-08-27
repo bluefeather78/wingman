@@ -296,7 +296,9 @@ def handle_emails(request: Request):
 def handle_email_preview(request: Request):
     kind = (request.query_params.get("kind") or "").strip()
     result = core.preview_lifecycle_email(kind, request.query_params.get("userid"))
-    return json_response(200 if result.get("ok") else 400, result, default=str)
+    # An empty digest (mimicking a user with nothing due) is informational, not a 400.
+    ok = result.get("ok") or result.get("empty_digest")
+    return json_response(200 if ok else 400, result, default=str)
 
 
 @router.post("/api/agents/emails/test")
@@ -308,7 +310,9 @@ async def handle_email_test(request: Request):
         (body.get("kind") or "").strip(),
         (body.get("to") or "").strip(),
         body.get("userid"))
-    return json_response(200 if result.get("state") in ("sent", "mock") else 400,
+    # 'skipped' is the honest "nothing to send" case (e.g. mimicking a user's deadline digest
+    # when they have nothing due) â€” informational, not a failure.
+    return json_response(200 if result.get("state") in ("sent", "mock", "skipped") else 400,
                          result, default=str)
 
 

@@ -59,9 +59,11 @@ import html
 from app.config import EMAIL_APP_URL, EMAIL_POSTAL_ADDRESS
 
 
-# The three kinds. app/services/email.py validates against this, so an unknown kind is
-# refused by name rather than silently producing an empty email.
-EMAIL_KINDS = ("welcome", "trial_ending", "goodbye")
+# The lifecycle kinds. app/services/email.py validates against this, so an unknown kind is
+# refused by name rather than silently producing an empty email. `deadline_alert` is a
+# DIGEST (a list of a student's own tracked deadlines), unlike the other three, which are
+# single-fact account-lifecycle notices — see _deadline_alert below.
+EMAIL_KINDS = ("welcome", "trial_ending", "goodbye", "deadline_alert")
 
 # Palette, from the source files (which track frontend/src/ui/theme.ts).
 CREAM = "#FBF8F3"
@@ -583,10 +585,185 @@ def _goodbye(ctx, unsubscribe_url):
             content, text, _GOODBYE_REASON, unsubscribe_url)
 
 
+# ---------------- deadline_alert ----------------
+#
+# The one DIGEST kind. Where the other three carry a single computed fact, this carries a
+# list of the student's own tracked deadlines, grouped by how soon each is. Two rules make it
+# safe: an EMPTY digest is refused (never send "here are your 0 deadlines"), and every value
+# comes through `ctx` — app/services/email.py runs the reader + rung engine and hands this a
+# plain, already-sorted list, so the console preview and the real send cannot disagree about
+# the dates. An estimated (or unknown-provenance) date is always labelled; only a date the
+# blob explicitly marks estimated:false is presented bare.
+
+_DEADLINE_REASON = ("You&rsquo;re receiving this because you&rsquo;re tracking these "
+                    "deadlines in Wingman.")
+_DEADLINE_REASON_TXT = ("You're receiving this because you're tracking these deadlines in "
+                        "Wingman.")
+
+# Rung -> the section heading that rung's items sit under. Keys are the DEADLINE_ALERT_RUNGS
+# values; a rung with no items is simply not rendered.
+_RUNG_TITLE = {
+    1: "Due today or tomorrow",
+    3: "Due in the next few days",
+    7: "Due this week",
+}
+
+_EST_HTML = " &middot; <em>estimated &mdash; confirm on the program&rsquo;s site</em>"
+_EST_TXT = " (estimated — confirm on the program's site)"
+
+
+def _relative_days(days):
+    if days is None:
+        return "soon"
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "tomorrow"
+    return f"in {days} days"
+
+
+def _deadline_card_title(alert):
+    """The program name, linked to its opportunity URL when there is one. The link is on the
+    NAME (not a separate 'view' link) so a student taps the thing they recognise. Falls back
+    to plain text when the tracked item carries no usable URL."""
+    name = _e(alert.get("name") or "This opportunity")
+    url = alert.get("url")
+    if url:
+        return (f'<a href="{_e(url)}" target="_blank" '
+                f'style="color:{NAVY};text-decoration:underline">{name}</a>')
+    return name
+
+
+def _deadline_card_body(alert):
+    """The body of one deadline card: org (if known), then 'Label: <date>' with the estimated
+    note where it applies."""
+    lines = []
+    org = alert.get("org")
+    if org:
+        lines.append(_e(org))
+    label = alert.get("label") or "Deadline"
+    date_display = alert.get("date_display") or alert.get("date_iso") or ""
+    row = f"{_e(label)}: <strong>{_e(date_display)}</strong>"
+    # is not False -> True or None (unknown). Unknown is labelled estimated, never confirmed.
+    if alert.get("estimated") is not False:
+        row += _EST_HTML
+    lines.append(row)
+    return "<br>".join(lines)
+
+
+def _overflow_row(count, url):
+    link = (f'<a href="{_e(url)}" style="color:{NAVY};text-decoration:underline">'
+            f'{count} more in your Quest Log</a>')
+    return f"""
+  <tr>
+    <td align="center" class="pad-mobile" style="padding:2px 4px 0 4px;font-family:{SANS};
+        font-size:14px;color:{MUTED}">&hellip; and {link}.</td>
+  </tr>"""
+
+
+def _deadline_alert_text(name, alerts, shown, groups, overflow, app, unsubscribe_url):
+    total = len(alerts)
+    lines = []
+    if total == 1:
+        lines.append(f"One deadline is {_relative_days(alerts[0]['days_left'])}, {name}.")
+    else:
+        lines.append(f"{total} deadlines coming up, {name} — the first is "
+                     f"{_relative_days(alerts[0]['days_left'])}.")
+    lines.append("")
+    for rung in sorted(_RUNG_TITLE):
+        items = groups.get(rung)
+        if not items:
+            continue
+        lines.append(_RUNG_TITLE[rung].upper())
+        for a in items:
+            org = f" ({a['org']})" if a.get("org") else ""
+            est = _EST_TXT if a.get("estimated") is not False else ""
+            date_display = a.get("date_display") or a.get("date_iso") or ""
+            lines.append(f"  - {a.get('name') or 'This opportunity'}{org} — "
+                         f"{a.get('label') or 'Deadline'}: {date_display}{est}")
+            if a.get("url"):
+                lines.append(f"    {a['url']}")
+        lines.append("")
+    if overflow > 0:
+        lines.append(f"...and {overflow} more in your Quest Log.")
+        lines.append("")
+    lines.append(f"Open your Quest Log: {app}/tracker")
+    return "\n".join(lines) + _footer_text(_DEADLINE_REASON_TXT, unsubscribe_url)
+
+
+def _deadline_alert(ctx, unsubscribe_url):
+    from app.config import DEADLINE_ALERT_MAX_ITEMS
+
+    name = ctx.get("first_name") or "there"
+    alerts = list(ctx.get("alerts") or [])
+    # An empty digest is refused, not sent. "Here are your 0 deadlines" is the one message
+    # this feature must never produce; the sweep also guards against it, so this is the
+    # second line of defence and the one that protects the preview/test path too.
+    if not alerts:
+        raise ValueError("deadline_alert has no due dates; an empty digest must not be sent")
+
+    app = EMAIL_APP_URL
+    total = len(alerts)
+    shown = alerts[:DEADLINE_ALERT_MAX_ITEMS]
+    overflow = total - len(shown)
+    soonest = alerts[0].get("days_left")
+    rel = _relative_days(soonest)
+
+    if total == 1:
+        only = alerts[0].get("name") or "your tracked opportunity"
+        subject = f"Deadline {rel}: {only}"
+        preheader = f"Your {_e(only)} deadline is {rel}."
+        badge = f"Deadline {rel}"
+        heading = f"One deadline is {rel}, {_e(name)}"
+        intro = ("You&rsquo;re tracking one deadline that&rsquo;s coming up &mdash; "
+                 "here&rsquo;s where it stands.")
+    else:
+        subject = f"{total} deadlines coming up — first {rel}"
+        preheader = f"{total} deadlines you&rsquo;re tracking are coming up soon."
+        badge = f"{total} deadlines coming up"
+        heading = f"{total} deadlines coming up, {_e(name)}"
+        intro = (f"You&rsquo;re tracking {total} deadlines closing soon &mdash; the first is "
+                 f"{rel}. Here&rsquo;s where things stand.")
+
+    # Group the shown items by rung, rendered in ladder order (1, 3, 7).
+    groups = {}
+    for a in shown:
+        groups.setdefault(a.get("rung"), []).append(a)
+
+    pieces = [
+        _hero(badge=badge, badge_fg=ORANGE, badge_bg=ORANGE_SOFT,
+              heading=heading, body=intro,
+              cta_url=f"{app}/tracker", cta_label="Open my Quest Log →", cta_width=260),
+        _gap(30),
+    ]
+    for rung in sorted(_RUNG_TITLE):
+        items = groups.get(rung)
+        if not items:
+            continue
+        pieces.append(_section(_RUNG_TITLE[rung]))
+        pieces.append(_cards([
+            (_ICON_CALENDAR, _deadline_card_title(a), _deadline_card_body(a))
+            for a in items
+        ]))
+        pieces.append(_gap(22))
+    if overflow > 0:
+        pieces.append(_overflow_row(overflow, f"{app}/tracker"))
+        pieces.append(_gap(10))
+    pieces.append(_banner(
+        "Don&rsquo;t let one slip",
+        "Open Wingman to see the full details, requirements, and check off your progress.",
+        f"{app}/tracker", "Go to my deadlines"))
+
+    content = "".join(pieces)
+    text = _deadline_alert_text(name, alerts, shown, groups, overflow, app, unsubscribe_url)
+    return subject, preheader, content, text, _DEADLINE_REASON, unsubscribe_url
+
+
 _BUILDERS = {
     "welcome": _welcome,
     "trial_ending": _trial_ending,
     "goodbye": _goodbye,
+    "deadline_alert": _deadline_alert,
 }
 
 

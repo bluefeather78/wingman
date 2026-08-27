@@ -814,17 +814,20 @@ tr.disabled-seed { opacity: .48; }
           <button class="tab active" data-kind="welcome">Welcome</button>
           <button class="tab" data-kind="trial_ending">Trial ending</button>
           <button class="tab" data-kind="goodbye">Goodbye</button>
+          <button class="tab" data-kind="deadline_alert">Deadline alert</button>
         </div>
         <div class="spacer"></div>
-        <input id="emailPreviewUser" placeholder="render for userid (optional)"
-               style="width:200px">
+        <input id="emailPreviewUser" placeholder="mimic a userid (optional)"
+               style="width:190px">
         <button class="btn btn-sm" id="emailPreviewBtn">Preview</button>
-        <input id="emailTestTo" placeholder="send a test to&hellip;" style="width:210px">
-        <button class="btn" id="emailTestBtn">Send test</button>
+        <input id="emailTestTo" placeholder="send a copy to&hellip;" style="width:210px">
+        <button class="btn" id="emailTestBtn">Send to me</button>
       </div>
       <div class="card-body tight">
         <div class="hint" style="padding:10px 14px" id="emailPreviewMeta">
-          Rendered against a sample account until you name a real userid.
+          Leave the userid blank for a sample. Enter a real userid to mimic exactly what
+          that student would receive &mdash; their name, dates, and (for a deadline alert)
+          their own tracked deadlines &mdash; sent to your address, on demand, never deduped.
         </div>
         <iframe id="emailPreviewFrame" title="Email preview" sandbox=""
                 style="width:100%;height:560px;border:0;border-top:1px solid var(--border);
@@ -3731,6 +3734,11 @@ $('seedDelete').onclick = deleteSeed;
    Emails — the three lifecycle messages
 =========================================================================== */
 async function loadEmails() {
+  // Prefill the "send to me" box with the address used last time on this machine.
+  try {
+    const saved = localStorage.getItem('wingman.testEmail');
+    if (saved && !$('emailTestTo').value) $('emailTestTo').value = saved;
+  } catch (e) {}
   try {
     S.emails = await api('/api/agents/emails?limit=200');
   } catch (e) {
@@ -3828,6 +3836,12 @@ async function loadEmailPreview() {
     const q = new URLSearchParams({ kind: S.emailKind });
     if (userid) q.set('userid', userid);
     const d = await api('/api/agents/emails/preview?' + q.toString());
+    if (d.empty_digest || (!d.ok && d.error)) {
+      // e.g. mimicking a deadline digest for a user with nothing due — honest, not an error.
+      frame.srcdoc = '';
+      meta.textContent = d.error || 'Nothing to preview for that user.';
+      return;
+    }
     // srcdoc into an empty sandbox: the preview is rendered, not executed, and cannot
     // reach back into the console. It is also the same HTML the send path produces, byte
     // for byte, because both come from render_for().
@@ -3844,22 +3858,31 @@ async function loadEmailPreview() {
 
 async function sendEmailTest() {
   const to = ($('emailTestTo').value || '').trim();
-  if (!to) { notice('Type an address to send the test to.'); return; }
+  if (!to) { notice('Type an address to send the copy to.'); return; }
   const userid = ($('emailPreviewUser').value || '').trim();
-  const warn = `Send a real ${S.emailKind} email to ${to}?`
-    + '\n\nThis is NOT deduped and is NOT recorded — a test must not consume the real '
-    + 'account’s one send. Its subject is prefixed [TEST].';
+  // Remember the operator's own address so "Send to me" is one click next time. Localhost
+  // console only, so this stays on this machine.
+  try { localStorage.setItem('wingman.testEmail', to); } catch (e) {}
+  const who = userid ? `${userid}'s ${S.emailKind}` : `a sample ${S.emailKind}`;
+  const warn = `Send ${who} email to ${to}?`
+    + '\n\nThis is NOT deduped and is NOT recorded — mimicking a user must not consume their '
+    + 'real one send. Its subject is prefixed [TEST].';
   if (!confirm(warn)) return;
   try {
     const d = await api('/api/agents/emails/test', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind: S.emailKind, to, userid: userid || null }),
     });
-    notice(d.state === 'mock'
-      ? 'Mock mode: nothing was sent (RESEND_API_KEY is not set).'
-      : `Test sent to ${to}.`);
+    if (d.state === 'mock') {
+      notice('Mock mode: nothing was sent (RESEND_API_KEY is not set).');
+    } else if (d.state === 'skipped') {
+      // e.g. mimicking a deadline digest for a user with nothing due — honest, not an error.
+      notice(d.reason || 'Nothing to send for that user.');
+    } else {
+      notice(`Sent to ${to}.`);
+    }
   } catch (e) {
-    notice('Test send failed: ' + e.message);
+    notice('Send failed: ' + e.message);
   }
 }
 

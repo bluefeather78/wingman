@@ -1,4 +1,9 @@
-# Daily trial-ending reminder sweep.
+# Daily lifecycle-email sweep — trial-ending reminders AND deadline alerts.
+#
+# POST /api/email/sweep runs BOTH sweeps by default (the body sends no "kind", which the
+# endpoint treats as "all"), so arming this one schedule turns on both the trial reminder
+# and the deadline-approaching digest at once. That is deliberate: they share a trigger, a
+# secret and an idempotency guard.
 #
 # This is the SCHEDULER, and it lives here rather than in the admin console for a reason
 # worth not re-deriving: ops/ is localhost-gated and deliberately never mounted on Render
@@ -26,12 +31,15 @@ name: Lifecycle emails
 # THE DAILY SCHEDULE IS CURRENTLY DISARMED (2026-08-24), by choice, not by oversight.
 #
 # With no `schedule:` trigger this workflow only ever runs when somebody presses "Run
-# workflow", so the trial-ending reminder DOES NOT GO OUT AUTOMATICALLY. Welcome and
-# goodbye are unaffected — they are event-driven from app/routes/, not from here.
+# workflow", so NEITHER the trial-ending reminder NOR the deadline alerts go out
+# automatically. Welcome and goodbye are unaffected — they are event-driven from
+# app/routes/, not from here.
 #
-# To arm it, uncomment the two lines below and set the WINGMAN_API_BASE and
-# EMAIL_CRON_SECRET repository secrets (the endpoint 503s without the latter, so an armed
-# schedule with no secret would just fail red every day).
+# ARM IT WHEN SHIPPING BETA (deadline alerts are built & tested but held until there are
+# real users). To arm: (1) run email_schema.sql in the Supabase SQL editor if not already;
+# (2) set the WINGMAN_API_BASE and EMAIL_CRON_SECRET repository secrets AND EMAIL_CRON_SECRET
+# in the Render dashboard (the endpoint 503s without the latter, so an armed schedule with no
+# secret would just fail red every day); (3) uncomment the two `schedule:` lines below.
 #
 # 15:00 UTC — mid-morning US Pacific, early evening in Europe. Deliberately not midnight
 # UTC: GitHub's scheduler is heavily oversubscribed on the hour and on 00:00 in particular,
@@ -52,7 +60,7 @@ jobs:
   sweep:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger the trial-ending sweep
+      - name: Trigger the daily email sweep (trial reminders + deadline alerts)
         env:
           API_BASE: ${{ secrets.WINGMAN_API_BASE }}
           CRON_SECRET: ${{ secrets.EMAIL_CRON_SECRET }}

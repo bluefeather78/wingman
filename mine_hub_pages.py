@@ -142,7 +142,7 @@ def extract_opportunity(url, key, timeout=40, min_delay=5):
     is a single call. Kept parallel to scrape_opportunities.extract_candidates."""
     from gemini_common import call_gemini, extract_json, estimate_cost, set_min_delay
     set_min_delay(min_delay)
-    text = page_text.fetch_page_text(url, timeout)
+    text, _reason = page_text.fetch_page_text(url, timeout)
     if not text:
         return None, 0.0
     user = f"PAGE URL: {url}\n\nPAGE TEXT:\n{text[:14000]}\n\nReturn the JSON object now."
@@ -188,7 +188,7 @@ def discover(hub_url, off_domain=False, timeout=url_repair.DEFAULT_TIMEOUT, recu
     # stage 2: page-level high-school-audience check (free fetch of each target)
     final = []
     for url, anchor in cand:
-        text = page_text.fetch_page_text(url, timeout)
+        text, _reason = page_text.fetch_page_text(url, timeout)
         if text and not has_hs_audience(text) and not has_hs_audience(anchor):
             trace["dropped_no_hs_audience"] += 1
             continue

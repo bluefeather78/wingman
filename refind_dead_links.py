@@ -100,6 +100,9 @@ def main():
     from gemini_common import set_min_delay
     set_min_delay(args.min_delay)
     today = datetime.date.today().strftime("%Y%m%d")
+    all_ids = {r["id"] for r in (supabase_get(supabase_url, "opportunities",
+                                              {"select": "id"}, service_key) or [])}
+    mint_id = so.next_id_generator(all_ids)
 
     class _A:  # minimal args shim for research_seed
         timeout = args.timeout
@@ -122,7 +125,7 @@ def main():
         stamp = list(r.get("quality_flags") or []) + [f"{_REFIND_STAMP} {today}"]
         patch = {"quality_flags": stamp}
         if new_url and not url_dedupe.find_duplicates(new_url, name, rows)[0]:
-            new_row = so.build_row({**r, "url": new_url}, f"refind-{today}-{found}",
+            new_row = so.build_row({**r, "url": new_url}, next(mint_id),
                                    f"refind-{today}", new_url, [])
             if new_row:
                 new_row["found_via"] = r.get("url")

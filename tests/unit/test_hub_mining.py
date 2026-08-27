@@ -113,9 +113,34 @@ _HUBU = "https://precollege.wisc.edu/"
     "https://online.wisc.edu/degrees/marketing/",                    # adult degree path
     "https://precollege.wisc.edu/blog/alinas-precollege-experience/", # editorial post
     "https://business.wisc.edu/news/some-headline/",                 # editorial post
+    # social / share / commerce / list-signup hosts (off-domain listicle leaks, 2026-08-27)
+    "https://www.facebook.com/CollegeTransitions",
+    "https://twitter.com/eduTransitions",
+    "https://www.tiktok.com/@nyu_k12stem",
+    "https://www.linkedin.com/company/nyu-k12-stem/",
+    "https://nyu.us10.list-manage.com/subscribe?u=77d1&id=f766",
+    "https://www.amazon.com/Colleges-Worth-Your-Money/dp/B0F4RP8NB9",
+    "https://www.facebook.com/dialog/send?app_id=140&link=https://blog.collegevine.com/x",
+    # wrong audience named only in the URL (anchor omitted it)
+    "https://spcs.stanford.edu/programs/stanford-middle-school-scholars-program",
+    "https://example.edu/programs/elementary-science-camp",
+    "https://example.edu/graduate-certificate-in-data",
+    # local/civic chaff (2026-08-27 Seattle preview): branch locations, service categories,
+    # and unrendered template placeholders
+    "https://www.spl.org/hours-and-locations/ballard-branch",
+    "https://kcls.org/ebooks/",
+    "https://kcls.org/teens/{{url}}",
+    "https://www.spl.org/donate",
 ])
 def test_is_nonprogram_link_true(url):
     assert hub.is_nonprogram_link(url, _HUBU) is True
+
+
+def test_real_local_programs_survive_civic_filter():
+    # The YMCA/4-H-shaped programs that DID yield on the Seattle preview must not be dropped.
+    for url in ["https://www.seattleymca.org/programs/camp-and-outdoor-leadership/bold-gold",
+                "https://extension.wsu.edu/king/4-h/king-county-4-h-clubs"]:
+        assert hub.is_nonprogram_link(url, "https://www.seattleymca.org/programs") is False
 
 
 @pytest.mark.parametrize("url", [

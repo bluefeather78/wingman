@@ -1,0 +1,10 @@
+[
+  {"url": "https://www.spl.org/programs-and-services/teens", "off_domain": false, "org": "Seattle Public Library"},
+  {"url": "https://kcls.org/teens/", "off_domain": false, "org": "King County Library System"},
+  {"url": "https://pacificsciencecenter.org/education/", "off_domain": false, "org": "Pacific Science Center"},
+  {"url": "https://www.seattleaquarium.org/learn", "off_domain": false, "org": "Seattle Aquarium"},
+  {"url": "https://www.mopop.org/programs", "off_domain": false, "org": "MoPOP"},
+  {"url": "https://www.seattleymca.org/programs", "off_domain": false, "org": "YMCA of Greater Seattle"},
+  {"url": "https://extension.wsu.edu/king/4-h", "off_domain": false, "org": "WSU Extension King County 4-H"},
+  {"url": "https://www.seattle.gov/human-services/services-and-programs/youth-and-young-adults", "off_domain": false, "org": "City of Seattle Human Services"}
+]

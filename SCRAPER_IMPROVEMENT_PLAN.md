@@ -7,6 +7,43 @@ below before reading the phase specs, which are now the historical design record
 
 ---
 
+## ⭐ START HERE — session of 2026-08-27 (late) — NEW SESSION PICK-UP
+
+**All work below this block is on branch `hub-social-audience-fix` (off `origin/main`
+`2c3c20d`), 4 commits, NOT PUSHED (the push to main was auto-approval-gated). Land it first
+next session (retry the push, or merge the branch).** Full unit suite green,
+`grade_scraper_batch` url-dup 0 regressions on every commit.
+
+- `fc2a120` — hub miner chaff filters: social/commerce/list-signup hosts (`_NONPROGRAM_HOSTS`),
+  wrong-audience named only in the URL, WordPress internals. (national listicle testing)
+- `0c576cb` — **scraper now resolves each new row's contact email** actively via the shared
+  `contact_email_common.resolve_contact_email` (regex-first, ~free), instead of only keeping
+  one that happened to appear in the notes. `find_contact_emails.py` shrinks to a backfill for
+  OLD rows.
+- `c197fe4` — **local discovery redesigned** (Phase 4L rewritten, see it) + civic chaff filters
+  (`_CIVIC_PATH_SEGMENTS`, template `{{}}` drop) + `hubs_seattle.json` registry.
+- `e0fc372` — **hub miner insert step WIRED**: `mine_hub_pages.py` now writes real
+  `is_active=false`/`pending_review` rows (proper ec-ids, reuses the scraper's `insert_rows`,
+  `agent_runs agent='hub_miner'`, snapshot, new `--dry-run`). Extraction still PAID + gated.
+
+**The visual map of all of this (live/built/unbuilt, colour-coded) is a published artifact —
+ask the operator for the "Scraper Logic Map" link if you need it.**
+
+**THE TWO PRIORITIES, both UNBUILT — new phase specs added below:**
+1. **Phase 4N — `name-harvest → search`** (the single highest-value build). Load-bearing for
+   BOTH national JS-directories (College Transitions' 70 named-but-unlinked competitions) and
+   local civic sites (library/museum calendars). Reuses the refind primitive.
+2. **Phase 4F — feed-forward** (search discovers hubs/listicles → leads queue). Measured: the
+   08-23 run consulted 660 grounding pages, kept 126 as rows, **discarded 71 listicles/mills**
+   that each name 7-15 programs — hundreds of leads thrown away per run. Capture them (free)
+   and feed hub-mining/name-harvest.
+
+**Operator is reconsidering Phase 4L (local) — measured yield was weak; Phase 4F may make a
+dedicated local mode largely unnecessary (a Seattle *search* angle would auto-spin-off local
+hubs). Do not invest more in 4L until the operator decides.**
+
+---
+
 ## Implementation status — pick-up-here (last worked 2026-08-27)
 
 **Branch `scraper-v2`** (operator directive: NOT deadline-email-alerts). Branched off main
@@ -427,40 +464,132 @@ Success criteria (pilot-sized, then scale):
 
 ### Phase 4L — Local opportunities, Seattle-first (rides Phase 4; paid runs gated)
 
-**Current state: dormant.** `--mode seattle` exists (hyperlocal `SEATTLE_SEEDS` +
+**Current state: dormant, and REDESIGNED 2026-08-27 after a measured Seattle preview
+overturned the original premise.** `--mode seattle` exists (hyperlocal `SEATTLE_SEEDS` +
 `SEATTLE_ADDENDUM` in scrape_opportunities.py, console National/Seattle switch, `mode`
-column on `scraper_seeds`), ran once 2026-08-18, ~nothing survived review. Local is the
-worst case for search-first discovery (small orgs, no SEO, link rot) and the BEST case
-for hub-first discovery — every local institution publishes a program index that never
-ranks in search.
+column on `scraper_seeds`), ran once 2026-08-18, ~nothing survived review. Search-first is
+dead for local (small orgs, no SEO, link rot). The obvious replacement — "hub-first, every
+local institution publishes a program index" — was **tested and found only half true.**
 
-- **Strategy: depth in ONE metro as the template, not shallow local coverage
-  everywhere.** Seattle first (where the users are); replicate the pattern per metro
-  only when account locations warrant it (`/api/account/location` data exists).
-- **A curated hub registry per metro** (~20-30 pages: Parks & Rec teen programs,
-  SPL/KCLS, Pacific Science Center, Woodland Park Zoo, Seattle Aquarium, Seattle
-  Children's youth volunteering, UW outreach/pre-college, district CTE, YMCAs, MoPOP,
-  city youth commissions) fed to `mine_hub_pages.py`. A full metro sweep is ~$0.10-0.30
-  and re-runnable seasonally. Search-mode seattle angles stay only for what hubs can't
-  reach (regional competition rounds, county youth boards).
-- Rows carry `state`/`location` as today; the finder already filters on them. Angles
-  and hubs carry the metro so the Phase-1 ledger diagnoses local yield separately.
-- **The creative-reasoning addendum ("a student could set up a farmers-market booth")
-  is quarantined, not deleted** — and the boundary is precise (operator-confirmed
-  2026-08-26): **the program must exist on a page; the PITCH for why it matters may be
-  as creative as it likes.** A farmers market that actually hosts an "Emerging
-  Entrepreneurs" event IS in scope — the market's events/programs page belongs in the
-  hub registry, the row title-proves against that page, and its summary can say "sell
-  to real customers, beta-test your product." What stays quarantined is inventing rows
-  for opportunities no page describes ("a student *could* ask for a booth" where no
-  program exists) — unverifiable by construction, same failure family as the invented
-  Algebra-2 prerequisite. If run at all, that mode runs as a clearly labeled experiment
-  whose rows say so — never mixed into the verified local sweep.
+**MEASURED (2026-08-27, `hubs_seattle.json`, 8 fetchable Seattle hubs, free preview):**
+`mine_hub_pages.py` harvested/filtered to **54 candidates → 42 after new local chaff
+filters → still ~75% chaff.** The chaff was structural, not incidental: **civic/nonprofit
+sites are built differently from university program indexes.** A university links to a
+dedicated page *per program* (`STEM.php`, `badger-summer-scholars`); a library/museum/city
+dept links to **branch locations and service categories** — SPL yielded 23
+`/hours-and-locations/<branch>` pages, then `donatebutton`/`whats-popular`/research
+databases; KCLS yielded `/ebooks/`, `/volunteer/`, `learnenglish`, and a literal `{{url}}`
+template artifact. Their actual teen programs live in **event calendars and prose, which
+link-harvest cannot see.** The ONLY real yield (~10 programs) came from the two orgs that
+happen to structure programs as linked pages — **YMCA camps** (`bold-gold`,
+`overnight-camp`) and **WSU 4-H** (`4-h-clubs`, `4-h-stem`). Libraries and museums returned
+~0 programs by link-harvest. Also **7 of 16 candidate hub URLs 403'd/404'd our client** —
+the ~40% civic-site block rate is much higher than the national ~10-20%.
 
-Success criteria: pilot sweep over ~10 Seattle hubs lands ≥15 local candidates in the
-review queue at their own pages with `found_via` set, ≤$0.30, wrong-audience chaff
-filtered; operator approval rate on the batch ≥60%; a `(metro)` cut appears in the seed
-grid so local yield is diagnosable like any angle.
+**So local discovery needs THREE parts, and only the first two exist:**
+
+1. **Curated per-metro hub registry** — `hubs_seattle.json`-shaped (SPL/KCLS, Pacific
+   Science Center, Seattle Aquarium, MoPOP, YMCA, WSU 4-H King County, city youth services,
+   + Parks & Rec / UW outreach / district CTE where fetchable). This is the local analogue
+   of "angles". Curation is heavy and must point at the real program-list page; expect ~40%
+   of civic sites to block our client or render in JS.
+2. **Local chaff filters** — SHIPPED 2026-08-27 in `mine_hub_pages.is_nonprogram_link`:
+   `_CIVIC_PATH_SEGMENTS` (hours-and-locations/locations/branches/ebooks/databases/donate/…)
+   and an unrendered-template drop (`{{ }}`). Necessary but NOT sufficient — it removes
+   noise, it does not find programs (proved: 54→42 was almost all still service/nav).
+3. **`name-harvest → search` — THE LOAD-BEARING, UNBUILT piece.** Because local programs are
+   *named in prose/calendars, not linked*, the only way to reach them is: pull the program
+   NAMES from the hub page's text (one cheap no-search model call), dedup against the
+   catalog, then search-resolve each name to its own page via the refind primitive
+   (grounding-resolved + title-proven). This is the SAME feature national JS-listicles need
+   (College Transitions' 70 named-but-unlinked competitions) — **it is the common unlock,
+   and for local it is not optional.** Without it, "local hub mining" returns branch pages.
+
+- **Strategy: depth in ONE metro as the template.** Seattle first (where the users are);
+  replicate per metro only when account locations warrant it (`/api/account/location`).
+- Rows carry `state`/`location`; the finder already filters on them. Hubs carry the metro so
+  the Phase-1 ledger diagnoses local yield separately (a `(metro)` cut).
+- **The creative-reasoning addendum stays quarantined** (operator-confirmed 2026-08-26):
+  **the program must exist on a page (title-proven); the PITCH may be as creative as it
+  likes.** A farmers market that actually hosts an "Emerging Entrepreneurs" event is in
+  scope — its events page goes in the registry, the row title-proves against it, the summary
+  may say "beta-test your product on real customers." Inventing rows for opportunities no
+  page describes stays out — unverifiable by construction, the invented-Algebra-2 family.
+
+Success criteria (revised): (1) `name-harvest → search` built and unit-tested; (2) a Seattle
+sweep = registry → hub mine (link-harvest for the YMCA/4-H-shaped orgs) + name-harvest→search
+(for the library/museum/calendar orgs) lands ≥15 REAL local programs in the review queue at
+their own title-proven pages, `found_via` set, operator approval ≥60%; (3) the `(metro)` cut
+appears in the seed grid so local yield is diagnosable like any angle. The old "≤$0.30, hubs
+alone" target is retired — hubs alone cannot hit it on civic sites, and name-harvest is paid
+per name.
+
+### Phase 4N — Name-harvest → search (UNBUILT; the single highest-value build)
+
+**The problem it solves:** link-harvest (hub mining) only works when programs are actual
+`<a>` links. Two large classes of pages NAME many programs but don't link them: national
+**JS-rendered directories** (College Transitions' Dataverse — measured: 0 harvestable program
+links, but `page_text` returns 14,355 chars naming "70 academic competitions") and **local
+civic calendars** (library/museum teen programs live in event widgets/prose). For these, the
+names are in the TEXT; the URLs are not.
+
+**Mechanism** (reuses the refind primitive end-to-end):
+1. `page_text.fetch_page_text(hub_url)` (free) → one **no-search** model call: "list every
+   program/competition this page NAMES" → JSON list of names. ~$0.001/page.
+2. Dedup names against the catalog (free — skip what we already have).
+3. For each fresh name: one narrow search "official page for `<name>`", take the
+   grounding-resolved + **title-proven** URL (`refind_dead_links.best_refound_url`, same
+   evidence bar), insert `is_active=false`/`pending_review`. ~$0.02-0.05/name (PAID, per-search
+   fee — gated per run, with a per-page name cap).
+
+**Why higher precision than a broad search angle:** the page already vouched the program exists
+and is HS-relevant, so this only resolves name→URL, it doesn't discover from scratch.
+
+Build as a new mode on `mine_hub_pages.py` (`--resolve-names`) or a small `harvest_and_resolve.py`;
+free to build + unit-test, paid only when run. Confirmed feasible on the real College Transitions
+page (names ARE in the server text). Residual limit: a FULLY client-rendered page whose text is
+also empty still needs a headless browser — rarer than expected; flag, don't solve now.
+
+Success criteria: (1) name extraction + dedup + per-name resolve built and unit-tested against a
+fixture (fake page text in, resolved rows out); (2) a gated run over College Transitions'
+Dataverse lands ≥15 real competitions at title-proven pages, operator approval ≥70%; (3)
+per-name cost logged, capped, and attributed to the source page.
+
+### Phase 4F — Feed-forward: search discovers hubs/listicles → leads queue (UNBUILT)
+
+**The gap:** the search scraper, hub mining, and name-harvest are three disconnected channels.
+But WHILE searching, the scraper constantly hits hub indexes and listicles and then throws them
+away. **Measured (08-23 run, 28 seeds):** 660 grounding pages consulted → 126 became program
+rows → **71 discarded content-mill/listicle URLs** (aralia "research journals for high school",
+immerse "15 summer writing camps", lumiere "10 conferences") — each naming 7-15 programs, i.e.
+hundreds of leads discarded per run. Those listicles are exactly name-harvest/hub feedstock.
+
+**Mechanism — capture, don't inline-process** (keeps the free search run decoupled from paid
+extraction, per the repo's cost discipline):
+- In the scraper, for each resolved grounding URL that did NOT become a program row, classify
+  (free): **content-mill/listicle** (`url_validate.is_content_mill` — pure, no fetch) →
+  **name-harvest lead**; **non-mill page that LINKS ≥N HS programs** (one free
+  `mine_hub_pages.harvest_links`/`filter_hub_links` check, capped per seed) → **hub-mining
+  lead**. Everything else ignored.
+- Write leads with their **source seed/angle** (so the ledger can later credit "angle X
+  surfaced N good hubs"), deduped by URL against the catalog + prior leads.
+- Hub mining / name-harvest CONSUME the queue in their own gated (paid) step.
+
+**Storage — two tiers:**
+- **MVP (no migration):** scraper appends to `discovered_leads.jsonl` + a `leads` list in the
+  run snapshot; `mine_hub_pages.py` gains `--from-leads`. Hub leads processable NOW (insert is
+  wired); name-harvest leads wait on Phase 4N.
+- **Mature:** a `discovered_leads` table (url, kind, source_seed_id, signal, status) reviewable
+  in the console, same shape as `scraper_seeds` — with the degrade-and-retry pattern.
+
+**Why high-leverage:** the scraper already PAID to consult those 660 pages; harvesting the
+hub/listicle ones is nearly free and multiplies yield. It also means the hub registry no longer
+has to be hand-curated — search *discovers* hubs. Reframes search as a hub-DISCOVERY engine.
+
+Success criteria: (1) leads captured from a live scrape's grounding, classified + deduped +
+attributed, at ~zero added cost/wall-time (capped per seed); (2) `mine_hub_pages --from-leads`
+processes the hub leads into pending rows; (3) the run summary reports leads captured by kind so
+the operator can see the new yield channel.
 
 ### Phase 5 — The compounding loop (free)
 

@@ -37,7 +37,9 @@ import page_text
 import url_dedupe
 import url_repair
 import url_validate
-from scrape_opportunities import build_row
+from agent_common import snapshot_stamp
+from scrape_opportunities import (build_row, next_id_generator, insert_rows, VALID_TYPES,
+                                  FLAG_BARE_DOMAIN, FLAG_LOW_VALUE, FLAG_OFFSITE, FLAG_NO_TYPE)
 
 # --- pure audience/relevance filters (free, unit-tested) --------------------------------
 _WRONG_AUDIENCE = re.compile(
@@ -72,6 +74,7 @@ _NAV_SLUGS = url_repair.GENERIC_SLUGS | {
     "current-students", "student-life", "visit", "quicklinks", "contact-us", "about-us",
     "our-team", "team", "history", "mission", "accessibility", "privacy", "terms",
     "gallery", "photos", "media", "international-student-resources", "employment-opportunities",
+    "wp-admin", "wp-login", "wp-json",   # WordPress internals — never a program page
 }
 # A non-HTML target (a viewbook PDF, a flyer image) can never be a program's landing page.
 _NONHTML_EXT = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip",
@@ -86,24 +89,52 @@ _NONHTML_EXT = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip
 _ADULT_PATH_SEGMENTS = {"degrees", "degree", "graduate", "phd", "mba", "faculty", "alumni"}
 _EDITORIAL_PATH_SEGMENTS = {"blog", "blogs", "news", "in-the-news", "press", "press-releases",
                             "stories", "story", "article", "articles", "media"}
-_DROP_PATH_SEGMENTS = _ADULT_PATH_SEGMENTS | _EDITORIAL_PATH_SEGMENTS
+# Civic/nonprofit local sites (libraries, museums, city depts) link mostly to branch LOCATIONS
+# and service categories, not programs. Measured 2026-08-27 on a Seattle registry: SPL's teen
+# page yielded 23 /hours-and-locations/<branch> pages and KCLS yielded /ebooks//volunteer/.
+# These are the local analogue of a university's nav chaff.
+_CIVIC_PATH_SEGMENTS = {"hours-and-locations", "hours-locations", "locations", "location",
+                        "hours", "branches", "directions", "parking", "rentals", "donate",
+                        "ebooks", "audiobooks", "databases", "catalog"}
+_DROP_PATH_SEGMENTS = _ADULT_PATH_SEGMENTS | _EDITORIAL_PATH_SEGMENTS | _CIVIC_PATH_SEGMENTS
+# Hosts that are never a program's OWN page — social networks, share widgets, commerce, and
+# email-list signup providers. In off-domain (listicle) mode these leak heavily: measured
+# 2026-08-27 a CS-programs blog linked out to its own Facebook/Twitter/TikTok/LinkedIn, an NYU
+# Mailchimp signup (list-manage.com), and an Amazon book. Matched on the registrable domain.
+# (is_content_mill already covers youtube/reddit/wikipedia; this is the social/commerce/list
+# complement, kept here so the graded scraper's mill list is untouched.)
+_NONPROGRAM_HOSTS = {
+    "twitter.com", "x.com", "facebook.com", "fb.com", "instagram.com", "tiktok.com",
+    "linkedin.com", "pinterest.com", "threads.net", "snapchat.com", "whatsapp.com",
+    "t.me", "telegram.me", "amazon.com", "list-manage.com", "mailchi.mp", "eventbrite.com",
+}
 
 
 def is_nonprogram_link(url, hub_url):
-    """True if a harvested link is the hub's own page, a non-HTML file, page nav, an
-    adult/degree page, or an editorial post — i.e. never worth a paid extraction call.
-    Pure, free, pre-fetch."""
+    """True if a harvested link is the hub's own page, a social/commerce/list-signup host, a
+    non-HTML file, page nav, an adult/degree page, an editorial post, or a page whose URL names
+    a non-high-school audience — i.e. never worth a paid extraction call. Pure, free, pre-fetch."""
     try:
         parts = urllib.parse.urlsplit(url)
     except ValueError:
         return True
     if url_dedupe.match_key(url) == url_dedupe.match_key(hub_url):
         return True                       # the hub links to itself
+    if "{{" in url or "}}" in url or "%7b%7b" in url.lower():
+        return True                       # an unrendered template placeholder (e.g. kcls .../{{url}})
+    host = (parts.hostname or "").lower()
+    if url_dedupe.registrable_domain(host) in _NONPROGRAM_HOSTS:
+        return True                       # social / share / commerce / list-signup host
     path = (parts.path or "").lower()
     if path.endswith(_NONHTML_EXT):
         return True
     segs = {s for s in path.split("/") if s}
     if segs & _DROP_PATH_SEGMENTS:
+        return True
+    # Wrong audience named only in the URL — the anchor text may omit it. Measured: Stanford's
+    # "…/stanford-middle-school-scholars-program" whose anchor read "Scholars Program" passed the
+    # anchor-level is_wrong_audience but its slug names the middle-school audience.
+    if _WRONG_AUDIENCE.search(re.sub(r"[/_-]+", " ", path)):
         return True
     slug = url_repair._slug(url)
     return (not slug) or slug in _NAV_SLUGS
@@ -260,6 +291,8 @@ def main():
     ap.add_argument("--mode", default="national")
     ap.add_argument("--min-delay", type=int, default=5)
     ap.add_argument("--timeout", type=int, default=40)
+    ap.add_argument("--dry-run", action="store_true",
+                    help="PAID (extracts at full cost) but writes NO rows — logs the run + a snapshot.")
     args = ap.parse_args()
 
     hubs = []
@@ -305,27 +338,90 @@ def main():
     if not gemini_key:
         print("[ERROR] GEMINI_API_KEY not set — cannot extract. (Preview is free without it.)")
         raise SystemExit(1)
-    # PAID PATH — extraction. Reached only on an explicit (approved) live run.
+
+    # PAID PATH — extract each followed link, then insert as is_active=false / pending_review,
+    # exactly like the search scraper (shared insert_rows handles the migration-degrade ladder).
+    # Reached only on an explicit (approved) live run.
+    from supabase_common import supabase_insert_one, supabase_patch
     today = datetime.date.today().strftime("%Y%m%d")
-    rows, cost = [], 0.0
+    mint = next_id_generator({r["id"] for r in (existing or [])})
+    run_row = supabase_insert_one(supabase_url, "agent_runs", {
+        "agent": "hub_miner",
+        "mode": "hub" + ("-dryrun" if args.dry_run else ""),
+        "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }, service_key)
+    run_id = run_row["id"] if run_row else None
+
+    rows, review_by_id, cost, errors = [], {}, 0.0, 0
     for hub_url, fresh in all_new:
         dom = url_dedupe.registrable_domain(urllib.parse.urlsplit(hub_url).netloc) or "hub"
         source = f"hub-{dom}-{today}"
         for u in fresh:
-            cand, c = extract_opportunity(u, gemini_key, timeout=args.timeout,
-                                          min_delay=args.min_delay)
-            cost += c
+            try:
+                cand, c = extract_opportunity(u, gemini_key, timeout=args.timeout,
+                                              min_delay=args.min_delay)
+                cost += c
+            except Exception as e:
+                errors += 1
+                print(f"  [WARN] extract failed {u}: {str(e)[:100]}")
+                continue
             if not cand:
                 continue
-            row = build_row(cand, cand.get("id") or f"hub-{len(rows)}", source, u, [])
-            if row:
-                row["found_via"] = hub_url
-                rows.append(row)
-    print(f"[SUMMARY] extracted {len(rows)} row(s) from {total} page(s), cost ${cost:.4f}. "
-          f"Rows are is_active=false and need console activation.")
-    # Insert is intentionally left to the operator's console flow / a follow-up, mirroring the
-    # scraper: this script proves the discovery and prices the extraction; wiring the insert is a
-    # separate approved step so a hub run cannot silently write the catalog.
+            row = build_row(cand, next(mint), source, u, [])
+            if not row:
+                continue
+            row["found_via"] = hub_url
+            # Honest, free flags — same set the scraper attaches — so a hub row is reviewed on
+            # equal terms. The URL is a followed link (real by construction), so these are rare.
+            name, org = row.get("name"), row.get("org")
+            flags = []
+            if url_validate.is_bare_domain(u):
+                flags.append(FLAG_BARE_DOMAIN)
+            if url_validate.is_content_mill(u) or not url_validate.domain_matches_org(u, org, name):
+                flags.append(FLAG_OFFSITE)
+            if url_dedupe.is_low_value_path(u):
+                flags.append(FLAG_LOW_VALUE)
+            if cand.get("type") not in VALID_TYPES:
+                flags.append(FLAG_NO_TYPE)
+            review_by_id[row["id"]] = {"moderation_status": "pending_review",
+                                       "dup_candidates": None, "quality_flags": flags or None}
+            rows.append(row)
+            existing.append({"id": row["id"], "name": row["name"], "url": row["url"]})
+
+    # Review snapshot (audit trail; `inserted`/`rejected` shape mirrors the scraper's).
+    stamp = snapshot_stamp()
+    review_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               f"hub_review_{args.mode}_{stamp}.json")
+    with open(review_path, "w", encoding="utf-8") as f:
+        json.dump({"inserted": [{**r, "review": review_by_id.get(r["id"], {})} for r in rows],
+                   "rejected": [], "merged": []}, f, indent=2, ensure_ascii=False)
+
+    tier = None
+    if args.dry_run:
+        print(f"[DRY RUN] Extracted {len(rows)} row(s); NOTHING written. The run is still logged "
+              f"to agent_runs (it cost real money).")
+    elif rows:
+        tier = insert_rows(supabase_url, service_key, rows, review_by_id)
+        print(f"[OK] Inserted {len(rows)} row(s) into opportunities "
+              f"(is_active=false, pending_review, tier={tier}).")
+    else:
+        print("[OK] No rows extracted — nothing to insert.")
+
+    if run_id is not None:
+        supabase_patch(supabase_url, "agent_runs", {"id": f"eq.{run_id}"}, {
+            "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "items_processed": total,
+            "items_added": 0 if args.dry_run else len(rows),
+            "errors": errors,
+            "cost_usd": round(cost, 4),
+            "notes": (f"hubs={len(hubs)}, candidates={total}, extracted={len(rows)}, "
+                      f"source-date={today}"
+                      + (f", would_have_added={len(rows)}" if args.dry_run else "")),
+        }, service_key)
+
+    print(f"[SUMMARY] {total} candidate page(s) across {len(hubs)} hub(s) -> extracted "
+          f"{len(rows)} row(s), errors {errors}, cost ${cost:.4f}. Wrote {review_path}.")
+    print(f"[DONE] Review before activating anything from a source='hub-*-{today}' row.")
 
 
 if __name__ == "__main__":

@@ -520,7 +520,6 @@ tr.disabled-seed { opacity: .48; }
         can join with one tap.</p></div>
       <div class="section-label">Run the finder</div>
       <div class="agents" id="wf-lists"></div>
-      <div class="agents" id="tools-lists"></div>
       <div class="section-label">Verify recipes</div>
       <div id="slot-lists-recipes"></div>
     </div>
@@ -531,7 +530,6 @@ tr.disabled-seed { opacity: .48; }
         links, and backups.</p></div>
       <div class="section-label">Catalog hygiene</div>
       <div class="agents" id="wf-utils"></div>
-      <div class="agents" id="tools-utils-hygiene"></div>
       <div class="section-label">Backfills</div>
       <div class="agents" id="tools-utils-backfill"></div>
       <div class="section-label">Files &amp; backups</div>
@@ -2375,6 +2373,12 @@ const WORKFLOW_AGENTS = {
   'wf-lists':  ['mailinglist'],
   'wf-utils':  ['links'],
 };
+// Tool cards that share a grid with the agent above them, so they sit side by side rather
+// than dropping to their own row. Appended after the agent cards in the same container.
+const WORKFLOW_INLINE_TOOLS = {
+  'wf-lists': ['mlgrader'],
+  'wf-utils': ['dupfinder'],
+};
 
 function relocateConsole() {
   const cardOf = id => { const el = $(id); return el ? el.closest('.card') : null; };
@@ -3296,8 +3300,12 @@ function renderCards() {
   const rendered = new Set();
   Object.entries(WORKFLOW_AGENTS).forEach(([cont, keys]) => {
     const el = $(cont); if (!el) return;
-    el.innerHTML = keys.filter(k => S.config[k])
+    let html = keys.filter(k => S.config[k])
       .map(key => { rendered.add(key); return agentCardHTML(key, S.config[key]); }).join('');
+    // Inline tool cards share this grid. toolCardHTML returns '' until TOOLS has loaded, so
+    // the first render (before loadTools) shows just the agent; loadTools re-renders.
+    (WORKFLOW_INLINE_TOOLS[cont] || []).forEach(tk => { html += toolCardHTML(tk); });
+    el.innerHTML = html;
   });
   // Any agent not mapped to a workflow (e.g. a newly added one) still gets a home so it can
   // never silently vanish from the console.
@@ -4243,12 +4251,12 @@ document.addEventListener('keydown', e => {
    __forcerecheck, reuses the existing deadline-cache modal rather than a script.
 --------------------------------------------------------------------------- */
 let TOOLS = {};
+// Tool cards that get their own container. mlgrader and dupfinder are NOT here — they share
+// a grid with their neighbouring agent (see WORKFLOW_INLINE_TOOLS).
 const TOOL_SLOTS = {
   'slot-inspect': ['inspect'],
   'tools-core': ['refreshprog'],
   'tools-upkeep': ['__forcerecheck'],
-  'tools-lists': ['mlgrader'],
-  'tools-utils-hygiene': ['dupfinder'],
   'tools-utils-backfill': ['contactemail'],
   'tools-utils-files': ['export', 'legal'],
 };
@@ -4393,6 +4401,9 @@ async function loadTools() {
   try { const d = await api('/api/agents/tools'); TOOLS = (d && d.tools) || {}; }
   catch (e) { TOOLS = {}; }
   renderTools();
+  // Re-render the workflow grids so the inline tool cards (grader, duplicate finder) appear
+  // now that TOOLS is loaded — the initial renderCards ran before this fetch.
+  if (Object.keys(S.config || {}).length) renderCards();
 }
 
 // Money view: the system-vs-end-user cost filter over the spend chart.

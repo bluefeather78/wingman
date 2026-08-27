@@ -155,7 +155,7 @@ select:focus, input:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .delta.up { color: var(--ok); } .delta.down { color: var(--danger); } .delta.flat { color: var(--text-3); }
 
 /* ---- agent cards ---- */
-.agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px,1fr)); gap: var(--sp-4); margin-bottom: var(--sp-5); }
+.agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px,1fr)); gap: var(--sp-4); margin-bottom: var(--sp-5); }
 .agent-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; }
 .agent-card .accentbar { height: 3px; background: var(--c); }
 .agent-card .inner { padding: var(--sp-4); flex: 1; display: flex; flex-direction: column; gap: var(--sp-3); }
@@ -374,6 +374,58 @@ tr.disabled-seed { opacity: .48; }
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
   background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 99px;
   font-size: 13px; z-index: 100; box-shadow: 0 6px 20px rgba(0,0,0,.28); }
+
+/* ---- redesign: workflow sub-tabs, flow headers, collapsible cards ----
+   The top .viewtabs swap the whole page; these .subtabs page between the workflows
+   inside the Run view, and are deliberately a different (pill) shape so the two levels
+   of nav never read as interchangeable. */
+.subtabs { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-5); }
+.stab { padding: 6px 14px; border-radius: 99px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-2); font-family: var(--font-head);
+  font-size: 13px; font-weight: 600; }
+.stab:hover { border-color: var(--text-3); color: var(--text); }
+.stab.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+.stab .count { font-family: var(--font-mono); font-size: 11px; margin-left: 6px;
+  color: inherit; opacity: .7; }
+.subview { display: none; }
+.subview.active { display: block; }
+
+.flowhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; }
+.flowhead h2 { font-size: 17px; }
+.flowhead .step { font-family: var(--font-mono); font-size: 11px; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: .06em; }
+.flowhead p { flex-basis: 100%; margin: 0; color: var(--text-2); font-size: 12.5px; max-width: 76ch; }
+.section-label { font-family: var(--font-head); font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .05em; color: var(--text-3);
+  margin: 22px 0 12px; display: flex; align-items: center; gap: 10px; }
+.section-label::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.section-label .count { font-family: var(--font-mono); font-weight: 400; text-transform: none;
+  letter-spacing: 0; color: var(--text-2); }
+
+/* Collapsible cards. The whole head toggles; a ::after chevron marks the state. No per-card
+   markup — one delegated listener (initCollapse) and these rules cover every card at once. */
+.card > .card-head { cursor: pointer; }
+.card > .card-head::after { content: "\25BE"; margin-left: auto; padding-left: 10px;
+  color: var(--text-3); font-size: 11px; }
+.card.collapsed > .card-head::after { content: "\25B8"; }
+.card.collapsed > .card-head { border-bottom: 0; }
+.card.collapsed > .card-body,
+.card.collapsed > .panel-break { display: none !important; }
+
+/* Money view: system-vs-end-user segmented filter over the spend chart. */
+.seg { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px;
+  margin-bottom: var(--sp-5); flex-wrap: wrap; }
+.segbtn { border: 0; background: transparent; color: var(--text-2); font-size: 12.5px;
+  font-weight: 600; font-family: var(--font-head); padding: 6px 14px; border-radius: 5px; }
+.segbtn:hover { color: var(--text); }
+.segbtn.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.seg .hint { color: var(--text-3); font-size: 12px; padding: 0 8px; font-weight: 400; }
+
+/* Maintenance-tool cards reuse .agent-card; params inside the tool modal. */
+.tool-inline { display: flex; gap: 8px; align-items: center; }
+.tool-inline input { flex: 1; min-width: 0; }
+.badge-row { display: flex; gap: 6px; flex-wrap: wrap; }
 </style>
 </head>
 <body>
@@ -396,16 +448,127 @@ tr.disabled-seed { opacity: .48; }
   </div>
 
   <div class="viewtabs" id="viewTabs">
-    <button class="vtab active" data-view="metrics">Metrics<span class="count" id="metricsTabCount"></span></button>
-    <button class="vtab" data-view="agents">Agents</button>
-    <button class="vtab" data-view="review">Review queue<span class="count" id="reviewTabCount"></span></button>
-    <button class="vtab" data-view="signups">Mailing lists<span class="count" id="signupTabCount"></span></button>
-    <button class="vtab" data-view="sources">Sources<span class="count" id="sourcesTabCount"></span></button>
-    <button class="vtab" data-view="users">Cost per user<span class="count" id="userTabCount"></span></button>
-    <button class="vtab" data-view="emails">Emails<span class="count" id="emailTabCount"></span></button>
+    <button class="vtab active" data-view="metrics">Dashboard<span class="count" id="metricsTabCount"></span></button>
+    <button class="vtab" data-view="run">Run</button>
+    <button class="vtab" data-view="money">Money<span class="count" id="userTabCount"></span></button>
+    <button class="vtab" data-view="comms">Comms<span class="count" id="emailTabCount"></span></button>
   </div>
 
   <div id="globalNotice" class="notice err hidden" style="margin-bottom:24px"></div>
+
+  <!-- ==========================================================================
+       Run / Money / Comms are the redesign's grouped views. They are built as empty
+       shells here; relocateConsole() (in the script below) moves the existing, still
+       fully-wired cards into these slots at load time, so no render function or endpoint
+       had to change. The Dashboard tab shows the unchanged #view-metrics view.
+  =========================================================================== -->
+  <div class="view hidden" id="view-run">
+    <div class="subtabs" id="runSubtabs">
+      <button class="stab active" data-sub="inspect">Inspect</button>
+      <button class="stab" data-sub="newopp">New Opportunities<span class="count" id="reviewTabCount"></span></button>
+      <button class="stab" data-sub="core">Core Details</button>
+      <button class="stab" data-sub="upkeep">Keep Details Current</button>
+      <button class="stab" data-sub="lists">Mailing Lists<span class="count" id="signupTabCount"></span></button>
+      <button class="stab" data-sub="utils">Utilities</button>
+      <button class="stab" data-sub="log">Run Log &amp; Timing</button>
+    </div>
+
+    <div class="subview active" id="rsub-inspect">
+      <div class="flowhead"><h2>Inspect an Opportunity</h2><span class="step">look up one row</span>
+        <p>Quick lookup for a single program &mdash; everything stored for it, deadline data
+        first. The place to start when a student reports something wrong. Paste one or more ids
+        and run; the output streams below.</p></div>
+      <div class="agents" id="slot-inspect"></div>
+    </div>
+
+    <div class="subview" id="rsub-newopp">
+      <div class="flowhead"><h2>New Opportunities</h2><span class="step">discover &rarr; review &rarr; admit</span>
+        <p>Find programs missing from the catalog, decide what the scout may search and trust,
+        and admit the good finds. Everything for this pipeline is here.</p></div>
+      <div class="section-label">Run the scout</div>
+      <div class="agents" id="wf-newopp"></div>
+      <div class="section-label">What it searches</div>
+      <div class="agents" id="tools-newopp-angles"></div>
+      <div id="slot-newopp-angles"></div>
+      <div class="section-label">Trusted sources <span class="count hidden" id="sourcesTabCount"></span></div>
+      <div id="slot-newopp-allowlist"></div>
+      <div class="section-label">Review &amp; admit</div>
+      <div id="slot-newopp-review"></div>
+    </div>
+
+    <div class="subview" id="rsub-core">
+      <div class="flowhead"><h2>Core Details</h2><span class="step">name &middot; org &middot; eligibility &middot; pricing</span>
+        <p>The agent that refreshes each program&rsquo;s core catalog fields, and its progress report.</p></div>
+      <div class="section-label">Agent</div>
+      <div class="agents" id="wf-core"></div>
+      <div class="section-label">Reports</div>
+      <div class="agents" id="tools-core"></div>
+    </div>
+
+    <div class="subview" id="rsub-upkeep">
+      <div class="flowhead"><h2>Keep Details Current</h2><span class="step">deadlines &middot; steps &middot; reputation</span>
+        <p>Time-sensitive, per-program enrichment: when the deadlines are, what the application
+        steps are, and whether the org is legitimate.</p></div>
+      <div class="section-label">Agents</div>
+      <div class="agents" id="wf-upkeep"></div>
+      <div class="section-label">Tools</div>
+      <div class="agents" id="tools-upkeep"></div>
+    </div>
+
+    <div class="subview" id="rsub-lists">
+      <div class="flowhead"><h2>Mailing Lists</h2><span class="step">find &rarr; verify &rarr; student can join</span>
+        <p>Find each program&rsquo;s signup form, then promote a recipe to verified so students
+        can join with one tap.</p></div>
+      <div class="section-label">Run the finder</div>
+      <div class="agents" id="wf-lists"></div>
+      <div class="section-label">Verify recipes</div>
+      <div id="slot-lists-recipes"></div>
+    </div>
+
+    <div class="subview" id="rsub-utils">
+      <div class="flowhead"><h2>Utilities</h2><span class="step">catalog hygiene &amp; maintenance</span>
+        <p>Cross-cutting maintenance that isn&rsquo;t part of one pipeline &mdash; pruning dead
+        links, and backups.</p></div>
+      <div class="section-label">Catalog hygiene</div>
+      <div class="agents" id="wf-utils"></div>
+      <div class="section-label">Backfills</div>
+      <div class="agents" id="tools-utils-backfill"></div>
+      <div class="section-label">Files &amp; backups</div>
+      <div class="agents" id="tools-utils-files"></div>
+    </div>
+
+    <div class="subview" id="rsub-log">
+      <div class="flowhead"><h2>Run Log &amp; Timing</h2><span class="step">history across every flow</span>
+        <p>Every run, dry-run snapshots you can commit, and the rate-limit defaults each run
+        starts from.</p></div>
+      <div id="slot-log-kpis"></div>
+      <div id="slot-log-history"></div>
+      <div id="slot-log-snapshots"></div>
+      <div id="slot-log-timing"></div>
+    </div>
+  </div>
+
+  <div class="view hidden" id="view-money">
+    <div class="view-lead">
+      All spend in one place &mdash; the daily chart, what the providers actually billed, and
+      per-user attribution. Every figure is <strong>estimated locally</strong> from token
+      counts unless it is labelled billed; per-user cost is the <em>same</em> money split by who
+      triggered it, never additional spend.
+    </div>
+    <div class="seg" id="costSeg">
+      <button class="segbtn active" data-f="all">All spend</button>
+      <button class="segbtn" data-f="system">System-generated</button>
+      <button class="segbtn" data-f="enduser">End-user</button>
+      <span class="hint" id="costSegNote"></span>
+    </div>
+    <div id="slot-money-chart"></div>
+    <div id="slot-money-billed"></div>
+    <div id="slot-money-users"></div>
+  </div>
+
+  <div class="view hidden" id="view-comms">
+    <div id="slot-comms"></div>
+  </div>
 
   <div class="view" id="view-metrics">
     <div class="view-lead">
@@ -1198,6 +1361,31 @@ tr.disabled-seed { opacity: .48; }
       <button class="btn btn-ghost" id="dlCachePreview">Preview</button>
       <div class="spacer"></div>
       <button class="btn btn-primary" id="dlCacheApply" disabled>Clear cache</button>
+    </div>
+  </div>
+</div>
+
+<!-- Maintenance-tool run modal. Simpler than the agent run modal: tools have no preview,
+     no cost estimate and no dry/live split — a handful of params, a Run button and a live
+     console. Output streams from GET /api/agents/log?agent=tool:<key>. -->
+<div class="overlay" id="toolModal">
+  <div class="modal">
+    <div class="modal-head">
+      <span class="dot" id="toolDot"></span>
+      <h2 id="toolTitle">Run tool</h2>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" id="toolClose">Close</button>
+    </div>
+    <div class="modal-body">
+      <div id="toolDesc" class="field help"></div>
+      <div id="toolParams" class="field" style="gap:12px"></div>
+      <div id="toolWarn" class="notice hidden"></div>
+      <div id="toolArgv" class="field help mono hidden"></div>
+      <div class="console hidden" id="toolConsole"></div>
+    </div>
+    <div class="modal-foot">
+      <div class="spacer"></div>
+      <button class="btn btn-primary" id="toolRunBtn">Run</button>
     </div>
   </div>
 </div>
@@ -2169,27 +2357,103 @@ function planPill(status) {
 
 const VIEW_SUBTITLE = {
   metrics: 'Who signs up, how far they get, and whether they convert',
-  agents: 'Background agents that maintain the Wingman opportunity catalog',
-  users:  'What each user\u2019s own activity costs, against the plan they pay for',
-  review: 'Scraped opportunities waiting on a human before students can see them',
-  signups: 'Mailing-list signup recipes waiting on a human before any student is subscribed',
-  sources: 'The trusted-domain allowlist — which off-domain sources deadlines and tasks may use',
-  emails: 'The three lifecycle emails — what they say, who is due one, and what actually went out',
+  run:     'Run the agents and tools that build and maintain the opportunity catalog',
+  money:   'What everything costs — the agents you run and the app usage students trigger',
+  comms:   'The three lifecycle emails — what they say, who is due one, and what went out',
 };
 
 function showView(view) {
   S.view = view;
-  // Loaded on demand rather than in refreshDashboard's Promise.all: this list changes
-  // only when an agent runs or a person clicks, so polling it every 20s is pure traffic.
-  if (view === 'signups') loadSignups();
-  if (view === 'sources') loadAggregators();
-  if (view === 'emails') loadEmails();
+  // Loaded on demand rather than in refreshDashboard's Promise.all: this data changes only
+  // when an agent runs or a person clicks, so polling it every 20s is pure traffic. The
+  // per-workflow loads (aggregators, signups) fire from the Run sub-tab handlers instead.
+  if (view === 'comms') loadEmails();
   document.querySelectorAll('#viewTabs .vtab').forEach(
     t => t.classList.toggle('active', t.dataset.view === view));
   document.querySelectorAll('.view').forEach(
     v => v.classList.toggle('hidden', v.id !== 'view-' + view));
   $('viewSubtitle').textContent = VIEW_SUBTITLE[view] || '';
   window.scrollTo({ top: 0 });
+}
+
+/* ---------------------------------------------------------------------------
+   Redesign plumbing. The grouped Run/Money/Comms views are empty shells in the
+   markup; these three run once at startup to (1) move the existing, still-wired
+   cards into the right slot, (2) page the Run workflows, (3) make every card
+   collapsible. Nothing here changes what a card renders — only where it lives.
+--------------------------------------------------------------------------- */
+// Which workflow container each agent card renders into, in display order.
+const WORKFLOW_AGENTS = {
+  'wf-newopp': ['scraper'],
+  'wf-core':   ['metadata'],
+  'wf-upkeep': ['deadline', 'tasks', 'reviews'],
+  'wf-lists':  ['mailinglist'],
+  'wf-utils':  ['links'],
+};
+// Tool cards that share a grid with the agent above them, so they sit side by side rather
+// than dropping to their own row. Appended after the agent cards in the same container.
+const WORKFLOW_INLINE_TOOLS = {
+  'wf-newopp': ['minehub'],
+  'wf-lists': ['mlgrader'],
+  'wf-utils': ['dupfinder', 'refind'],
+};
+
+function relocateConsole() {
+  const cardOf = id => { const el = $(id); return el ? el.closest('.card') : null; };
+  const move = (node, slot) => { const t = $(slot); if (node && t) t.appendChild(node); };
+
+  move($('kpis'), 'slot-log-kpis');
+  move(cardOf('costChart'), 'slot-money-chart');
+  move(cardOf('billedBody'), 'slot-money-billed');
+  move(cardOf('userCostSummary'), 'slot-money-users');
+  move(cardOf('historyBody'), 'slot-log-history');
+  move(cardOf('snapshotBody'), 'slot-log-snapshots');
+  move(cardOf('seedBody'), 'slot-newopp-angles');
+  move(cardOf('timingBody'), 'slot-log-timing');
+  move(cardOf('pendingBody'), 'slot-newopp-review');
+  move(cardOf('signupBody'), 'slot-lists-recipes');
+
+  // Trusted-domain allowlist: its setup hint plus both cards.
+  const src = $('view-sources'), allow = $('slot-newopp-allowlist');
+  if (src && allow) {
+    const setup = $('sourcesSetup'); if (setup) allow.appendChild(setup);
+    src.querySelectorAll(':scope > .card').forEach(c => allow.appendChild(c));
+  }
+  // Emails: move the whole view body (lead, setup hint, KPIs, all three cards).
+  const em = $('view-emails'), comms = $('slot-comms');
+  if (em && comms) { while (em.firstChild) comms.appendChild(em.firstChild); }
+}
+
+function initSubtabs() {
+  document.querySelectorAll('.subtabs').forEach(strip => {
+    strip.querySelectorAll('.stab').forEach(btn => {
+      btn.onclick = () => {
+        strip.querySelectorAll('.stab').forEach(b => b.classList.toggle('active', b === btn));
+        const sub = btn.dataset.sub;
+        document.querySelectorAll('#view-run .subview').forEach(
+          v => v.classList.toggle('active', v.id === 'rsub-' + sub));
+        if (sub === 'newopp') loadAggregators();
+        if (sub === 'lists') loadSignups();
+      };
+    });
+  });
+}
+
+// Every card collapses from its own head. One delegated listener, keyed by heading text so
+// the open/closed choice survives a reload; clicks on controls inside a head don't toggle.
+function initCollapse() {
+  document.querySelectorAll('.card').forEach(card => {
+    const head = card.querySelector(':scope > .card-head');
+    if (!head) return;
+    const h = head.querySelector('h2');
+    const key = 'wingman.ops.collapse.' + ((h && h.textContent.trim()) || card.id || '');
+    try { if (localStorage.getItem(key) === '1') card.classList.add('collapsed'); } catch (e) {}
+    head.addEventListener('click', e => {
+      if (e.target.closest('button, select, input, label, a, .tabs, .switch')) return;
+      card.classList.toggle('collapsed');
+      try { localStorage.setItem(key, card.classList.contains('collapsed') ? '1' : '0'); } catch (e) {}
+    });
+  });
 }
 
 function renderUserCosts() {
@@ -2949,7 +3213,19 @@ function renderChart() {
   // S.config dropped the interactive rollups, on-demand deadline checks and any agent run
   // from a script with no card — $4.84 of a $14.24 KPI printed ten pixels above the bars.
   const meta = S.summary.series_keys || [];
-  const keys = meta.length ? meta.map(m => m.key) : Object.keys(S.config);
+  const groupOf = k => (meta.find(m => m.key === k) || {}).group;
+  let keys = meta.length ? meta.map(m => m.key) : Object.keys(S.config);
+  // Money filter: 'app' is the end-user band (interactive AI + on-demand deadline checks);
+  // everything else ('agent' bands + 'other' scripts) is system-generated.
+  const filt = S.costFilter || 'all';
+  if (filt === 'system') keys = keys.filter(k => groupOf(k) !== 'app');
+  else if (filt === 'enduser') keys = keys.filter(k => groupOf(k) === 'app');
+  const segNote = $('costSegNote');
+  if (segNote) segNote.textContent = filt === 'system'
+    ? 'Agents you run + standalone scripts — nobody in the app triggers these.'
+    : filt === 'enduser'
+    ? 'Interactive AI and on-demand deadline checks students set off in the app.'
+    : '';
   const labelFor = k => (meta.find(m => m.key === k) || {}).label
                      || (S.config[k] && S.config[k].name) || k;
   // Carded agents and the named app bands each have their own CSS var. Anything else is a
@@ -3039,7 +3315,24 @@ function sparkline(values) {
 }
 
 function renderCards() {
-  $('agentCards').innerHTML = Object.entries(S.config).map(([key, cfg]) => {
+  const rendered = new Set();
+  Object.entries(WORKFLOW_AGENTS).forEach(([cont, keys]) => {
+    const el = $(cont); if (!el) return;
+    let html = keys.filter(k => S.config[k])
+      .map(key => { rendered.add(key); return agentCardHTML(key, S.config[key]); }).join('');
+    // Inline tool cards share this grid. toolCardHTML returns '' until TOOLS has loaded, so
+    // the first render (before loadTools) shows just the agent; loadTools re-renders.
+    (WORKFLOW_INLINE_TOOLS[cont] || []).forEach(tk => { html += toolCardHTML(tk); });
+    el.innerHTML = html;
+  });
+  // Any agent not mapped to a workflow (e.g. a newly added one) still gets a home so it can
+  // never silently vanish from the console.
+  const extras = Object.keys(S.config).filter(k => !rendered.has(k));
+  const utils = $('wf-utils');
+  if (extras.length && utils) utils.innerHTML += extras.map(k => agentCardHTML(k, S.config[k])).join('');
+}
+
+function agentCardHTML(key, cfg) {
     const s = S.status[key] || {};
     const runs = S.history.filter(h => h.agent === key && h.cost_usd !== null).slice(0, 12).reverse();
     const spark = sparkline(runs.map(r => Number(r.cost_usd)));
@@ -3077,7 +3370,6 @@ function renderCards() {
         <button class="btn btn-primary btn-sm" style="width:100%" onclick="openRun('${key}')">Configure &amp; run</button>
         ${key === 'deadline' ? `<button class="btn btn-ghost btn-sm" style="width:100%;margin-top:7px" onclick="openDeadlineCache()">Force re-check&hellip;</button>` : ''}
       </div></div>`;
-  }).join('');
 }
 
 function renderHistory() {
@@ -4038,9 +4330,192 @@ document.addEventListener('keydown', e => {
   }
 });
 
+/* ---------------------------------------------------------------------------
+   Maintenance tools — the runnable scripts in Run > Inspect / Core / Keep Details
+   Current / Mailing Lists / Utilities. Fetched from /api/agents/tools; each renders
+   as a card whose Run opens a small streaming console. One synthetic entry,
+   __forcerecheck, reuses the existing deadline-cache modal rather than a script.
+--------------------------------------------------------------------------- */
+let TOOLS = {};
+// Tool cards that get their own container. mlgrader and dupfinder are NOT here — they share
+// a grid with their neighbouring agent (see WORKFLOW_INLINE_TOOLS).
+const TOOL_SLOTS = {
+  'slot-inspect': ['inspect'],
+  'tools-newopp-angles': ['proposeangles'],
+  'tools-core': ['refreshprog'],
+  'tools-upkeep': ['__forcerecheck'],
+  'tools-utils-backfill': ['contactemail'],
+  'tools-utils-files': ['export', 'legal'],
+};
+
+function toolBadges(t) {
+  return `<div class="badge-row">${
+    (t.free ? '<span class="pill ok">Free</span>' : '<span class="pill warn">Paid</span>')
+    + (t.writes ? '<span class="pill info">Writes</span>' : '<span class="pill">Read-only</span>')
+  }</div>`;
+}
+
+function toolCardHTML(key) {
+  if (key === '__forcerecheck') {
+    // Not a script — reuses the deadline-cache modal, which talks about queued per-row spend
+    // rather than a run, so it deliberately stays outside the tool-run flow.
+    return `<div class="agent-card" style="--c:var(--agent-deadline)">
+      <div class="accentbar"></div>
+      <div class="inner">
+        <h3>Force Deadline Re-check</h3>
+        <div class="badge-row"><span class="pill ok">Free</span><span class="pill info">Writes</span></div>
+        <div class="desc">Clear the deadline cache so the next student view runs a fresh check.
+          Free itself; each cleared row later costs ~$0.07 when a student opens it.</div>
+        <div class="foot"><div class="spacer"></div>
+          <button class="btn btn-sm" onclick="openDeadlineCache()">Force re-check&hellip;</button></div>
+      </div></div>`;
+  }
+  const t = TOOLS[key];
+  if (!t) return '';
+  return `<div class="agent-card" style="--c:var(--text-3)">
+    <div class="accentbar"></div>
+    <div class="inner">
+      <h3>${esc(t.name)}</h3>
+      ${toolBadges(t)}
+      <div class="desc">${esc(t.description)}</div>
+      <div class="foot"><div class="spacer"></div>
+        <button class="btn btn-sm btn-primary" onclick="openToolModal('${key}')">${(t.params || []).length ? 'Run&hellip;' : 'Run'}</button></div>
+    </div></div>`;
+}
+
+function renderTools() {
+  Object.entries(TOOL_SLOTS).forEach(([slot, keys]) => {
+    const el = $(slot); if (!el) return;
+    el.innerHTML = keys.map(toolCardHTML).join('');
+  });
+}
+
+function toolParamHTML(p) {
+  const id = 'tp-' + p.key;
+  if (p.type === 'select') {
+    return `<div class="field"><label for="${id}">${esc(p.label)}</label>
+      <select id="${id}">${(p.options || []).map(o => `<option value="${esc(o[0])}">${esc(o[1])}</option>`).join('')}</select></div>`;
+  }
+  if (p.type === 'check') {
+    return `<label class="check"><input type="checkbox" id="${id}"><span>${esc(p.label)}</span></label>`;
+  }
+  return `<div class="field"><label for="${id}">${esc(p.label)}</label>
+    <input type="${p.type === 'number' ? 'number' : 'text'}" id="${id}" placeholder="${esc(p.placeholder || '')}"></div>`;
+}
+
+function openToolModal(key) {
+  S.toolKey = key; S.toolCursor = 0;
+  const t = TOOLS[key]; if (!t) return;
+  $('toolTitle').textContent = t.name;
+  $('toolDesc').textContent = t.description;
+  $('toolDot').className = 'dot idle';
+  $('toolParams').innerHTML = (t.params || []).map(toolParamHTML).join('');
+  const warn = $('toolWarn');
+  if (!t.free) {
+    warn.className = 'notice';
+    warn.textContent = 'This tool calls a paid API at full cost — there is no free preview. '
+      + 'A dry run still pays for the API; it only skips the database writes.';
+    warn.classList.remove('hidden');
+  } else { warn.classList.add('hidden'); }
+  $('toolConsole').classList.add('hidden'); $('toolConsole').innerHTML = '';
+  $('toolArgv').classList.add('hidden'); $('toolArgv').textContent = '';
+  $('toolRunBtn').disabled = false; $('toolRunBtn').textContent = 'Run';
+  $('toolModal').classList.add('open');
+}
+
+function collectToolParams() {
+  const t = TOOLS[S.toolKey]; const out = {};
+  (t.params || []).forEach(p => {
+    const el = $('tp-' + p.key); if (!el) return;
+    out[p.key] = p.type === 'check' ? el.checked : el.value;
+  });
+  return out;
+}
+
+async function launchTool() {
+  const key = S.toolKey, t = TOOLS[key];
+  const params = collectToolParams();
+  const missing = (t.params || []).find(p => p.required && !String(params[p.key] || '').trim());
+  if (missing) { notice(missing.label + ' is required.'); return; }
+  $('toolRunBtn').disabled = true; $('toolRunBtn').textContent = 'Running…';
+  $('toolDot').className = 'dot running';
+  try {
+    const d = await api('/api/agents/tools/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: key, params }),
+    });
+    S.toolLogKey = d.log_key; S.toolCursor = 0;
+    $('toolArgv').textContent = '$ ' + (d.argv || []).join(' ');
+    $('toolArgv').classList.remove('hidden');
+    $('toolConsole').innerHTML = ''; $('toolConsole').classList.remove('hidden');
+    startToolPolling();
+  } catch (e) {
+    notice('Could not start tool: ' + e.message);
+    $('toolRunBtn').disabled = false; $('toolRunBtn').textContent = 'Run';
+    $('toolDot').className = 'dot error';
+  }
+}
+
+function startToolPolling() {
+  clearInterval(S.toolTimer);
+  S.toolTimer = setInterval(pollToolLog, 1000);
+  pollToolLog();
+}
+
+async function pollToolLog() {
+  if (!S.toolLogKey) return;
+  try {
+    const d = await api(`/api/agents/log?agent=${encodeURIComponent(S.toolLogKey)}&since=${S.toolCursor}`);
+    const con = $('toolConsole');
+    if (d.lines && d.lines.length) {
+      con.innerHTML += d.lines.map(l => {
+        const cls = /^\[ERROR\]/.test(l) ? 'l-err' : /^\[DONE\]|^\[OK\]/.test(l) ? 'l-ok'
+          : /^\[WARN\]/.test(l) ? 'l-warn' : /^\$/.test(l) ? 'l-cmd' : '';
+        return `<span class="${cls}">${esc(l)}</span>`;
+      }).join('\n') + '\n';
+      con.scrollTop = con.scrollHeight;
+    }
+    if (d.next != null) S.toolCursor = d.next;
+    if (!d.running) {
+      clearInterval(S.toolTimer);
+      $('toolDot').className = 'dot idle';
+      $('toolRunBtn').disabled = false; $('toolRunBtn').textContent = 'Run again';
+    }
+  } catch (e) { /* transient poll error; keep the interval and retry */ }
+}
+
+async function loadTools() {
+  try { const d = await api('/api/agents/tools'); TOOLS = (d && d.tools) || {}; }
+  catch (e) { TOOLS = {}; }
+  renderTools();
+  // Re-render the workflow grids so the inline tool cards (grader, duplicate finder) appear
+  // now that TOOLS is loaded — the initial renderCards ran before this fetch.
+  if (Object.keys(S.config || {}).length) renderCards();
+}
+
+// Money view: the system-vs-end-user cost filter over the spend chart.
+function initCostFilter() {
+  const seg = $('costSeg'); if (!seg) return;
+  seg.querySelectorAll('.segbtn').forEach(b => b.onclick = () => {
+    seg.querySelectorAll('.segbtn').forEach(x => x.classList.toggle('active', x === b));
+    S.costFilter = b.dataset.f;
+    if (S.summary) renderChart();
+  });
+}
+
+$('toolClose').onclick = () => { $('toolModal').classList.remove('open'); clearInterval(S.toolTimer); };
+$('toolRunBtn').onclick = launchTool;
+
 (async function init() {
+  // Arrange the grouped layout before any data lands: move the wired cards into their new
+  // slots and page the Run workflows. Collapse is wired last, once every card is in place.
+  relocateConsole();
+  initSubtabs();
+  initCostFilter();
   try { await loadConfig(); } catch (e) { notice('Could not load agent config: ' + e.message); }
   await refreshDashboard();
+  initCollapse();
+  await loadTools();
   await loadSeeds();
   // Once at startup so the nav badge shows how many recipes are waiting, even if nobody
   // opens the tab. Refreshed on demand from showView() after that.

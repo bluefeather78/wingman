@@ -511,3 +511,73 @@ def test_moderation_updates_duplicate_explicit_reason_wins():
 def test_moderation_updates_reason_is_capped():
     u = core._moderation_updates("rejected", "", "x" * 2000, NOW)
     assert len(u["moderation_reason"]) == core.MODERATION_REASON_MAX_LEN
+
+
+# --------------------------------------------------------------------------- #
+# Maintenance tools — the runnable standalone scripts in the Run view. Pure over
+# the registry + argv builder; no subprocess is launched here.
+# --------------------------------------------------------------------------- #
+class TestMaintenanceTools:
+    def test_public_registry_hides_script_paths(self):
+        pub = core.maintenance_tools_public()
+        assert set(pub) == set(core.MAINTENANCE_TOOLS)
+        for entry in pub.values():
+            assert "script" not in entry
+            assert {"name", "description", "free", "writes", "params"} <= set(entry)
+
+    def test_every_tool_script_exists(self):
+        import os
+        for key, cfg in core.MAINTENANCE_TOOLS.items():
+            path = os.path.join(core.REPO_ROOT, cfg["script"])
+            assert os.path.exists(path), f"{key} -> missing {cfg['script']}"
+
+    def test_inspect_accepts_commas_or_spaces(self):
+        args = core.build_tool_args("inspect", {"ids": "ec1, ec2 ec3"})
+        assert args[2:] == ["check_opp_data.py", "ec1", "ec2", "ec3"]
+
+    def test_contactemail_all_and_force(self):
+        args = core.build_tool_args("contactemail", {"scope": "all", "force": True})
+        assert args[2:] == ["find_contact_emails.py", "--all", "--force"]
+
+    def test_contactemail_ids_limit_dryrun(self):
+        args = core.build_tool_args(
+            "contactemail", {"scope": "ids", "ids": "ec9", "limit": "5", "dryRun": True})
+        assert args[2:] == ["find_contact_emails.py", "--ids", "ec9", "--limit", "5", "--dry-run"]
+
+    def test_contactemail_defaults_to_all_without_ids(self):
+        # scope=ids but no ids given must not emit a bare --ids; falls back to --all.
+        args = core.build_tool_args("contactemail", {"scope": "ids"})
+        assert "--all" in args and "--ids" not in args
+
+    def test_fixed_args_and_no_params(self):
+        assert core.build_tool_args("mlgrader", {})[2:] == ["grade_mailing_lists.py", "--sample"]
+        assert core.build_tool_args("export", {})[2:] == ["export_json.py"]
+
+    def test_paid_tools(self):
+        # The paid tools: the contact-email backfill, the dead-link re-finder, and hub mining
+        # (its extraction call). Angle proposing and the hub PREVIEW are free.
+        paid = {k for k, c in core.MAINTENANCE_TOOLS.items() if not c.get("free")}
+        assert paid == {"contactemail", "refind", "minehub"}
+
+    def test_minehub_args(self):
+        # Needs a url; defaults to the free preview; a paid run drops --preview.
+        prev = core.build_tool_args("minehub", {"url": "https://x.edu/programs"})
+        assert prev[2:] == ["mine_hub_pages.py", "--hubs", "https://x.edu/programs", "--preview"]
+        run = core.build_tool_args("minehub", {"url": "https://x.edu/programs", "mode": "run",
+                                               "offDomain": True})
+        assert "--preview" not in run and "--off-domain" in run and "--hubs" in run
+
+    def test_proposeangles_args(self):
+        assert core.build_tool_args("proposeangles", {})[2:] == [
+            "propose_angles.py", "--mode", "national", "--preview"]
+        commit = core.build_tool_args("proposeangles", {"mode": "seattle", "action": "commit"})
+        assert commit[2:] == ["propose_angles.py", "--mode", "seattle", "--commit"]
+
+    def test_refind_defaults_to_free_preview(self):
+        # A paid run must be chosen explicitly; anything else previews (free, no writes).
+        assert core.build_tool_args("refind", {})[2:] == ["refind_dead_links.py", "--preview"]
+        assert core.build_tool_args("refind", {"mode": "preview"})[-1] == "--preview"
+        run = core.build_tool_args("refind", {"mode": "run", "limit": 15})
+        assert run[2:] == ["refind_dead_links.py", "--limit", "15"]
+        # missing limit on a paid run falls back to the script's own default of 20.
+        assert core.build_tool_args("refind", {"mode": "run"})[-1] == "20"

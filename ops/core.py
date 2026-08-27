@@ -119,8 +119,11 @@ AGENT_CONFIGS_SCHEMA = {
         "defaults": {"min_delay": 5, "timeout": 120},
     },
     "reviews": {
-        "name": "Review Checker",
-        "description": "Verify org legitimacy and reputation from independent sources",
+        # Display name only — the db_agent literal stays "review_checker" so agent_runs
+        # history is unbroken. Renamed 2026-08-28 to match the console redesign.
+        "name": "Reviews Generator",
+        "description": "Generate the reviews shown on each opportunity — org legitimacy and "
+                       "reputation, verified from independent sources",
         "script": "check_reviews.py",
         "db_agent": "review_checker",
         "unit": "rows",
@@ -3162,6 +3165,241 @@ def run_agent_subprocess(agent_name, config):
     finally:
         close_agent_log(agent_name)
         _agent_process[agent_name] = None
+
+
+# ---------- Maintenance tools ----------
+#
+# Standalone scripts an operator runs by hand from the console's Run > Utilities / Core /
+# Mailing Lists / Inspect flows. Unlike the seven agents in AGENT_CONFIGS_SCHEMA these carry
+# no preview, no cost estimate and no agent_runs accounting — most are free and read-only,
+# and the one paid tool (contact-email backfill) writes its own agent_runs row like any other
+# script. They reuse the agent log/stream plumbing, keyed by "tool:<key>" so a tool run and
+# an agent run can never collide in the ring buffer or the running-state map.
+TOOL_KEY_PREFIX = "tool:"
+TOOL_RUN_TIMEOUT_SECS = 1800  # a full contact-email backfill is the longest of these
+
+MAINTENANCE_TOOLS = {
+    "inspect": {
+        "name": "Inspect an Opportunity",
+        "description": "Dump everything stored for one program id — deadline data first. "
+                       "The place to start when a student reports something wrong.",
+        "script": "check_opp_data.py",
+        "free": True, "writes": False,
+        "params": [{"key": "ids", "label": "Opportunity id(s)", "required": True,
+                    "placeholder": "ec18694 ec17433"}],
+    },
+    "refreshprog": {
+        "name": "Refresh Progress Report",
+        "description": "How many rows the Update Opportunity agent has recently touched. "
+                       "Read-only.",
+        "script": "check_refresh_progress.py",
+        "free": True, "writes": False, "params": [],
+    },
+    "dupfinder": {
+        "name": "Duplicate Finder",
+        "description": "List rows that are secretly the same opportunity (URL or near-name "
+                       "collisions). Writes nothing — a report only.",
+        "script": "find_catalog_dups.py",
+        "free": True, "writes": False, "params": [],
+    },
+    "minehub": {
+        # Hub-first discovery: one page that LISTS many programs yields many real rows without
+        # a per-search fee. Preview (discover + dedup) is free; extraction is one no-search
+        # model call per surviving page (~$0.003) and inserts inactive rows for review.
+        "name": "Mine Hub Pages",
+        "description": "Discover programs by mining a hub page that lists many — a university "
+                       "pre-college index, a city teen page, a listicle. Preview is free; a real "
+                       "run extracts (~$0.003/page) and inserts inactive rows for review.",
+        "script": "mine_hub_pages.py",
+        "free": False, "writes": True,
+        "params": [
+            {"key": "url", "label": "Hub page URL", "required": True,
+             "placeholder": "https://ceismc.gatech.edu/programs"},
+            {"key": "offDomain", "type": "check",
+             "label": "Listicle — follow off-site links, not same-domain"},
+            {"key": "mode", "type": "select", "label": "Mode", "options": [
+                ["preview", "Preview — free, no model call, no writes"],
+                ["run", "Run — PAID: extracts and inserts rows for review"]]},
+        ],
+    },
+    "proposeangles": {
+        # Finds thin catalog cells (under-served type/season/subject) and proposes angles to
+        # fill them. Both exposed actions are free — commit writes DISABLED seeds a person must
+        # still enable, so nothing runs or spends on its own.
+        "name": "Propose Search Angles",
+        "description": "Analyse where the catalog is thin and propose new scraper angles. "
+                       "Preview prints them; Commit writes them as DISABLED seeds for you to "
+                       "review and enable. Both are free.",
+        "script": "propose_angles.py",
+        "free": True, "writes": True,
+        "params": [
+            {"key": "mode", "type": "select", "label": "Scope", "options": [
+                ["national", "National"], ["seattle", "Local (Seattle)"]]},
+            {"key": "action", "type": "select", "label": "Action", "options": [
+                ["preview", "Preview — print proposals"],
+                ["commit", "Commit — write as disabled seeds"]]},
+        ],
+    },
+    "refind": {
+        # The counterpart to the Link Checker: check_links deactivates dead-link rows, this
+        # tries to resurrect the real ones by finding where the page moved. Paid + gated, and
+        # inserts inactive rows into the review queue like the scraper — Preview is free.
+        "name": "Re-find Dead Links",
+        "description": "Resurrect real programs whose stored link died — one narrow web search "
+                       "per row, inserting a fresh inactive row for review. Preview is free; a "
+                       "real run is PAID (~$0.02–0.05/row) and needs approval.",
+        "script": "refind_dead_links.py",
+        "free": False, "writes": True,
+        "params": [
+            {"key": "mode", "type": "select", "label": "Mode", "options": [
+                ["preview", "Preview — free, no search, no writes"],
+                ["run", "Run — PAID: searches and inserts rows for review"]]},
+            {"key": "limit", "type": "number", "label": "Max rows to re-find (paid run)"},
+        ],
+    },
+    "mlgrader": {
+        "name": "Mailing-List Accuracy Grader",
+        "description": "Pick the deterministic pilot sample and print the finder --ids string "
+                       "to run next. Calls no API.",
+        "script": "grade_mailing_lists.py", "fixed_args": ["--sample"],
+        "free": True, "writes": False, "params": [],
+    },
+    "export": {
+        "name": "Export Catalog Backup",
+        "description": "Write the whole catalog to a diffable opportunities.json snapshot. "
+                       "Local file only.",
+        "script": "export_json.py",
+        "free": True, "writes": True, "params": [],
+    },
+    "legal": {
+        "name": "Rebuild Legal Pages",
+        "description": "Regenerate terms.html / privacy.html from the legal markdown source. "
+                       "Run after editing anything under legal/.",
+        "script": "build_legal.py",
+        "free": True, "writes": True, "params": [],
+    },
+    "contactemail": {
+        "name": "Contact Email Finder (backfill)",
+        "description": "Backfill only. New opportunities already get a contact email when "
+                       "they’re added, and an Update Opportunity refresh keeps it current "
+                       "— run this just to fill gaps in older rows or force a re-check.",
+        "script": "find_contact_emails.py",
+        "free": False, "writes": True,
+        "params": [
+            {"key": "scope", "type": "select", "label": "Scope", "options": [
+                ["all", "All rows missing a contact email"], ["ids", "Specific ids"]]},
+            {"key": "ids", "label": "Ids (comma-separated)", "placeholder": "ec18694,ec17433"},
+            {"key": "limit", "type": "number", "label": "Limit (optional)"},
+            {"key": "force", "type": "check", "label": "Re-check rows that already have one"},
+            {"key": "dryRun", "type": "check",
+             "label": "Dry run — still calls the paid API, but writes nothing"},
+        ],
+    },
+}
+
+
+def maintenance_tools_public():
+    """The tool registry for the console, without the script paths."""
+    return {k: {"name": c["name"], "description": c["description"],
+                "free": c.get("free", False), "writes": c.get("writes", False),
+                "params": c.get("params", [])}
+            for k, c in MAINTENANCE_TOOLS.items()}
+
+
+def build_tool_args(tool_key, params):
+    """argv for one maintenance tool. Mirrors build_agent_args but far smaller — these scripts
+    take a handful of flags at most, and most take none."""
+    cfg = MAINTENANCE_TOOLS[tool_key]
+    args = [sys.executable, "-u", cfg["script"]]
+    args += list(cfg.get("fixed_args") or [])
+    params = params or {}
+    if tool_key == "inspect":
+        # check_opp_data.py takes positional ids; accept commas or spaces from the one field.
+        args += str(params.get("ids") or "").replace(",", " ").split()
+    elif tool_key == "refind":
+        # Default to the free preview; a paid run must be chosen explicitly.
+        if str(params.get("mode") or "preview") == "run":
+            args += ["--limit", str(_int_or_none(params.get("limit")) or 20)]
+        else:
+            args.append("--preview")
+    elif tool_key == "minehub":
+        url = str(params.get("url") or "").strip()
+        if url:
+            args += ["--hubs", url]
+        if params.get("offDomain"):
+            args.append("--off-domain")
+        if str(params.get("mode") or "preview") != "run":
+            args.append("--preview")
+    elif tool_key == "proposeangles":
+        args += ["--mode", str(params.get("mode") or "national")]
+        if str(params.get("action") or "preview") == "commit":
+            args.append("--commit")
+        else:
+            args.append("--preview")
+    elif tool_key == "contactemail":
+        if str(params.get("scope") or "") == "ids" and params.get("ids"):
+            args += ["--ids", str(params["ids"])]
+        else:
+            args.append("--all")
+        limit = _int_or_none(params.get("limit"))
+        if limit:
+            args += ["--limit", str(limit)]
+        if params.get("force"):
+            args.append("--force")
+        if params.get("dryRun"):
+            args.append("--dry-run")
+    return args
+
+
+def run_tool_subprocess(tool_key, params):
+    """Run a maintenance-tool script, streaming its output. Keyed by 'tool:<key>' so it reuses
+    the agent log/running-state plumbing without colliding with an agent. Returns (ok, msg)."""
+    cfg = MAINTENANCE_TOOLS.get(tool_key)
+    if not cfg:
+        return False, f"Unknown tool: {tool_key}"
+    script = cfg.get("script")
+    if not script or not os.path.exists(os.path.join(REPO_ROOT, script)):
+        return False, f"Script not found: {script}"
+
+    log_key = TOOL_KEY_PREFIX + tool_key
+    args = build_tool_args(tool_key, params)
+    proc = None
+    try:
+        mark_agent_running(log_key)
+        start_agent_log(log_key)
+        _append_log(log_key, f"$ {' '.join(args[1:])}")
+        print(f"[INFO] Starting tool {tool_key}: {' '.join(args[1:])}")
+
+        proc = subprocess.Popen(
+            args, cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, encoding="utf-8", errors="replace",
+        )
+        _agent_process[log_key] = proc
+        for line in proc.stdout:
+            _append_log(log_key, line.rstrip("\n"))
+
+        try:
+            proc.wait(timeout=TOOL_RUN_TIMEOUT_SECS)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            msg = f"Execution timed out (limit {TOOL_RUN_TIMEOUT_SECS // 60} min)"
+            _append_log(log_key, f"[ERROR] {msg}")
+            return False, msg
+
+        if proc.returncode == 0:
+            _append_log(log_key, "[DONE] Finished (exit 0)")
+            return True, "Tool completed"
+        _append_log(log_key, f"[ERROR] Exited {proc.returncode}")
+        return False, f"Tool failed (exit {proc.returncode})"
+    except Exception as e:
+        _append_log(log_key, f"[ERROR] {e}")
+        return False, f"Error running tool: {e}"
+    finally:
+        # Unlike an agent, a tool keeps no persistent error state — its output IS the result,
+        # shown inline — so every exit path just clears the running flag and closes the log.
+        mark_agent_idle(log_key)
+        close_agent_log(log_key)
+        _agent_process[log_key] = None
 
 
 # ---------- Scraper seeds (the editable search angles) ----------

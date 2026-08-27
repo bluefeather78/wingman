@@ -145,7 +145,10 @@ def handle_agents_billed(request: Request):
 @router.get("/api/agents/log")
 def handle_agents_log(request: Request):
     agent = request.query_params.get("agent")
-    if agent not in core.AGENT_CONFIGS_SCHEMA:
+    # Agents key by their bare name; maintenance tools key by "tool:<key>" (same ring buffer).
+    is_tool = (isinstance(agent, str) and agent.startswith(core.TOOL_KEY_PREFIX)
+               and agent[len(core.TOOL_KEY_PREFIX):] in core.MAINTENANCE_TOOLS)
+    if agent not in core.AGENT_CONFIGS_SCHEMA and not is_tool:
         return json_error(400, f"Unknown agent: {agent}")
     since = _qs_int(request, "since", 0) or 0
     return json_response(200, core.get_agent_log(agent, since), default=str)
@@ -274,6 +277,43 @@ async def handle_agents_run(request: Request):
         "dry_run": bool(config.get("dryRun")),
         "argv": argv[1:],
         "message": f"{core.AGENT_CONFIGS_SCHEMA[agent_name]['name']} started",
+    }, default=str)
+
+
+# ---------------- Maintenance tools ----------------
+
+@router.get("/api/agents/tools")
+def handle_tools_list():
+    return json_response(200, {"tools": core.maintenance_tools_public()}, default=str)
+
+
+@router.post("/api/agents/tools/run")
+async def handle_tools_run(request: Request):
+    body = await read_json_body(request)
+    tool = (body.get("tool") or "").strip()
+    cfg = core.MAINTENANCE_TOOLS.get(tool)
+    if not cfg:
+        return json_error(400, f"Unknown tool: {tool}")
+
+    log_key = core.TOOL_KEY_PREFIX + tool
+    if core.is_agent_running(log_key):
+        return json_error(409, f"{cfg['name']} is already running.")
+
+    params = body.get("params") or {}
+    for p in cfg.get("params", []):
+        if p.get("required") and not str(params.get(p["key"]) or "").strip():
+            return json_error(400, f"{p['label']} is required.")
+
+    argv = core.build_tool_args(tool, params)
+    threading.Thread(
+        target=lambda: core.run_tool_subprocess(tool, params), daemon=True).start()
+
+    return json_response(202, {
+        "ok": True,
+        "tool": tool,
+        "log_key": log_key,
+        "argv": argv[1:],
+        "message": f"{cfg['name']} started",
     }, default=str)
 
 

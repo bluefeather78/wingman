@@ -19,11 +19,15 @@ agent here — needs fresh explicit approval per run.
 import argparse
 import datetime
 import os
+import urllib.parse
 
 import url_dedupe
+import url_repair
 import url_validate
 
 _REFIND_STAMP = "refind_attempted"
+# At most this many grounding siblings are fetched per row to find a proven page.
+_MAX_SIBLING_FETCH = 3
 
 
 def is_dead_link_reject(row):
@@ -47,13 +51,51 @@ def refind_angle(name, org):
     return f"Find the current official program page for {who}. Return only its own page."
 
 
-def best_refound_url(resolved_urls, name, org, timeout):
-    """The title-proven, org-domain URL among a search's grounding results — or None. FREE.
+def best_refound_url(resolved_urls, old_url, name, org, timeout):
+    """The title-proven URL among a search's grounding results — or None. FREE.
 
-    Reuses the exact Phase-2 gate (a grounding sibling that passes domain + title proof), so a
-    re-find is held to the same evidence bar as anything else the scraper stores."""
-    import scrape_opportunities as so
-    return so._first_proven_sibling(resolved_urls, "", name, org, timeout)
+    Held to a STRICTER bar than the general scraper's `_first_proven_sibling`, because a re-find
+    is a paid, precision-first operation whose measured failures (Aug-27 pilot) were exactly the
+    two things a looser gate lets through:
+      1. `domain_matches_org` substring-matches too loosely (`northern.virginia.edu` ⊃
+         "virginia"). So instead of the name-derived substring heuristic, require the re-found URL
+         to sit on the **same registrable domain as the dead URL** — a program moves pages, not
+         institutions; a jump to another domain is re-finding a different thing. This is "require
+         the org's registrable domain, not a substring": the old URL IS the org's domain of
+         record.
+      2. Title-proof is weak on generic names ("Creative Writing") and can land on a sibling. So
+         require BOTH title_proves (tests 1+2) AND keeps_identity (test 3, the built sibling
+         guard: the new page must not drop an identity word the old URL used).
+    A malformed/empty old URL yields no registrable domain, so nothing passes — fail closed,
+    which is the correct precision-first default (the row simply stays in the dead pile)."""
+    old_reg = url_dedupe.registrable_domain(
+        (urllib.parse.urlsplit(old_url or "").hostname or "").lower())
+    if not old_reg:
+        return None
+    fetched = 0
+    for sib in resolved_urls:
+        if fetched >= _MAX_SIBLING_FETCH:
+            break
+        if not sib or url_validate.is_content_mill(sib):
+            continue
+        sib_reg = url_dedupe.registrable_domain(
+            (urllib.parse.urlsplit(sib).hostname or "").lower())
+        if sib_reg != old_reg:
+            continue
+        fetched += 1
+        page, final = url_repair._fetch(sib, timeout)
+        if not page:
+            continue
+        final = final or sib
+        if url_validate.is_bare_domain(final):
+            continue                      # a redirect to the homepage is a soft-404, not a page
+        title = url_repair.page_title(page)
+        if not url_repair.title_proves(title, name, org)[0]:
+            continue
+        if not url_repair.keeps_identity(old_url, final, title, name, org)[0]:
+            continue
+        return final
+    return None
 
 
 def select(rows):
@@ -118,7 +160,8 @@ def main():
             paid += 1
             resolved = [x["url"] for x in url_validate.resolve_grounding_chunks(grounding)
                         if x.get("url")]
-            new_url = best_refound_url(resolved, name, org, url_validate.DEFAULT_TIMEOUT)
+            new_url = best_refound_url(resolved, r.get("url") or "", name, org,
+                                       url_validate.DEFAULT_TIMEOUT)
         except Exception as e:
             print(f"  [WARN] {r['id']}: {str(e)[:120]}")
             new_url = None

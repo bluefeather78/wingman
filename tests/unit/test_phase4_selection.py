@@ -36,6 +36,54 @@ def test_refind_angle_names_program_and_org():
     assert "Clark Scholars Program" in a and "Texas Tech University" in a
 
 
+# ---- refind acceptance gate (tightened Aug-27: registrable domain + sibling guard) -----
+
+_NAME, _ORG = "Clark Scholars Program", "Texas Tech University"
+_OLD = "https://www.depts.ttu.edu/honors/clarkscholars/dead.html"
+
+
+def _no_fetch(*a, **k):
+    raise AssertionError("_fetch must not be called before the domain gate passes")
+
+
+def test_refind_rejects_off_registrable_domain(monkeypatch):
+    # A grounding sibling on ANOTHER registrable domain is never accepted — and never even
+    # fetched (the northern.virginia.edu ⊃ 'virginia' false positive class).
+    monkeypatch.setattr(rf.url_repair, "_fetch", _no_fetch)
+    assert rf.best_refound_url(["https://scholarships360.org/clark"], _OLD, _NAME, _ORG, 5) is None
+    assert rf.best_refound_url(["https://elsewhere.edu/clark-scholars/"], _OLD, _NAME, _ORG, 5) is None
+
+
+def test_refind_rejects_empty_old_url(monkeypatch):
+    monkeypatch.setattr(rf.url_repair, "_fetch", _no_fetch)
+    assert rf.best_refound_url(["https://www.depts.ttu.edu/clark/"], "", _NAME, _ORG, 5) is None
+
+
+def test_refind_accepts_same_domain_title_proven(monkeypatch):
+    good = "https://www.depts.ttu.edu/honors/clarkscholars/"
+    monkeypatch.setattr(rf.url_repair, "_fetch", lambda u, t: ("<html/>", good))
+    monkeypatch.setattr(rf.url_repair, "page_title",
+                        lambda p: "Clark Scholars Program | Texas Tech University")
+    assert rf.best_refound_url([good], _OLD, _NAME, _ORG, 5) == good
+
+
+def test_refind_rejects_when_title_unproven(monkeypatch):
+    sib = "https://www.depts.ttu.edu/honors/other/"
+    monkeypatch.setattr(rf.url_repair, "_fetch", lambda u, t: ("<html/>", sib))
+    monkeypatch.setattr(rf.url_repair, "page_title", lambda p: "Texas Tech Honors College")
+    assert rf.best_refound_url([sib], _OLD, _NAME, _ORG, 5) is None
+
+
+def test_refind_rejects_when_sibling_drops_identity(monkeypatch):
+    # Same domain, title proves the name, but the old URL carried an org identity word the new
+    # page dropped -> keeps_identity (test 3) catches the sibling.
+    old = "https://www.depts.ttu.edu/texas/clark-scholars.html"
+    sib = "https://www.depts.ttu.edu/lubbock/clark-scholars/"
+    monkeypatch.setattr(rf.url_repair, "_fetch", lambda u, t: ("<html/>", sib))
+    monkeypatch.setattr(rf.url_repair, "page_title", lambda p: "Clark Scholars Program")
+    assert rf.best_refound_url([sib], old, _NAME, _ORG, 5) is None
+
+
 # ---- coverage-gap angle proposals -----------------------------------------------------
 
 def _row(type_, is_active=True, season="Summer", subjects=None):

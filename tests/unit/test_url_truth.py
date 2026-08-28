@@ -47,6 +47,16 @@ def test_immerse_education_both_ways():
     ("https://a.edu/prog/rules", True),
     ("https://a.edu/clark/scholars", False),
     ("https://a.edu/summer-research-institute", False),
+    # Ancillary tail even when the program name is prepended, or it sits on a parent section --
+    # the three Columbia walk-up cases the leaf-only rule let through (2026-08-28).
+    ("https://precollege.sps.columbia.edu/admissions/program-costs/college-edge-tuition-and-fees", True),
+    ("https://precollege.sps.columbia.edu/columbia-experience/commuting-campus", True),
+    ("https://x.edu/programs/nyc-residential-summer/residential-life", True),
+    # ...but the canonical program pages themselves are NOT low value.
+    ("https://precollege.sps.columbia.edu/programs/summer-programs/college-edge-summer", False),
+    ("https://precollege.sps.columbia.edu/programs/summer-programs/nyc-residential-summer", False),
+    # A real program under /Admissions/ must stay high value (exact-word rule is leaf-only).
+    ("https://www.usna.edu/Admissions/Programs/STEM", False),
 ])
 def test_is_low_value_path(url, low):
     assert url_dedupe.is_low_value_path(url) is low

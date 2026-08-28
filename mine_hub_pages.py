@@ -450,6 +450,60 @@ def fresh_candidates(urls, catalog_keys, seen_this_run):
     return fresh, already, twice
 
 
+def _host_path(url):
+    """(lowercased hostname, path with no trailing slash) — the pair a containment check needs."""
+    try:
+        p = urllib.parse.urlsplit(url)
+    except ValueError:
+        return "", ""
+    return (p.hostname or "").lower(), (p.path or "").rstrip("/").lower()
+
+
+def contained_children(urls, catalog_paths=None):
+    """(keep, dropped): drop a candidate that is the DIRECT sub-page of another page — one also
+    in this candidate set, or already in the catalog — on the same host. Pure, free, pre-spend.
+
+    A program index links the program's own page AND its ancillary tabs: the walk-up review
+    surfaced Columbia's `/programs/summer-programs/nyc-residential-summer/residential-life`
+    alongside its parent `/nyc-residential-summer`, which is the page a student should land on.
+    When the parent is already catalogued, `fresh_candidates`' exact-URL check does NOT see the
+    child, so the run would PAY to extract a worse-URL duplicate of a row we already have; when
+    both are candidates this run, `collapse_intra_run_twins` only merges them AFTER paying for
+    both. Suppressing the child here is free and stops both.
+
+    DIRECT parent only (not any ancestor): a distinct program legitimately nested one level under
+    a section is rare, but dropping on any ancestor would reach far enough up to catch it. This
+    mirrors the same-host, real-prefix shape url_dedupe._prefix_relation already treats as a
+    strong duplicate signal, kept one level tight because this DROPS rather than merely flags.
+    """
+    parsed = [(u, *_host_path(u)) for u in (urls or [])]
+    own = {}
+    for _u, h, pth in parsed:
+        if h and pth:
+            own.setdefault(h, set()).add(pth)
+    cat = catalog_paths or {}
+    keep, dropped = [], []
+    for u, h, pth in parsed:
+        segs = [s for s in pth.split("/") if s]
+        parent = "/" + "/".join(segs[:-1]) if len(segs) >= 2 else ""
+        parents = own.get(h, set()) | cat.get(h, set())
+        if parent and parent != pth and parent in parents:
+            dropped.append(u)
+        else:
+            keep.append(u)
+    return keep, dropped
+
+
+def catalog_paths_by_host(rows):
+    """{host: {normalized_path, ...}} for every catalog url — the index contained_children reads."""
+    out = {}
+    for r in rows or []:
+        h, pth = _host_path(r.get("url") or "")
+        if h and pth:
+            out.setdefault(h, set()).add(pth)
+    return out
+
+
 def hubs_from_leads(leads):
     """[(url, off_domain)] for queued hub leads -- WHICH WAY each one must be mined.
 
@@ -556,13 +610,19 @@ def main():
         if k:
             catalog_keys.add(k)
 
+    catalog_paths = catalog_paths_by_host(existing)
+
     all_new, seen_this_run = [], set()
     for hub_url, off_domain in hubs:
         urls, trace = discover(hub_url, off_domain=off_domain, timeout=args.timeout)
+        # Drop a candidate that is the direct sub-page of another candidate or of a catalogued
+        # page (a program's residential-life / costs tab beside its own page). Free, pre-spend.
+        urls, contained = contained_children(urls, catalog_paths)
         fresh, already, twice = fresh_candidates(urls, catalog_keys, seen_this_run)
         print(f"[HUB] {hub_url}: harvested {trace['harvested']}, after audience filter "
               f"{trace['after_anchor_filter']}, kept {trace['kept']}, already in catalog "
-              f"{already}, seen earlier this run {twice}, new {len(fresh)}."
+              f"{already}, sub-page of a parent {len(contained)}, seen earlier this run "
+              f"{twice}, new {len(fresh)}."
               + (f"  over cap {trace['over_cap']}" if trace.get("over_cap") else "")
               + (f"  ERROR: {trace['error']}" if trace.get("error") else ""))
         for u in fresh:

@@ -343,11 +343,13 @@ opportunities for high school students, for the app "Wingman". Today's date is {
 
 Find as many DISTINCT opportunities as you can for: {angle}
 
-WHAT YOU ARE PRODUCING. For each opportunity: its name, who runs it, one sentence on what it is, \
-and — most important — the URL of its own page. You are NOT writing a profile. Other agents later \
-read each opportunity's own page and take eligibility, grade range, cost, dates and application \
-steps from it, so you do not need to establish any of those and must not spend searches on them. \
-Not knowing them is expected, not a gap.
+WHAT YOU ARE PRODUCING. For each opportunity: its NAME (this is the most important thing), who \
+runs it, one sentence on what it is, and its own-page URL only if a search result already shows it. \
+The name is what matters — if you have the name but not the URL, write the name and "no url", and a \
+later step will find the page. Do NOT go hunting for a specific program's page yourself. You are NOT \
+writing a profile: other agents later read each program's page and take eligibility, grade range, \
+cost, dates and application steps from it, so do not spend searches on those either. Not knowing the \
+URL or those details is expected, not a gap.
 
 WHAT COUNTS AS AN OPPORTUNITY. One program a high schooler can take part in — a summer or \
 pre-college program, an internship or mentorship, a competition or olympiad, a research placement, \
@@ -369,17 +371,25 @@ that site's root is the right page. Copy the URL character-for-character from a 
 retrieved. NEVER construct, complete or guess one — a plausible wrong URL is worse than no URL, \
 because it looks correct to a reviewer.
 
-HOW TO SEARCH. Run at least a few DIFFERENT searches before you write anything, and make every one \
-describe a CLASS of opportunity rather than naming a specific program.
-A GOOD (broad) search describes a class and can surface many different programs:
+HOW TO SEARCH. Your searches should surface programs you did NOT already know about. Every search \
+must be one you could have run BEFORE you knew any specific program existed: it names only the FIELD, \
+the AUDIENCE, and the KIND of opportunity — never a proper noun. Do NOT put the name of any specific \
+organization, university, company, institute, or program in a search, in ANY capitalization: \
+"rockefeller university ... program" and "columbia brainyac ..." are named searches just as much as a \
+quoted name or a site: filter, and they only return the one program you already had in mind. If a \
+proper noun appears in your query, delete it and search the class instead. Run at least a few \
+DIFFERENT such searches before you write anything.
+A GOOD (broad) search names no organization and no program — only field + audience + kind:
 - "summer marine biology research programs for high school students"
 - "high school journalism competitions with cash prizes"
 - "list of pre-college engineering programs 2027"
 - "national labs that host high school interns"
-A BAD (named) search names one specific program, so it can only ever return that one — never do this \
-during discovery:
+A BAD search carries a specific organization or program name — quoted, lowercase, or site:-pinned all \
+count — so it can only return the one program you already had in mind; never do this during discovery:
 - "MIT Research Science Institute application"
-- "Congressional App Challenge deadline"
+- "rockefeller university summer neuroscience program high school"
+- "columbia brainyac high school program"
+- "Barrow Neurological Institute internship site:barrowneuro.org"
 Vary your searches deliberately: swap the noun (program / institute / academy / intensive / \
 fellowship / challenge / competition / internship), the audience wording (high school students / \
 teens / grades 9-12 / rising juniors / pre-college), and the host type (university, national lab, \

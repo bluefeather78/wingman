@@ -51,10 +51,13 @@ def test_discovery_prompt_defines_opportunity_and_shows_query_examples():
     p = so.DISCOVERY_SYSTEM
     assert "WHAT COUNTS AS AN OPPORTUNITY" in p
     assert "SOURCE to mine" in p                                  # listicle-is-feedstock rule
-    assert "A GOOD (broad) search" in p and "A BAD (named) search" in p
+    assert "A GOOD (broad) search" in p and "A BAD search" in p
     # a concrete good example and a concrete bad example are both present
     assert "summer marine biology research programs" in p
     assert "MIT Research Science Institute application" in p
+    # the tightened guideline: a lowercase org/program name is a named search too
+    assert "in ANY capitalization" in p
+    assert "columbia brainyac high school program" in p
 
 
 def test_discovery_prompt_is_not_json():

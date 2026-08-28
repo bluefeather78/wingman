@@ -88,7 +88,7 @@ _NAV_SLUGS = url_repair.GENERIC_SLUGS | {
     "program-policies", "policies", "policy", "compare-programs", "explore-courses",
     "publications", "publications-and-funding", "funding", "grants", "grants-collaborations",
     "work-with-us", "partnerships", "successful-partnerships", "partnership-opportunities",
-    "map", "maps", "projects",
+    "map", "maps", "projects", "viewform",
     # NOT here, deliberately: anything naming a scholarship or financial aid. The operator wants
     # SCHOLARSHIPS in the catalog (2026-08-28), so a page at /scholarships-and-financial-aid is a
     # lead, not chaff -- and this list existing at all is why that had to be caught by hand
@@ -125,6 +125,16 @@ _NONPROGRAM_HOSTS = {
     "twitter.com", "x.com", "facebook.com", "fb.com", "instagram.com", "tiktok.com",
     "linkedin.com", "pinterest.com", "threads.net", "snapchat.com", "whatsapp.com",
     "t.me", "telegram.me", "amazon.com", "list-manage.com", "mailchi.mp", "eventbrite.com",
+    # Link shorteners, booking pages and form SaaS. A round-up's own funnel runs through these,
+    # and none of them can ever BE a program's page: measured on a ladderinternships round-up,
+    # which offered bit.ly, calendly and airtable links among its candidates. A shortener is also
+    # opaque -- we would pay to extract whatever it happens to point at today.
+    "bit.ly", "tinyurl.com", "goo.gl", "ow.ly", "buff.ly", "lnkd.in", "rebrand.ly",
+    "calendly.com", "airtable.com", "typeform.com", "jotform.com", "surveymonkey.com",
+    "forms.gle", "wufoo.com", "formstack.com", "smartsheet.com",
+    # NOT docs.google.com: hosts match on the REGISTRABLE domain, so it would collapse to
+    # google.com and take "Doodle for Google" -- a real catalog row -- with it. A Google Form is
+    # caught by its /viewform leaf instead.
 }
 
 
@@ -366,6 +376,46 @@ def discover(hub_url, off_domain=False, timeout=url_repair.DEFAULT_TIMEOUT, recu
     return final, trace
 
 
+def fresh_candidates(urls, catalog_keys, seen_this_run):
+    """(fresh, already_in_catalog, seen_earlier_this_run) -- what is worth PAYING to extract.
+
+    URL-only, and that is the point: nothing has been extracted yet, so there is no name to match
+    on. `url_dedupe.find_duplicates(u, "")` cannot help here -- its exact rule is "same normalized
+    URL AND similar name" by design, so an empty name always falls through to a hint, and the
+    caller ignored the hint. The result was a check that suppressed NOTHING while its comment
+    said it deduped against the catalog: mining CMU's index inserted 14 rows of which 12 were
+    pages the catalog already held, and the walk-up lead had predicted exactly that ("links 12
+    program(s) we already have").
+
+    URL-only is safe HERE in a way it would not be at the scraper's insert layer, where one
+    application portal legitimately backs six different programs. We are following a link: if a
+    row already sits at this exact URL, re-reading the page cannot produce anything the catalog
+    does not have, and improving that row is tenet 9's job rather than a second extraction's.
+
+    `seen_this_run` is shared across hubs and MUTATED, because two hubs in one run legitimately
+    link the same program -- CMU AI Scholars appeared on two different Immerse round-ups in a
+    single 3-hub run -- and extracting it twice pays twice for one page and hands the reviewer a
+    twin to resolve.
+    """
+    fresh, already, twice = [], 0, 0
+    for u in urls or []:
+        try:
+            k = url_dedupe.match_key(u)
+        except ValueError:
+            continue
+        if not k:
+            continue
+        if k in catalog_keys:
+            already += 1
+            continue
+        if k in seen_this_run:
+            twice += 1
+            continue
+        seen_this_run.add(k)
+        fresh.append(u)
+    return fresh, already, twice
+
+
 def hubs_from_leads(leads):
     """[(url, off_domain)] for queued hub leads -- WHICH WAY each one must be mined.
 
@@ -443,19 +493,38 @@ def main():
     existing = supabase_get(supabase_url, "opportunities", {"select": "id,name,url"},
                             service_key) if supabase_url else []
 
-    all_new = []
+    # Every URL the catalog already holds, active or not. THIS is the pre-spend check, and it
+    # has to be URL-only: at this point we have not extracted anything, so there is no name to
+    # match on, and `find_duplicates(u, "")` can never return an exact hit -- its exact rule is
+    # "same normalized URL AND similar name" by design, so an empty name always falls through to
+    # a hint the caller then ignored. The comment below claimed the catalog was checked; it was
+    # not, and NOTHING was ever suppressed.
+    #
+    # Measured: mining CMU's pre-college index extracted and inserted 14 rows of which 12 were
+    # pages already in the catalog -- and the walk-up lead had said so in advance ("links 12
+    # program(s) we already have"). The URL-only rule is right HERE, unlike at the scraper's
+    # insert layer where a shared application portal legitimately backs several programs: we are
+    # following a link, so if a row already sits at this exact URL, re-reading the page cannot
+    # produce anything the catalog does not have. Improving that row is tenet 9's job, not a
+    # second extraction's.
+    catalog_keys = set()
+    for r in existing or []:
+        try:
+            k = url_dedupe.match_key(r.get("url") or "")
+        except ValueError:
+            continue
+        if k:
+            catalog_keys.add(k)
+
+    all_new, seen_this_run = [], set()
     for hub_url, off_domain in hubs:
         urls, trace = discover(hub_url, off_domain=off_domain, timeout=args.timeout)
-        # dedup against the catalog BEFORE any model call — a followed link we already have is free
-        # to skip and must never be re-extracted.
-        fresh = []
-        for u in urls:
-            exact, _ = url_dedupe.find_duplicates(u, "", existing)
-            if not exact:
-                fresh.append(u)
+        fresh, already, twice = fresh_candidates(urls, catalog_keys, seen_this_run)
         print(f"[HUB] {hub_url}: harvested {trace['harvested']}, after audience filter "
-              f"{trace['after_anchor_filter']}, kept {trace['kept']}, new (not in catalog) "
-              f"{len(fresh)}." + (f"  ERROR: {trace['error']}" if trace.get("error") else ""))
+              f"{trace['after_anchor_filter']}, kept {trace['kept']}, already in catalog "
+              f"{already}, seen earlier this run {twice}, new {len(fresh)}."
+              + (f"  over cap {trace['over_cap']}" if trace.get("over_cap") else "")
+              + (f"  ERROR: {trace['error']}" if trace.get("error") else ""))
         for u in fresh:
             print(f"    candidate: {u}")
         all_new.append((hub_url, fresh))

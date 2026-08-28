@@ -297,3 +297,43 @@ def test_links_under_the_hub_path_are_offered_first():
     HUB = "https://city.gov/parks/teen/"
     kept, _subs = hub.filter_hub_links(hub.harvest_links(page, HUB), HUB, off_domain=False)
     assert kept[0][0] == "https://city.gov/parks/teen/art-club"
+
+
+@pytest.mark.parametrize("url", [
+    "https://bit.ly/LadderInternshipsApplication",
+    "https://calendly.com/heather-park/informational-session",
+    "https://airtable.com/appx1OFdMpDfxtEkR/shrNdEykWdhc4yeSv",
+    "https://docs.google.com/forms/d/e/1FAIpQLSc/viewform",
+])
+def test_shorteners_and_form_hosts_are_never_a_program_page(url):
+    """A round-up's own funnel runs through these, and none can BE a program's page. A shortener
+    is worse than useless: we would pay to extract whatever it points at today."""
+    assert hub.is_nonprogram_link(url, "https://roundup.example/list") is True
+
+
+# ---------- what is worth paying to extract ----------
+
+def test_a_page_already_in_the_catalog_is_never_re_extracted():
+    """The check that was supposed to do this suppressed NOTHING: it called
+    find_duplicates(url, "") whose exact rule is "same URL AND similar name", so an empty name
+    always fell through to a hint the caller ignored. Mining CMU's index inserted 14 rows of
+    which 12 were pages the catalog already held -- and the walk-up lead had said so in advance."""
+    import url_dedupe
+    known = {url_dedupe.match_key("https://x.edu/pre-college/ai.html")}
+    fresh, already, twice = hub.fresh_candidates(
+        ["https://x.edu/pre-college/ai.html", "https://x.edu/pre-college/art.html"], known, set())
+    assert fresh == ["https://x.edu/pre-college/art.html"]
+    assert already == 1 and twice == 0
+
+
+def test_two_hubs_linking_one_program_pay_for_it_once():
+    """Measured: CMU AI Scholars appeared on two different Immerse round-ups in one 3-hub run."""
+    seen = set()
+    a, _, _ = hub.fresh_candidates(["https://x.edu/p/ai"], set(), seen)
+    b, _, twice = hub.fresh_candidates(["https://x.edu/p/ai/"], set(), seen)
+    assert a == ["https://x.edu/p/ai"] and b == [] and twice == 1
+
+
+def test_a_malformed_href_cannot_stop_the_run():
+    fresh, _, _ = hub.fresh_candidates(["http://a b c:99999/x", "https://x.edu/p/ok"], set(), set())
+    assert fresh == ["https://x.edu/p/ok"]

@@ -162,7 +162,7 @@ def main():
         name, org = r.get("name") or "", r.get("org") or ""
         try:
             notes, usage, grounding, c, _att = so.research_seed(
-                refind_angle(name, org), "", today, gemini_key, _A)
+                refind_angle(name, org), "", today, gemini_key, _A, system=so.RESOLVE_SYSTEM)
             cost += c
             paid += 1
             resolved = [x["url"] for x in url_validate.resolve_grounding_chunks(grounding)

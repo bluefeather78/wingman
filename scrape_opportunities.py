@@ -108,6 +108,10 @@ FLAG_NO_TYPE = "no valid type returned — set one before activating"
 # is never a rejection — false negatives like "Algebra II" vs "Algebra 2" are the accepted cost.
 FLAG_URL_RESCUED = "URL rescued to the program's own page (was on {domain}) — confirm it matches"
 FLAG_TITLE_UNPROVEN = "page title does not clearly name this program — confirm it's the right page"
+# Stage 1b (discovery). Discovery returns a NAME with no URL; a per-name search then found and
+# title-proved its own page. Same evidence bar as harvest_names (title_proves), so it is not a
+# guess — but it is worth a reviewer's glance that the resolved page is the right program.
+FLAG_URL_RESOLVED = "URL found by a per-name search (stage 1b) — confirm it's the right program"
 # Phase-3 uniqueness. A row sharing a program's HOMEPAGE with another may be a genuinely
 # distinct program that just has no page of its own (tenet 6), so it is kept + flagged rather
 # than auto-merged — a person confirms it's distinct or a duplicate.
@@ -319,10 +323,87 @@ SEATTLE_SEEDS = [
     "teen programs, internships, or youth councils",
 ]
 
-# PHASE 1 — research. Deliberately asks for PROSE. This call's job is to search and to leave
-# behind grounding metadata; structuring the answer is phase 2's job. Do not add an output
-# format here.
-RESEARCH_SYSTEM = """You are a meticulous researcher helping build a high-quality catalog of extracurricular \
+# PHASE 1 — DISCOVERY. The broad-search prompt used by the scraper's own discovery pass.
+#
+# MARQUEE M5 + M8 (MARQUEE_DECISIONS.md): this is a phase-1 prompt and a prompt in general, so
+# changing it needs Shama's approval and its own dedicated commit. M5: it stays PROSE-ish with
+# real search — never collapsed into one JSON call (JSON output measured 0/4 search vs prose 4/4).
+# The line-per-opportunity FORMAT below is lighter than free prose but is NOT JSON; the one-angle
+# A/B (plan P4) must confirm the search rate holds under it before a full run. If search collapses,
+# loosen back toward free prose, do not add JSON.
+#
+# Its job: find MANY distinct programs and each one's own-page URL. Everything else (eligibility,
+# cost, dates, tasks) is filled downstream by refresh_opportunities/check_deadlines/action-items,
+# so discovery must not spend searches confirming those — that is what produced the 73% named-query
+# rate this prompt is designed to fix. Examples are load-bearing here (models follow do/don't
+# examples far better than adjectives); keep the good/bad query examples and the opportunity
+# definition concrete.
+DISCOVERY_SYSTEM = """You are a meticulous researcher building a catalog of extracurricular \
+opportunities for high school students, for the app "Wingman". Today's date is {today}.
+
+Find as many DISTINCT opportunities as you can for: {angle}
+
+WHAT YOU ARE PRODUCING. For each opportunity: its name, who runs it, one sentence on what it is, \
+and — most important — the URL of its own page. You are NOT writing a profile. Other agents later \
+read each opportunity's own page and take eligibility, grade range, cost, dates and application \
+steps from it, so you do not need to establish any of those and must not spend searches on them. \
+Not knowing them is expected, not a gap.
+
+WHAT COUNTS AS AN OPPORTUNITY. One program a high schooler can take part in — a summer or \
+pre-college program, an internship or mentorship, a competition or olympiad, a research placement, \
+a structured volunteer or service program, a student journal that accepts submissions, or a \
+conference a student can attend or present at. Those are the seven kinds. One opportunity = one \
+program with its own page:
+- If an organization runs several distinct programs, each is its own opportunity at its own page — \
+never the organization's homepage as a single entry.
+- A single course, session or track WITHIN one program is not a separate opportunity; the program is.
+- A listicle, directory, ranking or "N programs for high schoolers" article is never an opportunity \
+— it is a SOURCE to mine for the opportunities it names.
+- A company, university or org is not itself an opportunity unless it runs a specific program open to \
+high schoolers. The opportunity is the program, not the org.
+
+WHAT COUNTS AS ITS OWN PAGE. A page on the running organization's own website — not a round-up, \
+directory, blog or aggregator — and the page about THAT program: not the org's homepage when it runs \
+many, not the application form, not an FAQ, not a PDF. If the program has its own dedicated site, \
+that site's root is the right page. Copy the URL character-for-character from a page you actually \
+retrieved. NEVER construct, complete or guess one — a plausible wrong URL is worse than no URL, \
+because it looks correct to a reviewer.
+
+HOW TO SEARCH. Run at least a few DIFFERENT searches before you write anything, and make every one \
+describe a CLASS of opportunity rather than naming a specific program.
+A GOOD (broad) search describes a class and can surface many different programs:
+- "summer marine biology research programs for high school students"
+- "high school journalism competitions with cash prizes"
+- "list of pre-college engineering programs 2027"
+- "national labs that host high school interns"
+A BAD (named) search names one specific program, so it can only ever return that one — never do this \
+during discovery:
+- "MIT Research Science Institute application"
+- "Congressional App Challenge deadline"
+Vary your searches deliberately: swap the noun (program / institute / academy / intensive / \
+fellowship / challenge / competition / internship), the audience wording (high school students / \
+teens / grades 9-12 / rising juniors / pre-college), and the host type (university, national lab, \
+hospital, museum, professional society, nonprofit, company). Include at least one list-shaped search \
+("list of ...", "... directory", "best ... 2027"). Round-up and directory pages are USEFUL to you: \
+read them and take every opportunity name they list. Only broad searches find programs we do not \
+already know about, which is the entire job.
+
+HARD RULES:
+- Only write up opportunities you found actual evidence for in a search result. Never invent one, and \
+never pad the list with weak or speculative filler to look thorough.
+- Skip anything that looks defunct, or where nothing you found suggests it still runs.
+- Write an opportunity down even when you could not find its own page: give the name and say "no url". \
+A name on its own is still useful to us.
+
+FORMAT. One opportunity per line, no paragraphs:
+**Name** — organization — one sentence on what it is — URL of its own page, or "no url"."""
+
+# NARROW RESOLUTION prompt (formerly RESEARCH_SYSTEM). Used by the name->page resolvers —
+# refind_dead_links, harvest_names, and discovery stage 1b — which pass system=RESOLVE_SYSTEM to
+# research_seed and use only the grounding it leaves behind. Its text is UNCHANGED from the old
+# RESEARCH_SYSTEM so those callers behave exactly as before; a named "find this one page" search is
+# correct here, which is the opposite of DISCOVERY_SYSTEM above. (M8 still applies to edits.)
+RESOLVE_SYSTEM = """You are a meticulous researcher helping build a high-quality catalog of extracurricular \
 opportunities (programs, internships, research, competitions, volunteer roles, journals, conferences) for \
 high school students, for the app "Wingman". Today's date is {today}.
 
@@ -630,16 +711,26 @@ def build_row(candidate, mint_id, source, url, flags):
     }
 
 
-def research_seed(angle, addendum, today, gemini_key, args):
-    """Phase 1. Returns (notes, usage, grounding, cost, attempts).
+def research_seed(angle, addendum, today, gemini_key, args, system=None):
+    """Phase 1 search-with-grounding. Returns (notes, usage, grounding, cost, attempts).
+
+    `system=None` is the scraper's own DISCOVERY pass (broad, many programs — DISCOVERY_SYSTEM).
+    A non-None `system` (RESOLVE_SYSTEM) is the narrow name->page mode used by refind_dead_links,
+    harvest_names and discovery stage 1b: those pass RESOLVE_SYSTEM and read only the grounding,
+    so their prompt and user turn are kept byte-identical to the pre-split behaviour.
 
     Retries once on a zero-search response. Retrying rather than re-prompting is the only
     mitigation that works: the search decision is non-deterministic (seed 51 returned 0
     searches then 6 on an identical command), and a silent call is cheap because it pays no
     per-search fee.
     """
-    system = RESEARCH_SYSTEM.format(today=today, angle=angle) + addendum
-    user_content = f"Search now and write up what you find for: {angle}"
+    if system is None:
+        system = DISCOVERY_SYSTEM.format(today=today, angle=angle) + addendum
+        user_content = (f"Search now, then list every opportunity you find, one per line, with its "
+                        f"own-page URL where you have one, for: {angle}")
+    else:
+        system = system.format(today=today, angle=angle) + addendum
+        user_content = f"Search now and write up what you find for: {angle}"
     cost = 0.0
     notes, usage, extra = "", {}, {}
     for attempt in (1, 2):
@@ -657,6 +748,39 @@ def research_seed(angle, addendum, today, gemini_key, args):
             print("  [SILENT] no search invoked — retrying once (a silent call pays no "
                   "search fee, and the decision is non-deterministic)")
     return notes, usage, extra.get("grounding") or {}, cost, 2
+
+
+def resolve_missing_url(name, org, existing, today, gemini_key, args):
+    """Stage 1b: one narrow search to find a discovered program's OWN page. Returns
+    (url_or_None, cost, queries).
+
+    MARQUEE M9: this makes a paid per-name search (~$0.02-0.05, the per-search fee dominates).
+    Two FREE gates run first so money is never spent on a name that could not produce a provable
+    row, or on one we already have:
+      - name_is_resolvable: the name needs >=2 identity words, or title_proves can never accept
+        any page for it ("Debate", "Summer Internship" can't clear the bar — paying is waste).
+      - is_known_name: a strict identity match against the catalog means we already have it, so a
+        second copy is not worth a search; url_dedupe still catches it at insert if this misses.
+    Then one RESOLVE_SYSTEM search (max 1), grounding-resolved and title-proven by
+    harvest_names.best_resolved_url — the same evidence bar the name-harvest channel uses, so a
+    resolved URL is proven, not guessed. harvest_names is imported lazily: it imports this module.
+    """
+    import harvest_names
+    if not harvest_names.name_is_resolvable(name, org):
+        return None, 0.0, []
+    if harvest_names.is_known_name(name, existing):
+        return None, 0.0, []
+
+    class _A:                                   # a per-name search caps at ONE search
+        timeout = args.timeout
+        max_searches = 1
+
+    notes, usage, grounding, cost, _att = research_seed(
+        harvest_names.resolve_angle(name, org), "", today, gemini_key, _A, system=RESOLVE_SYSTEM)
+    queries = list((usage.get("server_tool_use") or {}).get("web_search_queries", []) or [])
+    resolved = [x["url"] for x in url_validate.resolve_grounding_chunks(grounding) if x.get("url")]
+    url = harvest_names.best_resolved_url(resolved, name, org, timeout=url_validate.DEFAULT_TIMEOUT)
+    return url, cost, queries
 
 
 def extract_candidates(notes, resolved_urls, gemini_key, args):
@@ -838,6 +962,17 @@ def main():
                          help="Skip the free HTTP liveness check on every candidate URL. Only for "
                               "offline debugging — without it, dead links reach the review queue "
                               "unflagged, which is the failure this rewrite exists to fix.")
+    parser.add_argument("--no-resolve", action="store_true",
+                         help="Disable stage 1b (the per-name search that finds a discovered "
+                              "program's own page when discovery returned a name but no URL). "
+                              "With it off, name-only candidates are dropped as before.")
+    parser.add_argument("--resolve-per-angle", type=int, default=12,
+                         help="Stage-1b spend ceiling PER angle: at most this many per-name "
+                              "resolution searches (each ~$0.02-0.05). Default 12.")
+    parser.add_argument("--resolve-per-run", type=int, default=150,
+                         help="Stage-1b spend ceiling for the WHOLE run, spread across angles "
+                              "(the mine_hub_pages lesson: a per-item cap is not a run cap). "
+                              "Default 150.")
     # --timeout comes from add_agent_args at 280s: broad national seeds with multiple
     # search rounds routinely take longer than the 120s the other agents use.
     add_agent_args(parser, default_timeout=280)
@@ -910,6 +1045,8 @@ def main():
     total_cost = 0.0
     raw_found = duplicates_skipped = invalid_skipped = errors = 0
     total_searches = silent_search_count = flagged_rows = dead_links = 0
+    # Stage 1b (per-name URL resolution) run-level totals + the shared run budget.
+    resolve_run_count = names_attempted = names_resolved = names_dropped = 0
     # Phase 4F: the hub/listicle pages this run consulted but did not turn into rows.
     # Captured free; acted on later by a separately-approved gated run.
     captured_leads = []
@@ -922,6 +1059,10 @@ def main():
         seed_found = seed_added = seed_dupes = 0
         seed_cost = 0.0
         resolved_urls, seed_used = [], []
+        # Stage 1b per-seed accounting (also written to this seed's log for the query view).
+        resolve_seed_count = 0
+        resolution_queries = []
+        seed_names_attempted = seed_names_resolved = seed_names_dropped = 0
         try:
             notes, usage, grounding, phase1_cost, attempts = research_seed(
                 angle, addendum, today, gemini_key, args)
@@ -953,12 +1094,18 @@ def main():
 
             # Save the raw material. No run before 2026-08-23 kept any, which is why past
             # failures ("5 candidates, all invalid, $0.09") were undiagnosable afterwards.
-            with open(os.path.join(log_dir, f"scraper_{run_stamp}_seed{seed.get('id')}.json"),
-                      "w", encoding="utf-8") as f:
-                json.dump({"angle": angle, "searches": searches, "attempts": attempts,
-                           "queries": (usage.get("server_tool_use") or {}).get("web_search_queries", []),
-                           "resolved_urls": resolved_urls, "notes": notes,
-                           "candidates": candidates}, f, indent=2, ensure_ascii=False)
+            seed_log_path = os.path.join(log_dir, f"scraper_{run_stamp}_seed{seed.get('id')}.json")
+            seed_log = {"angle": angle, "searches": searches, "attempts": attempts,
+                        "queries": (usage.get("server_tool_use") or {}).get("web_search_queries", []),
+                        "resolved_urls": resolved_urls, "notes": notes,
+                        "candidates": candidates}
+            # Written NOW (discovery raw material survives a later crash), then re-written after
+            # the staged loop with stage-1b resolution stats folded in. `queries` stays
+            # DISCOVERY-only on purpose — stage-1b searches are named by design and live in
+            # `resolution_queries`, so the console's breadth metric (computed over `queries`)
+            # keeps measuring discovery, not resolution.
+            with open(seed_log_path, "w", encoding="utf-8") as f:
+                json.dump(seed_log, f, indent=2, ensure_ascii=False)
 
             # Resolve each candidate's URL first, so liveness is checked on the URL we will
             # actually store rather than the one the model typed.
@@ -969,13 +1116,45 @@ def main():
                     rejected.append({"reason": "not a JSON object", "raw": candidate})
                     continue
                 name = (candidate.get("name") or "").strip()
+                if not name:
+                    invalid_skipped += 1
+                    rejected.append({"reason": "no name — a row cannot be identified", "raw": candidate})
+                    continue
                 span_urls = spans_for_name(name, spans)
                 url, flags = reconcile_url(candidate.get("url"), resolved_urls, span_urls)
-                if not name or not url:
-                    invalid_skipped += 1
-                    rejected.append({"reason": "no name or no URL — a row cannot be identified "
-                                               "without both", "raw": candidate})
-                    continue
+                if not url:
+                    # Stage 1b: discovery found a NAME but no URL. Try one per-name search to
+                    # find its own page before dropping it — within the per-angle and per-run
+                    # spend ceilings, and skipped entirely under --no-resolve / --no-verify-urls
+                    # (both mean "don't spend on URL work").
+                    can_resolve = (not args.no_resolve and not args.no_verify_urls
+                                   and resolve_run_count < args.resolve_per_run
+                                   and resolve_seed_count < args.resolve_per_angle)
+                    if can_resolve:
+                        r_url, r_cost, r_queries = resolve_missing_url(
+                            name, candidate.get("org"), existing, today, gemini_key, args)
+                        seed_cost += r_cost
+                        total_cost += r_cost
+                        resolution_queries.extend(r_queries)
+                        resolve_run_count += 1
+                        resolve_seed_count += 1
+                        seed_names_attempted += 1
+                        names_attempted += 1
+                        if r_url:
+                            url = r_url
+                            flags = list(flags) + [FLAG_URL_RESOLVED]
+                            seed_names_resolved += 1
+                            names_resolved += 1
+                    if not url:
+                        # Still no URL: drop, but COUNT it (a discovered name we could not prove
+                        # is not a silent loss — it is the signal that discovery is out-running
+                        # resolution, and a future channel could pick it up).
+                        seed_names_dropped += 1
+                        names_dropped += 1
+                        invalid_skipped += 1
+                        rejected.append({"reason": "name found but no own-page URL could be "
+                                                   "proven (stage 1b)", "raw": candidate})
+                        continue
                 # Phase-2 URL truth: rescue a content-mill/off-site URL to the program's own
                 # page and title-prove what we store. Free HTTP, so it rides the same
                 # --no-verify-urls switch as the liveness check.
@@ -983,6 +1162,22 @@ def main():
                     url, flags = resolve_url_truth(
                         candidate, url, flags, resolved_urls, url_validate.DEFAULT_TIMEOUT)
                 staged.append((candidate, url, list(flags)))
+
+            # Fold stage-1b resolution stats into this seed's log (queries stay discovery-only).
+            if seed_names_attempted:
+                seed_log.update({
+                    "resolution_queries": resolution_queries,
+                    "names_attempted": seed_names_attempted,
+                    "names_resolved": seed_names_resolved,
+                    "names_dropped": seed_names_dropped,
+                })
+                try:
+                    with open(seed_log_path, "w", encoding="utf-8") as f:
+                        json.dump(seed_log, f, indent=2, ensure_ascii=False)
+                except OSError:
+                    pass
+                print(f"  -> stage 1b: {seed_names_resolved}/{seed_names_attempted} name(s) "
+                      f"resolved to a page, {seed_names_dropped} dropped")
 
             checks = {}
             if staged and not args.no_verify_urls:
@@ -1126,6 +1321,7 @@ def main():
           f"errors: {errors}, new rows: {len(inserted_rows)} "
           f"({flagged_rows} flagged for review, {dead_links} with dead links), "
           f"searches: {total_searches}, silent seeds: {silent_search_count}/{len(seeds)}, "
+          f"stage-1b: {names_resolved}/{names_attempted} name(s) resolved ({names_dropped} dropped), "
           f"cost: ${total_cost:.4f}")
 
     # Phase 4F — persist the leads. Written even on a --dry-run: a dry run pays the search in
@@ -1181,6 +1377,8 @@ def main():
             "notes": (f"raw_found={raw_found}, duplicates_skipped={duplicates_skipped}, "
                       f"invalid_skipped={invalid_skipped}, flagged={flagged_rows}, "
                       f"dead_links={dead_links}, leads={len(captured_leads)}, "
+                      f"resolve_attempted={names_attempted}, resolve_resolved={names_resolved}, "
+                      f"resolve_dropped={names_dropped}, "
                       f"max_searches={args.max_searches}, timeout={args.timeout}s"
                       + (f", would_have_added={len(inserted_rows)}" if args.dry_run else "")),
         }, service_key)

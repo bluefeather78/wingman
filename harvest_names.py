@@ -592,7 +592,7 @@ def main():
         for name in keep:
             try:
                 notes, _usage, grounding, c, _att = so.research_seed(
-                    resolve_angle(name), "", today, gemini_key, _A)
+                    resolve_angle(name), "", today, gemini_key, _A, system=so.RESOLVE_SYSTEM)
                 cost += c
                 searched += 1
                 resolved = [x["url"] for x in url_validate.resolve_grounding_chunks(grounding)

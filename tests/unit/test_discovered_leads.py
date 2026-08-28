@@ -418,3 +418,46 @@ def test_the_roundup_reason_is_defined_once():
     assert dl.ROUNDUP_REJECT_REASON == "third-party-roundup"
     import ops.core as core
     assert core._ROUNDUP_REJECT_REASON() == dl.ROUNDUP_REJECT_REASON
+
+
+# ---------- a page we never received is not a page that "names without linking" ----------
+
+def test_zero_anchors_means_we_did_not_get_the_page(monkeypatch):
+    """Measured on a Wix round-up: 400KB of HTML, 0 `<a>` tags, and none of the programs it
+    lists present anywhere in the bytes. Scoring that as '0 outside sites' routed it to name
+    harvest as though its programs were in prose — where the identical fetch finds the identical
+    nothing. An honest no-verdict beats a confident wrong answer."""
+    import mine_hub_pages
+    monkeypatch.setattr(mine_hub_pages, "fetch_html",
+                        lambda u, t=None: "<html><title>15 Summer Programs</title>" + "x" * 5000)
+    kind, sig = dl.classify_page("https://js-built.example/15-summer-programs")
+    assert kind is None and "did not render" in sig
+
+
+def test_a_page_with_anchors_but_few_outside_sites_still_reaches_the_names_branch(monkeypatch):
+    """The guard must not swallow the real case it sits next to: a genuine article links its
+    own nav and footer, just not the programs."""
+    import mine_hub_pages, page_text
+    html = ('<html><title>15 Summer Programs for High School Students</title>'
+            '<a href="/about">About</a><a href="/contact">Contact</a>')
+    monkeypatch.setattr(mine_hub_pages, "fetch_html", lambda u, t=None: html)
+    monkeypatch.setattr(page_text, "fetch_page_text",
+                        lambda u, t=None: ("high school students " * 200, "ok"))
+    kind, _ = dl.classify_page("https://real.example/15-summer-programs")
+    assert kind == dl.KIND_NAMES
+
+
+def test_stylesheet_text_is_not_prose():
+    """A site builder can return a 200 whose readable text is entirely custom properties —
+    24,000 chars, 412 `--` markers, 0% prose lines. It reads as a healthy fetch."""
+    assert dl._looks_like_stylesheet("--bg-color: red; " * 200) is True
+    assert dl._looks_like_stylesheet("A perfectly ordinary article about summer programs.") is False
+
+
+def test_confirmed_roundup_says_so_when_it_cannot_read_the_page(monkeypatch):
+    """Still queued — never drop what a person flagged — but the signal must not claim the
+    programs were 'named, not linked' when we saw nothing at all."""
+    import mine_hub_pages
+    monkeypatch.setattr(mine_hub_pages, "fetch_html", lambda u, t=None: "")
+    kind, sig = dl.classify_confirmed_roundup("https://blocked.example/list")
+    assert kind == dl.KIND_NAMES and "cannot read this page" in sig

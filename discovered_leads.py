@@ -159,6 +159,18 @@ def strip_site_name(title):
     return best
 
 
+def _looks_like_stylesheet(text):
+    """True when the extracted 'text' is really CSS. FREE, pure.
+
+    Site builders can return a successful 200 whose readable text is entirely custom
+    properties. Measured: a Wix round-up yielded 24,000 chars containing **412 `--` markers and
+    0% prose lines**, while the round-ups that really are readable (lumiere aside) scored 0.
+    It reads as a healthy fetch, which is what makes it dangerous — the page reports "named
+    nothing" rather than "could not be read".
+    """
+    return (text or "").count("--") > 100
+
+
 def classify_confirmed_roundup(url, timeout=url_repair.DEFAULT_TIMEOUT):
     """(kind, signal) for a page a PERSON has already confirmed is a third-party round-up.
 
@@ -174,6 +186,7 @@ def classify_confirmed_roundup(url, timeout=url_repair.DEFAULT_TIMEOUT):
     person explicitly flagged is the one outcome this path must not produce.
     """
     import mine_hub_pages
+    html = ""
     try:
         html = mine_hub_pages.fetch_html(url, timeout)
         kept, subs = mine_hub_pages.filter_hub_links(
@@ -185,6 +198,8 @@ def classify_confirmed_roundup(url, timeout=url_repair.DEFAULT_TIMEOUT):
         domains = set()
     if len(domains) >= MIN_HUB_DOMAINS:
         return KIND_HUB, f"you marked it a round-up; it links programs on {len(domains)} sites"
+    if not html:
+        return KIND_NAMES, "you marked it a round-up, but we cannot read this page at all"
     return KIND_NAMES, ("you marked it a round-up; it links "
                         f"{len(domains)} site(s), so its programs are named, not linked")
 
@@ -216,9 +231,20 @@ def classify_page(url, timeout=url_repair.DEFAULT_TIMEOUT):
         return None, f"title does not promise many programs: {title[:60]!r}"
     if mine_hub_pages.is_wrong_audience(title):
         return None, f"title names a non-high-school audience: {title[:60]!r}"
+    # A page with NO anchors at all was not rendered for us. Every real article has some —
+    # nav, footer, related posts — so zero is not "it doesn't link its programs", it is "we
+    # received a shell". Measured on a Wix round-up: 400KB of HTML, **0 `<a>` tags**, and none
+    # of the programs it lists (Parsons, Otis, Pratt, RISD) present anywhere in the bytes.
+    # Without this guard that page scored "0 outside sites" and was routed to name harvest as
+    # though it named its programs in prose — where the identical fetch would have found the
+    # identical nothing. A confident wrong answer is worse than an honest no verdict.
+    anchors = mine_hub_pages.harvest_links(html, url)
+    if not anchors:
+        return None, f"page did not render for us — 0 links in {len(html)} bytes (JS-built)"
+    if _looks_like_stylesheet(page_text.fetch_page_text(url, timeout)[0] or ""):
+        return None, "page returned stylesheet, not article text (site builder)"
     try:
-        kept, subs = mine_hub_pages.filter_hub_links(
-            mine_hub_pages.harvest_links(html, url), url, off_domain=True, cap=400)
+        kept, subs = mine_hub_pages.filter_hub_links(anchors, url, off_domain=True, cap=400)
         domains = {url_dedupe.registrable_domain(urllib.parse.urlsplit(u).netloc)
                    for u, _ in kept + subs}
         domains.discard("")

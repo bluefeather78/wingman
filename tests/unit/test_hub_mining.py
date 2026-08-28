@@ -131,6 +131,11 @@ _HUBU = "https://precollege.wisc.edu/"
     "https://kcls.org/ebooks/",
     "https://kcls.org/teens/{{url}}",
     "https://www.spl.org/donate",
+    # inquiry / application-material forms (2026-08-28 Columbia re-preview)
+    "https://apply.sps.columbia.edu/register/pre-college-rfi",
+    "https://precollege.sps.columbia.edu/admissions/applying-pre-college-programs/application-materials",
+    "https://x.edu/programs/summer-info-session",
+    "https://x.edu/how-to-apply",
 ])
 def test_is_nonprogram_link_true(url):
     assert hub.is_nonprogram_link(url, _HUBU) is True

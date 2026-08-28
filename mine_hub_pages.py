@@ -89,11 +89,24 @@ _NAV_SLUGS = url_repair.GENERIC_SLUGS | {
     "publications", "publications-and-funding", "funding", "grants", "grants-collaborations",
     "work-with-us", "partnerships", "successful-partnerships", "partnership-opportunities",
     "map", "maps", "projects", "viewform",
+    # Inquiry/application-material forms, surfaced by the 2026-08-28 Columbia re-preview:
+    # /register/pre-college-rfi (a request-for-information form) and
+    # /applying-pre-college-programs/application-materials both passed every other filter and
+    # would have cost a refusal each. Exact leaves here; the program-name-prepended shapes
+    # (pre-college-rfi) are caught by _NAV_LEAF_SUFFIXES below.
+    "application-materials", "request-info", "request-information", "rfi", "inquiry",
+    "info-session", "information-session", "how-to-apply", "checklist",
     # NOT here, deliberately: anything naming a scholarship or financial aid. The operator wants
     # SCHOLARSHIPS in the catalog (2026-08-28), so a page at /scholarships-and-financial-aid is a
     # lead, not chaff -- and this list existing at all is why that had to be caught by hand
     # rather than by a rule. Anything added here must be a page nobody would ever want as a row.
 }
+# Furniture tails that mark an inquiry/application form even when the program name is prepended
+# to the leaf ('pre-college-rfi', 'summer-info-session'). Matched as a leaf suffix, the same way
+# _NAV_SLUGS matches an exact leaf — a program is never named after one of these.
+_NAV_LEAF_SUFFIXES = ("-rfi", "-request-info", "-request-information", "-inquiry",
+                      "-info-session", "-information-session", "-application-materials",
+                      "-how-to-apply")
 # A non-HTML target (a viewbook PDF, a flyer image) can never be a program's landing page.
 _NONHTML_EXT = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip",
                 ".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mov", ".webp", ".svg", ".bmp",
@@ -172,7 +185,7 @@ def is_nonprogram_link(url, hub_url):
     if _WRONG_AUDIENCE.search(re.sub(r"[/_-]+", " ", path)):
         return True
     slug = url_repair._slug(url)
-    return (not slug) or slug in _NAV_SLUGS
+    return (not slug) or slug in _NAV_SLUGS or slug.endswith(_NAV_LEAF_SUFFIXES)
 
 
 def is_wrong_audience(text):

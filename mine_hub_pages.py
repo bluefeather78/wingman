@@ -81,6 +81,14 @@ _NAV_SLUGS = url_repair.GENERIC_SLUGS | {
     # other filter (same registrable domain, deep path, high-school wording) and would have been
     # extracted and inserted as a row.
     "join-our-mailing-list", "mailing-list", "newsletter", "subscribe",
+    # Measured on the first three walk-up previews (Columbia, Vanderbilt, Seattle Parks): pages
+    # ABOUT a program set rather than a program. Each is a leaf slug, so a real program sitting
+    # under /programs/ or /admissions/ is untouched -- only the page itself is dropped.
+    "frequently-asked-questions", "program-costs", "costs", "cost", "fees", "tuition-and-fees",
+    "program-policies", "policies", "policy", "compare-programs", "explore-courses",
+    "publications", "publications-and-funding", "funding", "grants", "grants-collaborations",
+    "work-with-us", "partnerships", "successful-partnerships", "partnership-opportunities",
+    "map", "maps", "projects", "financial-aid", "scholarships-and-financial-aid",
 }
 # A non-HTML target (a viewbook PDF, a flyer image) can never be a program's landing page.
 _NONHTML_EXT = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip",
@@ -529,7 +537,12 @@ def main():
                       + (f", would_have_added={len(rows)}" if args.dry_run else "")),
         }, service_key)
 
-    if lead_urls and not args.dry_run:
+    # Mark every hub we actually mined, not only the ones taken off the queue. The CMU pilot was
+    # run with --hubs while its lead sat in the queue as "new", so the next --from-leads run would
+    # have re-mined and re-PAID for the same 14 pages. marking a URL that is not in the file is a
+    # no-op, so this is safe for a hub that was never a lead.
+    lead_urls = list(dict.fromkeys(lead_urls + [h for h, _off in hubs]))
+    if lead_urls and not args.dry_run and not args.preview:
         # Stamped only on a real run: a dry run proved the extraction works but wrote nothing,
         # so the lead still has work left in it and must stay in the queue.
         import discovered_leads

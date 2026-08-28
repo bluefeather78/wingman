@@ -149,6 +149,36 @@ harvest run is the flat `$0.014` per-search fee, charged per name, at `MAX_SEARC
 money — they rejected 4 names for $0.00 that would have cost ~$0.08 to reject by searching.
 Hub mining is a different cost class entirely: **$0.0015/page**, no search fee at all.
 
+### Score floor replaces the count cap (2026-08-27, verified live)
+
+`--max-names` is now a spend CEILING (default 20); `--min-score` (default 1) chooses. A "15
+programs" listicle yields only **8-11** names past the free gates, so a count cap near the list
+length never binds — it rationed rather than economised. Bands: **score >= 1 resolved 3/5, score
+<= 0 resolved 0/3.** Floor is 1 not 2 on purpose (Interlochen scored 1 and resolved).
+`below_score` and `over_cap` report separately — only the latter is a reason to re-run bigger.
+
+| page | cap 5, page order | cap 5, ranked | **floor >= 1** |
+|---|---|---|---|
+| ladder | 5 searched, 1 row | 5, 3 rows | **5, 3 rows** (identical set) |
+| immerse | 5, 2 rows | 5, 2 rows | **2 searched, $0.097 -> $0.042** |
+
+**Live verification, fresh AI listicle (PAID $0.2048):** 18 named -> 5 already in catalog, 2
+below score, **10 searched, 6 resolved (60%)**; the ceiling never bound. It exposed three bugs,
+all fixed: `dup_candidates` was hardcoded `None` (a row went in on the SAME URL as ec17751 with
+no flag); one page names one program twice with different identity words, so we paid twice and
+inserted twins (`collapse_name_variants` — subset incl. equal, never a ratio; replay: 10
+searches -> 8); and `veritasai.com`/`collegevine.com`/`novascholar.org`/`deltainstitute.co`
+joined `CONTENT_MILL_HOSTS` after a veritasai round-up was stored as NYU Tandon's own page.
+
+**Residual, stated not hidden:** ec18781 twins ec18343 via a catalog-level near-duplicate (stored
+row says "(BWSI)", new one does not). Gate 3's exact-set match cannot see it, and loosening it to
+a subset would risk suppressing a genuinely more specific program — reviewer's Duplicate button.
+
+**Cost model, fitted to both runs (reconciles to $0.0001):** naming call **$0.0038/page**, per
+name searched **$0.0167** (84% of it the flat $0.014 search fee), extraction **$0.0047/row**.
+Draining all 70 queued leads: ~**$7** at cap 5, ~**$12-13** at cap 10-20 — but with the floor it
+self-sizes, so budget on names-worth-searching, not on the cap.
+
 ### OPEN / do next
 1. **Push `main`** — now 11 commits ahead of `origin/main` (the merge brought 5 branch commits with it). Scraper-only (no `app/`,
    `render.yaml`, `requirements.txt`, `server.py`), so a Render deploy is a no-op for the web

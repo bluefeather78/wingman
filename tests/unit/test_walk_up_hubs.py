@@ -211,3 +211,25 @@ def test_a_parent_that_can_never_be_a_source_is_skipped(url):
     """A row sitting at /blog/<post> has a blog index for a parent, and a row on a social host a
     profile page. Neither is a program list, and the router already owns that definition."""
     assert wu.group_by_parent([{"id": 1, "url": url}]) == {}
+
+
+# ---------- the free-ness claim, pinned ----------
+
+def test_walking_up_can_never_make_a_paid_call(monkeypatch):
+    """`walk_up_hubs` documents itself as FREE at every tier. The paid libraries ARE reachable in
+    its import graph -- walk_up_hubs -> discovered_leads -> mine_hub_pages -> gemini_common, among
+    others -- so "it does not import a model client" is not the claim and could not be. The claim
+    is that no model function is ever CALLED, and this fails loudly if that stops being true."""
+    import gemini_common, claude_common
+
+    def boom(*a, **k):
+        raise AssertionError("walk_up_hubs made a paid model call")
+
+    monkeypatch.setattr(gemini_common, "call_gemini", boom)
+    monkeypatch.setattr(claude_common, "call_claude", boom)
+
+    rows = [{"id": 1, "name": "Robotics Institute", "url": CHILD},
+            {"id": 2, "url": "https://y.edu/summer/art"}]
+    pages = {PARENT: _page([(CHILD, "Robotics")] + SIBLINGS), "https://y.edu/summer/": None}
+    leads, trace = wu.walk_up(rows, fetch=_fake_fetch(pages))
+    assert len(leads) == 1 and trace["unreadable"] == 1

@@ -749,6 +749,41 @@ tr.disabled-seed { opacity: .48; }
     </div>
   </div>
 
+  <!-- What each angle actually searched (query telemetry from agent_logs/) -->
+  <div class="card">
+    <div class="card-head">
+      <h2>What each angle searched</h2>
+      <div class="spacer"></div>
+      <div class="hint">Gemini writes the queries, not us &mdash; this is what the angle turned into</div>
+      <select id="querySelect" style="max-width:220px"></select>
+    </div>
+    <div class="card-body tight">
+      <div class="notice err hidden" id="queryMissing" style="margin:10px 14px"></div>
+      <div class="hint" id="querySummary" style="padding:10px 14px">Loading&hellip;</div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th class="seed-angle">Angle (as sent that run)</th>
+            <th class="num" title="web_search_requests reported by the model">Searches</th>
+            <th class="num" title="Query strings the model actually issued">Queries</th>
+            <th class="num" title="Share of this angle's queries that named no program — the only shape that can discover something new">Broad&nbsp;%</th>
+            <th>Shape mix</th>
+            <th class="num" title="Candidates the angle returned that run">Cands</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="queryBody"><tr><td colspan="7" class="empty">Loading&hellip;</td></tr></tbody>
+        </table>
+      </div>
+      <div class="hint" style="padding:8px 14px">
+        <strong>broad</strong> names no program &mdash; it describes a class and can surface something
+        we have never heard of. <strong>named</strong> carries a specific program or organisation, so
+        its ceiling is one program the model already had in mind. <strong>metadata</strong> asks for
+        cost/eligibility/contact on something already found. The split is a regex heuristic over the
+        query text, not a model judgement.
+      </div>
+    </div>
+  </div>
+
   <!-- Recent merges (Phase-3 audit) -->
   <div class="card">
     <div class="card-head">
@@ -1398,6 +1433,7 @@ tr.disabled-seed { opacity: .48; }
 const S = {
   config: {}, status: {}, history: [], summary: null,
   seeds: [], seedMode: 'national', seedSort: 'cost_per_approved', seedReady: false,
+  queryRuns: null,
   userCosts: null, userCostSort: 'cost_usd', expandedUsers: new Set(), view: 'metrics',
   metrics: null, metricPanel: 'funnel', metricSort: 'stage', expandedStage: null,
   lastRefresh: null, seedYield: null, userPanel: 'provider',
@@ -2410,6 +2446,7 @@ function relocateConsole() {
   move(cardOf('historyBody'), 'slot-log-history');
   move(cardOf('snapshotBody'), 'slot-log-snapshots');
   move(cardOf('seedBody'), 'slot-newopp-angles');
+  move(cardOf('queryBody'), 'slot-newopp-angles');
   move(cardOf('timingBody'), 'slot-log-timing');
   move(cardOf('pendingBody'), 'slot-newopp-review');
   move(cardOf('signupBody'), 'slot-lists-recipes');
@@ -3496,6 +3533,7 @@ async function loadSeeds() {
       then <span class="mono">python migrate_seeds_to_supabase.py</span>.</span></td></tr>`;
   }
   loadMerges();
+  loadQueryRuns();
 }
 
 async function loadMerges() {
@@ -3516,6 +3554,115 @@ async function loadMerges() {
     </div>`).join('');
   } catch (e) {
     el.textContent = 'Could not load merges: ' + e.message;
+  }
+}
+
+/* ===========================================================================
+   What each angle actually searched (query telemetry)
+
+   An angle is a prompt fragment; the queries are the model's. They were printed, written to
+   agent_logs/scraper_<stamp>_seed<id>.json and then read by nobody — so "did this phrase turn
+   into broad searches or into narrow ones that could only confirm a program already in mind"
+   was unanswerable. This card is the read side. It costs nothing: local files, no model call.
+=========================================================================== */
+const QUERY_SHAPE = {
+  broad:    { cls: 'ok',     label: 'broad' },
+  named:    { cls: 'warn',   label: 'named' },
+  metadata: { cls: '',       label: 'metadata' },
+};
+
+function shapeBar(counts, total) {
+  if (!total) return '<span class="hint">no queries logged</span>';
+  const seg = (k) => {
+    const n = (counts || {})[k] || 0;
+    if (!n) return '';
+    const w = (n / total * 100).toFixed(1);
+    const c = k === 'broad' ? 'var(--ok)' : (k === 'named' ? 'var(--warn)' : 'var(--text-3)');
+    return `<span title="${n} ${k}" style="display:inline-block;height:8px;width:${w}%;background:${c}"></span>`;
+  };
+  return `<span style="display:inline-flex;width:110px;border-radius:4px;overflow:hidden;
+    background:var(--surface-3);vertical-align:middle">${seg('broad')}${seg('named')}${seg('metadata')}</span>`;
+}
+
+function renderQueryRuns() {
+  const d = S.queryRuns;
+  const body = $('queryBody'), sum = $('querySummary'), miss = $('queryMissing');
+  if (!d) return;
+
+  // Runs whose telemetry is GONE are reported, never hidden. These files are local and
+  // untracked, so a run executed in a git worktree takes its logs with it when the worktree is
+  // removed — which is what happened to the 08-27 runs. Showing the newest run we happen to
+  // hold, with no note, would read as "this is the latest run".
+  const gone = d.missing_runs || [];
+  if (gone.length) {
+    miss.innerHTML = `<b>${gone.length} live scraper run(s) newer than this one have no query log on disk.</b>
+      ${gone.map(g => `run ${g.run_id} (${esc(clock(g.started_at))}, ${num(g.items)} angles, ${money(g.cost_usd)})`).join(' · ')}
+      <br><span style="font-size:12px">agent_logs/ is local and untracked — a run executed in a git worktree
+      writes its logs there, and removing the worktree deletes them.</span>`;
+    miss.classList.remove('hidden');
+  } else { miss.classList.add('hidden'); }
+
+  const sel = $('querySelect');
+  sel.innerHTML = (d.runs || []).map(r =>
+    `<option value="${esc(r)}" ${r === d.run ? 'selected' : ''}>${esc(runStamp(r))}</option>`).join('');
+  sel.classList.toggle('hidden', (d.runs || []).length < 2);
+
+  const s = d.summary;
+  if (!s || !s.seeds) {
+    sum.textContent = d.note || 'No per-seed query logs on disk yet. A live scraper run writes them.';
+    body.innerHTML = '<tr><td colspan="7" class="empty">Nothing to show.</td></tr>';
+    return;
+  }
+  // distinct < total means two angles paid for the same search — the only overlap signal there is.
+  const overlap = s.total_queries - s.distinct_queries;
+  sum.innerHTML = `<b>${num(s.seeds)}</b> angles · <b>${num(s.total_queries)}</b> searches
+    (${s.queries_per_seed} per angle) · <b>${pct(s.breadth)}</b> broad, ${pct(s.named_rate)} named
+    · ${num(s.silent_seeds)} silent, ${num(s.retried_seeds)} retried
+    · ${overlap > 0 ? `<span style="color:var(--warn)">${num(overlap)} repeated across angles</span>`
+                    : 'no repeated queries'}`;
+
+  body.innerHTML = (d.seeds || []).map(r => {
+    const rid = `q${r.seed_id}`;
+    const detail = (r.queries || []).map(q => {
+      const sh = QUERY_SHAPE[q.shape] || { cls: '', label: q.shape };
+      const flags = [q.audience ? 'HS' : '', q.place ? 'place' : '', q.metadata ? 'meta' : '']
+        .filter(Boolean).join(' · ');
+      return `<div style="padding:3px 0;display:flex;gap:8px;align-items:baseline">
+        <span class="pill ${sh.cls}">${sh.label}</span>
+        <span class="mono" style="flex:1">${esc(q.query)}</span>
+        <span class="hint" style="font-size:11px">${esc(flags)}</span></div>`;
+    }).join('') || '<div class="hint">No query strings logged for this angle.</div>';
+    return `<tr>
+      <td class="seed-angle"><div class="txt" onclick="toggleQueryRow('${rid}')" title="Click to see the queries">${esc(r.angle || '(angle not recorded)')}</div></td>
+      <td class="num mono">${num(r.searches)}</td>
+      <td class="num mono">${num(r.total)}</td>
+      <td class="num mono" ${r.breadth !== null && r.breadth < 0.34 ? 'style="color:var(--warn);font-weight:600"' : ''}>${pct(r.breadth)}</td>
+      <td>${shapeBar(r.counts, r.total)}</td>
+      <td class="num mono">${num(r.candidates)}</td>
+      <td class="num"><button class="btn btn-ghost btn-sm" onclick="toggleQueryRow('${rid}')">Queries</button></td>
+    </tr>
+    <tr id="${rid}" class="hidden"><td colspan="7" style="background:var(--surface-2)">${detail}</td></tr>`;
+  }).join('');
+}
+
+function toggleQueryRow(id) { const el = $(id); if (el) el.classList.toggle('hidden'); }
+
+// '20260823-015749' → '2026-08-23 01:57'; a date-only stamp (pre-2026-08-22 runs) prints no
+// time, because '00:00' would read as a real run time rather than as an unknown one.
+function runStamp(s) {
+  if (!s) return '';
+  const d = `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  return s.length > 8 ? `${d} ${s.slice(9, 11)}:${s.slice(11, 13)}` : d;
+}
+
+async function loadQueryRuns(run) {
+  const body = $('queryBody');
+  if (!body) return;
+  try {
+    S.queryRuns = await api('/api/seeds/queries' + (run ? `?run=${encodeURIComponent(run)}` : ''));
+    renderQueryRuns();
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="7" class="empty">Could not load query telemetry: ${esc(e.message)}</td></tr>`;
   }
 }
 
@@ -4104,6 +4251,7 @@ $('dlCachePreview').onclick = () => runDeadlineCache(true);
 $('dlCacheApply').onclick = () => runDeadlineCache(false);
 $('dlCacheAll').onchange = resetDeadlineCachePreview;
 $('dlCacheIds').oninput = resetDeadlineCachePreview;
+$('querySelect').onchange = (e) => loadQueryRuns(e.target.value);
 $('seedClose').onclick = () => $('seedModal').classList.remove('open');
 $('seedSave').onclick = saveSeed;
 $('seedDelete').onclick = deleteSeed;

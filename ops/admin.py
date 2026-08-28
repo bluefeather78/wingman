@@ -384,6 +384,13 @@ def handle_seeds_list(request: Request):
                                "yield": core.seed_yield_state(rows)}, default=str)
 
 
+@router.get("/api/seeds/queries")
+def handle_seed_queries(request: Request):
+    """What each angle actually SEARCHED on one run. Reads local agent_logs/, never the model."""
+    return json_response(200, {"ok": True, **core.list_seed_query_runs(
+        run=request.query_params.get("run"))}, default=str)
+
+
 @router.get("/api/agents/merges")
 def handle_merges_list(request: Request):
     return json_response(200, core.list_recent_merges(

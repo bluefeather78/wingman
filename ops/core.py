@@ -28,6 +28,7 @@ import agent_common
 import aggregators_common
 import dryrun_common
 import mailing_list_common
+import query_telemetry
 import seed_ledger
 from supabase_common import supabase_get
 from agent_common import PREVIEW_PREFIX as AGENT_PREVIEW_PREFIX
@@ -3598,6 +3599,110 @@ def seed_yield_state(rows):
         reason = "No angle has been credited yet: no scraper run has completed."
     return {"credited_seeds": 0, "ever_credited": False, "reason": reason,
             "live_runs": live_runs, "dry_runs": dry_runs}
+
+
+# ---------- What each angle actually SEARCHED (query telemetry) ----------
+#
+# An angle is a prompt fragment; the queries are Gemini's own. They come back as telemetry and
+# `scrape_opportunities.main()` writes one `scraper_<stamp>_seed<id>.json` per angle per run.
+# Nothing read them back until this view existed, so nobody could see whether an angle turned
+# into BROAD searches (which can surface a program nobody has named) or into NAMED ones (whose
+# ceiling is one program the model already had in mind). The judgement lives in the pure
+# `query_telemetry` module; this half is only the disk read.
+_SEED_LOG_RE = re.compile(r"^scraper_(\d{8}-\d{6}|\d{8})_seed(\d+)\.json$")
+
+
+def _seed_log_files():
+    """(stamp, seed_id, path) for every per-seed scraper log on disk, newest run first.
+
+    Both filename shapes are accepted for the same reason `dryrun_common` accepts both: logs
+    written before 2026-08-22 carry a date-only stamp. A date-only stamp sorts before any
+    timestamped one from the same day, which is the right order — it IS earlier or unknown.
+    """
+    out = []
+    try:
+        names = os.listdir(AGENT_LOG_DIR)
+    except OSError:
+        return out
+    for name in names:
+        m = _SEED_LOG_RE.match(name)
+        if m:
+            out.append((m.group(1), int(m.group(2)), os.path.join(AGENT_LOG_DIR, name)))
+    out.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return out
+
+
+def _scraper_runs_without_logs(run_stamps):
+    """Live scraper runs in `agent_runs` that have no per-seed log on disk.
+
+    These files are LOCAL and untracked: a run executed in a git worktree writes them into that
+    worktree, so removing it takes the telemetry with it. That is exactly what happened to the
+    2026-08-27 runs. Reporting the gap is the whole point — a query view that silently shows
+    the newest run it happens to hold reads as "this is the latest run", which is the one thing
+    it must never imply.
+
+    Only runs NEWER than the newest log on disk count as missing. Per-seed logging landed with
+    the two-phase scraper on 2026-08-23; every earlier run predates the telemetry entirely, so
+    listing those would bury the two runs that really did lose their logs under eleven that
+    never had any.
+    """
+    days = {s[:8] for s in run_stamps}
+    newest_day = max(days) if days else ""
+    missing = []
+    for r in recent_runs():
+        if r.get("agent") != "scraper" or not r.get("started_at"):
+            continue
+        if str(r.get("mode") or "").endswith("-dryrun"):
+            continue
+        day = str(r.get("started_at"))[:10].replace("-", "")
+        if day and day not in days and day > newest_day:
+            missing.append({"run_id": r.get("id"), "started_at": r.get("started_at"),
+                            "items": r.get("items_processed"), "cost_usd": r.get("cost_usd")})
+    return missing
+
+
+def list_seed_query_runs(run=None, limit_runs=12):
+    """Per-angle search-query telemetry for one scraper run (the newest by default).
+
+    Returns `{runs: [...stamps...], run: <stamp>, summary: {...}, seeds: [...]}`. Each seed row
+    carries its angle, search/attempt counts, and every query it issued classified broad /
+    named / metadata. Angle text comes from the LOG, not from `scraper_seeds`: the log records
+    the phrase that was actually sent, and an angle edited in the console since would otherwise
+    be shown as if it were what ran.
+    """
+    files = _seed_log_files()
+    stamps = []
+    for stamp, _sid, _path in files:
+        if stamp not in stamps:
+            stamps.append(stamp)
+    if not stamps:
+        return {"runs": [], "run": None, "summary": None, "seeds": [],
+                "missing_runs": _scraper_runs_without_logs([]),
+                "note": "No per-seed query logs on disk. They are written to agent_logs/ by a "
+                        "live scraper run and are local, untracked files."}
+    chosen = run if run in stamps else stamps[0]
+    seeds = []
+    for stamp, seed_id, path in files:
+        if stamp != chosen:
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                entry = json.load(fh)
+        except (OSError, ValueError) as e:
+            # A half-written or unreadable log must cost one row, never the whole view.
+            seeds.append({"seed_id": seed_id, "angle": "", "error": str(e)[:120],
+                          "queries": [], "total": 0, "counts": {}, "breadth": None})
+            continue
+        seeds.append({"seed_id": seed_id, **query_telemetry.summarize_seed(entry)})
+    seeds.sort(key=lambda s: ((s.get("breadth") if s.get("breadth") is not None else 2),
+                              s.get("seed_id") or 0))
+    return {
+        "runs": stamps[:limit_runs],
+        "run": chosen,
+        "summary": query_telemetry.summarize_run(seeds),
+        "seeds": seeds,
+        "missing_runs": _scraper_runs_without_logs(stamps),
+    }
 
 
 def create_seed(payload):

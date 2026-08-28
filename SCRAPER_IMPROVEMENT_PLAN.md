@@ -9,7 +9,9 @@ below before reading the phase specs, which are now the historical design record
 
 ## ⭐ START HERE — session of 2026-08-27 (evening). NEW SESSION PICK-UP.
 
-**`main` is 25 commits ahead of `origin/main` and NOT PUSHED.** Gate on every commit:
+**`main` is well ahead of `origin/main` and NOT PUSHED** (count it — `git rev-list
+--count origin/main..main` — rather than trusting a number written here, which every commit
+since has made stale). Gate on every commit:
 **1484 tests green, `grade_scraper_batch` url-dup 0 regressions, SAFE.** (The
 `[suppress-all] … UNSAFE` line is the harness's own self-test probe, not a failure.)
 
@@ -94,7 +96,7 @@ route — it produced the only successful hub-mining run.
 | router, filters, dedupe, review, loop | — | **$0.00** |
 
 ### OPEN / do next
-1. **Push `main`** (25 commits, scraper-only — a Render deploy is a no-op for the web service).
+1. **Push `main`** (scraper-only — a Render deploy is a no-op for the web service).
 2. **Build the walk-up-from-a-program idea** for kind B. Agreed, not started.
 3. **Review the 31 pending rows** (19 hub-mined, 12 name-harvested).
 4. Queue today: **25 hub leads, 1 names lead.** The hub leads are now mined correctly
@@ -106,7 +108,13 @@ route — it produced the only successful hub-mining run.
    help. Deferred by the operator.
 7. **4L (local) stays PINNED.** Two designs measured, neither worked.
 8. Two files from a concurrent session sit untracked and were deliberately left alone:
-   `ANGLE_STRATEGY_PLAN.md`, `MATCHING_UX_REQUIREMENTS.md`.
+   `ANGLE_STRATEGY_PLAN.md`, `MATCHING_UX_REQUIREMENTS.md`. That session is also editing
+   `ops/admin.py`, `ops/admin_console.html` and `ops/core.py` in this working tree (angle
+   query telemetry) — do not stage those with scraper work.
+9. **The plain-English picture of all of this is the published *Scraper Logic Map* artifact**
+   — <https://claude.ai/code/artifact/5a5c5614-e561-4f28-9f0f-cac1c30ada99>. It carries the
+   same rules, the fitted cost table, and the kind-B gap. Update it in place (pass that URL)
+   when the pipeline changes; do not publish a second copy.
 
 ### Rejected ideas, with the reason (do not re-propose without new evidence)
 - **An LLM classifier at the search-results step.** Costed at **$0.02–0.07 per 30-seed run**, so
@@ -604,9 +612,18 @@ appears in the seed grid so local yield is diagnosable like any angle. The old "
 alone" target is retired — hubs alone cannot hit it on civic sites, and name-harvest is paid
 per name.
 
-### Phase 4N — Name-harvest → search (**BUILT 2026-08-27 as `harvest_names.py`**; not yet run paid)
+### Phase 4N — Name-harvest → search (**BUILT + RUN PAID 2026-08-27 as `harvest_names.py`**; operator-pointed)
 
-*The spec below is the design record. What shipped follows it in every respect except one: the per-name resolver is `harvest_names.best_resolved_url`, not `refind_dead_links.best_refound_url` directly — refind holds a candidate to the same registrable domain as the DEAD url, and a harvested name has no prior url to hold it to, so `title_proves` carries the whole weight there. That is exactly why free gate 2 refuses an unprovable name before any search is paid for. See the START-HERE block for what the build measured.*
+*The spec below is the design record. Two things about what shipped are NOT in it. (a) It has run
+paid — 12 rows across 3 runs — and the ranking A/B, the score floor and `FLAG_SELF_PROMOTED` all
+came out of those runs; see START HERE. (b) **It is a console tool the operator aims, never fed by
+the router** (2026-08-27, `52c6a56`): of the 11 name leads the router had queued, 10 were pages we
+never actually received, and paying a search per name off a page we did not get is the one way this
+tool wastes money outright. The genuine cases are recognisable by eye — College Transitions'
+competitions table has 28 anchors, 0 off-domain links and ~70 canonical names in its text — so a
+queue was not worth its failure mode. Free `--preview` by default; the name cap doubles as the
+spend ceiling; the set of tools allowed to spend is pinned in a test. The remaining difference from
+the spec: the per-name resolver is `harvest_names.best_resolved_url`, not `refind_dead_links.best_refound_url` directly — refind holds a candidate to the same registrable domain as the DEAD url, and a harvested name has no prior url to hold it to, so `title_proves` carries the whole weight there. That is exactly why free gate 2 refuses an unprovable name before any search is paid for. See the START-HERE block for what the build measured.*
 
 **The problem it solves:** link-harvest (hub mining) only works when programs are actual
 `<a>` links. Two large classes of pages NAME many programs but don't link them: national
@@ -637,9 +654,23 @@ fixture (fake page text in, resolved rows out); (2) a gated run over College Tra
 Dataverse lands ≥15 real competitions at title-proven pages, operator approval ≥70%; (3)
 per-name cost logged, capped, and attributed to the source page.
 
-### Phase 4F — Feed-forward (**BUILT 2026-08-27 as `discovered_leads.py`**; hub half OFF)
+### Phase 4F — Feed-forward (**BUILT 2026-08-27 as `discovered_leads.py`**; router is structural)
 
-*Spec below is the design record. What shipped differs in one measured respect: the hub-lead half does not work and is disabled by default — free link-counting cannot tell an index from a page with a big nav (both discriminators measured, fully overlapping). The names half shipped and queued 70 leads. See the session block above.*
+*Spec below is the design record. **This status line has been wrong once already — read it against
+the START HERE block, which is authoritative.** An earlier version said the hub half did not work
+and the names half carried the feature; the router was rebuilt structural and it is the other way
+round.*
+
+- **The hub half is the working one.** A lead qualifies on **>= 6 distinct OFF-domain domains**
+  (round-ups 9-20, ordinary pages 1-3), and `--from-leads` mines it **off-domain to match** — the
+  fix in `52c6a56`, without which all 25 queued leads would have been mined for their own nav.
+- **The names half is recorded, not consumed.** `harvest_names.py` is operator-pointed (4N above).
+- **Rule 0 sits in front of both** (`01cd374`): a page with **zero anchors was never received**, and
+  gets no verdict rather than a guess. That alone was 10 of the 11 queued name leads.
+- What free link-counting genuinely cannot do is spot **an institution's own index** — the kind-B
+  gap in START HERE. Its fix is the walk-up-from-a-program idea, not a better threshold: raw
+  same-domain counting calls 42% of all pages an index, nav-subtraction overlaps, and
+  links-under-own-path scores 0 for 3 of 6 real indexes.
 
 **The gap:** the search scraper, hub mining, and name-harvest are three disconnected channels.
 But WHILE searching, the scraper constantly hits hub indexes and listicles and then throws them

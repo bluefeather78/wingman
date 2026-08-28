@@ -131,7 +131,10 @@ off-domain, since every lead already on file came from the router.
    as a curated one. `python mine_hub_pages.py --from-leads 1 --preview` prices it for free —
    but note `pending()` is FIFO, so the 25 router leads come first; pass a `--hubs` URL directly
    for the pilot.
-3. **Review the 31 pending rows** (19 hub-mined, 12 name-harvested).
+3. ~~Review the 31 pending rows~~ **DONE by the operator.** Verified live 2026-08-28: of the 35
+   rows from hub mining / name harvest / refind, **32 are approved and ACTIVE and 3 rejected**.
+   The queue holds **3 rows**, all from `scraper-national-20260826` (NSLI-Y twice, SCA). Do not
+   trust a pending count written in this file — read it from the table.
 4. Queue today: **277 hub leads (244 same-domain from the walk-up, 33 off-domain round-ups),
    5 names leads.** Each is now mined the way it qualified; mining is PAID and gated.
 5. ~~Catch-up for the pre-hook rejected backlog~~ **DONE 2026-08-28, free**: `--from-rejects
@@ -437,7 +440,9 @@ the frozen fixtures are stable ground truth.
 - Reject-reason capture live end-to-end (console modal → `moderation_reason` column).
 - Tombstones retired; 56 backfill rows in table (note: `opportunities.type` is NOT
   NULL — backfill rows carry a 'Program' placeholder).
-- Review queue: EMPTY as of 2026-08-26. Catalog ~1261 active / ~1607 total rows.
+- Review queue: **3 rows as of 2026-08-28** (all `scraper-national-20260826`). Catalog **1325
+  active**, 1704 total; the 379 inactive = 349 rejected + 27 duplicate + 3 queued. Counts in this
+  file go stale as soon as anyone reviews anything — read them from the table.
 - Loose end: 13 rows sit `is_active=true` + `moderation_status='pending_review'` — the
   url_repair-restored rows from 08-23. Harmless (queue filters on inactive), tidy to
   'approved' whenever convenient.

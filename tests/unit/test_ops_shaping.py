@@ -554,10 +554,20 @@ class TestMaintenanceTools:
         assert core.build_tool_args("export", {})[2:] == ["export_json.py"]
 
     def test_paid_tools(self):
-        # The paid tools: the contact-email backfill, the dead-link re-finder, and hub mining
-        # (its extraction call). Angle proposing and the hub PREVIEW are free.
+        # The paid tools: the contact-email backfill, the dead-link re-finder, hub mining (its
+        # extraction call) and name harvesting (a search per name). Angle proposing and every
+        # PREVIEW are free. Pinned so a new tool cannot quietly join the list that spends.
         paid = {k for k, c in core.MAINTENANCE_TOOLS.items() if not c.get("free")}
-        assert paid == {"contactemail", "refind", "minehub"}
+        assert paid == {"contactemail", "refind", "minehub", "harvestnames"}
+
+    def test_harvestnames_args(self):
+        # Operator-pointed only — the router never sends work here. Free preview by default;
+        # a paid run drops --preview, and the name cap is a spend ceiling.
+        prev = core.build_tool_args("harvestnames", {"url": "https://x.edu/list"})
+        assert prev[2:] == ["harvest_names.py", "--hubs", "https://x.edu/list", "--preview"]
+        run = core.build_tool_args("harvestnames", {"url": "https://x.edu/list", "mode": "run",
+                                                    "maxNames": "8"})
+        assert "--preview" not in run and run[-2:] == ["--max-names", "8"]
 
     def test_minehub_args(self):
         # Needs a url; defaults to the free preview; a paid run drops --preview.

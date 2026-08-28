@@ -3260,6 +3260,26 @@ MAINTENANCE_TOOLS = {
                 ["run", "Run — PAID: extracts and inserts rows for review"]]},
         ],
     },
+    "harvestnames": {
+        # The counterpart to Mine Hub Pages, for a page that NAMES programs without linking
+        # them — a JS-built directory, a library calendar. Operator-pointed only: the router
+        # never sends work here on its own, because a page that names without linking is far
+        # more often one we simply could not read. Preview is free and prices the run.
+        "name": "Harvest Names From a Page",
+        "description": "For a page that LISTS programs by name but does not link them. Reads "
+                       "the names free, then searches for each one's own page. Preview is free; "
+                       "a real run is PAID (~$0.02/name) and inserts inactive rows for review.",
+        "script": "harvest_names.py",
+        "free": False, "writes": True,
+        "params": [
+            {"key": "url", "label": "Page URL", "required": True,
+             "placeholder": "https://www.collegetransitions.com/dataverse/..."},
+            {"key": "maxNames", "label": "Spend ceiling — names per page", "placeholder": "20"},
+            {"key": "mode", "type": "select", "label": "Mode", "options": [
+                ["preview", "Preview — free, no model call, no writes"],
+                ["run", "Run — PAID: searches each name and inserts rows for review"]]},
+        ],
+    },
     "proposeangles": {
         # Finds thin catalog cells (under-served type/season/subject) and proposes angles to
         # fill them. Both exposed actions are free — commit writes DISABLED seeds a person must
@@ -3366,6 +3386,15 @@ def build_tool_args(tool_key, params):
             args += ["--hubs", url]
         if params.get("offDomain"):
             args.append("--off-domain")
+        if str(params.get("mode") or "preview") != "run":
+            args.append("--preview")
+    elif tool_key == "harvestnames":
+        url = str(params.get("url") or "").strip()
+        if url:
+            args += ["--hubs", url]
+        cap = _int_or_none(params.get("maxNames"))
+        if cap:
+            args += ["--max-names", str(cap)]
         if str(params.get("mode") or "preview") != "run":
             args.append("--preview")
     elif tool_key == "proposeangles":

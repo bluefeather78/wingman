@@ -119,8 +119,15 @@ def is_nonprogram_link(url, hub_url):
         parts = urllib.parse.urlsplit(url)
     except ValueError:
         return True
-    if url_dedupe.match_key(url) == url_dedupe.match_key(hub_url):
-        return True                       # the hub links to itself
+    try:
+        if url_dedupe.match_key(url) == url_dedupe.match_key(hub_url):
+            return True                   # the hub links to itself
+    except ValueError:
+        # A broken page yields hrefs that are not URLs at all — measured live, one carried
+        # `... A Home That Builds Multitudes<` where a port should be, and urlsplit raises
+        # while parsing it. A junk href is not a program link, and a single bad anchor must
+        # never take down the harvest of the whole page.
+        return True
     if "{{" in url or "}}" in url or "%7b%7b" in url.lower():
         return True                       # an unrendered template placeholder (e.g. kcls .../{{url}})
     host = (parts.hostname or "").lower()
@@ -317,9 +324,13 @@ def main():
         import discovered_leads
         lead_urls = [l["url"] for l in discovered_leads.pending(discovered_leads.KIND_HUB,
                                                                limit=args.from_leads)]
-        # A hub lead is same-domain by construction: it was kept because IT links programs, so
-        # its own site is where they are. A listicle goes to harvest_names, not here.
-        hubs += [(u, False) for u in lead_urls]
+        # OFF-domain, and this is load-bearing. The router qualifies a hub lead by counting
+        # the distinct OTHER sites it links (>= 6) — so the programs are on those other sites,
+        # not on this one. Mining it same-domain would follow precisely the links the router
+        # did not count, i.e. the page's own navigation. (The comment here used to say the
+        # opposite; it predated the router being structural, when leads were picked by host
+        # list and every listicle went to name harvest instead.)
+        hubs += [(u, True) for u in lead_urls]
         print(f"[OK] {len(lead_urls)} hub lead(s) taken from the queue.")
     if not hubs:
         print("[ERROR] Give --hubs or --hubs-file.")

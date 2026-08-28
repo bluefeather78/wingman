@@ -339,6 +339,52 @@ def test_a_malformed_href_cannot_stop_the_run():
     assert fresh == ["https://x.edu/p/ok"]
 
 
+# ---------- containment: a child page beside its parent is not its own program ----------
+
+def test_child_page_dropped_when_parent_is_a_candidate():
+    """The hub links a program's page AND its residential-life tab; only the parent is kept."""
+    keep, dropped = hub.contained_children([
+        "https://c.edu/programs/nyc-residential-summer",
+        "https://c.edu/programs/nyc-residential-summer/residential-life",
+    ])
+    assert keep == ["https://c.edu/programs/nyc-residential-summer"]
+    assert dropped == ["https://c.edu/programs/nyc-residential-summer/residential-life"]
+
+
+def test_child_page_dropped_when_parent_is_in_the_catalog():
+    """The canonical parent is already catalogued, so fresh_candidates never sees the child as a
+    dup -- containment stops us paying to extract a worse-URL duplicate."""
+    cat = hub.catalog_paths_by_host(
+        [{"url": "https://c.edu/programs/nyc-residential-summer"}])
+    keep, dropped = hub.contained_children(
+        ["https://c.edu/programs/nyc-residential-summer/residential-life"], cat)
+    assert keep == [] and len(dropped) == 1
+
+
+def test_containment_is_direct_parent_only_and_same_host():
+    # A grandparent relationship does NOT drop (direct parent only).
+    keep, dropped = hub.contained_children([
+        "https://c.edu/a",
+        "https://c.edu/a/b/c",
+    ])
+    assert dropped == [] and len(keep) == 2
+    # A same-path child on a DIFFERENT host is not contained.
+    keep, dropped = hub.contained_children([
+        "https://a.edu/p",
+        "https://b.edu/p/child",
+    ])
+    assert dropped == [] and len(keep) == 2
+
+
+def test_two_distinct_programs_under_one_index_both_survive():
+    """The common case discover() yields: siblings, not parent/child -- neither is dropped."""
+    keep, dropped = hub.contained_children([
+        "https://x.edu/pre-college/ai",
+        "https://x.edu/pre-college/art",
+    ])
+    assert dropped == [] and len(keep) == 2
+
+
 # ---------- how a run spends its ceiling ----------
 
 def test_the_ceiling_is_spread_across_hubs_not_taken_off_the_end():

@@ -50,6 +50,17 @@ LOW_VALUE_SEGMENTS = {
 # application form is a sub-resource, not the page a student should be sent to.
 _LOW_VALUE_EXTENSIONS = (".pdf", ".doc", ".docx")
 
+# Ancillary tails that mark a sub-page even when the exact-word set above misses them, because
+# either the program's OWN name is prepended to the tail ('college-edge-tuition-and-fees') or the
+# ancillary word sits on a PARENT section rather than the leaf ('columbia-experience/commuting-
+# campus'). So this is matched as a suffix on ANY path segment, not just the leaf. It is a
+# DEMOTE/FLAG signal, never a drop — a canonical twin outranks a page caught here, but a lone
+# ancillary page still survives. Kept to tails no real program is named after: a tuition/costs/
+# faq page, or a campus-'life'/'experience' page. (Contrast the exact-word LOW_VALUE_SEGMENTS,
+# still leaf-only so 'admissions' cannot demote a real program under /Admissions/Programs/.)
+_LOW_VALUE_SEGMENT_SUFFIXES = ("-tuition-and-fees", "-tuition", "-fees", "-costs", "-cost",
+                               "-pricing", "-faq", "-faqs", "-life", "-experience")
+
 # Second-level labels that are part of a public suffix rather than the registrable name,
 # so "cam.ac.uk" and "med.stanford.edu" resolve to the right owner.
 _MULTIPART_TLD_HEADS = {"edu", "ac", "co", "com", "org", "net", "gov", "govt", "sch"}
@@ -258,7 +269,11 @@ def is_low_value_path(url):
     if not segments:
         return False
     last = segments[-1]
-    return last.endswith(_LOW_VALUE_EXTENSIONS) or last in LOW_VALUE_SEGMENTS
+    if last.endswith(_LOW_VALUE_EXTENSIONS) or last in LOW_VALUE_SEGMENTS:
+        return True
+    # An ancillary tail on any segment: 'college-edge-tuition-and-fees' (leaf carries the program
+    # name) or 'columbia-experience/commuting-campus' (a parent section is the tell).
+    return any(seg.endswith(_LOW_VALUE_SEGMENT_SUFFIXES) for seg in segments)
 
 
 def _prefix_relation(path_a, path_b):

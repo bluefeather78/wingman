@@ -239,6 +239,42 @@ lose candidates invisibly.
 lead is dropped silently. Footnote counts (free, evidential) then an LLM call (~$0.02/run) are
 the only tools that can see anything there. Order if resumed: footnotes first.
 
+### Rejecting AS A ROUND-UP feeds the page back in, automatically (2026-08-27)
+
+**The trigger is the REASON, not the rejection.** "Wrong page", "dead link", "not a fit" say
+nothing about a page being a round-up; routing every rejection would spend a fetch each to
+mostly learn no.
+
+The console's reject list lumped three things into one option ("article / listicle / video ABOUT
+it"). A video is unreadable junk, an article about ONE program is not feedstock, only the
+round-up is. Now:
+
+| reason | effect |
+|---|---|
+| `third-party-roundup` — *lists MANY programs* | queued for hub mining / name harvest |
+| `third-party-url` — *article or video about this ONE program* | nothing |
+
+- `moderate_opportunities` fires on that reason alone, **fire-and-forget on a daemon thread**:
+  rejecting is the operation that matters, and a hung fetch must never make the button wait or
+  the verdict fail. A failure is logged, not surfaced — the page waits for the backfill instead.
+- **`classify_confirmed_roundup` deliberately SKIPS the title test.** That test asks "is this a
+  page about many programs?", which the operator just answered having actually looked at it;
+  re-asking with a heuristic could only overrule them — and that test was fooled by a site-name
+  suffix the same day. Only "does it LINK them or NAME them" is left. It **defaults to names,
+  never to nothing**: an unreadable page costs zero to queue (`harvest_names` makes no model
+  call on empty text), and dropping a lead a person explicitly flagged is the one outcome this
+  path must not produce.
+- **NOs are remembered** (`STATUS_NOT_A_LEAD`). Without it every sweep re-opened the whole
+  rejected pile to re-learn answers it had — 40 pages to recover 24 known nos, growing with the
+  pile. Tombstones are neither queued work nor counted, but they ARE known, so the next sweep
+  skips them.
+- `ROUNDUP_REJECT_REASON` is defined **once**, in `discovered_leads`; `ops/core` reads it from
+  there, so the hook and the backfill can never disagree. `--from-rejects` filters on it too,
+  with `--any-reason` as the escape hatch for rows rejected before it existed.
+
+Nothing routes automatically until a row is rejected under the new reason — the live sweep
+currently returns 0, which is correct.
+
 ### OPEN / do next
 1. **Push `main`** — now 11 commits ahead of `origin/main` (the merge brought 5 branch commits with it). Scraper-only (no `app/`,
    `render.yaml`, `requirements.txt`, `server.py`), so a Render deploy is a no-op for the web

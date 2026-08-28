@@ -304,3 +304,34 @@ def test_rejected_rows_tolerate_junk():
         [{"id": "x", "url": None}, {"id": "y", "url": "javascript:void(0)"}, {}],
         classify=lambda u, t=None: (dl.KIND_HUB, "s"))
     assert leads == []
+
+
+# ---------- a site's own name in the title suffix lies about the page ----------
+
+def test_strip_site_name_removes_a_short_trailing_suffix():
+    assert dl.strip_site_name(
+        "15 Summer Art Programs in New York City for High School Students | Immerse Education"
+    ) == "15 Summer Art Programs in New York City for High School Students"
+    assert dl.strip_site_name("Contact - National Youth Leadership Council") == "Contact"
+
+
+def test_site_name_plural_no_longer_fakes_a_round_up():
+    """Measured live: opportunitiesforyouth.org publishes SINGLE-program articles whose titles
+    end '... - Opportunities for Youth'. The plural in the site name made the title test call a
+    one-program article a round-up, and it was queued as a paid name-harvest lead."""
+    title = ("NYLC Youth Advisory Council 2026-2028: A National Leadership Opportunity "
+             "for High School Changemakers - Opportunities for Youth")
+    assert dl._MANY_RE.search(title)                       # the raw title is fooled
+    assert not dl._MANY_RE.search(dl.strip_site_name(title))   # the stripped one is not
+
+
+def test_strip_site_name_leaves_a_long_tail_alone():
+    """Only a SHORT tail looks like a site name; a real title containing a dash keeps itself."""
+    t = "Summer Programs - everything a rising junior needs to know before applying this year"
+    assert dl.strip_site_name(t) == t
+
+
+def test_strip_site_name_never_empties_a_title():
+    assert dl.strip_site_name("Programs | MIT") == "Programs"
+    assert dl.strip_site_name("| Immerse") == "| Immerse"
+    assert dl.strip_site_name("") == ""

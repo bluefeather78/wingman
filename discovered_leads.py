@@ -125,6 +125,25 @@ def is_ignorable(url):
     return url_validate.is_editorial_url(url)
 
 
+# Most page titles end with the site's own name after a separator, and that suffix lies about
+# what the page is. Measured live: `opportunitiesforyouth.org` publishes single-program articles
+# whose titles end "... - Opportunities for Youth", and the plural in the SITE NAME made the
+# title test call a one-program article a round-up. Only a short tail is stripped, so a real
+# title that merely contains a dash keeps all of itself.
+_TITLE_SEPARATORS = (" | ", " - ", " – ", " — ", " :: ")
+_MAX_SITE_NAME_WORDS = 5
+
+
+def strip_site_name(title):
+    """A page title with its trailing site-name removed, if that is what the tail looks like."""
+    best = title or ""
+    for sep in _TITLE_SEPARATORS:
+        head, found, tail = best.rpartition(sep)
+        if found and head.strip() and len(tail.split()) <= _MAX_SITE_NAME_WORDS:
+            best = head.strip()
+    return best
+
+
 def classify_page(url, timeout=url_repair.DEFAULT_TIMEOUT):
     """(kind, signal) for a third-party page, by looking at it. FREE — plain HTTP, no model.
 
@@ -147,7 +166,7 @@ def classify_page(url, timeout=url_repair.DEFAULT_TIMEOUT):
     # symmetrical: they then only decide HOW the page presents its programs, not whether it has
     # any. The wrong-audience check rides along for free (seagrant's "Undergraduate
     # Opportunities" links 20 sites and is not for high schoolers).
-    title = url_repair.page_title(html) or ""
+    title = strip_site_name(url_repair.page_title(html) or "")
     if not _MANY_RE.search(title):
         return None, f"title does not promise many programs: {title[:60]!r}"
     if mine_hub_pages.is_wrong_audience(title):

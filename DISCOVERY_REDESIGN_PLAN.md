@@ -311,6 +311,19 @@ Do not ship on argument. Ship on that table.
 
 ---
 
+## 6a. Deferred — silent-search retry budget (operator: revisit another time, 2026-08-28)
+
+`research_seed` re-rolls a zero-search call **once** (attempt loop `(1, 2)`). Measured in the P4
+runs: ~1/3 of discovery calls on model-saturated domains (neuroscience, culinary) still went silent
+through *both* attempts and answered from memory (homepage/memory URLs, all flagged). A silent call
+pays no per-search fee, so raising the budget to ~3 attempts is nearly free and — if the silent
+decision is independent per call — would cut memory-answers from ~1/3 to ~1/25. **Deferred by the
+operator.** When revisited: make the attempt count configurable, and MEASURE whether extra re-rolls
+actually break a silent streak or just repeat it (if the streak is angle-correlated, the real lever
+is running discovery on less-saturated angles, not more retries). Forcing a search is impossible
+(no `toolConfig: ANY` for `googleSearch` — gemini_common's THIRD finding); this only raises the odds.
+It is an M9 change (alters the API-call loop) — own commit, approval first.
+
 ## 6. Open questions for the operator
 
 1. **Unresolved names (§3.9)** — a third lead kind, or snapshot-only until a later pass? A third kind

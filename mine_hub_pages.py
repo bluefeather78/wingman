@@ -283,6 +283,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hubs", nargs="+", help="Hub page URL(s).")
     ap.add_argument("--hubs-file", help="JSON file: [{\"url\":..., \"off_domain\": bool}, ...].")
+    ap.add_argument("--from-leads", type=int, nargs="?", const=5, metavar="N",
+                    help="Take up to N hub leads (default 5) that a search run captured for "
+                         "free — see discovered_leads.py. The search already paid to consult "
+                         "those pages; this is what stops them being discarded.")
     ap.add_argument("--off-domain", action="store_true",
                     help="Treat hubs as listicles: follow OFF-domain links, not same-domain.")
     ap.add_argument("--preview", action="store_true",
@@ -300,6 +304,15 @@ def main():
         with open(args.hubs_file, encoding="utf-8") as f:
             hubs = [(h["url"], bool(h.get("off_domain"))) for h in json.load(f)]
     hubs += [(u, args.off_domain) for u in (args.hubs or [])]
+    lead_urls = []
+    if args.from_leads:
+        import discovered_leads
+        lead_urls = [l["url"] for l in discovered_leads.pending(discovered_leads.KIND_HUB,
+                                                               limit=args.from_leads)]
+        # A hub lead is same-domain by construction: it was kept because IT links programs, so
+        # its own site is where they are. A listicle goes to harvest_names, not here.
+        hubs += [(u, False) for u in lead_urls]
+        print(f"[OK] {len(lead_urls)} hub lead(s) taken from the queue.")
     if not hubs:
         print("[ERROR] Give --hubs or --hubs-file.")
         raise SystemExit(1)
@@ -418,6 +431,13 @@ def main():
                       f"source-date={today}"
                       + (f", would_have_added={len(rows)}" if args.dry_run else "")),
         }, service_key)
+
+    if lead_urls and not args.dry_run:
+        # Stamped only on a real run: a dry run proved the extraction works but wrote nothing,
+        # so the lead still has work left in it and must stay in the queue.
+        import discovered_leads
+        n = discovered_leads.mark_processed(lead_urls)
+        print(f"[OK] Marked {n} hub lead(s) processed.")
 
     print(f"[SUMMARY] {total} candidate page(s) across {len(hubs)} hub(s) -> extracted "
           f"{len(rows)} row(s), errors {errors}, cost ${cost:.4f}. Wrote {review_path}.")

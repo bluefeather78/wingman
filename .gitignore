@@ -35,6 +35,11 @@ agent_settings.json
 # Dry-run snapshots written by the agent scripts
 *_dry_run_*.json
 scrape_review_*.json
+hub_review_*.json
+names_review_*.json
+# Phase 4F's lead work-list: local run state (which leads exist, which are processed),
+# regenerated free from any run's grounding. Same reasoning as the review snapshots above.
+discovered_leads.jsonl
 
 #gitignore
 .gitignore

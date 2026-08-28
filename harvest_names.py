@@ -303,6 +303,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hubs", nargs="+", help="Page URL(s) that NAME opportunities.")
     ap.add_argument("--hubs-file", help='JSON file: [{"url": ...}, ...] (same shape as the hub registry).')
+    ap.add_argument("--from-leads", type=int, nargs="?", const=3, metavar="N",
+                    help="Take up to N listicle leads (default 3) that a search run captured "
+                         "for free — see discovered_leads.py. A listicle names many programs "
+                         "and links none of them, which is exactly this agent's case.")
     ap.add_argument("--preview", action="store_true",
                     help="FREE: fetch the page(s) and report what would be harvested. No model "
                          "call, no search, no writes.")
@@ -321,6 +325,13 @@ def main():
         with open(args.hubs_file, encoding="utf-8") as f:
             hubs = [h["url"] for h in json.load(f)]
     hubs += list(args.hubs or [])
+    lead_urls = []
+    if args.from_leads:
+        import discovered_leads
+        lead_urls = [l["url"] for l in discovered_leads.pending(discovered_leads.KIND_NAMES,
+                                                               limit=args.from_leads)]
+        hubs += lead_urls
+        print(f"[OK] {len(lead_urls)} listicle lead(s) taken from the queue.")
     if not hubs:
         print("[ERROR] Give --hubs or --hubs-file.")
         raise SystemExit(1)
@@ -480,6 +491,12 @@ def main():
                       f"resolved={len(rows)}, source-date={today}"
                       + (f", would_have_added={len(rows)}" if args.dry_run else "")),
         }, service_key)
+
+    if lead_urls and not args.dry_run:
+        # Real runs only — a dry run read the names but wrote no rows, so the lead is not done.
+        import discovered_leads
+        n = discovered_leads.mark_processed(lead_urls)
+        print(f"[OK] Marked {n} listicle lead(s) processed.")
 
     print(f"[SUMMARY] {len(hubs)} page(s) named {named}, searched {searched}, resolved "
           f"{len(rows)} row(s), errors {errors}, cost ${cost:.4f}. Wrote {review_path}.")

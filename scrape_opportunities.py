@@ -61,6 +61,7 @@ import sys
 import urllib.error
 
 import seed_ledger
+import discovered_leads
 import url_dedupe
 import url_repair
 import url_validate
@@ -909,6 +910,10 @@ def main():
     total_cost = 0.0
     raw_found = duplicates_skipped = invalid_skipped = errors = 0
     total_searches = silent_search_count = flagged_rows = dead_links = 0
+    # Phase 4F: the hub/listicle pages this run consulted but did not turn into rows.
+    # Captured free; acted on later by a separately-approved gated run.
+    captured_leads = []
+    lead_keys = discovered_leads.lead_keys(discovered_leads.load_leads())
 
     for seed in seeds:
         angle = seed["angle"]
@@ -916,6 +921,7 @@ def main():
         print(f"\n[SEED {seed_label}] {angle[:90]}...")
         seed_found = seed_added = seed_dupes = 0
         seed_cost = 0.0
+        resolved_urls, seed_used = [], []
         try:
             notes, usage, grounding, phase1_cost, attempts = research_seed(
                 angle, addendum, today, gemini_key, args)
@@ -1007,6 +1013,7 @@ def main():
                 if action == "merge":
                     duplicates_skipped += 1
                     seed_dupes += 1
+                    seed_used.append(url)
                     if args.dry_run or args.no_verify_urls:
                         merged.append({"id": target["id"], "from_name": candidate.get("name"),
                                        "into_name": target.get("name"), "changed": False,
@@ -1069,6 +1076,7 @@ def main():
                 # Join the dedupe pool immediately so a later seed in the same run doesn't
                 # re-add what this one just found.
                 existing.append({"id": row["id"], "name": row["name"], "url": row["url"]})
+                seed_used.append(url)
                 inserted_rows.append(row)
                 seed_added += 1
         except urllib.error.HTTPError as e:
@@ -1077,6 +1085,22 @@ def main():
         except Exception as e:
             errors += 1
             print(f"  [ERROR] {e}")
+
+        # Phase 4F — spin off the pages this seed consulted but did NOT turn into rows.
+        # FREE, and wrapped whole: a discovery side-effect must never fail a paid scrape.
+        try:
+            if resolved_urls:
+                seed_leads, lead_trace = discovered_leads.capture(
+                    resolved_urls, seed_used, existing_rows=existing, seed_id=seed.get("id"),
+                    angle=angle, known_keys=lead_keys)
+                lead_keys |= discovered_leads.lead_keys(seed_leads)
+                captured_leads.extend(seed_leads)
+                if seed_leads:
+                    print(f"  -> leads: {lead_trace['names']} listicle(s), "
+                          f"{lead_trace['hub']} hub(s) captured free "
+                          f"({lead_trace['probed']} page(s) probed)")
+        except Exception as e:
+            print(f"  [WARN] lead capture skipped: {str(e)[:100]}")
 
         # Record this angle's yield against the seed itself, so the console can rank angles
         # by rows-added-per-dollar and retire the ones that only return dupes. Dry runs
@@ -1104,12 +1128,28 @@ def main():
           f"searches: {total_searches}, silent seeds: {silent_search_count}/{len(seeds)}, "
           f"cost: ${total_cost:.4f}")
 
+    # Phase 4F — persist the leads. Written even on a --dry-run: a dry run pays the search in
+    # full, so the pages it consulted are just as real, and the lead file is a local work-list
+    # rather than a catalog write. Acting on a lead stays separately gated and paid.
+    leads_written = discovered_leads.append_leads(captured_leads)
+    if captured_leads:
+        by_kind = discovered_leads.summarize(captured_leads)
+        print(f"[OK] Captured {len(captured_leads)} lead(s) this run "
+              + (", ".join(f"{k}={v}" for k, v in sorted(by_kind.items())))
+              + f" — {leads_written} new to {os.path.basename(discovered_leads.LEADS_PATH)}. "
+              f"These cost nothing; mining them is a separate approved run.")
+        queued = discovered_leads.summarize(discovered_leads.load_leads())
+        print("     queue now: "
+              + (", ".join(f"{k}={v}" for k, v in sorted(queued.items())) or "empty")
+              + "  (mine_hub_pages.py --from-leads / harvest_names.py --from-leads)")
+
     review_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 f"scrape_review_{args.mode}_{run_stamp}.json")
     with open(review_path, "w", encoding="utf-8") as f:
         # `merged` is additive — dryrun_common reads only `inserted`; do not reshape those two.
         json.dump({"inserted": [{**r, "review": review_by_id.get(r["id"], {})} for r in inserted_rows],
-                   "rejected": rejected, "merged": merged}, f, indent=2, ensure_ascii=False)
+                   "rejected": rejected, "merged": merged,
+                   "leads": captured_leads}, f, indent=2, ensure_ascii=False)
     applied_merges = sum(1 for m in merged if m.get("changed"))
     print(f"[OK] Wrote review snapshot: {review_path} "
           f"({len(inserted_rows)} inserted, {len(rejected)} rejected with reasons, "
@@ -1140,7 +1180,7 @@ def main():
             "silent_search_count": silent_search_count,
             "notes": (f"raw_found={raw_found}, duplicates_skipped={duplicates_skipped}, "
                       f"invalid_skipped={invalid_skipped}, flagged={flagged_rows}, "
-                      f"dead_links={dead_links}, "
+                      f"dead_links={dead_links}, leads={len(captured_leads)}, "
                       f"max_searches={args.max_searches}, timeout={args.timeout}s"
                       + (f", would_have_added={len(inserted_rows)}" if args.dry_run else "")),
         }, service_key)

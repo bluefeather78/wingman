@@ -132,10 +132,13 @@ off-domain, since every lead already on file came from the router.
    but note `pending()` is FIFO, so the 25 router leads come first; pass a `--hubs` URL directly
    for the pilot.
 3. **Review the 31 pending rows** (19 hub-mined, 12 name-harvested).
-4. Queue today: **269 hub leads (244 same-domain from the walk-up, 25 off-domain round-ups),
-   1 names lead.** Each is now mined the way it qualified; mining is PAID and gated.
-5. Catch-up for the pre-hook rejected backlog: `python discovered_leads.py --from-rejects
-   --any-reason --commit` (free; it remembers its NOs).
+4. Queue today: **277 hub leads (244 same-domain from the walk-up, 33 off-domain round-ups),
+   5 names leads.** Each is now mined the way it qualified; mining is PAID and gated.
+5. ~~Catch-up for the pre-hook rejected backlog~~ **DONE 2026-08-28, free**: `--from-rejects
+   --any-reason --commit` over the whole pile — **349 rejected rows -> 12 leads** (8 hub, 4
+   names), 9 ignorable, and **323 remembered as not-a-round-up** so no later sweep re-fetches
+   them. The 93% no-verdict rate is the expected shape: most rejects are ordinary program pages
+   rejected for wrong-page/dead-link/duplicate, which say nothing about being a round-up.
 6. **~22% of candidates cannot be read at all** (403/PDF/JS). They are dropped with no verdict.
    That bucket — and only that bucket — is where grounding footnotes or an LLM classifier could
    help. Deferred by the operator.

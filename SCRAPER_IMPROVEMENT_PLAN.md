@@ -121,16 +121,16 @@ off-domain, since every lead already on file came from the router.
 | name harvest — make a row | row | $0.0047 |
 | re-find a dead link | row | $0.02–0.05 |
 | walk-up: catalog -> proven index | — | **$0.00** (one free fetch per parent) |
+| hub mining, measured over 300 pages | page | **$0.00096** ($0.2884 / 300, incl. refusals) |
 | router, filters, dedupe, review, loop | — | **$0.00** |
 
 ### OPEN / do next
-1. **Push `main`** (scraper-only — a Render deploy is a no-op for the web service).
-2. **Mine a walk-up lead as a pilot** — PAID and gated. Take ONE dense lead first
-   (`cmu.edu/pre-college/academic-programs/`, 25 candidates) rather than a batch, and grade the
-   rows before spending on the rest: nothing has yet proven that a *proven index* mines as well
-   as a curated one. `python mine_hub_pages.py --from-leads 1 --preview` prices it for free —
-   but note `pending()` is FIFO, so the 25 router leads come first; pass a `--hubs` URL directly
-   for the pilot.
+1. ~~Push `main`~~ **PUSHED 2026-08-28.** Verified before pushing: the batch touches no `app/`,
+   `frontend/`, `render.yaml`, `requirements.txt`, `server.py` or workflow file, so the Render
+   deploy is a genuine no-op for the web service.
+2. ~~Mine a walk-up lead as a pilot~~ **DONE — and then a 43-hub batch. See the session block
+   below.** 158 rows now await review. **240 walk-up leads remain queued**; drain them in
+   batches with a `--max-pages` ceiling, and expect the ~50% refusal rate that run measured.
 3. ~~Review the 31 pending rows~~ **DONE by the operator.** Verified live 2026-08-28: of the 35
    rows from hub mining / name harvest / refind, **32 are approved and ACTIVE and 3 rejected**.
    The queue holds **3 rows**, all from `scraper-national-20260826` (NSLI-Y twice, SCA). Do not
@@ -171,6 +171,58 @@ off-domain, since every lead already on file came from the router.
 - **NOT done, deliberately:** no console tile for the walk-up. `ops/` is being edited by a
   concurrent session in this shared tree, and the plan's own rule is to stage only scraper files.
   Wiring *Walk Up From The Catalog* beside *Mine Hub Pages* is a clean follow-up.
+
+### Session 2026-08-28b — both extractors exercised live, five bugs found by doing it
+
+**PAID: $0.3280 total** ($0.0396 CMU pilot + $0.2884 the 43-hub batch). 1 agent_runs row each.
+
+**The batch:** 33 off-domain round-ups + the 10 densest walk-up leads -> 346 new candidates ->
+300 extracted (ceiling) -> **144 rows**, 0 errors. Both halves work. Off-domain yielded real
+programs at real institutions (UCLA CSSI, Toronto DEEP, UChicago Data Science Summer Lab,
+Syracuse, Stanford AI4ALL, NYU Shanghai, NIMH SIP, Columbia BRAINStorm); the walk-up half
+produced the first LOCAL rows the project has ever had (Seattle Parks teen life centres, Teen
+Summer Musical, YMCA BOLD & GOLD).
+
+**MEASURED: the extractor refuses 52% of pages** (300 read, 144 rows). That is the answer to the
+open question from 4N — the `{"name": null}` refusal is doing the chaff filtering, not the free
+slug list, which must therefore NOT grow into one.
+
+**Five bugs, each found only by running it:**
+1. **The pre-spend catalog check suppressed NOTHING.** `find_duplicates(u, "")` — its exact rule
+   is "same URL AND similar name" by design, so an empty name always fell through to a hint the
+   caller ignored, while the comment claimed the catalog was checked. **12 of the 14 CMU rows
+   duplicated rows we already had**, and the walk-up lead had predicted it in as many words
+   ("links 12 program(s) we already have"). `fresh_candidates()` is URL-only, which is right here
+   and would be wrong at the scraper's insert layer where one portal backs six programs.
+2. **The link cap truncated by POSITION IN THE PAGE.** `filter_hub_links` broke at 25 survivors,
+   and a page's first links are its chrome — so on seattle.gov (974 links) the cap filled with
+   navigation and every real teen program was never judged. The operator found this by pointing
+   at a program we had missed. Now every link is judged, the cap applies last, and `over_cap` is
+   reported (907 on that page).
+3. **The run ceiling starved whichever hubs came last** — all 46 skipped candidates were walk-up
+   leads, so Brown/BU/Vanderbilt/UCSF reported zero rows because they NEVER RAN. `allocate_budget()`
+   is round-robin. Same failure as (2), one level up.
+4. **A candidate's redirect was invisible.** Nine CMU `/student-affairs/...` links all 302 to the
+   index; deduping on the requested URL made them nine candidates. `page_text.fetch_page_text_resolved`
+   returns the landing URL (two-value form unchanged, like `call_gemini(return_grounding=True)`).
+5. **`FLAG_OFFSITE` was wrong 94% of the time on hub rows** — 16 of 17. It asks "did a model type
+   somebody else's URL?", and a followed link is real by construction. Suppressed for hub-mined
+   rows; a content mill still flags. NOT fixed by loosening `domain_matches_org`, which also gates
+   url_repair's acceptance of a re-found link.
+
+**Also built:** `--max-pages` (spend ceiling, spread evenly, and a truncated hub stays queued),
+`--give-up-after` (abandon a hub after N refusals — non-trivial.org spent 17 extractions for
+zero rows), per-hub yield in the run summary, shortener/booking/form hosts dropped (never
+`docs.google.com` — it collapses to google.com and would take "Doodle for Google" with it), and
+a **Discovery leads card in the console** plus "take N from the queue" on Mine Hub Pages. The
+queue had no surface at all before: the console wrote to it and never showed it.
+
+**Dedupe analysis, done and DEFERRED by the operator.** Every same-site pair in the catalog with
+a different URL and name similarity >= 0.85 was resolved: **96 pairs, 5 are true aliases**
+(`/alp/` 301s to `/accelerated-learning-program/`), **91 are genuinely different programs**. So
+suppressing on name similarity would destroy 91 rows to catch 5 — the existing "suppress only on
+proof" rule is measured-correct and must not move. A redirect-equality proof tier was designed
+and NOT built; the 5 known aliases are ec18774, ec18771, ec18856, ec18918, ec18865.
 
 ### Rejected ideas, with the reason (do not re-propose without new evidence)
 - **An LLM classifier at the search-results step.** Costed at **$0.02–0.07 per 30-seed run**, so
@@ -440,7 +492,8 @@ the frozen fixtures are stable ground truth.
 - Reject-reason capture live end-to-end (console modal → `moderation_reason` column).
 - Tombstones retired; 56 backfill rows in table (note: `opportunities.type` is NOT
   NULL — backfill rows carry a 'Program' placeholder).
-- Review queue: **3 rows as of 2026-08-28** (all `scraper-national-20260826`). Catalog **1325
+- Review queue: **158 rows as of 2026-08-28** (144 from the 43-hub batch, 14 from the CMU pilot
+  of which 12 are duplicates created before the dedupe fix — keep ec18794/ec18795). Was 3 rows (all `scraper-national-20260826`). Catalog **1325
   active**, 1704 total; the 379 inactive = 349 rejected + 27 duplicate + 3 queued. Counts in this
   file go stale as soon as anyone reviews anything — read them from the table.
 - Loose end: 13 rows sit `is_active=true` + `moderation_status='pending_review'` — the

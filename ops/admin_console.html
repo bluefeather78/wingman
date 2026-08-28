@@ -466,6 +466,7 @@ tr.disabled-seed { opacity: .48; }
     <div class="subtabs" id="runSubtabs">
       <button class="stab active" data-sub="inspect">Inspect</button>
       <button class="stab" data-sub="newopp">New Opportunities<span class="count" id="reviewTabCount"></span></button>
+      <button class="stab" data-sub="dupes">Duplicates<span class="count" id="dupeTabCount"></span></button>
       <button class="stab" data-sub="core">Core Details</button>
       <button class="stab" data-sub="upkeep">Keep Details Current</button>
       <button class="stab" data-sub="lists">Mailing Lists<span class="count" id="signupTabCount"></span></button>
@@ -494,6 +495,41 @@ tr.disabled-seed { opacity: .48; }
       <div id="slot-newopp-allowlist"></div>
       <div class="section-label">Review &amp; admit</div>
       <div id="slot-newopp-review"></div>
+    </div>
+
+    <div class="subview" id="rsub-dupes">
+      <div class="flowhead"><h2>Duplicates</h2><span class="step">scan &rarr; flag &rarr; keep or confirm</span>
+        <p>Find live rows that look like the same opportunity and flag the weaker ones. Flagging
+        never hides a row &mdash; both stay live and visible to students until you either
+        <strong>Keep</strong> them (a false positive, e.g. a shared application portal) or confirm
+        the real <strong>Duplicate</strong> (which retires the loser and points it at the survivor).</p></div>
+      <div class="card">
+        <div class="card-head">
+          <h2>Flagged as suspected duplicates</h2>
+          <div class="spacer"></div>
+          <button class="btn btn-sm" id="dupScanBtn" title="Scan the live catalog for duplicate pairs and flag a reviewed subset">Scan for duplicates</button>
+          <button class="btn btn-sm" id="dupeSelectAll">Select all</button>
+          <button class="btn btn-sm" id="dupeClear">Clear</button>
+          <button class="btn btn-danger" id="dupeConfirmBtn" disabled>Confirm duplicate</button>
+          <button class="btn" id="dupeKeepBtn" disabled>Keep selected</button>
+        </div>
+        <div class="card-body tight">
+          <div class="hint hidden" id="dupeModerationSetup" style="padding:10px 14px">
+            The moderation columns do not exist yet. Run
+            <span class="mono">user_submissions_schema.sql</span> in the Supabase SQL editor
+            (it is idempotent), then restart with <span class="mono">restart_server.ps1</span>.
+          </div>
+          <div class="tbl-wrap">
+            <table>
+              <thead><tr>
+                <th style="width:34px"></th><th>Name</th><th>Org</th><th>Type</th>
+                <th>Source</th><th>Found</th><th></th>
+              </tr></thead>
+              <tbody id="dupeBody"><tr><td colspan="7" class="empty">Loading&hellip;</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="subview" id="rsub-core">
@@ -1240,6 +1276,38 @@ tr.disabled-seed { opacity: .48; }
   </div>
 </div>
 
+<!-- Scan the live catalog for flag-eligible duplicate pairs (both rows live) and flag a
+     reviewed subset as suspected_duplicate. Nothing here hides or deletes a row — flagging
+     leaves both live and moves the weaker one into the Flagged tab for a final decision. -->
+<div class="overlay" id="dupScanModal">
+  <div class="modal" style="max-width:900px">
+    <div class="modal-head">
+      <h2>Scan for duplicates</h2>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" id="dupScanClose">Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="hint" style="margin-bottom:12px">
+        Pairs of <strong>live</strong> rows that look like the same opportunity. Review each one,
+        <strong>Swap</strong> if the wrong row is set to keep, and <strong>uncheck</strong> the
+        false positives (a shared application portal, or two genuinely different programs), then
+        flag the rest. Flagging leaves both rows live &mdash; the weaker one moves to the
+        <span class="mono">Flagged</span> tab for a final keep-or-confirm decision. Nothing is
+        hidden or deleted here.
+      </div>
+      <div id="dupScanStatus" class="help" style="margin-bottom:10px">Scanning&hellip;</div>
+      <div id="dupScanList" class="dup-list"></div>
+      <div id="dupScanError" class="notice err hidden"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-sm" id="dupScanSelectAll">Select all</button>
+      <button class="btn btn-sm" id="dupScanClearSel">Clear</button>
+      <div class="spacer"></div>
+      <button class="btn" id="dupScanFlag" disabled>Flag selected</button>
+    </div>
+  </div>
+</div>
+
 <!-- Why a row is being rejected. The codes are labeled training data for the scraper:
      each one names a scraper failure mode, and grade_scraper_batch.py fixtures read the
      stored reason instead of re-inferring it from row content. Codes here must stay in
@@ -1456,7 +1524,9 @@ const S = {
   signups: [], signupStatus: 'pending_review', selectedSignups: new Set(),
   signupCounts: {}, mailingListReady: true,
   emails: null, emailKind: 'welcome',
-  pendingStatus: 'queue', moderationReady: true, editingOpp: null,
+  pendingStatus: 'queue', moderationReady: true, editingOpp: null, flagged: [],
+  selectedDupes: new Set(),
+  dupScan: { pairs: [], sel: new Set(), swap: new Set() },
   duplicateTargets: {}, dupSubject: null, dupPick: null, dupTimer: null,
   range: 30, modalAgent: null, logCursor: 0, logTimer: null, pollTimer: null,
   editingSeed: null, expanded: new Set(),
@@ -1547,7 +1617,7 @@ async function loadConfig() {
 async function refreshDashboard() {
   markRefreshing(true);
   try {
-    const [status, summary, history, billed, userCosts, metrics, snapshots, pending] = await Promise.all([
+    const [status, summary, history, billed, userCosts, metrics, snapshots, pending, flagged] = await Promise.all([
       api('/api/agents/status'),
       api(`/api/agents/summary?days=${S.range}`),
       api(`/api/agents/history?days=${S.range}&limit=100`),
@@ -1558,19 +1628,23 @@ async function refreshDashboard() {
       // status=all fetches both slices at once — the queue and the already-rejected rows
       // are split client-side, so switching tabs costs no round-trip.
       api('/api/agents/pending?limit=2000&status=all').catch(() => null),
+      // Flagged-in-place rows are is_active=TRUE, so they are NOT in the status=all fetch
+      // above (which reads inactive rows). They need their own request.
+      api('/api/agents/pending?limit=2000&status=flagged').catch(() => null),
     ]);
     S.status = status; S.summary = summary; S.history = history; S.billed = billed;
     S.userCosts = userCosts;
     S.metrics = metrics;
     S.snapshots = (snapshots && snapshots.snapshots) || [];
     S.pending = (pending && pending.opportunities) || [];
+    S.flagged = (flagged && flagged.opportunities) || [];
     S.pendingSources = (pending && pending.sources) || [];
     S.moderationReady = !pending || pending.moderation_ready !== false;
     S.reasonReady = !pending || pending.reason_ready !== false;
     S.duplicateTargets = (pending && pending.duplicate_targets) || {};
     notice('');
     renderKPIs(); renderBilled(); renderUserCosts(); renderMetrics(); renderChart(); renderCards(); renderHistory();
-    renderSnapshots(); renderPending();
+    renderSnapshots(); renderPending(); renderDupes();
     S.lastRefresh = Date.now();
   } catch (e) {
     notice('Could not reach the agent API: ' + e.message);
@@ -1773,9 +1847,50 @@ function pendingInStatus(status) {
   return (S.pending || []).filter(o => status === 'rejected' ? isAdjudicated(o) : !isAdjudicated(o));
 }
 
-function renderPending() {
+// The rows currently on screen in the Review queue (Queue / Rejected). Suspected duplicates
+// are is_active=true and live under Run → Duplicates, not here.
+function visiblePendingRows() {
   const inStatus = pendingInStatus(S.pendingStatus);
-  const rows = S.pendingSource ? inStatus.filter(o => o.source === S.pendingSource) : inStatus;
+  return S.pendingSource ? inStatus.filter(o => o.source === S.pendingSource) : inStatus;
+}
+
+// One row of the moderation table, shared by the Review queue (Queue/Rejected) and the
+// Duplicates tab (flagged live rows). `selected` is the Set the checkbox reflects and
+// `toggleFn` the global toggler name; opts.hideEdit drops the Edit button (the pending-update
+// endpoint only edits inactive rows, so it does not apply to a live flagged row).
+function pendingRowHtml(o, selected, toggleFn, opts) {
+  opts = opts || {};
+  const on = selected.has(o.id);
+  const flags = Array.isArray(o.quality_flags) ? o.quality_flags : [];
+  const dupes = Array.isArray(o.dup_candidates) ? o.dup_candidates : [];
+  const tags = [
+    o.submitted_by ? `<span class="pill info">from ${esc(o.submitted_by)}</span>` : '',
+    ...flags.map(f => `<span class="pill warn" title="${esc(String(f))}">${esc(String(f).slice(0, 90))}</span>`),
+    isAdjudicated(o) ? `<span class="pill danger">${esc(o.moderation_status)}${o.reviewed_at ? ' ' + ago(o.reviewed_at) : ''}</span>` : '',
+    o.moderation_status === 'suspected_duplicate' ? `<span class="pill warn">suspected duplicate</span>` : '',
+    o.duplicate_of ? `<span class="pill info">of ${esc((S.duplicateTargets[o.duplicate_of] || {}).name || o.duplicate_of)}</span>` : '',
+    o.moderation_reason ? `<span class="pill info" title="${esc(String(o.moderation_reason))}">why: ${esc(String(o.moderation_reason).slice(0, 60))}</span>` : '',
+  ].filter(Boolean).join(' ');
+  const editBtn = opts.hideEdit ? '' : `<button class="btn btn-sm" onclick="editOpportunity('${esc(o.id)}')">Edit</button> `;
+  return `<tr class="${on ? 'sel-row' : ''}">
+    <td><input type="checkbox" ${on ? 'checked' : ''} onchange="${toggleFn}('${esc(o.id)}', this.checked)"></td>
+    <td><div>${esc(o.name || '(no name)')}</div>
+        ${o.summary ? `<div class="hint" style="margin-top:3px">${esc(String(o.summary).slice(0, 120))}</div>` : ''}
+        ${tags ? `<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px">${tags}</div>` : ''}
+        ${dupeBackLinks(dupes)}</td>
+    <td>${esc(o.org || '—')}</td>
+    <td>${esc(o.type || '—')}</td>
+    <td class="mono" style="font-size:11.5px">${esc(o.source || '—')}</td>
+    <td style="white-space:nowrap;color:var(--text-2)">${ago(o.created_at)}</td>
+    <td style="white-space:nowrap">
+      ${editBtn}${isAdjudicated(o) ? '' : `<button class="btn btn-sm" ${S.moderationReady ? '' : 'disabled'}
+        onclick="markDuplicate('${esc(o.id)}')">Duplicate</button>`}
+      ${o.url ? ` <a href="${esc(o.url)}" target="_blank" rel="noopener">Open ↗</a>` : ''}</td>
+  </tr>`;
+}
+
+function renderPending() {
+  const rows = visiblePendingRows();
   const queueTotal = pendingInStatus('queue').length;
   const rejectedTotal = pendingInStatus('rejected').length;
   // The nav badge counts work still to do, not every inactive row.
@@ -1797,45 +1912,95 @@ function renderPending() {
 
   const body = $('pendingBody');
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="7" class="empty">${S.pendingStatus === 'rejected'
-      ? 'Nothing has been rejected.' : 'Nothing waiting for review.'}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="7" class="empty">${
+      S.pendingStatus === 'rejected' ? 'Nothing has been rejected.'
+      : 'Nothing waiting for review.'}</td></tr>`;
     updateReviewButtons();
     return;
   }
-  body.innerHTML = rows.map(o => {
-    const on = S.selectedPending.has(o.id);
-    // Provenance and the submission-time hints matter most on a student submission:
-    // they are what a reviewer would otherwise have to open the database to see.
-    const flags = Array.isArray(o.quality_flags) ? o.quality_flags : [];
-    const dupes = Array.isArray(o.dup_candidates) ? o.dup_candidates : [];
-    const tags = [
-      o.submitted_by ? `<span class="pill info">from ${esc(o.submitted_by)}</span>` : '',
-
-      ...flags.map(f => `<span class="pill warn" title="${esc(String(f))}">${esc(String(f).slice(0, 90))}</span>`),
-      isAdjudicated(o) ? `<span class="pill danger">${esc(o.moderation_status)}${o.reviewed_at ? ' ' + ago(o.reviewed_at) : ''}</span>` : '',
-      // A bare duplicate_of id means nothing to a reader; name the survivor.
-      o.duplicate_of ? `<span class="pill info">of ${esc((S.duplicateTargets[o.duplicate_of] || {}).name || o.duplicate_of)}</span>` : '',
-      // The recorded why. Only ever present on adjudicated rows; the full text rides the tooltip.
-      o.moderation_reason ? `<span class="pill info" title="${esc(String(o.moderation_reason))}">why: ${esc(String(o.moderation_reason).slice(0, 60))}</span>` : '',
-    ].filter(Boolean).join(' ');
-    return `<tr class="${on ? 'sel-row' : ''}">
-      <td><input type="checkbox" ${on ? 'checked' : ''} onchange="togglePending('${esc(o.id)}', this.checked)"></td>
-      <td><div>${esc(o.name || '(no name)')}</div>
-          ${o.summary ? `<div class="hint" style="margin-top:3px">${esc(String(o.summary).slice(0, 120))}</div>` : ''}
-          ${tags ? `<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px">${tags}</div>` : ''}
-          ${dupeBackLinks(dupes)}</td>
-      <td>${esc(o.org || '—')}</td>
-      <td>${esc(o.type || '—')}</td>
-      <td class="mono" style="font-size:11.5px">${esc(o.source || '—')}</td>
-      <td style="white-space:nowrap;color:var(--text-2)">${ago(o.created_at)}</td>
-      <td style="white-space:nowrap">
-        <button class="btn btn-sm" onclick="editOpportunity('${esc(o.id)}')">Edit</button>
-        ${isAdjudicated(o) ? '' : ` <button class="btn btn-sm" ${S.moderationReady ? '' : 'disabled'}
-          onclick="markDuplicate('${esc(o.id)}')">Duplicate</button>`}
-        ${o.url ? ` <a href="${esc(o.url)}" target="_blank" rel="noopener">Open ↗</a>` : ''}</td>
-    </tr>`;
-  }).join('');
+  body.innerHTML = rows.map(o => pendingRowHtml(o, S.selectedPending, 'togglePending')).join('');
   updateReviewButtons();
+}
+
+/* ---------- Run → Duplicates tab: the flagged (suspected_duplicate) live rows ---------- */
+function renderDupes() {
+  const rows = S.flagged || [];
+  $('dupeTabCount').textContent = rows.length ? num(rows.length) : '';
+  $('dupeModerationSetup').classList.toggle('hidden', S.moderationReady);
+  const body = $('dupeBody');
+  if (!body) return;
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="7" class="empty">Nothing flagged. Use
+      <strong>Scan for duplicates</strong> to find and flag suspected pairs.</td></tr>`;
+    updateDupeButtons();
+    return;
+  }
+  // hideEdit: these rows are live (is_active=true) and the pending-update endpoint only edits
+  // inactive rows. The useful per-row action here is Duplicate (confirm) — that stays.
+  body.innerHTML = rows.map(o => pendingRowHtml(o, S.selectedDupes, 'toggleDupe', { hideEdit: true })).join('');
+  updateDupeButtons();
+}
+
+function toggleDupe(id, on) {
+  if (on) S.selectedDupes.add(id); else S.selectedDupes.delete(id);
+  renderDupes();
+}
+
+function updateDupeButtons() {
+  const n = S.selectedDupes.size;
+  const keep = $('dupeKeepBtn'), conf = $('dupeConfirmBtn');
+  if (!keep || !conf) return;
+  keep.disabled = !n;
+  keep.textContent = n ? `Keep ${n} (not a dup)` : 'Keep selected';
+  conf.disabled = !n || !S.moderationReady;
+  conf.title = S.moderationReady ? '' : 'Run user_submissions_schema.sql first.';
+  conf.textContent = n ? `Confirm ${n} duplicate${n > 1 ? 's' : ''}` : 'Confirm duplicate';
+}
+
+// Keep = release the suspicion. Moderating to 'approved' clears the suspected_duplicate flag
+// AND the stale duplicate_of pointer, and — because 'approved' is not an adjudicated status —
+// leaves is_active untouched, so the row stays live. Reject = pull it (deactivates).
+async function dupeKeepSelected() {
+  const ids = [...S.selectedDupes];
+  if (!ids.length) return;
+  try {
+    const r = await api('/api/agents/pending/moderate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, status: 'approved' }),
+    });
+    if (!r || !r.ok) throw new Error((r && r.error) || 'Keep failed');
+    S.selectedDupes.clear();
+    toast(`Kept ${r.moderated || ids.length} row(s) — no longer flagged.`);
+    refreshDashboard();
+  } catch (e) { notice('Could not keep: ' + e.message); }
+}
+
+// Confirm = these really are duplicates. Each flagged row already points at its survivor
+// (duplicate_of), so moderate it to 'duplicate' against that survivor, which retires the loser
+// (is_active=false) and keeps the link. moderate takes one duplicate_of per call, so loop.
+async function dupeConfirmSelected() {
+  const rows = (S.flagged || []).filter(o => S.selectedDupes.has(o.id));
+  if (!rows.length) return;
+  const missing = rows.filter(o => !o.duplicate_of);
+  if (missing.length) {
+    notice(`${missing.length} selected row(s) have no survivor to confirm against — open `
+      + `Duplicate on each to pick one. Confirming the rest.`);
+  }
+  let done = 0, failed = 0;
+  for (const o of rows) {
+    if (!o.duplicate_of) { failed++; continue; }
+    try {
+      const r = await api('/api/agents/pending/moderate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [o.id], status: 'duplicate', duplicate_of: o.duplicate_of,
+                               reason: o.moderation_reason || undefined }),
+      });
+      if (r && r.ok && r.moderated) done += r.moderated; else failed++;
+    } catch (_) { failed++; }
+  }
+  S.selectedDupes.clear();
+  toast(`Confirmed ${done} duplicate(s).` + (failed ? ` ${failed} could not be confirmed.` : ''));
+  refreshDashboard();
 }
 
 /* ---------- Mailing-list signup recipes ----------
@@ -2216,8 +2381,13 @@ function dupeBackLinks(dupes) {
   </div>`;
 }
 
+// A row may live in the Review queue (S.pending) or the Duplicates tab (S.flagged).
+function findPendingRow(id) {
+  return (S.pending || []).find(x => x.id === id) || (S.flagged || []).find(x => x.id === id);
+}
+
 function markDuplicate(id) {
-  const o = (S.pending || []).find(x => x.id === id);
+  const o = findPendingRow(id);
   if (!o) return;
   S.dupSubject = o; S.dupPick = null;
   $('dupSubject').textContent = o.name || o.id;
@@ -2291,6 +2461,113 @@ async function saveDuplicate() {
   } catch (e) {
     $('dupError').textContent = e.message;
     $('dupError').classList.remove('hidden');
+  }
+}
+
+/* ---- Scan for duplicates → flag a reviewed subset as suspected_duplicate ---------------- */
+async function openDupScan() {
+  S.dupScan = { pairs: [], sel: new Set(), swap: new Set() };
+  $('dupScanError').classList.add('hidden');
+  $('dupScanList').innerHTML = '';
+  $('dupScanStatus').textContent = 'Scanning the catalog…';
+  $('dupScanFlag').disabled = true;
+  $('dupScanModal').classList.add('open');
+  try {
+    const r = await api('/api/agents/duplicate-report');
+    // A null response means the route wasn't found and the request fell through to the
+    // static SPA fallback (HTML, unparseable) — almost always a server that needs restarting.
+    if (!r) throw new Error('No response from the scan route — restart the server (restart_server.ps1) to load it.');
+    if (!r.ok) throw new Error(r.error || 'Scan failed');
+    S.dupScan.pairs = r.pairs || [];
+    // Pre-select the near-certain (strong) pairs; leave the weak ones for a deliberate tick.
+    S.dupScan.pairs.forEach((p, i) => { if (p.confidence === 'strong') S.dupScan.sel.add(i); });
+    $('dupScanStatus').textContent = S.dupScan.pairs.length
+      ? `${S.dupScan.pairs.length} live pair(s) found across ${num(r.scanned)} rows. Strong `
+        + `matches are pre-selected.`
+      : `No live duplicate pairs found across ${num(r.scanned)} rows.`;
+    renderDupScan();
+  } catch (e) {
+    $('dupScanStatus').textContent = '';
+    $('dupScanError').textContent = e.message;
+    $('dupScanError').classList.remove('hidden');
+  }
+}
+
+function dupScanSide(row, label, cls) {
+  return `<div class="dup-side ${cls}"><span class="pill ${cls === 'keep' ? 'ok' : 'warn'}">${label}</span>
+    <span class="nm">${esc(row.name || row.id)}</span>
+    <div class="sub">${esc(row.org || '')}</div>
+    <div class="sub mono">${esc(row.id)}${row.url ? ' · ' + esc(row.url) : ''}</div></div>`;
+}
+
+function renderDupScan() {
+  const box = $('dupScanList');
+  const pairs = S.dupScan.pairs;
+  box.innerHTML = pairs.map((p, i) => {
+    const swapped = S.dupScan.swap.has(i);
+    const keep = swapped ? p.flag : p.keep;
+    const flag = swapped ? p.keep : p.flag;
+    const on = S.dupScan.sel.has(i);
+    const conf = `<span class="pill ${p.confidence === 'strong' ? 'danger' : 'info'}">${esc(p.confidence)}</span>`;
+    return `<div class="dup-pair" style="display:flex;gap:10px;align-items:flex-start;padding:8px 4px;border-bottom:1px solid var(--line)">
+      <input type="checkbox" ${on ? 'checked' : ''} onchange="toggleDupScan(${i}, this.checked)" style="margin-top:4px">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px">
+          ${conf}<span class="sub">${esc(p.reason)}</span>
+          <button class="btn btn-ghost btn-sm" onclick="swapDupScan(${i})">Swap</button>
+        </div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap">
+          ${dupScanSide(keep, 'KEEP', 'keep')}
+          ${dupScanSide(flag, 'FLAG', 'flag')}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  updateDupScanBtn();
+}
+
+function toggleDupScan(i, on) {
+  if (on) S.dupScan.sel.add(i); else S.dupScan.sel.delete(i);
+  updateDupScanBtn();
+}
+
+function swapDupScan(i) {
+  if (S.dupScan.swap.has(i)) S.dupScan.swap.delete(i); else S.dupScan.swap.add(i);
+  renderDupScan();
+}
+
+function updateDupScanBtn() {
+  const n = S.dupScan.sel.size;
+  const btn = $('dupScanFlag');
+  btn.disabled = !n;
+  btn.textContent = n ? `Flag ${n} selected` : 'Flag selected';
+}
+
+async function flagDupScan() {
+  const { pairs, sel, swap } = S.dupScan;
+  const payload = [...sel].map(i => {
+    const p = pairs[i];
+    const swapped = swap.has(i);
+    const keep = swapped ? p.flag : p.keep;
+    const flag = swapped ? p.keep : p.flag;
+    return { id: flag.id, duplicate_of: keep.id, reason: `dedupe scan (${p.confidence}): ${p.reason}` };
+  });
+  if (!payload.length) return;
+  $('dupScanFlag').disabled = true;
+  try {
+    const r = await api('/api/agents/duplicate-report/flag', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairs: payload }),
+    });
+    if (!r) throw new Error('No response from the flag route — restart the server (restart_server.ps1) to load it.');
+    $('dupScanModal').classList.remove('open');
+    toast(`Flagged ${r.flagged || 0} row(s) as suspected duplicates.`
+      + (r.errors ? ` ${r.errors} failed.` : ''));
+    refreshDashboard();          // reloads the Flagged tab
+  } catch (e) {
+    $('dupScanError').textContent = e.message;
+    $('dupScanError').classList.remove('hidden');
+    updateDupScanBtn();
   }
 }
 
@@ -2447,7 +2724,7 @@ const WORKFLOW_AGENTS = {
 const WORKFLOW_INLINE_TOOLS = {
   'wf-newopp': ['minehub'],
   'wf-lists': ['mlgrader'],
-  'wf-utils': ['dupfinder', 'refind'],
+  'wf-utils': ['refind'],
 };
 
 function relocateConsole() {
@@ -2490,6 +2767,7 @@ function initSubtabs() {
         document.querySelectorAll('#view-run .subview').forEach(
           v => v.classList.toggle('active', v.id === 'rsub-' + sub));
         if (sub === 'newopp') { loadAggregators(); loadLeads(); }
+        if (sub === 'dupes') renderDupes();
         if (sub === 'lists') loadSignups();
       };
     });
@@ -4275,6 +4553,18 @@ document.querySelectorAll('#userCostTabs .tab')
 $('activateBtn').onclick = activateSelected;
 $('dupClose').onclick = () => { $('dupModal').classList.remove('open'); S.dupSubject = null; };
 $('dupSave').onclick = saveDuplicate;
+$('dupScanBtn').onclick = openDupScan;
+$('dupeSelectAll').onclick = () => { (S.flagged || []).forEach(o => S.selectedDupes.add(o.id)); renderDupes(); };
+$('dupeClear').onclick = () => { S.selectedDupes.clear(); renderDupes(); };
+$('dupeKeepBtn').onclick = dupeKeepSelected;
+$('dupeConfirmBtn').onclick = dupeConfirmSelected;
+$('dupScanClose').onclick = () => $('dupScanModal').classList.remove('open');
+$('dupScanSelectAll').onclick = () => {
+  S.dupScan.pairs.forEach((_, i) => S.dupScan.sel.add(i));
+  renderDupScan();
+};
+$('dupScanClearSel').onclick = () => { S.dupScan.sel.clear(); renderDupScan(); };
+$('dupScanFlag').onclick = flagDupScan;
 $('dupSearch').oninput = e => {
   // Debounced: this hits the database on every keystroke otherwise.
   clearTimeout(S.dupTimer);
@@ -4294,9 +4584,7 @@ $('pendingSource').onchange = e => { S.pendingSource = e.target.value; renderPen
   t.onclick = () => { S.pendingStatus = t.dataset.status; S.selectedPending.clear(); renderPending(); };
 });
 $('pendingSelectAll').onclick = () => {
-  const inStatus = pendingInStatus(S.pendingStatus);
-  const rows = S.pendingSource ? inStatus.filter(o => o.source === S.pendingSource) : inStatus;
-  rows.forEach(o => S.selectedPending.add(o.id));
+  visiblePendingRows().forEach(o => S.selectedPending.add(o.id));
   renderPending();
 };
 $('pendingClear').onclick = () => { S.selectedPending.clear(); renderPending(); };
@@ -4545,8 +4833,9 @@ document.addEventListener('keydown', e => {
    __forcerecheck, reuses the existing deadline-cache modal rather than a script.
 --------------------------------------------------------------------------- */
 let TOOLS = {};
-// Tool cards that get their own container. mlgrader and dupfinder are NOT here — they share
-// a grid with their neighbouring agent (see WORKFLOW_INLINE_TOOLS).
+// Tool cards that get their own container. mlgrader is NOT here — it shares a grid with its
+// neighbouring agent (see WORKFLOW_INLINE_TOOLS). The old dupfinder card was retired; its scan
+// now lives on the Run → Duplicates tab.
 const TOOL_SLOTS = {
   'slot-inspect': ['inspect'],
   'tools-newopp-angles': ['proposeangles'],

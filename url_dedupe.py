@@ -321,7 +321,16 @@ def find_duplicates(url, name, existing_rows, apply_url=None):
         if key and row_key == key:
             # Same page. Only a duplicate if the name agrees too — otherwise this is one
             # of the shared-application-portal cases (see EXACT_DUP_NAME_RATIO).
-            if (normalize_name(name) == normalize_name(row.get("name"))
+            # A bare institution name ('Tulane University') is NOT real agreement even when
+            # both sides carry the same one, so it must not trigger the silent reject — the
+            # same guard Fix 3 (2026-08-28) applied to the hint branches below. This branch
+            # is the one place a false match actually LOSES a row, so the guard matters most
+            # here; a bare-institution collision falls through to the strong flag instead.
+            _, row_host_x, _, _ = split_url(row_url)
+            exact_name_is_evidence = not (_is_bare_institution(name, host)
+                                          or _is_bare_institution(row.get("name"), row_host_x))
+            if exact_name_is_evidence and (
+                    normalize_name(name) == normalize_name(row.get("name"))
                     or name_similarity(name, row.get("name")) >= EXACT_DUP_NAME_RATIO):
                 return row, []
             candidates.append(dict(

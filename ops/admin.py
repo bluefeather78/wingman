@@ -98,7 +98,7 @@ def handle_snapshots_list():
 def handle_pending_list(request: Request):
     limit = _qs_int(request, "limit", 500) or 500
     status = request.query_params.get("status") or "queue"
-    if status not in ("queue", "rejected", "all"):
+    if status not in ("queue", "rejected", "all", "flagged"):
         return json_error(400, f"Unknown status filter: {status}")
     result = core.list_pending_opportunities(
         limit=limit, source=request.query_params.get("source"), status=status)
@@ -186,6 +186,24 @@ async def handle_pending_moderate(request: Request):
 async def handle_pending_update(request: Request):
     body = await read_json_body(request)
     result = core.update_pending_opportunity(body.get("id"), body.get("fields") or {})
+    return json_response(200 if result.get("ok") else 400, result, default=str)
+
+
+@router.get("/api/agents/duplicate-report")
+def handle_duplicate_report(request: Request):
+    """Read-only scan for flag-eligible duplicate pairs (both rows live). Writes nothing —
+    the operator reviews the pairs and flags a chosen subset via the POST below."""
+    limit = _qs_int(request, "limit", 2000) or 2000
+    result = core.duplicate_report_pairs(limit=limit)
+    return json_response(200 if result.get("ok") else 502, result, default=str)
+
+
+@router.post("/api/agents/duplicate-report/flag")
+async def handle_duplicate_flag(request: Request):
+    """Flag the reviewed pairs as suspected_duplicate (flag-in-place — both rows stay live).
+    Body: {pairs: [{id, duplicate_of, reason}]}."""
+    body = await read_json_body(request)
+    result = core.flag_suspected_duplicate_pairs(body.get("pairs") or [])
     return json_response(200 if result.get("ok") else 400, result, default=str)
 
 

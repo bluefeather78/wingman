@@ -55,8 +55,19 @@ LEADS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "discovere
 KIND_NAMES = "names"          # a page that NAMES programs -> harvest_names.py
 KIND_HUB = "hub"              # a page that LINKS programs -> mine_hub_pages.py
 
+# The ONE reject reason that feeds this system. Rejecting is not the trigger — rejecting FOR
+# THIS REASON is. Every other verdict ("wrong page", "dead link", "not a fit") says nothing
+# about the page being a round-up, and routing all of them would spend a fetch per rejection to
+# mostly learn no. Kept here rather than in the console so the hook and the backfill sweep can
+# never disagree about which reason means what.
+ROUNDUP_REJECT_REASON = "third-party-roundup"
+
 STATUS_NEW = "new"
 STATUS_DONE = "processed"
+# A page we looked at and judged NOT a round-up is recorded too, so neither the reject hook nor
+# a backfill sweep ever re-opens it. Without this every sweep re-fetches the whole rejected pile
+# to re-learn answers it already had — 40 pages to recover 24 known "no"s, growing with the pile.
+STATUS_NOT_A_LEAD = "not-a-lead"
 
 # --- the classifier -------------------------------------------------------------------
 # A third-party page earns a lead by its STRUCTURE, not by being on a known-bad host list.
@@ -146,6 +157,36 @@ def strip_site_name(title):
         if found and head.strip() and len(tail.split()) <= _MAX_SITE_NAME_WORDS:
             best = head.strip()
     return best
+
+
+def classify_confirmed_roundup(url, timeout=url_repair.DEFAULT_TIMEOUT):
+    """(kind, signal) for a page a PERSON has already confirmed is a third-party round-up.
+
+    Deliberately skips the title test. That test answers "is this a page about many
+    programs?" — and here a human has answered it by picking the round-up reject reason, having
+    actually looked at the page. Re-asking it with a heuristic could only overrule them, and it
+    would: the test reads a `<title>`, and a title is a poor description of a page that a person
+    has read. So the only question left is the one the title never answered anyway — does it
+    LINK the programs or merely NAME them.
+
+    Defaults to KIND_NAMES rather than to nothing. An unreadable page still costs zero to queue
+    (`harvest_names` makes no model call when a page yields no text), and dropping a lead a
+    person explicitly flagged is the one outcome this path must not produce.
+    """
+    import mine_hub_pages
+    try:
+        html = mine_hub_pages.fetch_html(url, timeout)
+        kept, subs = mine_hub_pages.filter_hub_links(
+            mine_hub_pages.harvest_links(html or "", url), url, off_domain=True, cap=400)
+        domains = {url_dedupe.registrable_domain(urllib.parse.urlsplit(u).netloc)
+                   for u, _ in kept + subs}
+        domains.discard("")
+    except Exception:
+        domains = set()
+    if len(domains) >= MIN_HUB_DOMAINS:
+        return KIND_HUB, f"you marked it a round-up; it links programs on {len(domains)} sites"
+    return KIND_NAMES, ("you marked it a round-up; it links "
+                        f"{len(domains)} site(s), so its programs are named, not linked")
 
 
 def classify_page(url, timeout=url_repair.DEFAULT_TIMEOUT):
@@ -273,18 +314,16 @@ def capture(resolved_urls, used_urls, existing_rows=None, seed_id=None, angle=""
     return leads, trace
 
 
-def from_rejected_rows(rows, known_keys=None, classify=None, limit=None, timeout=None):
-    """Leads from the review queue's REJECTED pile. FREE. Returns (leads, trace).
+def from_rejected_rows(rows, known_keys=None, classify=None, limit=None, timeout=None,
+                       confirmed=False):
+    """Leads from rows a person rejected. FREE. Returns (leads, trace).
 
-    The operator's second source, and it is free evidence of exactly the right kind: a row
-    rejected as a third-party round-up is a page a HUMAN has already confirmed is not a
-    program's own page but does talk about programs. That is the premise this classifier has to
-    guess at when it works from raw grounding — here it is given.
-
-    The URL is still classified structurally, because "not a program page" does not say whether
-    it LINKS the programs or merely NAMES them, and that is what decides which extractor gets it.
+    `confirmed=True` means the operator picked the round-up reject reason — they looked at the
+    page and said what it is. That skips the title test (see `classify_confirmed_roundup`) and
+    always yields a lead. `confirmed=False` is the general sweep, which still has to judge
+    whether the page is a round-up at all, and records its NOs so they are never re-fetched.
     """
-    classify = classify or classify_page
+    classify = classify or (classify_confirmed_roundup if confirmed else classify_page)
     known = set(known_keys or set())
     trace = {"rejected": len(rows or []), "already_known": 0, "ignored": 0, "already_used": 0,
              "no_verdict": 0, KIND_NAMES: 0, KIND_HUB: 0}
@@ -299,22 +338,32 @@ def from_rejected_rows(rows, known_keys=None, classify=None, limit=None, timeout
     leads = []
     stamp = datetime.date.today().isoformat()
     for url, kind, signal in _classify_all(shortlist, classify, timeout):
-        if kind is None:
-            trace["no_verdict"] += 1
-            continue
         row = by_url.get(_key(url)) or {}
-        trace[kind] += 1
-        leads.append({"url": url, "kind": kind, "seed_id": row.get("seed_id"),
-                      "angle": f"rejected row {row.get('id')}: {(row.get('name') or '')[:60]}",
-                      "signal": signal, "first_seen": stamp, "status": STATUS_NEW})
+        entry = {"url": url, "kind": kind, "seed_id": row.get("seed_id"),
+                 "angle": f"rejected row {row.get('id')}: {(row.get('name') or '')[:60]}",
+                 "signal": signal, "first_seen": stamp, "status": STATUS_NEW}
+        if kind is None:
+            # Remember the NO. Written to the same file so the next sweep skips it outright.
+            trace["no_verdict"] += 1
+            entry["status"] = STATUS_NOT_A_LEAD
+        else:
+            trace[kind] += 1
+        leads.append(entry)
     return leads, trace
 
 
-def fetch_rejected_rows(supabase_url, service_key, limit=None):
-    """The catalog's rejected rows, newest first. FREE (a Supabase read costs nothing)."""
+def fetch_rejected_rows(supabase_url, service_key, limit=None, any_reason=False):
+    """The catalog's rejected rows, newest first. FREE (a Supabase read costs nothing).
+
+    Defaults to rows rejected FOR THE ROUND-UP REASON only, matching the live hook — the reason
+    is the trigger, not the rejection. `any_reason=True` is the backfill escape hatch for rows
+    rejected before that reason existed, where the general classifier has to judge for itself.
+    """
     from supabase_common import supabase_get
     params = {"select": "id,name,url,seed_id,moderation_status,moderation_reason,quality_flags",
               "moderation_status": "eq.rejected", "order": "id.desc"}
+    if not any_reason:
+        params["moderation_reason"] = f"eq.{ROUNDUP_REJECT_REASON}"
     rows = supabase_get(supabase_url, "opportunities", params, service_key) or []
     return rows[:limit] if limit else rows
 
@@ -365,7 +414,7 @@ def append_leads(leads, path=LEADS_PATH):
 def pending(kind, path=LEADS_PATH, limit=None):
     """The unprocessed leads of one kind, oldest first — what a consumer should work on."""
     out = [l for l in load_leads(path)
-           if l.get("kind") == kind and l.get("status", STATUS_NEW) != STATUS_DONE]
+           if l.get("kind") == kind and l.get("status", STATUS_NEW) == STATUS_NEW]
     return out[:limit] if limit else out
 
 
@@ -395,7 +444,7 @@ def summarize(leads):
     """{kind: count} over unprocessed leads — what the run summary and console report."""
     out = {}
     for lead in leads:
-        if lead.get("status", STATUS_NEW) == STATUS_DONE:
+        if lead.get("status", STATUS_NEW) != STATUS_NEW:
             continue
         out[lead.get("kind") or "?"] = out.get(lead.get("kind") or "?", 0) + 1
     return out
@@ -408,9 +457,13 @@ def main():
     ap.add_argument("--all", action="store_true", help="Include already-processed leads.")
     ap.add_argument("--path", default=LEADS_PATH)
     ap.add_argument("--from-rejects", action="store_true",
-                    help="FREE: classify the review queue's REJECTED rows into leads. A row "
-                         "rejected as a third-party round-up is a page a human already "
-                         "confirmed talks about programs without being one.")
+                    help="FREE: queue the rows you rejected AS ROUND-UPS. This is the catch-up "
+                         "for rows rejected before the live hook existed — new ones are queued "
+                         "the moment you pick that reason in the console.")
+    ap.add_argument("--any-reason", action="store_true",
+                    help="Sweep EVERY rejected row, not just the round-ups, and let the "
+                         "classifier judge each one. For the backlog rejected before the "
+                         "round-up reason existed. Its NOs are remembered, so it is cheap twice.")
     ap.add_argument("--limit", type=int, help="Max rejected rows to classify.")
     ap.add_argument("--commit", action="store_true", help="Write the leads (default: preview).")
     args = ap.parse_args()
@@ -424,19 +477,30 @@ def main():
         if not su or not key:
             print("[ERROR] SUPABASE_URL and a key must be set in .env.")
             raise SystemExit(1)
-        rows = fetch_rejected_rows(su, key, limit=args.limit)
-        print(f"[OK] {len(rows)} rejected row(s) to classify (free HTTP, no model calls)...")
-        leads, trace = from_rejected_rows(rows, known_keys=lead_keys(load_leads(args.path)))
+        rows = fetch_rejected_rows(su, key, limit=args.limit, any_reason=args.any_reason)
+        scope = "every rejected row" if args.any_reason else f"rejected as {ROUNDUP_REJECT_REASON}"
+        print(f"[OK] {len(rows)} row(s) to classify ({scope}; free HTTP, no model calls)...")
+        leads, trace = from_rejected_rows(rows, known_keys=lead_keys(load_leads(args.path)),
+                                          confirmed=not args.any_reason)
         print("[OK] " + ", ".join(f"{k}={v}" for k, v in trace.items()))
         for l in leads:
+            if l["status"] == STATUS_NOT_A_LEAD:
+                continue
             print(f"    {l['kind']:5}  {l['url'][:88]}")
             print(f"           {l['signal']}")
+        nos = sum(1 for l in leads if l["status"] == STATUS_NOT_A_LEAD)
+        if nos:
+            print(f"    ({nos} page(s) judged not a round-up — remembered, never re-fetched)")
+        real = [l for l in leads if l["status"] == STATUS_NEW]
         if args.commit:
             n = append_leads(leads, args.path)
-            print(f"[OK] Wrote {n} new lead(s). Queue: {summarize(load_leads(args.path))}")
+            print(f"[OK] Wrote {n} row(s) ({len(real)} lead(s), {len(leads) - len(real)} "
+                  f"remembered as not-a-round-up). Queue: {summarize(load_leads(args.path))}")
         else:
             print("")
-            print(f"[PREVIEW] {len(leads)} lead(s) would be queued. Re-run with --commit.")
+            print(f"[PREVIEW] {len(real)} lead(s) would be queued, and "
+                  f"{len(leads) - len(real)} NO(s) remembered so they are never re-fetched. "
+                  f"Re-run with --commit.")
         return
 
     leads = load_leads(args.path)

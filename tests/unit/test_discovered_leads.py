@@ -302,20 +302,25 @@ def test_rejected_rows_become_leads_of_the_right_kind():
     but it still has to be classified, because 'not a program page' does not say whether it
     LINKS the programs or merely NAMES them."""
     leads, trace = dl.from_rejected_rows(REJECTED, classify=lambda u, t=None: VERDICTS[u])
-    assert [l["kind"] for l in leads] == [dl.KIND_HUB, dl.KIND_NAMES]
+    real = [l for l in leads if l["status"] == dl.STATUS_NEW]
+    assert [l["kind"] for l in real] == [dl.KIND_HUB, dl.KIND_NAMES]
     assert trace["no_verdict"] == 1 and trace["rejected"] == 3
+    # the NO is kept as a tombstone so it is never re-fetched
+    assert [l["url"] for l in leads if l["status"] == dl.STATUS_NOT_A_LEAD] ==         ["https://faq.example/c"]
 
 
 def test_rejected_leads_carry_their_source_row():
     leads, _ = dl.from_rejected_rows(REJECTED, classify=lambda u, t=None: VERDICTS[u])
-    assert "ec1" in leads[0]["angle"] and "Top 15 Summer Programs" in leads[0]["angle"]
+    first = [l for l in leads if l["status"] == dl.STATUS_NEW][0]
+    assert "ec1" in first["angle"] and "Top 15 Summer Programs" in first["angle"]
 
 
 def test_rejected_rows_skip_leads_already_queued():
     known = {dl._key("https://roundup.example/a")}
     leads, trace = dl.from_rejected_rows(REJECTED, known_keys=known,
                                          classify=lambda u, t=None: VERDICTS[u])
-    assert [l["url"] for l in leads] == ["https://prose.example/b"]
+    real = [l["url"] for l in leads if l["status"] == dl.STATUS_NEW]
+    assert real == ["https://prose.example/b"]
     assert trace["already_known"] == 1
 
 
@@ -360,3 +365,56 @@ def test_strip_site_name_never_empties_a_title():
     assert dl.strip_site_name("Programs | MIT") == "Programs"
     assert dl.strip_site_name("| Immerse") == "| Immerse"
     assert dl.strip_site_name("") == ""
+
+
+# ---------- the reject REASON is the trigger, not the rejection ----------
+
+def _stub_links(monkeypatch, n):
+    import mine_hub_pages
+    html = "".join(f'<a href="https://site{i}.org/p">Program {i}</a>' for i in range(n))
+    monkeypatch.setattr(mine_hub_pages, "fetch_html", lambda u, t=None: html)
+
+
+def test_confirmed_roundup_routes_to_hub_when_it_links_many_sites(monkeypatch):
+    _stub_links(monkeypatch, dl.MIN_HUB_DOMAINS + 2)
+    kind, sig = dl.classify_confirmed_roundup("https://round.example/list")
+    assert kind == dl.KIND_HUB and "you marked it" in sig
+
+
+def test_confirmed_roundup_defaults_to_names_never_to_nothing(monkeypatch):
+    """Dropping a lead a person explicitly flagged is the one outcome this path must not
+    produce. An unreadable page still costs nothing to queue — harvest_names makes no model
+    call when a page yields no text."""
+    import mine_hub_pages
+    monkeypatch.setattr(mine_hub_pages, "fetch_html", lambda u, t=None: "")
+    kind, _ = dl.classify_confirmed_roundup("https://blocked.example/list")
+    assert kind == dl.KIND_NAMES
+
+
+def test_confirmed_roundup_survives_a_fetch_explosion(monkeypatch):
+    import mine_hub_pages
+
+    def boom(u, t=None):
+        raise RuntimeError("network on fire")
+    monkeypatch.setattr(mine_hub_pages, "fetch_html", boom)
+    assert dl.classify_confirmed_roundup("https://x.example/a")[0] == dl.KIND_NAMES
+
+
+def test_a_no_is_remembered_so_it_is_never_re_fetched(leadfile):
+    """Without this, every sweep re-opens the whole rejected pile to re-learn its NOs."""
+    rows = [{"id": "ec9", "name": "Not a round-up", "url": "https://faq.example/c"}]
+    leads, trace = dl.from_rejected_rows(rows, classify=lambda u, t=None: (None, "no verdict"))
+    assert trace["no_verdict"] == 1
+    assert leads[0]["status"] == dl.STATUS_NOT_A_LEAD
+    dl.append_leads(leads, leadfile)
+    # it is neither queued work nor counted...
+    assert dl.pending(dl.KIND_HUB, leadfile) == [] and dl.summarize(dl.load_leads(leadfile)) == {}
+    # ...but it IS known, so the next sweep skips it outright
+    assert dl._key("https://faq.example/c") in dl.lead_keys(dl.load_leads(leadfile))
+
+
+def test_the_roundup_reason_is_defined_once():
+    """The console hook and the backfill sweep must never disagree about which reason routes."""
+    assert dl.ROUNDUP_REJECT_REASON == "third-party-roundup"
+    import ops.core as core
+    assert core._ROUNDUP_REJECT_REASON() == dl.ROUNDUP_REJECT_REASON

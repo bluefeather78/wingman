@@ -2071,7 +2071,8 @@ async function moderateSelected(status) {
 --------------------------------------------------------------------------- */
 const REJECT_REASONS = [
   ['duplicate',       'Duplicate — already have this program (use the Duplicate button if you know the survivor)'],
-  ['third-party-url', 'URL is an article / listicle / video ABOUT it, not the program’s own page'],
+  ['third-party-roundup', 'Round-up — lists MANY programs (sends it to hub mining / name harvest)'],
+  ['third-party-url', 'Article or video about this ONE program, not the program’s own page'],
   ['wrong-page',      'Right site, wrong page (facilities page, costs page, another program…)'],
   ['dead-link',       'Page is gone (404 / domain dead)'],
   ['not-a-fit',       'Not a high-school extracurricular opportunity'],

@@ -1868,6 +1868,37 @@ def _moderation_updates(status, duplicate_of, reason, now):
     return updates
 
 
+def _ROUNDUP_REJECT_REASON():
+    """The reject reason that routes a page back into discovery, read from the one place that
+    defines it. Imported lazily so the console still loads if the offline layer is unavailable."""
+    try:
+        import discovered_leads
+        return discovered_leads.ROUNDUP_REJECT_REASON
+    except Exception:
+        return "third-party-roundup"
+
+
+def _queue_roundup_leads_async(ids):
+    """Classify the just-rejected round-ups and queue them, on a background thread."""
+    def work():
+        try:
+            import discovered_leads
+            rows = supabase_get(SUPABASE_URL, "opportunities",
+                                {"select": "id,name,url,seed_id",
+                                 "id": f"in.({','.join(ids)})"}, SUPABASE_SERVICE_KEY) or []
+            leads, _trace = discovered_leads.from_rejected_rows(
+                rows, known_keys=discovered_leads.lead_keys(discovered_leads.load_leads()),
+                confirmed=True)
+            n = discovered_leads.append_leads(leads)
+            if n:
+                print(f"[leads] queued {n} round-up(s) from the review queue.")
+        except Exception as e:
+            # Never surfaced to the operator: the rejection already succeeded, and a failure
+            # here only means the page has to be picked up by the backfill sweep instead.
+            print(f"[leads] could not queue rejected round-ups: {str(e)[:160]}")
+    threading.Thread(target=work, daemon=True).start()
+
+
 def moderate_opportunities(ids, status, reviewed_by="admin-console", duplicate_of=None,
                            reason=None):
     """Record a human verdict on an explicit list of queued rows.
@@ -1953,6 +1984,13 @@ def moderate_opportunities(ids, status, reviewed_by="admin-console", duplicate_o
     if done and status in ADJUDICATED_STATUSES:
         with _opportunities_cache_lock:
             _opportunities_cache["fetched_at"] = 0.0
+    # Feed the round-ups straight back in. The trigger is the REASON, not the rejection: the
+    # operator looked at the page and said it lists many programs, which is better evidence than
+    # anything this pipeline can derive. Every other reason says nothing about that and routes
+    # nothing. Fire-and-forget on purpose — rejecting is the operation that matters, and a slow
+    # or hung fetch must never make the button wait or the verdict fail.
+    if done and status == "rejected" and reason == _ROUNDUP_REJECT_REASON():
+        _queue_roundup_leads_async(ids)
     result = {"ok": errors == 0, "moderated": done, "status": status,
               "errors": errors, "error_details": details}
     if reason_dropped:

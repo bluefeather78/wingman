@@ -115,7 +115,11 @@ WEB_SEARCH_PRICE_PER_SEARCH = 0.01
 
 def call_claude(system, user_content, api_key, use_web_search=True, max_tokens=4000, timeout=None,
                  max_searches=10):
-    """POSTs directly to the Anthropic Messages API. Returns (text, usage) — text is
+    """MARQUEE M9 (MARQUEE_DECISIONS.md): this is a money seam. Changing whether/how callers spend
+    here — `use_web_search`, `max_searches`, `max_tokens` ceilings, the model pin (MODEL) — is a
+    marquee change: get Shama's approval first and make it its own dedicated commit.
+
+    POSTs directly to the Anthropic Messages API. Returns (text, usage) — text is
     the concatenated text content with any ```json fences stripped, usage is the raw
     `usage` dict from the response (for cost accounting).
 

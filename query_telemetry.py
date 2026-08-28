@@ -141,6 +141,11 @@ def summarize_seed(entry):
     attempts = entry.get("attempts")
     candidates = entry.get("candidates")
     resolved = entry.get("resolved_urls")
+    # Stage-1b resolution telemetry (absent on pre-1b logs). `breadth` above is computed over
+    # `queries`, which are DISCOVERY-only by construction — resolution searches are named by
+    # design and are kept out of that list, so they never drag breadth down. Resolution is
+    # reported as its own axis.
+    res_queries = entry.get("resolution_queries")
     return {
         "angle": entry.get("angle") or "",
         "searches": searches if isinstance(searches, int) else None,
@@ -150,6 +155,10 @@ def summarize_seed(entry):
         # A run that searched but logged no query strings is not the same as a silent call.
         "silent": searches == 0,
         "retried": attempts == 2,
+        "names_attempted": entry.get("names_attempted") if isinstance(entry.get("names_attempted"), int) else None,
+        "names_resolved": entry.get("names_resolved") if isinstance(entry.get("names_resolved"), int) else None,
+        "names_dropped": entry.get("names_dropped") if isinstance(entry.get("names_dropped"), int) else None,
+        "resolution_searches": len(res_queries) if isinstance(res_queries, list) else None,
         **summary,
     }
 

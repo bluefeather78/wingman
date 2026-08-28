@@ -64,6 +64,14 @@ The prompt is one of eleven things that move. The rest of this document is the e
 
 ## 3. Downstream implications
 
+> **Update 2026-08-28 — the memory half of this blocker is FIXED (MARQUEE M1).**
+> `refresh_opportunities.py` now READS THE LIVE PAGE (a free plain-HTTP GET) and extracts
+> fields from it; a fetch failure skips the row rather than answering from memory. It was
+> discovered that the agent had been silently flipped to memory-only (`use_web_search=False`,
+> "YOU HAVE NO WEB ACCESS") inside an unrelated commit — see [MARQUEE_DECISIONS.md](MARQUEE_DECISIONS.md)
+> M1. What REMAINS of this blocker: the agent still selects `is_active = true` rows only, so it
+> cannot yet be pointed at queued rows — the `--ids` / `--pending` mode below is still to build.
+
 ### 3.1 BLOCKER — a queued row can never be enriched, because the refresher only reads ACTIVE rows
 
 `refresh_opportunities.py` fetches with `"is_active": "eq.true"`. Scraped rows land
@@ -276,10 +284,11 @@ Each step is independently mergeable and independently useful. Free unless marke
 
 | # | Step | Cost | Gate to the next step |
 |---|---|---|---|
-| P0 | `refresh_opportunities.py --pending / --ids` (§3.1) | free to build; a pending pass is no-search, ~$0.001/row | a queued row can be enriched before review |
-| P1 | Per-query `stage` in the seed log + console reads breadth over 1a only (§3.6) | free | the A/B in P4 is measurable at all |
-| P2 | D1 prompt rewrite, single-stage (no 1b yet) | free to build | breadth% rises on one angle; row yield does not collapse |
-| P3 | D2 stage 1b, reusing `harvest_names` resolution + gates; per-angle AND per-run ceilings (§3.5) | free to build | resolution rate and proof rate on one angle |
+| P0a | **DONE 2026-08-28 (MARQUEE M1)** — `refresh_opportunities.py` reads the live page (free HTTP) instead of memory | fetch is free; only the Gemini extract costs, ~fraction of a ¢/fetched row | metadata is filled from the real page, not invented |
+| P0b | **DONE 2026-08-28** — `refresh_opportunities.py --ids / --pending` point it at queued/new rows | free | a queued or just-activated row can now be enriched (--pending found 174 queued rows live) |
+| P1 | **DONE 2026-08-28** — resolution queries kept OUT of `queries`, so breadth is discovery-only by construction; resolution reported on its own axis | free | the A/B in P4 is measurable |
+| P2 | **DONE 2026-08-28 (M5/M8)** — `DISCOVERY_SYSTEM` split from `RESOLVE_SYSTEM`; opportunity + broad/named queries defined with examples | free to build | breadth% rises on one angle (verify in P4) |
+| P3 | **DONE 2026-08-28 (M8/M9)** — `resolve_missing_url` (free gates + 1 search + best_resolved_url), `--resolve-per-angle/-per-run` ceilings, `--no-resolve` | free to build | resolution rate + proof rate (verify in P4) |
 | P4 | **A/B on ONE angle, both arms** | PAID, ~$0.20-0.40, needs approval | the table in §5 |
 | P5 | Ledger semantics: `found` excludes budget-declined names; re-check `MIN_FOUND` (§3.3) | free | no angle auto-disabled for discovering well |
 | P6 | Review-queue proof-state column/sort (§3.2) | free | reviewer can sweep proven rows |

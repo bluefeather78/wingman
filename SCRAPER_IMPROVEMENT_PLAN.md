@@ -23,8 +23,12 @@ search angle -> search -> URLs
   '- a third-party page about programs -------> ROUTER, never discarded
        |- LINKS them  -> hub mining    (free to follow, ~$0.0015/page to read)
        '- NAMES them  -> name harvest  (PAID, ~$0.019/name)   [operator-pointed only]
+
+a row we already activated -> its PARENT url -> does the parent link it back?
+       '- yes -> a same-domain hub lead   (walk_up_hubs.py, FREE, no classifier)
 ```
 Second feed: **rejecting a row as a round-up in the console queues it automatically.**
+Third feed: **the catalog itself** — see the walk-up below, which is where hubs now come from.
 
 **The router's whole rule** (`discovered_leads.classify_page`, FREE):
 ```
@@ -35,7 +39,7 @@ title promises many opportunities?  -> no: not a lead   (site name stripped firs
 ```
 It opens **every** candidate concurrently — 17 pages in 1.4s — so nothing is rationed.
 
-### Where we stopped: the operator's re-framing, and the open problem
+### The operator's re-framing, and how kind B was closed
 
 The operator's position, which the measurements support: the useful split is not links-vs-no-
 links, it is **(A) pages linking programs on OTHER domains** (third-party round-ups) versus
@@ -50,12 +54,35 @@ links, it is **(A) pages linking programs on OTHER domains** (third-party round-
   Ringling, LIM keep programs at a different path than the index). Cause is structural:
   same-domain links on any page are dominated by the shared nav.
 
-**THE NEXT BUILD, agreed but NOT STARTED — derive kind B instead of detecting it.** When a
-search returns `ced.berkeley.edu/academics/summer-programs/**summer-institute**` and it becomes
-a row, its **parent** is very likely the index of its siblings. Walk UP from a program we
-already trust: free, no classification, and it aims hub mining at institutions where we already
-know a real program exists. Curation (`hub_pilot_national.json`) remains the other working
-route — it produced the only successful hub-mining run.
+**BUILT 2026-08-28 — `walk_up_hubs.py` derives kind B instead of detecting it.** When a search
+returns `ced.berkeley.edu/academics/summer-programs/**summer-institute**` and it becomes a row,
+its **parent** is very likely the index of its siblings. So walk UP from a program we already
+trust and make the parent **prove** it:
+
+    the proof is the BACK-LINK. a parent that does not link the child is a shorter
+    URL, not an index -- which is exactly why the 42% false-positive rate above is
+    irrelevant here: a costs page does not link the program pages, so it cannot pass.
+
+- Only **activated** rows are walked up from (the strongest trust signal here — nothing in this
+  repo activates anything on its own), never up to a **root homepage** (business.wisc.edu's root:
+  40 links, 2 gems), never to a parent the router already calls impossible (a `/blog/` post's
+  parent is a blog index), and never a parent that redirects onto the child or links nothing
+  beyond it.
+- **First live sweep, FREE (plain HTTP, no model call anywhere): 1325 active rows -> 612 distinct
+  parents -> 584 looked at -> 244 proven indexes**, including `ced.berkeley.edu/academics/
+  summer-programs/` (this plan's own worked example), `cmu.edu/pre-college/academic-programs/`
+  (12 of our rows under it, 25 more programs on it), Brown, BU, Vanderbilt, Tufts, UCSF SEP.
+  171 parents were unreadable and 171 judged not an index — counted **separately**, because an
+  unreadable page is a fact about our HTTP client, never about the institution.
+- All 244 are **queued and unmined**. Queuing is free; reading them is the paid step.
+- Curation (`hub_pilot_national.json`, 5 hand-picked hubs) is no longer the only route to these
+  pages — which mattered, because it had produced the only successful hub-mining run.
+
+**`scope` now travels ON a hub lead** (`off-domain` / `same-domain`), because a round-up must be
+mined off-domain and one of these same-domain, and only whatever qualified the page knows which.
+`mine_hub_pages --from-leads` had a flat `True` for every lead and a flat `False` before that —
+each correct for one kind of lead and wrong for the other. A lead with no `scope` reads as
+off-domain, since every lead already on file came from the router.
 
 ### What shipped this session
 
@@ -93,14 +120,20 @@ route — it produced the only successful hub-mining run.
 | name harvest — search one name | name | **$0.0167** (84% is the flat search fee) |
 | name harvest — make a row | row | $0.0047 |
 | re-find a dead link | row | $0.02–0.05 |
+| walk-up: catalog -> proven index | — | **$0.00** (one free fetch per parent) |
 | router, filters, dedupe, review, loop | — | **$0.00** |
 
 ### OPEN / do next
 1. **Push `main`** (scraper-only — a Render deploy is a no-op for the web service).
-2. **Build the walk-up-from-a-program idea** for kind B. Agreed, not started.
+2. **Mine a walk-up lead as a pilot** — PAID and gated. Take ONE dense lead first
+   (`cmu.edu/pre-college/academic-programs/`, 25 candidates) rather than a batch, and grade the
+   rows before spending on the rest: nothing has yet proven that a *proven index* mines as well
+   as a curated one. `python mine_hub_pages.py --from-leads 1 --preview` prices it for free —
+   but note `pending()` is FIFO, so the 25 router leads come first; pass a `--hubs` URL directly
+   for the pilot.
 3. **Review the 31 pending rows** (19 hub-mined, 12 name-harvested).
-4. Queue today: **25 hub leads, 1 names lead.** The hub leads are now mined correctly
-   (off-domain); mining them is PAID and gated.
+4. Queue today: **269 hub leads (244 same-domain from the walk-up, 25 off-domain round-ups),
+   1 names lead.** Each is now mined the way it qualified; mining is PAID and gated.
 5. Catch-up for the pre-hook rejected backlog: `python discovered_leads.py --from-rejects
    --any-reason --commit` (free; it remembers its NOs).
 6. **~22% of candidates cannot be read at all** (403/PDF/JS). They are dropped with no verdict.
@@ -115,6 +148,23 @@ route — it produced the only successful hub-mining run.
    — <https://claude.ai/code/artifact/5a5c5614-e561-4f28-9f0f-cac1c30ada99>. It carries the
    same rules, the fitted cost table, and the kind-B gap. Update it in place (pass that URL)
    when the pipeline changes; do not publish a second copy.
+
+### Session 2026-08-28 — kind B closed, two live bugs fixed
+- **`walk_up_hubs.py` built + swept** (above). 1516 tests green (1533 collected locally, 17 of
+  them a concurrent session's untracked `test_query_telemetry.py`); `grade_scraper_batch` url-dup
+  **0 regressions, SAFE**. 244 leads written.
+- **`discovered_leads.py --list` crashed on the live file.** A remembered NO carries `kind=None`
+  and the listing formatted it with a width spec (`f"{None:5}"` raises); 10 such rows are on
+  disk, so the command this handoff tells the next session to run did not work at all. The
+  default listing is now the actionable work-list; `--all` shows the whole file.
+- **A Hawaiian okina (U+02BB) in a row name killed the first full sweep** on a cp1252 console —
+  after every fetch had completed, the same crash class the hub miner hit on a model's U+2011.
+  `safe_console()`, and leads are now **written before they are printed**: rendering must never
+  be able to discard finished work. (Free here, but the same shape as losing a paid call's
+  result.)
+- **NOT done, deliberately:** no console tile for the walk-up. `ops/` is being edited by a
+  concurrent session in this shared tree, and the plan's own rule is to stage only scraper files.
+  Wiring *Walk Up From The Catalog* beside *Mine Hub Pages* is a clean follow-up.
 
 ### Rejected ideas, with the reason (do not re-propose without new evidence)
 - **An LLM classifier at the search-results step.** Costed at **$0.02–0.07 per 30-seed run**, so

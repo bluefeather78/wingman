@@ -625,27 +625,76 @@ def main():
 
     catalog_paths = catalog_paths_by_host(existing)
 
-    all_new, seen_this_run = [], set()
+    import sitemap_hub
+    seen_this_run = set()
+
+    # ---- PREVIEW (free): no model call, no writes. An institutional hub reports the scoped page
+    # list the LLM WOULD classify; an off-domain listicle uses the anchor miner as before.
+    if args.preview:
+        would_classify = 0
+        for hub_url, off_domain in hubs:
+            if not off_domain:
+                scoped, tr = sitemap_hub.program_candidates(hub_url, classify=None,
+                                                            timeout=args.timeout)
+                would_classify += len(scoped)
+                print(f"[HUB] {hub_url}: {tr.get('sources', 'none')}, enumerated "
+                      f"{tr['enumerated']}, in scope {tr['in_scope']} -> classify (LLM) then "
+                      f"extract survivors."
+                      + (f"  ERROR: {tr['error']}" if tr.get("error") else ""))
+                for u in scoped[:25]:
+                    print(f"    to-classify: {u}")
+                if tr["in_scope"] > 25:
+                    print(f"    ... +{tr['in_scope'] - 25} more in scope")
+            else:
+                urls, _trace = discover(hub_url, off_domain=True, timeout=args.timeout)
+                urls, _c = contained_children(urls, catalog_paths)
+                fresh, _a, _t = fresh_candidates(urls, catalog_keys, seen_this_run)
+                print(f"[HUB] {hub_url} (off-domain listicle): {len(fresh)} candidate(s).")
+                for u in fresh:
+                    print(f"    candidate: {u}")
+        print(f"\n[PREVIEW] institutional hubs would classify ~{would_classify} in-scope page(s) "
+              f"(~$0.001/hub) then extract only the pages the LLM calls a program. No model call, "
+              f"no writes. A live run needs approval.")
+        return
+
+    if not gemini_key:
+        print("[ERROR] GEMINI_API_KEY not set — cannot classify/extract. (Preview is free.)")
+        raise SystemExit(1)
+
+    # ---- SELECT (paid): the LLM URL classifier is the PRIMARY selector for an institution's own
+    # index (sitemap ∪ anchor, scoped to the hub path, program pages out). A hub it returns
+    # nothing for — a category-only sitemap, a non-opportunity section — falls back to the
+    # anchor-rules recursive miner, so recall is never worse than before. An off-domain listicle's
+    # programs live on OTHER sites, which the same-domain enumeration cannot see, so those stay on
+    # the anchor miner. Validated across 22 real hubs 2026-08-28 (~$0.0009/hub). See sitemap_hub.
+    classify = sitemap_hub.make_gemini_classifier(gemini_key, timeout=args.timeout,
+                                                  min_delay=args.min_delay)
+    all_new, select_cost = [], 0.0
     for hub_url, off_domain in hubs:
-        urls, trace = discover(hub_url, off_domain=off_domain, timeout=args.timeout)
-        # Drop a candidate that is the direct sub-page of another candidate or of a catalogued
-        # page (a program's residential-life / costs tab beside its own page). Free, pre-spend.
-        urls, contained = contained_children(urls, catalog_paths)
+        if not off_domain:
+            urls, tr = sitemap_hub.program_candidates(hub_url, classify=classify,
+                                                      timeout=args.timeout)
+            select_cost += tr.get("cost", 0.0)
+            selector = f"sitemap-llm ${tr.get('cost', 0):.4f}"
+            if not urls:                                 # empty -> anchor-rules recursive fallback
+                d_urls, _dt = discover(hub_url, off_domain=False, timeout=args.timeout)
+                urls, _c = contained_children(d_urls, catalog_paths)
+                selector = "anchor-rules fallback"
+        else:
+            d_urls, _dt = discover(hub_url, off_domain=True, timeout=args.timeout)
+            urls, _c = contained_children(d_urls, catalog_paths)
+            selector = "anchor-rules (off-domain)"
+        # Drop any candidate that is the sub-page of a CATALOGUED page, for every selector.
+        urls, _c = contained_children(urls, catalog_paths)
         fresh, already, twice = fresh_candidates(urls, catalog_keys, seen_this_run)
-        print(f"[HUB] {hub_url}: harvested {trace['harvested']}, after audience filter "
-              f"{trace['after_anchor_filter']}, kept {trace['kept']}, already in catalog "
-              f"{already}, sub-page of a parent {len(contained)}, seen earlier this run "
-              f"{twice}, new {len(fresh)}."
-              + (f"  over cap {trace['over_cap']}" if trace.get("over_cap") else "")
-              + (f"  ERROR: {trace['error']}" if trace.get("error") else ""))
+        print(f"[HUB] {hub_url}: {selector}, {len(urls)} program page(s), already in catalog "
+              f"{already}, seen this run {twice}, new {len(fresh)}.")
         for u in fresh:
             print(f"    candidate: {u}")
         all_new.append((hub_url, fresh))
 
-    # A per-hub cap bounds one page; nothing bounded the RUN. Worst case here is 25 candidates
-    # plus three sub-hubs of 25 each, so a 43-hub run could reach thousands of paid extractions
-    # rather than the few hundred expected -- and the whole point of the ~$30-overspend rule is
-    # that the ceiling exists before the run, not after the bill.
+    # A per-hub cap bounds one page; nothing bounded the RUN — cap the paid extractions and spread
+    # the ceiling evenly across hubs rather than off the end of the list.
     capped_hubs = set()
     if args.max_pages is not None:
         all_new, capped = allocate_budget(all_new, args.max_pages)
@@ -659,14 +708,6 @@ def main():
                 print(f"    skipped {n}: {hub_url[:88]}")
 
     total = sum(len(f) for _, f in all_new)
-    if args.preview:
-        print(f"\n[PREVIEW] {total} new candidate page(s) across {len(hubs)} hub(s). No model "
-              f"call, no writes. A live run extracts each (~$0.003/page) and needs approval.")
-        return
-
-    if not gemini_key:
-        print("[ERROR] GEMINI_API_KEY not set — cannot extract. (Preview is free without it.)")
-        raise SystemExit(1)
 
     # PAID PATH — extract each followed link, then insert as is_active=false / pending_review,
     # exactly like the search scraper (shared insert_rows handles the migration-degrade ladder).
@@ -681,7 +722,9 @@ def main():
     }, service_key)
     run_id = run_row["id"] if run_row else None
 
-    rows, review_by_id, cost, errors = [], {}, 0.0, 0
+    # Bank the classifier spend up front so an exception in extraction cannot discard what SELECT
+    # already paid — the same per-attempt banking the two-phase agents use.
+    rows, review_by_id, cost, errors = [], {}, select_cost, 0
     yield_by_hub = {}
     for hub_url, fresh in all_new:
         dom = url_dedupe.registrable_domain(urllib.parse.urlsplit(hub_url).netloc) or "hub"

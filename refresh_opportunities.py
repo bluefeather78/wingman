@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """Opportunity refresh agent: for each active opportunity in the Supabase `opportunities`
-catalog, searches for current metadata and updates all fields EXCEPT those managed by the
-deadline and review agents. Runs monthly to keep opportunity info current (eligibility,
-pricing, program structure, location format, etc.) without interfering with deadline/review
-tracking.
+catalog, READS THE PROGRAM'S LIVE PAGE and updates all fields EXCEPT those managed by the
+deadline and review agents. Runs to keep opportunity info current (eligibility, pricing,
+program structure, location format, etc.) without interfering with deadline/review tracking.
+
+*** MARQUEE M1 (MARQUEE_DECISIONS.md) — do not change without Shama's approval ***
+This agent fills metadata by FETCHING AND READING each program's own page (a free plain-HTTP GET
+via page_text.fetch_page_text), never from model memory. Plain HTTP returns the page's real bytes,
+so the text is held — proof the page was read, and the option to verify. A fetch failure (non-200,
+blank/JS shell, TLS error) SKIPS the row (no write, no stamp, retry next run) — it does not fall
+back to memory. This was reversed once, silently, inside an unrelated commit; M1 exists so it
+cannot happen again. The extraction call runs use_web_search=False on purpose and correctly: the
+page text is handed to the model in the prompt, so there is nothing to search and no memory answer
+to invite.
 
 Fields NEVER touched by this agent (reserved for other agents):
   - status, important_dates, was_estimated, important_date_note, dates_last_checked_at (deadline agent)
@@ -35,9 +44,11 @@ The damage this avoids is asymmetric and that is the whole argument: a stale-but
 costs a student nothing, and a confidently-rewritten wrong one sends them to a 404 with no
 signal that anything happened. Do not put `url` back without a grounded source for it.
 
-Run roughly 1x/month on all active opportunities. Uses gemini-3.5-flash-lite (no web search —
-training data only) for cost efficiency and to avoid quota contention with deadline/review agents.
-With 1200+ rows, expect ~$1-2/month cost.
+Reads each program's live page (free plain-HTTP GET, then gemini-3.5-flash-lite extracts from the
+fetched text). The fetch itself is free; only the extraction call costs money, and only for rows
+that actually fetch — a blank/JS shell or a non-200 is skipped cheaply (~1300 rows, roughly a
+fraction of a cent each that fetches). GEMINI_API_KEY is required; ANTHROPIC_API_KEY is optional
+(only the contact-email fallback uses it).
 
 WALL TIME: dominated by the rate limiter, not by the API. gemini_common enforces a minimum
 delay between every Gemini call (default 5s, see --min-delay), so 1200+ rows is roughly
@@ -64,6 +75,7 @@ import random
 import sys
 import urllib.error
 
+import page_text
 from agent_common import add_agent_args, apply_timing, clean_email, emit_preview, snapshot_stamp
 from contact_email_common import resolve_contact_email
 from gemini_common import call_gemini, extract_json, estimate_cost
@@ -81,33 +93,28 @@ VALID_SEASON = {'Summer', 'Year-Long', 'Spring', 'Fall', 'Winter'}
 
 def build_system(opp):
     today = datetime.date.today().isoformat()
-    # This prompt used to open with "YOU MUST use web_search and web_fetch to verify CURRENT
-    # information" and list four SEARCH STEPS — while check_one() calls the API with
-    # use_web_search=False. The model had no search tool and was being told to search with
-    # it, which is an instruction it can only satisfy by answering from memory in the voice
-    # of something it looked up. The prompt now says what is actually true, so "I do not
-    # know this" stays an available answer.
-    return f"""You recall what you know about an extracurricular opportunity (program, \
-internship, competition, or research position) listed in a high school opportunity catalog. \
-Today's date is {today}.
+    # MARQUEE M1 (MARQUEE_DECISIONS.md): this agent fills metadata by READING THE PROGRAM'S
+    # LIVE PAGE, never from model memory. check_one() fetches the page and passes its TEXT into
+    # this prompt; the model's only job is to extract fields FROM that text. Do NOT rewrite this
+    # back toward "recall from memory" / "you have no web access" — that reversal (done silently
+    # inside an unrelated commit) is exactly what M1 exists to prevent. Restoring memory-mode
+    # requires Shama's explicit approval and its own dedicated commit.
+    return f"""You extract catalog metadata for a high-school extracurricular opportunity \
+(program, internship, competition, or research position) from the text of its OWN web page, \
+which is provided to you below. Today's date is {today}.
 
-YOU HAVE NO WEB ACCESS on this request. Answer only from what you already know about this \
-program. You are not expected to know it — most entries in this catalog are small or local, \
-and returning almost every field as null is a normal, correct outcome, not a failure. Never \
-present a guess as a recalled fact.
+Fill each field ONLY from the page text you are given. If the page does not state something, \
+return null for it — never guess, never fill it in from what programs of this kind usually look \
+like, and never carry over a value the page does not support. A null leaves the existing curated \
+value in place; a plausible invention silently overwrites one, so null is the correct, safe answer \
+whenever the page is silent.
 
-GOAL: core program metadata students use to judge relevance — eligibility, pricing, format, \
-location, subject area. NOT deadlines or program status (a separate agent with live search \
-handles those) and NOT the URL (see below).
+GOAL: core program metadata students use to judge relevance — a one-paragraph summary, \
+eligibility, pricing, format, location, grade range, subject area. NOT deadlines or program \
+status (a separate agent with live search handles those) and NOT the URL (see below).
 
-RELIABILITY RULE, and it is the one that matters: return a field ONLY if you specifically \
-recall it for THIS program by name. If you are pattern-matching from similar programs at the \
-same institution, or from what a program of this kind usually looks like, return null. A null \
-leaves a curated value in place; a plausible invention silently overwrites one.
-
-DO NOT return a URL. You will be given the program's URL for identification only — it is \
-maintained by a separate checker that actually fetches pages, and a remembered URL is close \
-enough to look right and wrong often enough to send a student to a missing page.
+DO NOT return a URL. You are given the program's URL for identification only — it is maintained \
+by a separate checker, and any URL written here is discarded (a separate marquee rule, P3).
 
 Schema: {{"name": "string or null", "org": "string or null", "summary": "one paragraph \
 or null", "type": "one of {', '.join(sorted(VALID_TYPES))} or null", \
@@ -120,27 +127,57 @@ Spring, Fall, or Winter or null", "eligibility": "concise description or null", 
 program if you find one (e.g. admissions or info@), else null — never guess or construct one"}}.
 
 Return ONLY the raw JSON object, no markdown, no preamble. Keep response under 800 tokens. \
-For fields you cannot specifically recall, use null rather than guessing."""
+For anything the page does not state, use null rather than guessing."""
 
 
-def check_one(opp, api_key):
+def check_one(opp, gemini_key, fetch=None):
+    """MARQUEE M1 (MARQUEE_DECISIONS.md): read the program's LIVE page and extract metadata
+    FROM IT. Never from model memory.
+
+    Returns (info, cost, reason):
+      reason == 'ok'       -> info is the parsed dict; the caller may write validated fields.
+      reason == 'no-fetch' -> the page could not be read; info is {}. The caller MUST skip:
+                              no write, no stamp, retry next run. NEVER fall back to memory —
+                              that is the reversal M1 exists to prevent. A blank row is honest;
+                              an invented one is not.
+      reason == 'unparsed' -> the page was read but the model's JSON was unreadable; info is
+                              None. The caller keeps existing values and does not stamp.
+
+    The fetch is a FREE plain-HTTP GET (page_text.fetch_page_text): it returns the page's real
+    bytes, so we hold the text — proof the page was read, and the option to code-verify. A
+    blank/JS shell or a non-200 comes back as a failure reason and is skipped, rather than
+    letting the model "quote" from nothing (that blank-shell path is how "read the page"
+    quietly degrades back into "return nothing", the M1 failure mode). `fetch` is injectable
+    for tests. A fetch failure here is evidence about our HTTP client, never about the program
+    (check_links measured ~9% of the catalog 403ing a non-browser agent), so the row is skipped
+    and retried, never condemned.
+    """
+    if fetch is None:
+        fetch = page_text.fetch_page_text
+    page, reason = fetch(opp.get("url"))
+    if reason != "ok" or not (page or "").strip():
+        return {}, 0.0, "no-fetch"
+
     system = build_system(opp)
-    user_content = (f"Opportunity: {opp['name']} ({opp.get('org') or 'unknown org'})\n"
-                    f"URL (for identification only — do not return a URL): {opp['url']}\n"
-                    f"Current summary: {opp.get('summary') or 'none'}\n\n"
-                    f"Return what you specifically recall about THIS program, per the schema. "
-                    f"Null is the right answer for anything you do not.")
-    # use_web_search=False: deliberate, for cost and to avoid quota contention with the
-    # deadline/review agents. What that costs in accuracy is bounded by clean_update_dict()
-    # dropping `url` and by the prompt no longer claiming a search tool exists — see the
-    # module docstring. Do not read "training data is sufficient" into this: it is
-    # sufficient for the fields that survive validation, and null for the rest is the
-    # designed outcome.
-    text, usage = call_gemini(system, user_content, api_key, use_web_search=False, max_tokens=1200,
-                              model="gemini-3.5-flash-lite")
-    info = extract_json(text)
-    searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
-    return info, estimate_cost(usage), searches
+    user_content = (f"Program: {opp['name']} ({opp.get('org') or 'unknown org'})\n"
+                    f"URL (identification only — do not return a URL): {opp['url']}\n\n"
+                    f"PAGE TEXT (extract ONLY from this):\n{page[:16000]}\n\n"
+                    f"Return the schema JSON now. Null for anything the page does not state.")
+    # use_web_search=False is CORRECT here and is not the M1 violation: the page's text is
+    # already in the prompt above, so there is nothing to search for and no memory answer to
+    # invite. The fetch happened over the real page (free HTTP, above).
+    text, usage = call_gemini(system, user_content, gemini_key, use_web_search=False,
+                              max_tokens=1200, model="gemini-3.5-flash-lite")
+    cost = estimate_cost(usage)
+    # Bank the cost BEFORE the parse (the call is already billed); a parse failure is a skip,
+    # not an error, and must not discard the spend or fall through to memory.
+    try:
+        info = extract_json(text)
+    except (ValueError, json.JSONDecodeError):
+        return None, cost, "unparsed"
+    if not isinstance(info, dict):
+        return None, cost, "unparsed"
+    return info, cost, "ok"
 
 
 def clean_update_dict(info):
@@ -195,6 +232,15 @@ def main():
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--sample", type=int, help="Check a random N-row sample instead of all rows.")
     group.add_argument("--all", action="store_true", help="Check every active row (default if no flag given).")
+    group.add_argument("--ids", type=str, default=None,
+                       help="Comma-separated opportunity ids to refresh (e.g. ec18771,ec18772). "
+                            "Ignores the is_active filter, so it works on queued rows the scraper "
+                            "just produced or a just-activated set — the way the new-angle pipeline "
+                            "enriches rows before or right after review.")
+    group.add_argument("--pending", action="store_true",
+                       help="Refresh queued rows (is_active=false, moderation_status pending/null) "
+                            "so a scraped batch can be enriched from its live pages before a human "
+                            "reviews it, instead of landing in the queue thin.")
     parser.add_argument("--dry-run", action="store_true", help="No writes — just prints and dumps results to JSON.")
     parser.add_argument("--exclude-source", type=str, default=None, help="Exclude opportunities with this source value.")
     parser.add_argument("--skip-contact-email", action="store_true",
@@ -216,27 +262,54 @@ def main():
     if not supabase_url or not service_key or not gemini_key:
         print("[ERROR] SUPABASE_URL / SUPABASE_SERVICE_KEY / GEMINI_API_KEY not set in .env.")
         sys.exit(1)
+    # MARQUEE M1: the page fetch is a FREE plain-HTTP GET, so no Anthropic key is needed to read
+    # the page. ANTHROPIC_API_KEY is only used for the optional contact-email fallback below;
+    # without it, multi-candidate contact pages are simply left unresolved (a warning, not a stop).
     if not args.skip_contact_email and not anthropic_key:
-        print("[WARN] ANTHROPIC_API_KEY not set — contact-email lookups will only resolve "
-              "pages with 0 or 1 candidate address; multi-candidate pages are left unresolved.")
+        print("[WARN] ANTHROPIC_API_KEY not set — contact-email lookups will only resolve pages "
+              "with 0 or 1 candidate address; multi-candidate pages are left unresolved. "
+              "(Metadata itself is read from the live page and does not need this key.)")
 
-    print("[OK] Fetching all active catalog rows from Supabase...")
-    params = {
-        "select": "id,name,org,url,summary,type,price,location,intl,season,eligibility,"
-                  "grade_min,grade_max,cost,subject_tags,contact_email",
-        "is_active": "eq.true",
-    }
-    if args.exclude_source:
-        params["source"] = f"neq.{args.exclude_source}"
-    all_active = supabase_get(supabase_url, "opportunities", params, service_key)
-    filter_note = f" (excluding source='{args.exclude_source}')" if args.exclude_source else ""
-    print(f"[OK] {len(all_active)} active rows{filter_note}.")
+    select = ("id,name,org,url,summary,type,price,location,intl,season,eligibility,"
+              "grade_min,grade_max,cost,subject_tags,contact_email")
 
-    mode = "all"
-    items = all_active
-    if args.sample:
-        mode = "sample"
-        items = random.sample(all_active, min(args.sample, len(all_active)))
+    # --ids / --pending target queued or just-activated rows (they ignore the is_active
+    # filter), which is how the new-angle pipeline enriches a scraped batch from its live
+    # pages. Everything else is the classic "refresh the active catalog" path.
+    if args.ids:
+        id_list = [x.strip() for x in args.ids.split(",") if x.strip()]
+        print(f"[OK] Fetching {len(id_list)} row(s) by id (is_active ignored)...")
+        items = supabase_get(supabase_url, "opportunities",
+                             {"select": select, "id": f"in.({','.join(id_list)})"}, service_key)
+        missing = set(id_list) - {o["id"] for o in items}
+        if missing:
+            print(f"[WARN] {len(missing)} id(s) not found: {sorted(missing)}")
+        mode = "ids"
+        all_active = items
+    elif args.pending:
+        # A NULL moderation_status must be spelled out separately: `NOT IN (…)` is NULL in SQL,
+        # and `in.(pending_review)` never matches a NULL, so a plain filter would miss every
+        # pre-review-column row. Same trap the console's queue filter documents.
+        print("[OK] Fetching queued rows (is_active=false, moderation pending/null)...")
+        items = supabase_get(supabase_url, "opportunities", {
+            "select": select, "is_active": "eq.false",
+            "or": "(moderation_status.is.null,moderation_status.eq.pending_review)",
+        }, service_key)
+        mode = "pending"
+        all_active = items
+    else:
+        print("[OK] Fetching all active catalog rows from Supabase...")
+        params = {"select": select, "is_active": "eq.true"}
+        if args.exclude_source:
+            params["source"] = f"neq.{args.exclude_source}"
+        all_active = supabase_get(supabase_url, "opportunities", params, service_key)
+        filter_note = f" (excluding source='{args.exclude_source}')" if args.exclude_source else ""
+        print(f"[OK] {len(all_active)} active rows{filter_note}.")
+        mode = "all"
+        items = all_active
+        if args.sample:
+            mode = "sample"
+            items = random.sample(all_active, min(args.sample, len(all_active)))
 
     # Preview: scope is now fully resolved, so report it and stop before the first
     # (paid) Gemini call. Nothing below this line runs.
@@ -258,12 +331,12 @@ def main():
     total_cost = 0.0
     updated = 0
     errors = 0
+    fetched = 0                 # rows whose live page we actually read (MARQUEE M1)
+    skipped_unfetchable = 0     # page could not be read -> skipped, NEVER written from memory
+    unparsed = 0                # page read but model JSON unreadable -> skipped, no stamp
+    # total_web_searches / silent_search_count are agent_runs columns the console reads. This
+    # agent fetches a KNOWN url rather than doing discovery search of its own, so both stay 0.
     total_searches = 0
-    # This agent deliberately runs with use_web_search=False, so "silent search" — the
-    # failure mode where the model was ASKED to search and quietly didn't — cannot apply
-    # to it. Counting every zero-search item as silent (as the search-enabled agents do)
-    # would report 100% silent on every run and train you to ignore a real warning on the
-    # agents where it means something. Stays 0 by construction.
     silent_search_count = 0
     dry_run_results = []
     contact_found = 0
@@ -274,19 +347,28 @@ def main():
         opp_name = opp['name'][:60].encode('utf-8', errors='ignore').decode('utf-8')
         print(f"[{i + 1}/{len(items)}] {opp_name}...", end=" ")
         try:
-            info, cost, searches = check_one(opp, gemini_key)
+            info, cost, reason = check_one(opp, gemini_key)
             total_cost += cost
-            total_searches += searches
 
-            # (No silent-search tracking here — see the counter's declaration above.)
+            # MARQUEE M1: a page we could not read is SKIPPED — never written from memory and
+            # never stamped, so the row stays due and the next run retries it. A page read but
+            # unreadable is likewise skipped (keep whatever curated values are already there).
+            if reason == "no-fetch":
+                skipped_unfetchable += 1
+                print(f"unfetchable page — skipped (no write), ${cost:.4f}")
+                continue
+            if reason == "unparsed":
+                unparsed += 1
+                print(f"page read, response unreadable — skipped, ${cost:.4f}")
+                continue
+            fetched += 1
 
-            # Extract only valid, non-null fields from the response
+            # Extract only valid, non-null fields — from what the PAGE stated.
             updates = clean_update_dict(info)
 
-            # contact_email almost never comes back from the training-data-only call above
-            # (see contact_email_common.py's docstring) — chain the regex-first lookup for
-            # any row that doesn't already have one, so a normal refresh pass fills it in
-            # without needing find_contact_emails.py run separately.
+            # contact_email: if the page-read didn't surface one, chain the regex-first lookup
+            # (contact_email_common) for any row that doesn't already have one, so a normal
+            # pass fills it without needing find_contact_emails.py run separately.
             if not args.skip_contact_email and "contact_email" not in updates and not opp.get("contact_email"):
                 email, c_cost, used_model, _ = resolve_contact_email(opp, anthropic_key)
                 total_cost += c_cost
@@ -296,27 +378,18 @@ def main():
                     contact_found += 1
 
             if not updates:
-                print(f"{searches} search(es), no changes, ${cost:.4f}")
+                print(f"page read, nothing the page changed, ${cost:.4f}")
                 if args.dry_run:
                     dry_run_results.append({
-                        "id": opp["id"],
-                        "name": opp["name"],
-                        "url": opp["url"],
-                        "changes": {},
-                        "web_searches": searches,
-                        "cost_usd": round(cost, 4),
+                        "id": opp["id"], "name": opp["name"], "url": opp["url"],
+                        "changes": {}, "cost_usd": round(cost, 4),
                     })
                 continue
 
-            changed = True
             if args.dry_run:
                 dry_run_results.append({
-                    "id": opp["id"],
-                    "name": opp["name"],
-                    "url": opp["url"],
-                    "changes": updates,
-                    "web_searches": searches,
-                    "cost_usd": round(cost, 4),
+                    "id": opp["id"], "name": opp["name"], "url": opp["url"],
+                    "changes": updates, "cost_usd": round(cost, 4),
                 })
             else:
                 # Apply changes to the database
@@ -324,8 +397,7 @@ def main():
                 supabase_patch(supabase_url, "opportunities", {"id": f"eq.{opp['id']}"}, updates, service_key)
 
             updated += 1
-            silent = " [SILENT: no search invoked]" if searches == 0 else ""
-            print(f"{len(updates)} field(s) changed, {searches} search(es){silent}, ${cost:.4f}")
+            print(f"{len(updates)} field(s) from page, ${cost:.4f}")
         except urllib.error.HTTPError as e:
             errors += 1
             print(f"[ERROR] HTTP {e.code}")
@@ -338,10 +410,11 @@ def main():
         # it and does nothing. This used to be time.sleep(2.0), which was a no-op unless a
         # call returned in under 3s. To slow this agent down, raise --min-delay.
 
-    print(f"\n[SUMMARY] checked: {len(items)}, updated: {updated}, errors: {errors}, "
-          f"contact emails found: {contact_found} ({contact_model_calls} model call(s)), "
-          f"cost: ${total_cost:.4f}  (metadata via training data only; contact_email via "
-          f"regex + occasional Haiku call — see contact_email_common.py)")
+    print(f"\n[SUMMARY] checked: {len(items)}, pages read: {fetched}, updated: {updated}, "
+          f"unfetchable(skipped): {skipped_unfetchable}, unreadable(skipped): {unparsed}, "
+          f"errors: {errors}, contact emails found: {contact_found} "
+          f"({contact_model_calls} model call(s)), cost: ${total_cost:.4f}  "
+          f"(metadata read from each program's live page — MARQUEE M1)")
     if mode == "sample" and items:
         per_item = total_cost / len(items)
         projected = per_item * len(all_active)
@@ -368,7 +441,9 @@ def main():
             "cost_usd": round(total_cost, 4),
             "total_web_searches": total_searches,
             "silent_search_count": silent_search_count,
-            "notes": f"contact_emails_found={contact_found}, contact_model_calls={contact_model_calls}",
+            "notes": f"pages_read={fetched}, unfetchable={skipped_unfetchable}, "
+                     f"unparsed={unparsed}, contact_emails_found={contact_found}, "
+                     f"contact_model_calls={contact_model_calls}",
         }, service_key)
         print(f"[OK] Logged agent_runs id={run_id}.")
 

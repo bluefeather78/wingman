@@ -37,8 +37,10 @@ import argparse
 import datetime
 import json
 import os
+import re
 import urllib.parse
 
+import page_text
 import url_dedupe
 import url_repair
 import url_validate
@@ -55,57 +57,56 @@ KIND_HUB = "hub"              # a page that LINKS programs -> mine_hub_pages.py
 STATUS_NEW = "new"
 STATUS_DONE = "processed"
 
-# A page must link at least this many surviving program candidates to be worth calling a hub.
-# Below it we are looking at an ordinary program page that happens to link two siblings, and
-# queueing those would bury the real indexes — the same reason `filter_hub_links` caps its own
-# output rather than returning everything it sees.
-MIN_HUB_LINKS = 5
-# Hub detection costs one free HTTP fetch per URL, and a broad seed resolves dozens of pages.
-# The budget caps those fetches: lead capture is a side-effect of a scrape, not the job. Mill
-# classification is pure and is NOT capped, which is why the names half still works at 0.
+# --- the classifier -------------------------------------------------------------------
+# A third-party page earns a lead by its STRUCTURE, not by being on a known-bad host list.
+# The question is only ever: does this page LINK the programs it mentions, or merely NAME them?
 #
-# **DEFAULT 0 — automatic hub capture is OFF, because free link-counting DOES NOT identify a hub
-# page, and two measurements say so rather than one opinion.** Replaying the 40 archived seed
-# logs (900 grounding URLs) at a budget of 8 classified **204 of 273 probed pages (75%) as
-# hubs** — among them /faq/, /apply/, /contact/, a PR-newswire release and a job posting. Two
-# candidate discriminators were then measured head-to-head on 6 known indexes vs 7 known
-# non-indexes:
-#
-#   raw candidate-link count   good 11-94   bad  7-53   -> fully overlapping
-#   count minus the site nav   good  0-57   bad  0-35   -> fully overlapping
-#
-# The cause is structural: same-domain links on ANY page are dominated by the site's shared
-# navigation, so the count measures how big the nav is, not whether the page is an index. Nav
-# subtraction cannot fix it either — `precollege.wisc.edu`, one of the best hubs we have, scores
-# 0 because it IS the site root, so its links ARE the nav; meanwhile a CMU cost page scores 35.
-#
-# A hub lead feeds a PAID extraction, so a 25%-precision queue spends money and reviewer
-# attention on junk. The machinery below is kept, tested and ready — `capture(probe_budget=N)`
-# turns it on for an experiment — but nothing queues hub leads until a discriminator exists that
-# actually separates the two populations. The names half needs none of this and ships on.
-HUB_PROBE_PER_SEED = 0
+# The discriminator is DISTINCT OFF-DOMAIN DOMAINS. Measured 2026-08-27 on 6 real listicles and
+# 5 real non-listicles:
+#     listicles        collegevine 20, aralia 16, veritasai 13, ladder 13, immerse 9
+#     not listicles    Cornell program page 3, job posting 2, university FAQ 1, cost page 1
+# Off-domain is the half that matters for a third-party page — its SAME-domain links are its own
+# navigation. (An earlier attempt counted same-domain links and could not separate the two
+# populations at all; that measurement was asking the wrong question of the wrong half.)
+# Distinct DOMAINS, not link count: the university FAQ carried 11 off-domain links pointing at a
+# single repeated footer destination, and a raw count calls that a hub.
+MIN_HUB_DOMAINS = 6
+# A page that names programs without linking them still has to be a page ABOUT programs. These
+# two are what separate "an article listing 15 summer programs" from a job posting that happens
+# to mention a high school: it must read as prose aimed at high schoolers, and there must be
+# enough of it to be a list rather than a mention.
+MIN_NAMES_CHARS = 2000
+# ...and its TITLE must promise MANY of them. A plural opportunity noun is what separates "15
+# Summer Art Programs for High School Students" from "FAQ | Wake Forest Summer Immersion
+# Program" — measured on 9 real pages, it kept 4 of 4 round-ups and rejected 4 of 4 non-lists.
+# The fifth, "YoungArts - Wikipedia", is rejected too and that is CORRECT: it is an article
+# about one program, so there is nothing to harvest. A Wikipedia LIST article ("List of physics
+# competitions") carries the plural and is kept.
+_MANY_RE = re.compile(r"\b(programs|competitions|internships|camps|scholarships|courses|"
+                      r"workshops|fellowships|contests|conferences|journals|opportunities|"
+                      r"schools|academies|institutes|summits|olympiads)\b", re.I)
+# Free HTTP fetches per seed. Classification is a side-effect of a scrape, not the job, and a
+# broad seed resolves dozens of pages.
+PROBE_PER_SEED = 12
 
-# NOT every content mill is a listicle, and this distinction is worth money.
-# `url_validate.is_content_mill` answers "may this URL be stored as a row's URL", and for THAT
-# question a video, a forum thread and an SEO round-up are all equally disqualified. For "does
-# this page name programs worth resolving" they are not remotely alike. Measured on the 40
-# archived seed logs (2026-08-23, 900 grounding URLs, 109 mill hits) by fetching one of each:
-#
-#   lumiere / immerse / aralia   19,500-24,000 chars of real listicle prose   <- the feedstock
-#   en.wikipedia.org              7,713 chars of real article prose          <- keep, it names
-#   www.youtube.com              24,000 chars of `ytcfg.set({...})` JS config <- junk, and it
-#                                bills as input tokens like any other text
-#   www.reddit.com                    0 chars (empty-or-js; Reddit refuses our client, the same
-#                                blanket block check_reviews measured on 654 source URLs)
-#
-# YouTube was 20 of the 109 mill hits and Reddit several more, so leaving them in would have
-# spent naming calls on the two hosts guaranteed to yield nothing. Wikipedia stays: a list
-# article genuinely names programs, and the three free gates in harvest_names judge the names.
+# Hosts that are content mills but are NOT round-ups, so they are never leads of either kind.
+# Measured 2026-08-27 by fetching one of each: youtube returns 24,000 chars of `ytcfg` JS config
+# (which bills as input tokens like any other text) and reddit returns 0 (it refuses our client,
+# the same blanket block check_reviews measured on 654 source URLs). YouTube alone was 20 of the
+# 109 mill hits in the archived grounding. Wikipedia is deliberately NOT here: its LIST articles
+# genuinely name programs, and the title test below rejects its single-program articles anyway.
 _NOT_LISTICLE_HOSTS = {"youtube.com", "youtu.be", "reddit.com"}
-
-
 def _key(url):
-    return url_dedupe.match_key(url or "")
+    """The dedupe key for a URL, or "" if it is not one.
+
+    Defensive because this runs on whatever a search or a rejected row happens to contain:
+    `match_key` parses, and a value like "javascript:void(0)" makes urlsplit raise while trying
+    to read a port. A malformed URL is not a lead, and it must not be able to stop a scrape.
+    """
+    try:
+        return url_dedupe.match_key(url or "")
+    except ValueError:
+        return ""
 
 
 def is_ignorable(url):
@@ -124,54 +125,69 @@ def is_ignorable(url):
     return url_validate.is_editorial_url(url)
 
 
-def classify_pure(url):
-    """KIND_NAMES for a content mill/listicle, else None. FREE and pure — no fetch.
+def classify_page(url, timeout=url_repair.DEFAULT_TIMEOUT):
+    """(kind, signal) for a third-party page, by looking at it. FREE — plain HTTP, no model.
 
-    A mill is classified WITHOUT a fetch because `is_content_mill` is a host/path test, so the
-    largest bucket of leads costs nothing at all to find. That asymmetry is deliberate: it means
-    a scrape can capture its listicles even when every hub probe is over budget.
-    """
-    if is_ignorable(url):
-        return None
-    return KIND_NAMES if url_validate.is_content_mill(url) else None
-
-
-def hub_link_count(url, timeout=url_repair.DEFAULT_TIMEOUT):
-    """How many program candidates this page links, via the hub miner's own free filters.
-
-    Uses `filter_hub_links` rather than a raw `<a>` count so the number means the same thing it
-    means to the consumer that will mine it — nav, PDFs, social, wrong-audience and branch pages
-    are already gone. A page we cannot fetch counts 0: unreachable is not evidence of a hub.
+    This is the whole routing decision:
+        links programs (many distinct off-domain destinations)  -> KIND_HUB
+        names programs in prose, without linking them           -> KIND_NAMES
+        neither                                                 -> (None, why)
     """
     import mine_hub_pages
     try:
         html = mine_hub_pages.fetch_html(url, timeout)
-        if not html:
-            return 0
-        kept, subs = mine_hub_pages.filter_hub_links(
-            mine_hub_pages.harvest_links(html, url), url, off_domain=False)
-        return len(kept) + len(subs)
     except Exception:
-        return 0
+        return None, "fetch failed"
+    if not html:
+        return None, "page could not be fetched"
+    # ONE gate before either branch: is this page about many opportunities at all? Structure
+    # alone is not enough — measured on the real rejected pile, a school district's "Classified
+    # Employees" jobs page linked 10 distinct sites and a CLA press release linked 6, and the
+    # link test happily called both hubs. Asking the title first makes the two branches
+    # symmetrical: they then only decide HOW the page presents its programs, not whether it has
+    # any. The wrong-audience check rides along for free (seagrant's "Undergraduate
+    # Opportunities" links 20 sites and is not for high schoolers).
+    title = url_repair.page_title(html) or ""
+    if not _MANY_RE.search(title):
+        return None, f"title does not promise many programs: {title[:60]!r}"
+    if mine_hub_pages.is_wrong_audience(title):
+        return None, f"title names a non-high-school audience: {title[:60]!r}"
+    try:
+        kept, subs = mine_hub_pages.filter_hub_links(
+            mine_hub_pages.harvest_links(html, url), url, off_domain=True, cap=400)
+        domains = {url_dedupe.registrable_domain(urllib.parse.urlsplit(u).netloc)
+                   for u, _ in kept + subs}
+        domains.discard("")
+    except Exception:
+        domains = set()
+    if len(domains) >= MIN_HUB_DOMAINS:
+        return KIND_HUB, f"links programs on {len(domains)} distinct sites"
+    text, _reason = page_text.fetch_page_text(url, timeout)
+    text = text or ""
+    if len(text) < MIN_NAMES_CHARS:
+        return None, f"only {len(text)} chars of text — not a page about many programs"
+    if not mine_hub_pages.has_hs_audience(text):
+        return None, "page text does not name a high-school audience"
+    return KIND_NAMES, f"names many programs: {title[:60]!r}"
 
 
 def capture(resolved_urls, used_urls, existing_rows=None, seed_id=None, angle="",
-            known_keys=None, probe_budget=HUB_PROBE_PER_SEED, timeout=None, probe=None):
+            known_keys=None, probe_budget=PROBE_PER_SEED, timeout=None, classify=None):
     """The leads one seed's grounding yields. FREE. Returns (leads, trace).
 
     `used_urls` are the pages that BECAME rows — a page the run already turned into an
-    opportunity is not a lead, it is a result. `known_keys` carries the catalog and the existing
-    lead file so the same listicle is not re-queued on every run that finds it.
+    opportunity is a result, not a lead. `known_keys` carries the catalog and the existing lead
+    file, so the same listicle is not re-queued by every run that finds it.
 
-    `probe` is injected so the hub half is testable without a network; production passes None
-    and gets `hub_link_count`.
+    `classify` is injected so the routing is testable without a network; production gets
+    `classify_page`.
     """
-    probe = probe or hub_link_count
+    classify = classify or classify_page
     used = {_key(u) for u in (used_urls or []) if u}
     known = set(known_keys or set())
     known |= {_key(r.get("url")) for r in (existing_rows or []) if r.get("url")}
     trace = {"resolved": len(resolved_urls or []), "already_used": 0, "already_known": 0,
-             "ignored": 0, "probed": 0, "names": 0, "hub": 0}
+             "ignored": 0, "probed": 0, "no_verdict": 0, KIND_NAMES: 0, KIND_HUB: 0}
     leads, seen = [], set()
     stamp = datetime.date.today().isoformat()
     probed = 0
@@ -189,23 +205,71 @@ def capture(resolved_urls, used_urls, existing_rows=None, seed_id=None, angle=""
         if is_ignorable(url):
             trace["ignored"] += 1
             continue
-        kind, signal = classify_pure(url), None
+        # Every candidate earns a look. The verdict is structural — does this page LINK the
+        # programs it mentions, or merely NAME them — and nothing about its domain shortcuts it.
+        if probed >= probe_budget:
+            continue
+        probed += 1
+        trace["probed"] += 1
+        kind, signal = classify(url) if timeout is None else classify(url, timeout)
         if kind is None:
-            # Not a mill, so the only way to know is to look. Budgeted per seed.
-            if probed >= probe_budget:
-                continue
-            probed += 1
-            trace["probed"] += 1
-            n = probe(url) if timeout is None else probe(url, timeout)
-            if n < MIN_HUB_LINKS:
-                continue
-            kind, signal = KIND_HUB, f"links {n} program candidate(s)"
-        else:
-            signal = "content mill / listicle — names programs it does not link"
+            trace["no_verdict"] += 1
+            continue
         trace[kind] += 1
         leads.append({"url": url, "kind": kind, "seed_id": seed_id, "angle": angle,
                       "signal": signal, "first_seen": stamp, "status": STATUS_NEW})
     return leads, trace
+
+
+def from_rejected_rows(rows, known_keys=None, classify=None, limit=None):
+    """Leads from the review queue's REJECTED pile. FREE. Returns (leads, trace).
+
+    The operator's second source, and it is free evidence of exactly the right kind: a row
+    rejected as a third-party round-up is a page a HUMAN has already confirmed is not a
+    program's own page but does talk about programs. That is the premise this whole classifier
+    has to guess at when it works from raw grounding — here it is given.
+
+    The URL is still classified structurally, because "not a program page" does not say whether
+    it LINKS the programs or merely NAMES them, and that is what decides which extractor gets it.
+    """
+    classify = classify or classify_page
+    known = set(known_keys or set())
+    trace = {"rejected": len(rows or []), "already_known": 0, "ignored": 0, "no_verdict": 0,
+             KIND_NAMES: 0, KIND_HUB: 0}
+    leads, seen = [], set()
+    stamp = datetime.date.today().isoformat()
+    for row in rows or []:
+        if limit and len(leads) >= limit:
+            break
+        url = row.get("url")
+        k = _key(url)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        if k in known:
+            trace["already_known"] += 1
+            continue
+        if is_ignorable(url):
+            trace["ignored"] += 1
+            continue
+        kind, signal = classify(url)
+        if kind is None:
+            trace["no_verdict"] += 1
+            continue
+        trace[kind] += 1
+        leads.append({"url": url, "kind": kind, "seed_id": row.get("seed_id"),
+                      "angle": f"rejected row {row.get('id')}: {(row.get('name') or '')[:60]}",
+                      "signal": signal, "first_seen": stamp, "status": STATUS_NEW})
+    return leads, trace
+
+
+def fetch_rejected_rows(supabase_url, service_key, limit=None):
+    """The catalog's rejected rows, newest first. FREE (a Supabase read costs nothing)."""
+    from supabase_common import supabase_get
+    params = {"select": "id,name,url,seed_id,moderation_status,moderation_reason,quality_flags",
+              "moderation_status": "eq.rejected", "order": "id.desc"}
+    rows = supabase_get(supabase_url, "opportunities", params, service_key) or []
+    return rows[:limit] if limit else rows
 
 
 def load_leads(path=LEADS_PATH):
@@ -296,7 +360,37 @@ def main():
     ap.add_argument("--kind", choices=[KIND_NAMES, KIND_HUB], help="Only this kind.")
     ap.add_argument("--all", action="store_true", help="Include already-processed leads.")
     ap.add_argument("--path", default=LEADS_PATH)
+    ap.add_argument("--from-rejects", action="store_true",
+                    help="FREE: classify the review queue's REJECTED rows into leads. A row "
+                         "rejected as a third-party round-up is a page a human already "
+                         "confirmed talks about programs without being one.")
+    ap.add_argument("--limit", type=int, help="Max rejected rows to classify.")
+    ap.add_argument("--commit", action="store_true", help="Write the leads (default: preview).")
     args = ap.parse_args()
+
+    if args.from_rejects:
+        import os as _os
+        from supabase_common import load_dotenv
+        load_dotenv()
+        su = _os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = _os.environ.get("SUPABASE_SERVICE_KEY") or _os.environ.get("SUPABASE_ANON_KEY")
+        if not su or not key:
+            print("[ERROR] SUPABASE_URL and a key must be set in .env.")
+            raise SystemExit(1)
+        rows = fetch_rejected_rows(su, key, limit=args.limit)
+        print(f"[OK] {len(rows)} rejected row(s) to classify (free HTTP, no model calls)...")
+        leads, trace = from_rejected_rows(rows, known_keys=lead_keys(load_leads(args.path)))
+        print("[OK] " + ", ".join(f"{k}={v}" for k, v in trace.items()))
+        for l in leads:
+            print(f"    {l['kind']:5}  {l['url'][:88]}")
+            print(f"           {l['signal']}")
+        if args.commit:
+            n = append_leads(leads, args.path)
+            print(f"[OK] Wrote {n} new lead(s). Queue: {summarize(load_leads(args.path))}")
+        else:
+            print("")
+            print(f"[PREVIEW] {len(leads)} lead(s) would be queued. Re-run with --commit.")
+        return
 
     leads = load_leads(args.path)
     if not leads:

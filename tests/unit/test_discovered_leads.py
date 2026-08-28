@@ -30,99 +30,86 @@ def test_is_ignorable_false(url):
     assert dl.is_ignorable(url) is False
 
 
-def test_classify_pure_calls_a_mill_a_name_harvest_lead():
-    """The largest bucket costs no fetch at all — is_content_mill is a host/path test."""
-    assert dl.classify_pure("https://www.aralia.com/helpful-information/summer-programs/") == dl.KIND_NAMES
+def test_routing_is_structural_with_no_host_shortcut():
+    """The routing decision is 'does this page LINK its programs or NAME them', full stop. A
+    host list used to shortcut the look, and on the real rejected pile that routed a single
+    lithub article and one scholarships360 scholarship page as round-ups on domain alone."""
+    assert not hasattr(dl, "classify_pure")
 
 
-def test_classify_pure_returns_none_for_an_ordinary_page():
-    """An ordinary page might still be a hub, but only a fetch can say so."""
-    assert dl.classify_pure("https://x.edu/programs") is None
 
-
-def test_classify_pure_never_promotes_an_ignorable_url():
-    assert dl.classify_pure("https://twitter.com/x") is None
 
 
 # ---------- capture ----------
 
-def _probe(counts):
-    """A stand-in for hub_link_count: {url: n}, defaulting to 0 (unfetchable)."""
-    return lambda url, timeout=None: counts.get(url, 0)
+def _probe(verdicts):
+    """A stand-in for classify_page: {url: kind}, defaulting to no verdict."""
+    return lambda url, timeout=None: ((verdicts.get(url), "stub") if verdicts.get(url)
+                                      else (None, "stub: no verdict"))
 
 
-def test_capture_splits_mills_from_hubs():
+def test_capture_splits_round_ups_from_hubs():
     resolved = ["https://www.aralia.com/info/list", "https://x.edu/programs", "https://y.edu/one"]
-    leads, trace = dl.capture(
-        resolved, used_urls=[], probe_budget=4,
-        probe=_probe({"https://x.edu/programs": 12, "https://y.edu/one": 1}))
+    leads, trace = dl.capture(resolved, used_urls=[], classify=_probe({
+        "https://www.aralia.com/info/list": dl.KIND_NAMES,
+        "https://x.edu/programs": dl.KIND_HUB}))
     kinds = {l["url"]: l["kind"] for l in leads}
     assert kinds == {"https://www.aralia.com/info/list": dl.KIND_NAMES,
                      "https://x.edu/programs": dl.KIND_HUB}
-    assert trace["names"] == 1 and trace["hub"] == 1 and trace["probed"] == 2
+    assert trace["names"] == 1 and trace["hub"] == 1 and trace["probed"] == 3
 
 
 def test_capture_skips_a_page_that_became_a_row():
     """A page the run already turned into an opportunity is a result, not a lead."""
     leads, trace = dl.capture(["https://www.aralia.com/info/list"],
-                              used_urls=["https://www.aralia.com/info/list"], probe=_probe({}))
+                              used_urls=["https://www.aralia.com/info/list"], classify=_probe({}))
     assert leads == [] and trace["already_used"] == 1
 
 
 def test_capture_skips_a_page_already_in_the_catalog():
     leads, trace = dl.capture(
         ["https://www.aralia.com/info/list"], used_urls=[],
-        existing_rows=[{"id": "ec1", "url": "https://www.aralia.com/info/list"}], probe=_probe({}))
+        existing_rows=[{"id": "ec1", "url": "https://www.aralia.com/info/list"}], classify=_probe({}))
     assert leads == [] and trace["already_known"] == 1
 
 
 def test_capture_skips_a_lead_already_on_file():
     known = {dl._key("https://www.aralia.com/info/list")}
     leads, _ = dl.capture(["https://www.aralia.com/info/list"], used_urls=[],
-                          known_keys=known, probe=_probe({}))
+                          known_keys=known, classify=_probe({}))
     assert leads == []
 
 
 def test_capture_matches_used_urls_by_normalized_key():
     """Trailing slash / case must not make a used page look unused."""
     leads, trace = dl.capture(["https://www.aralia.com/Info/List/"],
-                              used_urls=["https://www.aralia.com/Info/List"], probe=_probe({}))
+                              used_urls=["https://www.aralia.com/Info/List"], classify=_probe({}))
     assert leads == [] and trace["already_used"] == 1
 
 
 def test_capture_dedupes_within_one_seed():
     leads, _ = dl.capture(["https://www.aralia.com/info/list", "https://www.aralia.com/info/list/"],
-                          used_urls=[], probe=_probe({}))
+                          used_urls=[],
+                          classify=_probe({"https://www.aralia.com/info/list": dl.KIND_NAMES}))
     assert len(leads) == 1
 
 
-def test_capture_requires_the_minimum_link_count():
-    just_under = dl.MIN_HUB_LINKS - 1
-    leads, _ = dl.capture(["https://x.edu/p"], used_urls=[], probe_budget=4,
-                          probe=_probe({"https://x.edu/p": just_under}))
-    assert leads == []
-    leads, _ = dl.capture(["https://x.edu/p"], used_urls=[], probe_budget=4,
-                          probe=_probe({"https://x.edu/p": dl.MIN_HUB_LINKS}))
-    assert len(leads) == 1 and leads[0]["kind"] == dl.KIND_HUB
-
-
-def test_capture_honours_the_probe_budget_and_still_captures_mills():
-    """The budget bounds FETCHES. Mills need none, so they must survive an exhausted budget —
-    that asymmetry is the whole reason the pure check runs first."""
-    urls = [f"https://x{i}.edu/p" for i in range(10)] + ["https://www.aralia.com/info/list"]
+def test_capture_honours_the_probe_budget():
+    """The budget bounds free FETCHES, so lead capture stays a side-effect of a scrape rather
+    than becoming its own crawl. Nothing bypasses it now that routing is structural."""
+    urls = [f"https://x{i}.edu/p" for i in range(10)]
     calls = []
 
     def probe(url, timeout=None):
         calls.append(url)
-        return 0
-    leads, trace = dl.capture(urls, used_urls=[], probe=probe, probe_budget=3)
-    assert len(calls) == 3 and trace["probed"] == 3
-    assert [l["kind"] for l in leads] == [dl.KIND_NAMES]
+        return None, "stub"
+    leads, trace = dl.capture(urls, used_urls=[], classify=probe, probe_budget=3)
+    assert len(calls) == 3 and trace["probed"] == 3 and leads == []
 
 
 def test_capture_records_attribution_and_a_signal():
     leads, _ = dl.capture(["https://x.edu/p"], used_urls=[], seed_id=42, angle="Marine Science",
-                          probe_budget=4, probe=_probe({"https://x.edu/p": 9}))
+                          classify=lambda u, t=None: (dl.KIND_HUB, "links programs on 9 sites"))
     lead = leads[0]
     assert lead["seed_id"] == 42 and lead["angle"] == "Marine Science"
     assert "9" in lead["signal"] and lead["status"] == dl.STATUS_NEW
@@ -133,24 +120,6 @@ def test_capture_tolerates_empty_input():
     assert dl.capture([], used_urls=[])[0] == []
     assert dl.capture(None, used_urls=None)[0] == []
 
-
-def test_hub_link_count_is_zero_when_the_page_cannot_be_fetched(monkeypatch):
-    """Unreachable is not evidence of a hub — and must not raise inside a paid scrape."""
-    import mine_hub_pages
-    monkeypatch.setattr(mine_hub_pages, "fetch_html", lambda u, t=None: "")
-    assert dl.hub_link_count("https://x.edu/p") == 0
-
-
-def test_hub_link_count_swallows_a_fetch_exception(monkeypatch):
-    import mine_hub_pages
-
-    def boom(u, t=None):
-        raise RuntimeError("network on fire")
-    monkeypatch.setattr(mine_hub_pages, "fetch_html", boom)
-    assert dl.hub_link_count("https://x.edu/p") == 0
-
-
-# ---------- the JSONL work-list ----------
 
 @pytest.fixture
 def leadfile(tmp_path):
@@ -227,7 +196,8 @@ def test_captured_leads_flow_straight_into_the_queue(leadfile):
     """End to end, with no network: capture -> append -> pending -> mark processed."""
     leads, _ = dl.capture(
         ["https://www.aralia.com/info/list", "https://x.edu/programs"], used_urls=[],
-        seed_id=7, probe_budget=4, probe=_probe({"https://x.edu/programs": 11}))
+        seed_id=7, classify=_probe({"https://www.aralia.com/info/list": dl.KIND_NAMES,
+                                    "https://x.edu/programs": dl.KIND_HUB}))
     assert dl.append_leads(leads, leadfile) == 2
     hub = dl.pending(dl.KIND_HUB, leadfile)
     names = dl.pending(dl.KIND_NAMES, leadfile)
@@ -246,39 +216,91 @@ def test_captured_leads_flow_straight_into_the_queue(leadfile):
 ])
 def test_a_mill_that_names_nothing_is_not_a_lead(url):
     """Measured on the archived logs: YouTube returns 24,000 chars of ytcfg JS (billable junk)
-    and Reddit returns 0 (it refuses our client). Both are content mills; neither is feedstock."""
+    and Reddit returns 0 (it refuses our client). Both are content mills; neither is feedstock,
+    so they are refused before any page is even fetched."""
     assert url_validate.is_content_mill(url) is True
     assert dl.is_ignorable(url) is True
-    assert dl.classify_pure(url) is None
 
 
-@pytest.mark.parametrize("url", [
-    "https://www.lumiere-education.com/post/15-pre-college-fashion-programs",
-    "https://www.immerse.education/knowledge-base/15-summer-art-programs",
-    "https://www.aralia.com/helpful-information/visual-art-competitions/",
-    "https://en.wikipedia.org/wiki/YoungArts",
-])
-def test_a_listicle_mill_is_a_name_harvest_lead(url):
-    """Wikipedia stays in: 7,713 chars of real prose, and a list article genuinely names
-    programs. The three free gates in harvest_names are what judge the names themselves."""
-    assert dl.classify_pure(url) == dl.KIND_NAMES
 
 
-def test_hub_capture_is_off_by_default():
-    """Measured twice: free link-counting cannot tell an index from a page with a big nav
-    (raw count good 11-94 vs bad 7-53; nav-subtracted good 0-57 vs bad 0-35). A hub lead feeds
-    a PAID extraction, so nothing is queued until a discriminator exists that actually works."""
-    assert dl.HUB_PROBE_PER_SEED == 0
-    calls = []
-    leads, trace = dl.capture(
-        ["https://x.edu/programs", "https://www.aralia.com/info/list"], used_urls=[],
-        probe=lambda u, t=None: calls.append(u) or 99)
-    assert calls == [], "no page may be probed at the default budget"
-    assert [l["kind"] for l in leads] == [dl.KIND_NAMES]
 
-
-def test_hub_capture_still_works_when_a_budget_is_passed():
-    """The machinery is kept and tested so an experiment costs a keyword argument."""
-    leads, _ = dl.capture(["https://x.edu/programs"], used_urls=[], probe_budget=4,
-                          probe=lambda u, t=None: 20)
+def test_hub_capture_is_on_and_routes_to_the_hub_extractor():
+    """Hub capture is ON: the structural classifier (distinct off-domain domains) separates a
+    round-up from a page with a big nav, which raw link counting could not."""
+    leads, _ = dl.capture(["https://x.edu/programs"], used_urls=[], classify=lambda u, t=None: (dl.KIND_HUB, "stub"))
     assert [l["kind"] for l in leads] == [dl.KIND_HUB]
+
+
+# ---------- the structural classifier: links vs names ----------
+
+def test_many_programs_title_test():
+    """The signal that separates a round-up from one program's own FAQ. Measured on 9 real
+    pages: kept 4 of 4 round-ups, rejected 4 of 4 non-lists."""
+    assert dl._MANY_RE.search("15 Summer Art Programs for High School Students")
+    assert dl._MANY_RE.search("22 Visual Art Competitions for High School Students")
+    assert not dl._MANY_RE.search("FAQ | Wake Forest Summer Immersion Program")
+    assert not dl._MANY_RE.search("Cornell Tech - Summer Innovation Intensives")
+    # a single-program encyclopedia article is correctly NOT a lead; a LIST article is
+    assert not dl._MANY_RE.search("YoungArts - Wikipedia")
+    assert dl._MANY_RE.search("List of physics competitions - Wikipedia")
+
+
+
+
+
+def test_capture_routes_both_kinds_from_one_seed():
+    verdicts = {"https://roundup.example/a": (dl.KIND_HUB, "links programs on 20 distinct sites"),
+                "https://prose.example/b": (dl.KIND_NAMES, "names many programs"),
+                "https://faq.example/c": (None, "title does not promise many programs")}
+    leads, trace = dl.capture(list(verdicts), used_urls=[],
+                              classify=lambda u, t=None: verdicts[u])
+    assert {l["url"]: l["kind"] for l in leads} == {
+        "https://roundup.example/a": dl.KIND_HUB, "https://prose.example/b": dl.KIND_NAMES}
+    assert trace["no_verdict"] == 1 and trace[dl.KIND_HUB] == 1 and trace[dl.KIND_NAMES] == 1
+
+
+# ---------- second source: the review queue's rejected pile ----------
+
+REJECTED = [
+    {"id": "ec1", "name": "Top 15 Summer Programs", "url": "https://roundup.example/a"},
+    {"id": "ec2", "name": "A blog post", "url": "https://prose.example/b"},
+    {"id": "ec3", "name": "Not about programs", "url": "https://faq.example/c"},
+]
+VERDICTS = {"https://roundup.example/a": (dl.KIND_HUB, "links programs on 12 distinct sites"),
+            "https://prose.example/b": (dl.KIND_NAMES, "names many programs"),
+            "https://faq.example/c": (None, "no verdict")}
+
+
+def test_rejected_rows_become_leads_of_the_right_kind():
+    """A row a human rejected as a third-party round-up is confirmed evidence, not a guess —
+    but it still has to be classified, because 'not a program page' does not say whether it
+    LINKS the programs or merely NAMES them."""
+    leads, trace = dl.from_rejected_rows(REJECTED, classify=lambda u, t=None: VERDICTS[u])
+    assert [l["kind"] for l in leads] == [dl.KIND_HUB, dl.KIND_NAMES]
+    assert trace["no_verdict"] == 1 and trace["rejected"] == 3
+
+
+def test_rejected_leads_carry_their_source_row():
+    leads, _ = dl.from_rejected_rows(REJECTED, classify=lambda u, t=None: VERDICTS[u])
+    assert "ec1" in leads[0]["angle"] and "Top 15 Summer Programs" in leads[0]["angle"]
+
+
+def test_rejected_rows_skip_leads_already_queued():
+    known = {dl._key("https://roundup.example/a")}
+    leads, trace = dl.from_rejected_rows(REJECTED, known_keys=known,
+                                         classify=lambda u, t=None: VERDICTS[u])
+    assert [l["url"] for l in leads] == ["https://prose.example/b"]
+    assert trace["already_known"] == 1
+
+
+def test_rejected_rows_honour_a_limit():
+    leads, _ = dl.from_rejected_rows(REJECTED, classify=lambda u, t=None: VERDICTS[u], limit=1)
+    assert len(leads) == 1
+
+
+def test_rejected_rows_tolerate_junk():
+    leads, _ = dl.from_rejected_rows(
+        [{"id": "x", "url": None}, {"id": "y", "url": "javascript:void(0)"}, {}],
+        classify=lambda u, t=None: (dl.KIND_HUB, "s"))
+    assert leads == []

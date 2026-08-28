@@ -56,7 +56,7 @@ import page_text
 import url_dedupe
 import url_repair
 import url_validate
-from agent_common import snapshot_stamp
+from agent_common import safe_console, snapshot_stamp
 from scrape_opportunities import (build_row, next_id_generator, insert_rows, VALID_TYPES,
                                   FLAG_BARE_DOMAIN, FLAG_LOW_VALUE, FLAG_OFFSITE, FLAG_NO_TYPE)
 
@@ -285,9 +285,38 @@ def harvest_names(hub_url, key, timeout=40, min_delay=5, cap=200):
     return parse_names(extract_json(out), cap=cap), text, estimate_cost(usage)
 
 
-def _row_flags(url, name, org, cand):
+FLAG_SELF_PROMOTED = ("resolved to the same site as the page that named it — may be that "
+                      "site's own product rather than an independent program")
+
+
+def is_self_promoted(url, source_url):
+    """True when a page's named program resolves back onto that same page's own site.
+
+    Measured on the first live run (2026-08-27): harvesting 3 marketing listicles produced 3
+    rows and ALL THREE were Immerse Education products, two of them from Immerse's own
+    listicle — while every independent program the same pages named (Parsons, Otis, Drexel,
+    NYU Tisch, Columbia, MAD) failed title-proof. The cause is not the evidence bar being
+    wrong, it is WHAT a listicle calls things: a heading like "Drawing: Eye and Idea
+    Pre-College Course at Columbia University" is a description, not what Columbia calls the
+    course, so no title can prove it — whereas a company names its OWN products canonically in
+    its own article, so those sail through. The bar therefore selects self-promotion.
+
+    This is a FLAG, never a rejection: a provider hosting a genuinely real program is exactly
+    the Immerse case the operator already ruled on (a mill can host its own real program). The
+    reviewer needs to see the pattern, not have the row decided for them.
+    """
+    if not url or not source_url:
+        return False
+    a = url_dedupe.registrable_domain(urllib.parse.urlsplit(url).hostname or "")
+    b = url_dedupe.registrable_domain(urllib.parse.urlsplit(source_url).hostname or "")
+    return bool(a) and a == b
+
+
+def _row_flags(url, name, org, cand, source_url=""):
     """The honest, free review flags for a resolved row — the scraper's own set."""
     flags = []
+    if is_self_promoted(url, source_url):
+        flags.append(FLAG_SELF_PROMOTED)
     if url_validate.is_bare_domain(url):
         flags.append(FLAG_BARE_DOMAIN)
     if not url_validate.domain_matches_org(url, org, name):
@@ -319,6 +348,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="PAID (searches at full cost) but writes NO rows — logs the run + a snapshot.")
     args = ap.parse_args()
+    safe_console()   # model output can carry characters a cp1252 console cannot encode
 
     hubs = []
     if args.hubs_file:
@@ -458,7 +488,8 @@ def main():
             row["found_via"] = hub_url
             review_by_id[row["id"]] = {
                 "moderation_status": "pending_review", "dup_candidates": None,
-                "quality_flags": _row_flags(url, row.get("name"), row.get("org"), cand) or None}
+                "quality_flags": _row_flags(url, row.get("name"), row.get("org"), cand,
+                                            source_url=hub_url) or None}
             rows.append(row)
             existing.append({"id": row["id"], "name": row["name"], "url": row["url"]})
             print(f"  [RESOLVED] {name} -> {url}")

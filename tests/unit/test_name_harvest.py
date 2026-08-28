@@ -298,3 +298,35 @@ def test_name_signature_carries_digits_but_not_short_words():
     assert nh._name_signature("1-Week Medical Academy")[1] == frozenset({"1"})
     assert nh._name_signature("US Academic Decathlon")[1] == frozenset()
     assert nh._name_signature("Academic Decathlon")[1] == frozenset()
+
+
+# ---------- self-promotion: measured on the first live run ----------
+
+def test_is_self_promoted_true_when_a_page_names_its_own_product():
+    """All 3 rows the first live run produced were Immerse products, two of them harvested
+    from Immerse's own listicle. Flagged, never rejected — a provider can host a real program."""
+    assert nh.is_self_promoted(
+        "https://www.immerse.education/summer-schools/fashion-design",
+        "https://www.immerse.education/knowledge-base/15-summer-art-programs/") is True
+
+
+def test_is_self_promoted_matches_across_a_subdomain():
+    assert nh.is_self_promoted("https://www.ted.immerse.education/locations/new-york",
+                               "https://www.immerse.education/knowledge-base/x/") is True
+
+
+def test_is_self_promoted_false_for_an_independent_program():
+    assert nh.is_self_promoted("https://www.otis.edu/summer-of-art",
+                               "https://www.immerse.education/knowledge-base/x/") is False
+
+
+@pytest.mark.parametrize("a,b", [("", "https://x.com/a"), ("https://x.com/a", ""), (None, None)])
+def test_is_self_promoted_tolerates_missing_input(a, b):
+    assert nh.is_self_promoted(a, b) is False
+
+
+def test_row_flags_attaches_the_self_promotion_flag():
+    flags = nh._row_flags("https://www.immerse.education/summer-schools/x", "X Program",
+                          "Immerse", {"type": "Program"},
+                          source_url="https://www.immerse.education/knowledge-base/y/")
+    assert nh.FLAG_SELF_PROMOTED in flags

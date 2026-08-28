@@ -35,6 +35,7 @@ server (which is where the history already lives).
 import datetime
 import json
 import re
+import sys
 
 PREVIEW_PREFIX = "PREVIEW_JSON:"
 SAMPLE_LIMIT = 12  # how many example names to include; enough to eyeball, not to flood
@@ -43,6 +44,23 @@ SAMPLE_LIMIT = 12  # how many example names to include; enough to eyeball, not t
 # model hallucinating "contact us via our website" or similar prose doesn't get written to
 # opportunities.contact_email as if it were a real address.
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]{2,}$")
+
+
+def safe_console():
+    """Stop a non-ASCII character in MODEL OUTPUT from killing an agent mid-run. Idempotent.
+
+    Windows consoles default to cp1252, which cannot encode most of what a web page contains.
+    Measured live 2026-08-27: `harvest_names.py` crashed on a program name carrying a
+    non-breaking hyphen (U+2011) while printing its own drop-list — AFTER the paid naming call
+    had returned, so the run lost work it had already been billed for. Anything that prints
+    model output or page text should call this first; it degrades an unprintable character to a
+    replacement glyph instead of raising.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass       # already wrapped, or not a real stream (pytest capture) — nothing to do
 
 
 def clean_email(value):

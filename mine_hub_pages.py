@@ -37,8 +37,9 @@ import page_text
 import url_dedupe
 import url_repair
 import url_validate
-from agent_common import snapshot_stamp
+from agent_common import safe_console, snapshot_stamp
 from scrape_opportunities import (build_row, next_id_generator, insert_rows, VALID_TYPES,
+                                  collapse_intra_run_twins,
                                   FLAG_BARE_DOMAIN, FLAG_LOW_VALUE, FLAG_OFFSITE, FLAG_NO_TYPE)
 
 # --- pure audience/relevance filters (free, unit-tested) --------------------------------
@@ -214,7 +215,13 @@ _EXTRACT_SYSTEM = (
     "location, intl, season, eligibility, grade_min, grade_max, subject_tags (array), "
     "contact_email. Use ONLY what the page says; use null for anything the page does not "
     "state. Do NOT invent a URL. If the page is not a single high-school program (a list, a "
-    "news article, a graduate/adult program), return {\"name\": null}.")
+    "news article, a graduate/adult program), return {\"name\": null}.\n"
+    # `type` is a closed set on the catalog row. Naming the key without naming its values
+    # made the model answer in its own vocabulary ("Summer Program"), which build_row parks
+    # on a placeholder while the caller attaches FLAG_NO_TYPE — measured at 19 of 19 rows on
+    # the first live run, i.e. every row needed a human to set a field the page states plainly.
+    "`type` MUST be exactly one of: " + ", ".join(sorted(VALID_TYPES)) + ". Choose the "
+    "closest one; never invent another word and never leave it null.")
 
 
 def extract_opportunity(url, key, timeout=40, min_delay=5):
@@ -298,6 +305,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="PAID (extracts at full cost) but writes NO rows — logs the run + a snapshot.")
     args = ap.parse_args()
+    safe_console()   # model output can carry characters a cp1252 console cannot encode
 
     hubs = []
     if args.hubs_file:
@@ -400,6 +408,14 @@ def main():
                                        "dup_candidates": None, "quality_flags": flags or None}
             rows.append(row)
             existing.append({"id": row["id"], "name": row["name"], "url": row["url"]})
+
+    # Collapse in-run twins to their best-URL copy, exactly as the search scraper does. A
+    # program index links the program AND its sub-pages, so one hub legitimately yields the
+    # same opportunity more than once — that is a property of hubs, not a model error.
+    flags_by_id = {rid: (rv.get("quality_flags") or []) for rid, rv in review_by_id.items()}
+    rows, collapsed = collapse_intra_run_twins(rows, flags_by_id)
+    if collapsed:
+        print(f"[OK] Collapsed {len(collapsed)} in-run twin(s) to their best-URL copy.")
 
     # Review snapshot (audit trail; `inserted`/`rejected` shape mirrors the scraper's).
     stamp = snapshot_stamp()

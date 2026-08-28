@@ -376,6 +376,40 @@ def discover(hub_url, off_domain=False, timeout=url_repair.DEFAULT_TIMEOUT, recu
     return final, trace
 
 
+def allocate_budget(all_new, max_pages):
+    """Spend a run's extraction budget ACROSS the hubs, not down the list. Pure.
+
+    Returns (all_new_trimmed, [(hub_url, n_skipped), ...]).
+
+    First-come allocation looked fine and was not. Measured on the 43-hub run: the ceiling of 300
+    fell entirely on the last hubs in the file, which happened to be all ten walk-up leads -- so
+    the round-ups took 248 extractions and the walk-ups 52, with 46 candidates dropped. Brown, BU,
+    Vanderbilt and UCSF reported zero rows because they NEVER RAN, which reads exactly like a hub
+    that yielded nothing. That is the same failure as a link cap that truncates by position in the
+    page, one level up: a cap must bound the cost, never silently choose the winners.
+
+    Round-robin means a ceiling degrades every hub by a similar fraction, and a hub with fewer
+    candidates than its share is never trimmed at all.
+    """
+    if max_pages is None or sum(len(f) for _, f in all_new) <= max_pages:
+        return all_new, []
+    take = {u: 0 for u, _ in all_new}
+    remaining, budget = {u: len(f) for u, f in all_new}, max_pages
+    while budget > 0 and any(remaining[u] > take[u] for u in take):
+        for u in take:
+            if budget <= 0:
+                break
+            if take[u] < remaining[u]:
+                take[u] += 1
+                budget -= 1
+    trimmed, capped = [], []
+    for u, fresh in all_new:
+        if take[u] < len(fresh):
+            capped.append((u, len(fresh) - take[u]))
+        trimmed.append((u, fresh[:take[u]]))
+    return trimmed, capped
+
+
 def fresh_candidates(urls, catalog_keys, seen_this_run):
     """(fresh, already_in_catalog, seen_earlier_this_run) -- what is worth PAYING to extract.
 
@@ -447,6 +481,9 @@ def main():
     ap.add_argument("--preview", action="store_true",
                     help="FREE: discover + dedup against the catalog, print candidates, make NO "
                          "model call and write nothing.")
+    ap.add_argument("--give-up-after", type=int, default=6, metavar="N",
+                    help="Stop reading a hub after N pages in a row are refused as not-a-program "
+                         "(default 6). What it leaves unread is reported.")
     ap.add_argument("--max-pages", type=int, default=None, metavar="N",
                     help="Hard ceiling on how many pages this run may EXTRACT (i.e. pay for), "
                          "across every hub. What it skips is reported, never dropped silently.")
@@ -538,18 +575,13 @@ def main():
     # that the ceiling exists before the run, not after the bill.
     capped_hubs = set()
     if args.max_pages is not None:
-        budget, capped = args.max_pages, []
-        for i, (hub_url, fresh) in enumerate(all_new):
-            if len(fresh) > budget:
-                capped.append((hub_url, len(fresh) - budget))
-                capped_hubs.add(hub_url)
-                all_new[i] = (hub_url, fresh[:budget])
-            budget -= len(all_new[i][1])
+        all_new, capped = allocate_budget(all_new, args.max_pages)
+        capped_hubs = {u for u, _n in capped}
         if capped:
             skipped = sum(n for _, n in capped)
             print(f"[LIMIT] --max-pages {args.max_pages} reached: {skipped} candidate(s) across "
-                  f"{len(capped)} hub(s) NOT extracted. They stay queued; raise the ceiling to "
-                  f"reach them.")
+                  f"{len(capped)} hub(s) NOT extracted, spread evenly rather than taken off the "
+                  f"end of the list. They stay queued; raise the ceiling to reach them.")
             for hub_url, n in capped:
                 print(f"    skipped {n}: {hub_url[:88]}")
 
@@ -577,10 +609,22 @@ def main():
     run_id = run_row["id"] if run_row else None
 
     rows, review_by_id, cost, errors = [], {}, 0.0, 0
+    yield_by_hub = {}
     for hub_url, fresh in all_new:
         dom = url_dedupe.registrable_domain(urllib.parse.urlsplit(hub_url).netloc) or "hub"
         source = f"hub-{dom}-{today}"
+        made, tried, refused_in_a_row = 0, 0, 0
         for u in fresh:
+            # A hub whose first pages are ALL refused is not going to start producing. Measured:
+            # non-trivial.org spent 17 extractions for zero rows, and one Ladder post 4 for zero.
+            # Refusal is the extractor working -- it returns {"name": null} for a page that is not
+            # a single program -- so this does not skip anything a row would have come from; it
+            # just stops paying to re-learn the same answer.
+            if refused_in_a_row >= args.give_up_after:
+                print(f"  [SKIP] {hub_url[:70]}: {refused_in_a_row} refusals in a row, "
+                      f"{len(fresh) - tried} page(s) left unread.")
+                break
+            tried += 1
             try:
                 cand, c = extract_opportunity(u, gemini_key, timeout=args.timeout,
                                               min_delay=args.min_delay)
@@ -590,18 +634,32 @@ def main():
                 print(f"  [WARN] extract failed {u}: {str(e)[:100]}")
                 continue
             if not cand:
+                refused_in_a_row += 1
                 continue
             row = build_row(cand, next(mint), source, u, [])
             if not row:
+                refused_in_a_row += 1
                 continue
+            refused_in_a_row = 0
+            made += 1
             row["found_via"] = hub_url
-            # Honest, free flags — same set the scraper attaches — so a hub row is reviewed on
-            # equal terms. The URL is a followed link (real by construction), so these are rare.
+            # Honest, free flags — but NOT the same set as the scraper, and that is the point.
+            # FLAG_OFFSITE asks "did a model type a URL that belongs to somebody else?" Here the
+            # URL was FOLLOWED FROM A LINK, so it is real by construction and the question does
+            # not apply. Measured on the 43-hub run: 16 of the 17 rows it flagged were false
+            # positives — thesca.org for the Student Conservation Association, precollege.syr.edu
+            # for Syracuse four times, medschool.uci.edu for UC Irvine, caes.uga.edu for the
+            # University of Georgia, internships.fnal.gov for Fermilab, and three CMU departments
+            # whose org name carries a school suffix the acronym rule cannot see. A flag that is
+            # wrong 94% of the time teaches the reviewer to ignore flags.
+            #
+            # A CONTENT MILL still flags: that is a fact about the destination, not about who
+            # typed it, and a mill can be linked from anywhere.
             name, org = row.get("name"), row.get("org")
             flags = []
             if url_validate.is_bare_domain(u):
                 flags.append(FLAG_BARE_DOMAIN)
-            if url_validate.is_content_mill(u) or not url_validate.domain_matches_org(u, org, name):
+            if url_validate.is_content_mill(u):
                 flags.append(FLAG_OFFSITE)
             if url_dedupe.is_low_value_path(u):
                 flags.append(FLAG_LOW_VALUE)
@@ -611,6 +669,7 @@ def main():
                                        "dup_candidates": None, "quality_flags": flags or None}
             rows.append(row)
             existing.append({"id": row["id"], "name": row["name"], "url": row["url"]})
+        yield_by_hub[hub_url] = (made, tried)
 
     # Collapse in-run twins to their best-URL copy, exactly as the search scraper does. A
     # program index links the program AND its sub-pages, so one hub legitimately yields the
@@ -666,6 +725,16 @@ def main():
         n = discovered_leads.mark_processed(lead_urls)
         print(f"[OK] Marked {n} hub lead(s) processed.")
 
+    if yield_by_hub:
+        print("[YIELD] rows made / pages read, per hub — worst first:")
+        for hub_url, (made, tried) in sorted(yield_by_hub.items(), key=lambda kv: kv[1][0]):
+            if not tried:
+                continue
+            rate = 100.0 * made / tried
+            print(f"    {made:3} / {tried:3}  ({rate:3.0f}%)  {hub_url[:76]}")
+        dud = [u for u, (made, tried) in yield_by_hub.items() if tried and not made]
+        if dud:
+            print(f"    {len(dud)} hub(s) produced NOTHING and are worth retiring by hand.")
     print(f"[SUMMARY] {total} candidate page(s) across {len(hubs)} hub(s) -> extracted "
           f"{len(rows)} row(s), errors {errors}, cost ${cost:.4f}. Wrote {review_path}.")
     print(f"[DONE] Review before activating anything from a source='hub-*-{today}' row.")

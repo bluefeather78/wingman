@@ -337,3 +337,33 @@ def test_two_hubs_linking_one_program_pay_for_it_once():
 def test_a_malformed_href_cannot_stop_the_run():
     fresh, _, _ = hub.fresh_candidates(["http://a b c:99999/x", "https://x.edu/p/ok"], set(), set())
     assert fresh == ["https://x.edu/p/ok"]
+
+
+# ---------- how a run spends its ceiling ----------
+
+def test_the_ceiling_is_spread_across_hubs_not_taken_off_the_end():
+    """Measured on the 43-hub run: a ceiling of 300 fell entirely on the hubs at the END of the
+    file, which happened to be all ten walk-up leads -- round-ups took 248 extractions, walk-ups
+    52, and 46 candidates were dropped. Brown, BU, Vanderbilt and UCSF reported zero rows because
+    they never ran, which reads exactly like a hub that yielded nothing. A cap must bound the
+    cost, never silently choose the winners."""
+    all_new = ([(f"https://roundup{i}.com/list", [f"u{i}-{j}" for j in range(8)]) for i in range(33)]
+               + [(f"https://uni{i}.edu/pre/", [f"w{i}-{j}" for j in range(12)]) for i in range(10)])
+    trimmed, capped = hub.allocate_budget(all_new, 300)
+    walk = sum(len(f) for u, f in trimmed if "uni" in u)
+    assert walk >= 60, "the walk-up half must not be starved by being last in the list"
+    assert sum(len(f) for _, f in trimmed) == 300
+    assert sum(n for _, n in capped) == 384 - 300
+
+
+def test_a_small_hub_is_never_trimmed_to_pay_for_a_big_one():
+    all_new = [("https://a/1", ["x"]), ("https://b/2", [f"y{i}" for i in range(50)])]
+    trimmed, capped = hub.allocate_budget(all_new, 20)
+    assert dict(trimmed)["https://a/1"] == ["x"]
+    assert [u for u, _ in capped] == ["https://b/2"]
+
+
+def test_a_budget_that_covers_everything_changes_nothing():
+    all_new = [("https://a/1", ["x", "y"]), ("https://b/2", ["z"])]
+    assert hub.allocate_budget(all_new, 99) == (all_new, [])
+    assert hub.allocate_budget(all_new, None) == (all_new, [])

@@ -179,6 +179,38 @@ name searched **$0.0167** (84% of it the flat $0.014 search fee), extraction **$
 Draining all 70 queued leads: ~**$7** at cap 5, ~**$12-13** at cap 10-20 — but with the floor it
 self-sizes, so budget on names-worth-searching, not on the cap.
 
+### The routing system, restated simply (2026-08-27) — THIS is the shape of 4F
+
+```
+search angle -> search -> URLs
+  |- the program's own page ----------------> catalog row        (unchanged)
+  '- a third-party page mentioning programs -> classify, never discard
+       |- LINKS them   -> hub mining    (free: follow the links)
+       '- NAMES them   -> name harvest  (paid: one search per name)
+```
+A second feed: **rows the operator REJECTED in the review queue** for being third-party
+round-ups. `python discovered_leads.py --from-rejects [--commit]`.
+
+**One rule decides everything, and it is structural — no host list:**
+```
+title promises many opportunities?  no -> not a lead
+>= 6 distinct OFF-domain domains       -> hub lead
+>= 2000 chars of HS-audience prose     -> names lead
+```
+Measured, 6 real round-ups vs 5 real non-round-ups: collegevine 20, aralia 16, veritasai 13,
+ladder 13, immerse 9 **against** Cornell program page 3, job posting 2, university FAQ 1, cost
+page 1. **Off-domain** and **distinct domains** are both load-bearing — an earlier attempt
+counted SAME-domain links and could not separate the populations at all, because a third-party
+page's same-domain links are its own nav; and the FAQ's 11 off-domain links all pointed at one
+repeated footer destination. The title gate runs before BOTH branches (structure alone called a
+school district jobs page and a press release hubs) and catches wrong audience for free.
+
+**Impact of going structural, measured on the live queue:** the 67 leads the old host-list rule
+had marked "names" (all paid searches) reclassify as **25 hub (free extraction) + 11 names
+(paid) + 31 not round-ups at all**. Several known round-up hosts — ladderinternships,
+collegevine — actually LINK their programs (15/18/27 distinct sites) and belong in the free
+extractor. On the real rejected pile: 40 rows -> 8 leads.
+
 ### OPEN / do next
 1. **Push `main`** — now 11 commits ahead of `origin/main` (the merge brought 5 branch commits with it). Scraper-only (no `app/`,
    `render.yaml`, `requirements.txt`, `server.py`), so a Render deploy is a no-op for the web

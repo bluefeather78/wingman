@@ -80,6 +80,86 @@ SAME_SITE_MAX_PEERS = 3
 GENERIC_NAMES = {"custom opportunity", "opportunity", "program", "summer program",
                  "internship", "competition", "conference", "journal", "untitled"}
 
+# A containment match ("Secondary School Program" inside "Harvard Secondary School Program
+# (SSP)") is a rename, not a coincidence, so it floors the similarity here — above every
+# threshold in this module (0.82/0.88) and above the scraper's 0.9 in-run collapse rule.
+CONTAINMENT_FLOOR = 0.9
+
+# Connectors and the word "program" carry no identity; everything else in a name does. Kept
+# deliberately SMALL — dropping "summer"/"school"/"academy" would let two distinct programs
+# that merely share a category word satisfy the containment test below.
+_NAME_FILLER = {"the", "a", "an", "of", "for", "and", "or", "in", "on", "at", "to", "with",
+                "program", "programs"}
+
+# If a name contains any of these it is a real program, not a bare institution label, no
+# matter how much of it the host domain also matches. Used only to PROTECT a name from the
+# bare-institution suppression — erring toward "this is a real name" keeps a good hint.
+_PROGRAM_WORDS = {
+    "academy", "academies", "camp", "camps", "scholar", "scholars", "internship",
+    "internships", "research", "summer", "session", "seminar", "fellowship", "bootcamp",
+    "olympiad", "challenge", "workshop", "immersion", "apprenticeship", "clinic",
+    "symposium", "symposia", "competition", "conference", "journal", "mentorship",
+    "pathways", "insights", "engineering", "precollege", "pre", "honors", "forum",
+}
+
+# Institution words stripped before asking "is anything program-specific left?".
+_INSTITUTION_WORDS = {"university", "college", "institute", "school", "state",
+                      "u", "the", "of", "at"}
+
+
+def _distinctive_tokens(name):
+    """Normalized name tokens with connectors and 'program' removed."""
+    return [t for t in normalize_name(name).split() if t and t not in _NAME_FILLER]
+
+
+def _is_containment_match(a, b):
+    """The shorter name's distinctive tokens are ALL in the longer's, and there are >= 2.
+
+    Two is load-bearing: a SINGLE shared distinctive word is how the programs sharing one
+    application portal relate ('Scholars Program' inside 'China Scholars Program'), and
+    matching those would merge distinct opportunities. Two shared distinctive words is the
+    'X' vs 'Org X (ACRONYM)' rename pattern this exists to catch.
+    """
+    sa, sb = set(_distinctive_tokens(a)), set(_distinctive_tokens(b))
+    if not sa or not sb:
+        return False
+    small, big = (sa, sb) if len(sa) <= len(sb) else (sb, sa)
+    return len(small) >= 2 and small <= big
+
+
+def _token_in_host(token, host):
+    """Loose 'this name-word belongs to this host', mirroring url_validate.domain_matches_org's
+    generosity WITHOUT importing it (url_validate imports this module — a cycle)."""
+    if len(token) < 3:
+        return False
+    for label in (host or "").split("."):
+        if label in _MULTIPART_TLD_HEADS or len(label) < 3:
+            continue
+        if token in label or (len(label) >= 4 and label in token):
+            return True
+        if len(label) >= 5 and label[0] == "u" and label[1:] in token:  # umich, upenn
+            return True
+    return False
+
+
+def _is_bare_institution(name, host):
+    """True when a name is just the institution — 'OSU', 'Tufts University',
+    'University of Wisconsin-Madison' — carrying no program of its own.
+
+    Two rows that are BOTH bare institution names score 1.0 on raw similarity (same string)
+    and manufacture a false 'strong' duplicate hint between genuinely different programs
+    (the Tulane/UTEP/UTSA rows in the 2026-08-28 audit). Suppressing the name signal for
+    these fails OPEN — no name-based hint is emitted — which is the safe direction.
+    """
+    toks = _distinctive_tokens(name)
+    if not toks:
+        return False
+    if any(t in _PROGRAM_WORDS for t in toks):
+        return False
+    leftover = [t for t in toks
+                if t not in _INSTITUTION_WORDS and not _token_in_host(t, host)]
+    return not leftover
+
 
 def split_url(url):
     """(scheme, host, path, query) with host lowercased and 'www.'/default port removed.
@@ -161,7 +241,10 @@ def name_similarity(a, b):
         return 0.0
     if len(na) < 4 or len(nb) < 4:
         return 0.0
-    return difflib.SequenceMatcher(None, na, nb).ratio()
+    ratio = difflib.SequenceMatcher(None, na, nb).ratio()
+    if ratio < CONTAINMENT_FLOOR and _is_containment_match(a, b):
+        return CONTAINMENT_FLOOR
+    return ratio
 
 
 def is_low_value_path(url):
@@ -243,12 +326,17 @@ def find_duplicates(url, name, existing_rows, apply_url=None):
         _, row_host, row_path, _ = split_url(row_url)
         same_domain = bool(domain) and registrable_domain(row_host) == domain
         ratio = name_similarity(name, row.get("name"))
+        # A name that is just the institution ('OSU', 'Tufts University') is not evidence of
+        # anything — two different programs both carrying it score 1.0. Drop the name-based
+        # hint for those; the URL and prefix signals are unaffected.
+        name_is_evidence = not (_is_bare_institution(name, host)
+                                or _is_bare_institution(row.get("name"), row_host))
 
         if same_domain and _prefix_relation(path, row_path):
             reason, confidence = "one URL is a sub-page of the other on the same site", "strong"
-        elif same_domain and ratio >= SAME_HOST_NAME_RATIO:
+        elif same_domain and name_is_evidence and ratio >= SAME_HOST_NAME_RATIO:
             reason, confidence = f"same site, name {int(ratio * 100)}% similar", "strong"
-        elif ratio >= CROSS_HOST_NAME_RATIO:
+        elif name_is_evidence and ratio >= CROSS_HOST_NAME_RATIO:
             reason, confidence = f"name {int(ratio * 100)}% similar", "weak"
         elif same_domain and same_site_is_evidence:
             plural = "entry" if peers == 1 else "entries"

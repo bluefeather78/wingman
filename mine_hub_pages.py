@@ -665,8 +665,22 @@ def main():
                 flags.append(FLAG_LOW_VALUE)
             if cand.get("type") not in VALID_TYPES:
                 flags.append(FLAG_NO_TYPE)
+            # fresh_candidates already dropped every EXACT-URL catalog match before we paid to
+            # extract, so the risk that remains is the SAME program at a DIFFERENT URL (the
+            # 2026-08-28 audit's Cut 2 — a rename, a second departmental path, a slug change).
+            # find_duplicates is free (pure, no network) and surfaces those as name/domain
+            # hints; without this the row reached the queue with no link to its twin. Hints
+            # only — the hub miner never auto-rejects, so an exact hit (should not occur here)
+            # is downgraded to a strong candidate rather than dropping the row.
+            _exact, dup_cands = url_dedupe.find_duplicates(u, name, existing)
+            if _exact and not any(c.get("id") == _exact.get("id") for c in dup_cands):
+                dup_cands = [{"id": _exact.get("id"), "name": _exact.get("name"),
+                              "url": _exact.get("url"),
+                              "reason": "identical URL and matching name",
+                              "confidence": "strong"}] + dup_cands
             review_by_id[row["id"]] = {"moderation_status": "pending_review",
-                                       "dup_candidates": None, "quality_flags": flags or None}
+                                       "dup_candidates": (dup_cands or None),
+                                       "quality_flags": flags or None}
             rows.append(row)
             existing.append({"id": row["id"], "name": row["name"], "url": row["url"]})
         yield_by_hub[hub_url] = (made, tried)

@@ -113,6 +113,73 @@ def test_name_similarity_year_makes_recurring_program_equal():
     assert ud.name_similarity("ISEF 2025", "ISEF 2026") == 1.0
 
 
+# ------------------------------------------------------------ containment (rename) matching
+def test_containment_match_org_prefix_and_acronym():
+    # 'X' vs 'Org X (ACRONYM)' — the dominant real rename pattern in the 2026-08-28 audit.
+    assert ud._is_containment_match(
+        "Secondary School Program", "Harvard Secondary School Program (SSP)") is True
+    assert ud._is_containment_match(
+        "Academic Insights Program", "Immerse Education Academic Insights") is True
+
+
+def test_containment_match_single_shared_word_is_not_enough():
+    # One shared distinctive word ('scholars', 'program' is filler) is how programs sharing a
+    # portal relate — must NOT match, or distinct opportunities merge.
+    assert ud._is_containment_match("Scholars Program", "China Scholars Program") is False
+    assert ud._is_containment_match("Stanford E-Japan", "Stanford e-China") is False
+
+
+def test_name_similarity_floors_on_containment():
+    # Raw SequenceMatcher ratio is well below 0.9 here; containment lifts it to the floor.
+    assert ud.name_similarity(
+        "Secondary School Program", "Harvard Secondary School Program (SSP)") \
+        == ud.CONTAINMENT_FLOOR
+    # No containment -> untouched (stays low).
+    assert ud.name_similarity("Scholars Program", "China Scholars Program") < 0.9
+
+
+# --------------------------------------------------------------------- bare-institution names
+@pytest.mark.parametrize("name,host,expected", [
+    ("OSU", "osu.edu", True),
+    ("Columbia", "lamont.columbia.edu", True),
+    ("Tufts University", "tufts.edu", True),
+    ("University of Utah", "science.utah.edu", True),
+    ("UCSF", "mstp.ucsf.edu", True),
+    # A campus suffix the host label does not spell ('madison' vs 'wisc') stays a distinctive
+    # leftover, so this reads as a real name. A missed suppression is the safe direction —
+    # Fix 3 only removes false hints, it never manufactures one — and the audit's genuinely
+    # false pairs (Tulane/UTEP/UTSA) all resolve because their leftover IS in the host label.
+    ("University of Wisconsin-Madison", "wisc.edu", False),
+    # a real program on the same host is NOT bare, even though the host also matches
+    ("OSU Summer Internship Program", "ma2jic.osu.edu", False),
+    ("KEYS Research Internship Program", "keys.arizona.edu", False),
+    ("Marine Biology Summer Academy", "ocean.org", False),
+])
+def test_is_bare_institution(name, host, expected):
+    assert ud._is_bare_institution(name, host) is expected
+
+
+def test_find_duplicates_bare_institution_names_emit_no_strong_hint():
+    # Two DIFFERENT Tulane programs, both stored under the junk name 'Tulane University',
+    # on the same domain via different paths. Must not produce a strong name hint.
+    rows = [_row("ec1", "Tulane University", "https://architecture.tulane.edu/admissions/pre-college")]
+    exact, cands = ud.find_duplicates(
+        "https://summer.tulane.edu/explorations-architecture-design", "Tulane University", rows)
+    assert exact is None
+    assert all(c["confidence"] != "strong" or "similar" not in c["reason"] for c in cands)
+
+
+def test_find_duplicates_same_url_containment_rename_rejects():
+    # Same page, one name a rename of the other (>=2 distinctive shared words) -> hard dup.
+    rows = [_row("ec1", "Harvard Secondary School Program (SSP)",
+                 "https://summer.harvard.edu/hs/secondary-school-program")]
+    exact, cands = ud.find_duplicates(
+        "https://summer.harvard.edu/hs/secondary-school-program",
+        "Secondary School Program", rows)
+    assert exact is rows[0]
+    assert cands == []
+
+
 # --------------------------------------------------------------------------- is_low_value_path
 @pytest.mark.parametrize("url,expected", [
     ("https://x.com/program/faq", True),

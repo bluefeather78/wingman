@@ -330,3 +330,72 @@ def test_row_flags_attaches_the_self_promotion_flag():
                           "Immerse", {"type": "Program"},
                           source_url="https://www.immerse.education/knowledge-base/y/")
     assert nh.FLAG_SELF_PROMOTED in flags
+
+
+# ---------- ranking before the cap (weights taken from the first live run) ----------
+
+@pytest.mark.parametrize("name", [
+    "Drawing: Eye and Idea Pre-College Course at Columbia University",
+    "Museum of Arts and Design Teen Programs: Artslife",
+    "Interlochen Arts Camp - Fashion Program",
+])
+def test_looks_descriptive_true(name):
+    """Every name carrying one of these markers came back unproven on the live run: a colon
+    splits a label from a gloss, and ' at <Institution>' is the article placing the program."""
+    assert nh.looks_descriptive(name) is True
+
+
+@pytest.mark.parametrize("name", [
+    "Career Insights Program", "New York TED Summer School",
+    "American Mathematics Competitions (AMC)",          # parens are NOT a marker
+    "Health Occupations Students of America (HOSA)",
+])
+def test_looks_descriptive_false(name):
+    assert nh.looks_descriptive(name) is False
+
+
+def test_fewer_identity_words_ranks_higher():
+    """Measured: resolved names carried [2, 3, 4] identity words, unproven [4, 4, 4, 5, 5, 5, 7].
+    title_proves needs EVERY word in the title, so each extra word is another chance to fail."""
+    assert nh.name_rank_score("Career Insights Program") > \
+        nh.name_rank_score("NYU Tisch School of the Arts: Drama, Production, and Design Workshop")
+
+
+def test_source_brand_in_the_name_is_penalised():
+    src = "https://www.immerse.education/knowledge-base/x/"
+    assert nh.shares_source_identity("Immerse Education Fashion & Design School", src) is True
+    assert nh.shares_source_identity("Otis College Summer of Art", src) is False
+    assert nh.name_rank_score("Immerse Education Fashion School", src) < \
+        nh.name_rank_score("Immerse Education Fashion School", "")
+
+
+def test_ranking_reorders_but_never_drops():
+    """The cap decides how many; ranking decides which. Total eligible must be unchanged."""
+    names = ["Alpha Scholars Institute", "Beta: Gamma Institute at Delta University",
+             "Epsilon Robotics Challenge"]
+    text = " ".join(names)
+    keep, dropped = nh.select_names(names, text, [], cap=99)
+    assert sorted(keep) == sorted(names) and dropped["over_cap"] == []
+
+
+def test_ranking_changes_what_the_cap_buys():
+    """The live failure: a positional cap bought the top of the article. A descriptive name
+    now sorts below a clean one even when it appears first."""
+    names = ["Beta: Gamma Institute at Delta University", "Epsilon Robotics Challenge"]
+    text = " ".join(names)
+    keep, dropped = nh.select_names(names, text, [], cap=1)
+    assert keep == ["Epsilon Robotics Challenge"]
+    assert dropped["over_cap"] == ["Beta: Gamma Institute at Delta University"]
+
+
+def test_rank_false_preserves_page_order():
+    """The old behaviour stays reachable, so the two rules can be compared on one page."""
+    names = ["Beta: Gamma Institute at Delta University", "Epsilon Robotics Challenge"]
+    keep, _ = nh.select_names(names, " ".join(names), [], cap=1, rank=False)
+    assert keep == ["Beta: Gamma Institute at Delta University"]
+
+
+def test_ranking_is_stable_for_equal_scores():
+    names = ["Alpha Scholars Institute", "Omega Robotics Challenge"]
+    keep, _ = nh.select_names(names, " ".join(names), [], cap=2)
+    assert keep == names

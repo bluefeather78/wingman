@@ -192,14 +192,85 @@ def is_known_name(name, existing_rows):
     return None
 
 
-def select_names(raw_names, text, existing_rows, cap=DEFAULT_MAX_NAMES):
+# Markers that a listicle wrote a DESCRIPTION rather than the program's own name. Both are
+# measured, not guessed: on the first live run every name carrying one came back unproven —
+# "Drawing: Eye and Idea Pre-College Course at Columbia University", "Museum of Arts and
+# Design Teen Programs: Artslife", "NYU Tisch School of the Arts: Drama, Production, and
+# Design Workshop", "The New School (Parsons) Summer Intensive Studies: New York". A colon
+# splits a label from a gloss and " at <Institution>" is the article placing the program, not
+# the program naming itself; neither can appear in the page title that has to prove it.
+# Parentheses are deliberately NOT a marker — canonical names use them constantly ("American
+# Mathematics Competitions (AMC)", "Health Occupations Students of America (HOSA)").
+_DESCRIPTIVE_RE = re.compile(r":|\s+at\s+[A-Z]|\s+[-\u2013\u2014]\s+")
+
+
+def looks_descriptive(name):
+    """True if this reads as an article's phrase about a program rather than its own name."""
+    return bool(_DESCRIPTIVE_RE.search(name or ""))
+
+
+def shares_source_identity(name, source_url):
+    """True if the name carries the source site's own brand word — the self-promotion tell.
+
+    A marketing listicle names its OWN products canonically and everyone else's descriptively,
+    which is exactly why the evidence bar passed 3 Immerse products and failed Parsons, Otis,
+    Drexel, NYU Tisch and Columbia on the first live run. Detected on the registrable domain's
+    brand label so it works on a competitor's page too — the Ladder listicle's one resolvable
+    entry was an Immerse product.
+    """
+    if not source_url:
+        return False
+    reg = url_dedupe.registrable_domain(urllib.parse.urlsplit(source_url).hostname or "")
+    brand = (reg or "").split(".")[0]
+    return bool(brand) and brand in url_repair.identity_words(name)
+
+
+def name_rank_score(name, source_url=""):
+    """How likely this name is to resolve to an INDEPENDENT program's own page. Higher first.
+
+    Ranking only reorders names the three free gates already kept — it never drops one — so a
+    wrong score costs position, never coverage. It exists because the cap was positional:
+    measured on the first live run, `--max-names 5` cut the Ladder listicle at char ~7,300 and
+    bought the top of the article, dropping Interlochen, FIT and NYU Steinhardt while keeping
+    the source's own products, which sit high on a marketing page by construction.
+
+    Three free signals, every weight taken from the 10 names the first live run actually
+    resolved or failed to resolve — not from taste:
+
+      identity-word COUNT, and FEWER IS BETTER. Measured: resolved [2, 3, 4] against unproven
+        [4, 4, 4, 5, 5, 5, 7]. This is the opposite of the obvious guess, and the reason is in
+        `title_proves` itself — it requires EVERY identity word to appear in the page title, so
+        each extra word is another chance to fail. A long name is a listicle padding a label
+        with description; a short one is usually what the program calls itself.
+      a DESCRIPTIVE marker: -3. Perfect precision on the sample — 0 of 3 resolved names carry
+        one, 5 of 7 unproven do.
+      the source site's own BRAND in the name: -4. Low recall by construction (it saw 1 of the
+        3 self-promoted rows, because a name can resolve onto the source's site without saying
+        the brand — "Career Insights Program" landed on immerse.education), so `FLAG_SELF_
+        PROMOTED` remains the real check AFTER resolution. This only stops paying for the
+        obvious cases first.
+
+    Small sample, and it is a RANKING not a gate: a wrong score costs a name its position in
+    the queue, never its eligibility.
+    """
+    n_ident = len(url_repair.identity_words(name))
+    score = 4 if n_ident <= 3 else (2 if n_ident == 4 else 0)
+    if looks_descriptive(name):
+        score -= 3
+    if shares_source_identity(name, source_url):
+        score -= 4
+    return score
+
+
+def select_names(raw_names, text, existing_rows, cap=DEFAULT_MAX_NAMES, source_url="",
+                 rank=True):
     """(keep, dropped) — the three free gates, in order, with a per-page cap. Pure.
 
     `dropped` maps a reason to the names it cost, so a run that resolves nothing says WHY
     instead of reading as "the page named nothing".
     """
-    keep, dropped = [], {"not_on_page": [], "unprovable": [], "already_in_catalog": [],
-                         "over_cap": []}
+    eligible, dropped = [], {"not_on_page": [], "unprovable": [], "already_in_catalog": [],
+                             "over_cap": []}
     for name in raw_names:
         if not name_is_on_page(name, text):
             dropped["not_on_page"].append(name)
@@ -211,10 +282,12 @@ def select_names(raw_names, text, existing_rows, cap=DEFAULT_MAX_NAMES):
         if known:
             dropped["already_in_catalog"].append(f"{name} (= {known})")
             continue
-        if len(keep) >= cap:
-            dropped["over_cap"].append(name)
-            continue
-        keep.append(name)
+        eligible.append(name)
+    # Rank AFTER the gates and BEFORE the cap, so the cap cuts the weakest candidates instead
+    # of the ones furthest down the page. Sorted stably, so equal scores keep page order.
+    ordered = (sorted(eligible, key=lambda n: -name_rank_score(n, source_url))
+               if rank else eligible)
+    keep, dropped["over_cap"] = ordered[:cap], ordered[cap:]
     return keep, dropped
 
 
@@ -437,7 +510,8 @@ def main():
             print(f"[HUB] {hub_url}: named nothing (or page unfetchable) — nothing to resolve.")
             continue
         named += len(raw_names)
-        keep, dropped = select_names(raw_names, text, existing, cap=args.max_names)
+        keep, dropped = select_names(raw_names, text, existing, cap=args.max_names,
+                                     source_url=hub_url)
         print(f"[HUB] {hub_url}: named {len(raw_names)}, resolving {len(keep)}. "
               + ", ".join(f"{k}={len(v)}" for k, v in dropped.items() if v))
         # Every dropped name is printed, never a head slice. This list IS the record of what a

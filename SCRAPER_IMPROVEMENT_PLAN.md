@@ -112,6 +112,43 @@ collapse in-run twins (one index links a program and its sub-pages — `/acceler
 program/` + `/alp/`); `agent_common.safe_console()` — a **U+2011 in model output crashed a run
 after its paid call had returned** (cp1252 console); and the self-promotion flag above.
 
+### Ranking before the cap — measured fix, A/B'd live (2026-08-27)
+
+The `--max-names` cap was POSITIONAL and that was actively harmful, not merely blunt. On the
+Ladder listicle it cut at char ~7,300 and bought the top of the article — dropping Interlochen,
+FIT and NYU Steinhardt while keeping the source's own products, which sit high on a marketing
+page by construction. **The cap was selecting for self-promotion.**
+
+`name_rank_score()` now orders eligible names AFTER the free gates and BEFORE the cap. It never
+drops a name; a wrong score costs position, never eligibility. Weights come from the 10 names
+the first run actually resolved or failed:
+- **identity-word count, FEWER IS BETTER** — resolved `[2,3,4]` vs unproven `[4,4,4,5,5,5,7]`.
+  Opposite of the obvious guess, and `title_proves` is why: it needs EVERY identity word in the
+  page title, so each extra word is another chance to fail.
+- **a descriptive marker** (a colon, or `" at <Institution>"`): −3. Perfect precision on the
+  sample — 0 of 3 resolved carry one, 5 of 7 unproven do. Parentheses are NOT a marker.
+- **the source site's brand in the name**: −4. Low recall by construction, so
+  `FLAG_SELF_PROMOTED` stays the real post-resolution check.
+
+**A/B, same page, same cap of 5 (PAID $0.1015 vs ~$0.10):**
+
+| | old (page order) | new (ranked) |
+|---|---|---|
+| searched | 5 | 5 |
+| rows | **1** | **3** |
+| self-promotion | 1 of 1 | **0 of 3** |
+| cost per row | $0.10 | **$0.034** |
+
+The three names ranking demoted out of the selection (Parsons, OTIS, Immerse Track) had all
+come back unproven live. New rows ec18778-ec18780 (ACA Summer, The Fashion Class, Interlochen),
+zero quality flags. `rank=False` keeps the old rule reachable so the two stay comparable.
+
+**Cost note settled:** there is NO economy of scale to lose by raising the cap. 73% of a name
+harvest run is the flat `$0.014` per-search fee, charged per name, at `MAX_SEARCHES=1`. Observed
+**~$0.019/name**. The cap rations; it does not economise. The FREE gates are what actually save
+money — they rejected 4 names for $0.00 that would have cost ~$0.08 to reject by searching.
+Hub mining is a different cost class entirely: **$0.0015/page**, no search fee at all.
+
 ### OPEN / do next
 1. **Push `main`** — now 11 commits ahead of `origin/main` (the merge brought 5 branch commits with it). Scraper-only (no `app/`,
    `render.yaml`, `requirements.txt`, `server.py`), so a Render deploy is a no-op for the web

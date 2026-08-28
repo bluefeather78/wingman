@@ -211,6 +211,34 @@ had marked "names" (all paid searches) reclassify as **25 hub (free extraction) 
 collegevine — actually LINK their programs (15/18/27 distinct sites) and belong in the free
 extractor. On the real rejected pile: 40 rows -> 8 leads.
 
+### No per-seed budget — and why the prioritiser was never needed (2026-08-27)
+
+The router capped itself at 12 pages per seed, which created a second problem: **which 12?**
+Two answers were designed for it — a grounding-footnote signal (a URL cited across many program
+spans is a round-up) and a paid classifier call after phase 1. **Both were solving a problem the
+cap invented.**
+
+**Measured:** 17 candidates from a real seed classify in **15s one at a time and 1.4s across 12
+workers**. End to end over 6 real seeds: 141 resolved URLs, 111 looked at, **6.5s/seed, nothing
+skipped**, 28 leads. Against a seed that costs minutes of paid search, that is free.
+
+So the cap is gone. `MAX_PAGES_PER_SEED = 60` remains as a runaway guard, not a cost control,
+and reports what it drops. Verdicts are zipped back onto the input order, so a run is
+reproducible however the concurrent fetches finish.
+
+**Why a classifier LLM call was rejected as the router** (costed properly, since cost was
+assumed to be the objection and is not): folded into phase 2 ~**$0.02/30-seed run**, standalone
+~**$0.07**. Cheap. It was rejected on *evidence*: at that point in the flow we have the URL
+string and phase 1's prose — **not the pages** — so it would infer from a slug what a free fetch
+reads from the page. Folding it into phase 2 is additionally unsafe: that call is capped at 6000
+tokens and `extractJSON` silently REPAIRS a truncated array, so competing for its budget can
+lose candidates invisibly.
+
+**The one place either idea still has an edge — deferred by the operator:** across 6 seeds,
+**22% of candidates cannot be read at all** (403 / PDF / JS-built). Those get no verdict and the
+lead is dropped silently. Footnote counts (free, evidential) then an LLM call (~$0.02/run) are
+the only tools that can see anything there. Order if resumed: footnotes first.
+
 ### OPEN / do next
 1. **Push `main`** — now 11 commits ahead of `origin/main` (the merge brought 5 branch commits with it). Scraper-only (no `app/`,
    `render.yaml`, `requirements.txt`, `server.py`), so a Render deploy is a no-op for the web

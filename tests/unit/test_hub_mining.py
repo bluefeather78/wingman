@@ -268,3 +268,32 @@ def test_a_sibling_section_is_not_treated_as_an_ancestor(monkeypatch):
     found, trace = hub.discover(HUB, recurse=False)
     assert found == ["https://x.edu/pre-college/academic-programs/art-camp.html"]
     assert trace.get("redirects_to_hub", 0) == 0
+
+
+def test_the_link_cap_never_truncates_by_position_in_the_page():
+    """seattle.gov/parks/childcare/teen-programs/ carries 974 links. The filter used to `break`
+    at 25 SURVIVORS, and a page's first links are its chrome -- so the cap filled with navigation
+    and every real teen program, further down the document, was never judged at all. The hub
+    reported zero programs and that was an artifact of the cap, not a fact about the site.
+    Judging a link is pure and free; only stage 2 fetches and only extraction pays."""
+    chrome = [(f"https://city.gov/about/thing-{i}", f"Thing {i} for high school") for i in range(40)]
+    real = [("https://city.gov/parks/teen-programs/career-explorations", "Career Explorations")]
+    page = _hub_html(chrome + real)
+    HUB = "https://city.gov/parks/teen-programs/"
+    kept, _subs, dropped = hub.filter_hub_links(hub.harvest_links(page, HUB), HUB,
+                                                off_domain=False, cap=25, with_dropped=True)
+    assert any("career-explorations" in u for u, _ in kept), "the real program must survive"
+    assert dropped > 0, "and what the cap did drop must be reported, never hidden"
+    assert len(kept) == 25
+
+
+def test_links_under_the_hub_path_are_offered_first():
+    """Not a detection rule -- an index's programs demonstrably need not sit under its path
+    (Georgetown, Ringling and LIM all keep them elsewhere, which is why that test failed as a
+    DETECTOR). It is only an ordering: when a cap forces a choice, spend it on the links most
+    likely to be this hub's own programs rather than on whatever appeared first in the HTML."""
+    page = _hub_html([("https://city.gov/about/newsroom-item", "Newsroom for high school"),
+                      ("https://city.gov/parks/teen/art-club", "Art Club for high school")])
+    HUB = "https://city.gov/parks/teen/"
+    kept, _subs = hub.filter_hub_links(hub.harvest_links(page, HUB), HUB, off_domain=False)
+    assert kept[0][0] == "https://city.gov/parks/teen/art-club"

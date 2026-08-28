@@ -93,7 +93,7 @@ _NAV_SLUGS = url_repair.GENERIC_SLUGS | {
 # A non-HTML target (a viewbook PDF, a flyer image) can never be a program's landing page.
 _NONHTML_EXT = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip",
                 ".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mov", ".webp", ".svg", ".bmp",
-                ".tiff", ".avif", ".mp3", ".wav")
+                ".tiff", ".avif", ".mp3", ".wav", ".xml")   # .xml: seattle.gov links x58902.xml
 # Path segments that mark a page never worth an extraction call, even when the SLUG is a
 # real-looking title. Two classes surfaced by the Aug-27 preview:
 #  - adult/degree: online.wisc.edu/degrees/marketing leaked past the anchor filter because its
@@ -191,7 +191,7 @@ def harvest_links(page_html, base_url):
     return out
 
 
-def filter_hub_links(links, hub_url, off_domain=False, cap=25):
+def filter_hub_links(links, hub_url, off_domain=False, cap=25, with_dropped=False):
     """Anchor-level filter (stage 1). Returns program-candidate links, best-effort ordered.
 
     off_domain=False (institutional hub): keep only same-registrable-domain links — an
@@ -201,6 +201,7 @@ def filter_hub_links(links, hub_url, off_domain=False, cap=25):
     a miner turns into a web crawler, so the caller declares which per hub.
     """
     hub_dom = url_dedupe.registrable_domain(urllib.parse.urlsplit(hub_url).netloc)
+    hub_path = urllib.parse.urlsplit(hub_url).path.rstrip("/")
     kept, subs = [], []
     for url, anchor in links:
         if is_wrong_audience(anchor):
@@ -219,9 +220,20 @@ def filter_hub_links(links, hub_url, off_domain=False, cap=25):
             subs.append((url, anchor))
         else:
             kept.append((url, anchor))
-        if len(kept) >= cap:
-            break
-    return kept, subs
+    # EVERY link is judged before the cap applies. It used to `break` at `cap` survivors, which
+    # truncated by POSITION IN THE PAGE -- and a page's first links are its chrome. Measured on
+    # seattle.gov/parks/childcare/teen-programs/ (974 links): the cap filled with navigation and
+    # the real programs, further down, were never looked at. `career-explorations` passes every
+    # filter here and was never reached, so the hub reported "0 real programs" and that was an
+    # artifact of the cap, not a fact about the site. Judging a link is pure and free -- only
+    # stage 2 fetches and only extraction pays -- so there was never a reason to stop early.
+    kept.sort(key=lambda ua: 0 if urllib.parse.urlsplit(ua[0]).path.startswith(hub_path)
+              else 1)
+    dropped = max(0, len(kept) - cap)
+    # `(kept, subs)` stays the default shape so no existing caller had to change; a caller that
+    # reports coverage asks for the third value. Same opt-in the repo uses for
+    # call_gemini(return_grounding=True) and page_text.fetch_page_text_resolved.
+    return (kept[:cap], subs, dropped) if with_dropped else (kept[:cap], subs)
 
 
 def fetch_html(url, timeout=url_repair.DEFAULT_TIMEOUT):
@@ -277,7 +289,12 @@ def discover(hub_url, off_domain=False, timeout=url_repair.DEFAULT_TIMEOUT, recu
         return [], trace
     links = harvest_links(html, hub_url)
     trace["harvested"] = len(links)
-    kept, subs = filter_hub_links(links, hub_url, off_domain=off_domain)
+    kept, subs, over_cap = filter_hub_links(links, hub_url, off_domain=off_domain,
+                                           with_dropped=True)
+    if over_cap:
+        # Never a silent truncation: a bounded sweep reported as a total reads as complete
+        # coverage when it is not. Raise --cap to reach them.
+        trace["over_cap"] = over_cap
     trace["sub_hubs"] = len(subs)
     if recurse:
         for sub_url, _anchor in subs[:3]:            # one level, at most 3 sub-hubs

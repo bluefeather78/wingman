@@ -3252,10 +3252,19 @@ MAINTENANCE_TOOLS = {
         "script": "mine_hub_pages.py",
         "free": False, "writes": True,
         "params": [
-            {"key": "url", "label": "Hub page URL", "required": True,
+            {"key": "fromLeads", "label": "…or take N from the discovery queue",
+             "placeholder": "5",
+             "help": "Leave the URL blank and set this to mine the top N queued leads. Each "
+                     "carries its own direction (a round-up is mined off-site, an institution\u2019s "
+                     "own index on-site), so the checkbox below is ignored for them."},
+            {"key": "url", "label": "Hub page URL",
              "placeholder": "https://ceismc.gatech.edu/programs"},
             {"key": "offDomain", "type": "check",
              "label": "Listicle — follow off-site links, not same-domain"},
+            {"key": "maxPages", "label": "Spend ceiling — pages this run may extract",
+             "placeholder": "50",
+             "help": "Spread evenly across hubs, so a ceiling never silently starves whichever "
+                     "hubs came last. A hub it truncates stays queued."},
             {"key": "mode", "type": "select", "label": "Mode", "options": [
                 ["preview", "Preview — free, no model call, no writes"],
                 ["run", "Run — PAID: extracts and inserts rows for review"]]},
@@ -3383,10 +3392,18 @@ def build_tool_args(tool_key, params):
             args.append("--preview")
     elif tool_key == "minehub":
         url = str(params.get("url") or "").strip()
+        n = _int_or_none(params.get("fromLeads"))
         if url:
             args += ["--hubs", url]
-        if params.get("offDomain"):
-            args.append("--off-domain")
+            if params.get("offDomain"):
+                args.append("--off-domain")
+        if n:
+            # Queued leads carry their own direction, so --off-domain is deliberately NOT passed
+            # with them: it is a property of how each lead qualified, not of the run.
+            args += ["--from-leads", str(n)]
+        cap = _int_or_none(params.get("maxPages"))
+        if cap:
+            args += ["--max-pages", str(cap)]
         if str(params.get("mode") or "preview") != "run":
             args.append("--preview")
     elif tool_key == "harvestnames":
@@ -3543,6 +3560,55 @@ def get_seed_yield(seed_rows):
                   f"unavailable.")
         return {"seed_ready": False, "funnels": {}}
     return {"seed_ready": True, "funnels": seed_ledger.build_seed_funnels(opp_rows, seed_rows)}
+
+
+def list_discovered_leads(limit=60):
+    """The discovery lead queue, for the console. FREE — reads a local file, never the model.
+
+    The queue had no surface at all: `discovered_leads.jsonl` is gitignored, the console WROTE to
+    it (the round-up reject hook) and never showed it, so the only way to see 245 queued leads was
+    a terminal command. That is also why "is any of this automatic?" was hard to answer from the
+    outside — the answer is that the queue fills itself and nothing ever drains it.
+
+    Order is QUEUE order, deliberately: it is the order `--from-leads N` takes them, so the top of
+    this list is exactly what a run of N would spend on. Sorting it prettily here would make the
+    console disagree with the tool.
+    """
+    try:
+        import discovered_leads
+    except Exception as e:                              # pragma: no cover - import guard
+        return {"ok": False, "error": str(e)[:200], "leads": []}
+    try:
+        leads = discovered_leads.load_leads()
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200], "leads": []}
+
+    counts = {"new": 0, "processed": 0, "not_a_lead": 0,
+              "hub_same_domain": 0, "hub_off_domain": 0, "names": 0}
+    queue = []
+    for l in leads:
+        status = l.get("status") or discovered_leads.STATUS_NEW
+        if status == discovered_leads.STATUS_DONE:
+            counts["processed"] += 1
+            continue
+        if status == discovered_leads.STATUS_NOT_A_LEAD:
+            counts["not_a_lead"] += 1
+            continue
+        counts["new"] += 1
+        kind = l.get("kind")
+        scope = discovered_leads.lead_scope(l)
+        if kind == discovered_leads.KIND_HUB:
+            counts["hub_same_domain" if scope == discovered_leads.SCOPE_SAME_DOMAIN
+                   else "hub_off_domain"] += 1
+        elif kind == discovered_leads.KIND_NAMES:
+            counts["names"] += 1
+        if len(queue) < limit:
+            queue.append({"url": l.get("url"), "kind": kind, "scope": scope,
+                          "signal": l.get("signal"), "angle": l.get("angle"),
+                          "seed_id": l.get("seed_id"), "first_seen": l.get("first_seen")})
+    return {"ok": True, "counts": counts, "leads": queue,
+            "truncated": max(0, counts["new"] - len(queue)),
+            "path": os.path.basename(discovered_leads.LEADS_PATH)}
 
 
 def list_recent_merges(limit=50):

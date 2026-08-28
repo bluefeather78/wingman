@@ -784,6 +784,21 @@ tr.disabled-seed { opacity: .48; }
     </div>
   </div>
 
+  <!-- Discovery lead queue. The console WROTE to this queue (the round-up reject hook) and
+       never showed it, so 245 leads were visible only through a terminal command against a
+       gitignored file -- which is also why "is any of this automatic?" was hard to answer.
+       Read-only: firing it is the Mine Hub Pages tool, which now takes the queue directly. -->
+  <div class="card">
+    <div class="card-head">
+      <h2>Discovery leads</h2>
+      <div class="spacer"></div>
+      <div class="hint">The queue fills itself; nothing drains it but you</div>
+    </div>
+    <div class="card-body tight">
+      <div id="leadsBody" class="hint" style="padding:10px 14px">Loading…</div>
+    </div>
+  </div>
+
   <!-- Recent merges (Phase-3 audit) -->
   <div class="card">
     <div class="card-head">
@@ -3534,6 +3549,47 @@ async function loadSeeds() {
   }
   loadMerges();
   loadQueryRuns();
+  loadLeads();
+}
+
+async function loadLeads() {
+  const el = $('leadsBody');
+  if (!el) return;
+  try {
+    const d = await api('/api/agents/leads?limit=40');
+    if (!d.ok) { el.textContent = 'Could not read the lead file: ' + (d.error || 'unknown'); return; }
+    const c = d.counts || {};
+    if (!c.new) {
+      el.innerHTML = `<div>Queue empty. A scrape refills it for free — every page it consulted
+        that did not become a row goes to the router, which classifies it and queues it.
+        Rejecting a row as a round-up queues that page too.</div>
+        <div style="margin-top:6px">${c.processed || 0} mined · ${c.not_a_lead || 0} remembered
+        as not-a-round-up, never re-fetched.</div>`;
+      return;
+    }
+    const head = `<div style="padding:2px 0 10px">
+      <b>${c.new}</b> waiting &middot; ${c.hub_same_domain || 0} own-site index,
+      ${c.hub_off_domain || 0} round-up, ${c.names || 0} names-only
+      &middot; ${c.processed || 0} mined &middot; ${c.not_a_lead || 0} remembered NOs
+      <div style="font-size:12px;color:var(--text-3);margin-top:4px">Queue order — this is the
+        order <span class="mono">Mine Hub Pages</span> takes them in, so the top of this list is
+        what a run of N would spend on. Nothing here has cost anything yet.</div></div>`;
+    const rows = (d.leads || []).map(l => {
+      const scope = l.kind === 'hub'
+        ? `<span class="pill">${l.scope === 'same-domain' ? 'own site' : 'off-site'}</span>` : '';
+      const kind = l.kind === 'names'
+        ? '<span class="pill warn">names only — you must point the harvester at it</span>' : '';
+      return `<div style="padding:7px 0;border-top:1px solid var(--border)">
+        <div>${scope}${kind} <span class="mono" title="${esc(l.url || '')}">${esc((l.url || '').slice(0, 96))}</span></div>
+        <div style="font-size:12px;color:var(--text-3)">${esc(l.signal || '')}</div>
+      </div>`;
+    }).join('');
+    const more = d.truncated
+      ? `<div class="hint" style="padding-top:8px">…and ${d.truncated} more in ${esc(d.path || '')}.</div>` : '';
+    el.innerHTML = head + rows + more;
+  } catch (e) {
+    el.textContent = 'Could not load leads: ' + e.message;
+  }
 }
 
 async function loadMerges() {

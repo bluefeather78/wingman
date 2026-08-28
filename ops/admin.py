@@ -391,6 +391,13 @@ def handle_seed_queries(request: Request):
         run=request.query_params.get("run"))}, default=str)
 
 
+@router.get("/api/agents/leads")
+def handle_leads_list(request: Request):
+    """The discovery lead queue. FREE — reads the local JSONL, never the model or Supabase."""
+    return json_response(200, core.list_discovered_leads(
+        limit=int(request.query_params.get("limit") or 60)), default=str)
+
+
 @router.get("/api/agents/merges")
 def handle_merges_list(request: Request):
     return json_response(200, core.list_recent_merges(

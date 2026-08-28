@@ -223,6 +223,10 @@ the worktree is immune). `.env` copied in (gitignored) so tests/scripts run ther
 - `python build_fixture.py --batch B --snapshot F1 F2 --out tests/fixtures/X.json` — FREE.
 - `python backfill_seed_attribution.py [--commit]` — FREE (done; idempotent).
 - `python propose_angles.py [--commit]` — FREE (18 written).
+- `python walk_up_hubs.py [--limit N] [--commit]` — **FREE at every tier** (plain HTTP +
+  a Supabase read, no model call anywhere). Derives an institution's own program index by
+  walking UP from an active row and requiring the parent to LINK that row. Queues
+  `scope=same-domain` hub leads; mining them is the paid step.
 - `python mine_hub_pages.py --hubs URL --preview` FREE / live = PAID.
 - `python refind_dead_links.py --preview` FREE / `--limit N` = PAID search.
 - `python harvest_names.py --hubs URL --preview` FREE (prices the run over fetchable pages) / without `--preview` = PAID (1 naming call + up to `--max-names` searches).

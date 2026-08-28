@@ -172,10 +172,23 @@ def test_filter_drops_nav_keeps_program_and_subhub():
     assert any("pre-college" in u for u, _ in subs)          # sub-hub survives for recursion
 
 
-def test_hub_leads_are_mined_off_domain():
-    """A hub lead is qualified by the distinct OTHER sites it links (>= 6), so its programs are
-    on those sites — mining it same-domain would follow exactly the links the router did not
-    count, i.e. the page's own navigation. All 25 queued leads were affected by this."""
-    src = open("mine_hub_pages.py", encoding="utf-8").read()
-    assert "hubs += [(u, True) for u in lead_urls]" in src
-    assert "hubs += [(u, False) for u in lead_urls]" not in src
+def test_each_lead_is_mined_the_way_it_qualified():
+    """A router lead is qualified by the distinct OTHER sites it links (>= 6), so its programs
+    are on those sites and it must be mined OFF-domain — mining it same-domain follows exactly
+    the links the router did not count, i.e. the page's own navigation. All 25 queued leads were
+    affected by that. A walk-up lead is the opposite: it is proven by linking a program on its
+    OWN site. So the direction is carried on the lead, not decided by the miner."""
+    import discovered_leads
+    leads = [{"url": "https://listicle.example/15-programs"},                       # router lead
+             {"url": "https://ok.example/x", "scope": discovered_leads.SCOPE_OFF_DOMAIN},
+             {"url": "https://x.edu/precollege/", "scope": discovered_leads.SCOPE_SAME_DOMAIN}]
+    assert hub.hubs_from_leads(leads) == [
+        ("https://listicle.example/15-programs", True),
+        ("https://ok.example/x", True),
+        ("https://x.edu/precollege/", False)]
+
+
+def test_a_lead_written_before_scope_existed_is_still_mined_off_domain():
+    """Every lead already on file came from the router, which qualifies off-domain. A missing
+    field must not silently flip 25 queued leads onto the wrong side."""
+    assert hub.hubs_from_leads([{"url": "https://a.example/list"}])[0][1] is True

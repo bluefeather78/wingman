@@ -461,3 +461,32 @@ def test_confirmed_roundup_says_so_when_it_cannot_read_the_page(monkeypatch):
     monkeypatch.setattr(mine_hub_pages, "fetch_html", lambda u, t=None: "")
     kind, sig = dl.classify_confirmed_roundup("https://blocked.example/list")
     assert kind == dl.KIND_NAMES and "cannot read this page" in sig
+
+
+# ---------- the work-list you actually read ----------
+
+def test_listing_survives_a_lead_with_no_verdict():
+    """A remembered NO carries `kind: None` by construction, and the listing formatted it with a
+    width spec — `f"{None:5}"` raises TypeError. Ten such rows sit in the live file, so
+    `--list`, the command the handoff tells the next session to run, crashed outright."""
+    leads = [{"url": "https://a.example/x", "kind": None, "status": dl.STATUS_NOT_A_LEAD},
+             {"url": "https://b.example/y", "kind": dl.KIND_HUB, "status": dl.STATUS_NEW}]
+    shown = dl.leads_to_show(leads, show_all=True)
+    assert [f"{(l.get('kind') or '--'):5}" for l in shown] == ["--   ", "hub  "]
+
+
+def test_listing_defaults_to_actionable_leads_only():
+    """Processed leads and remembered NOs stay ON FILE so nothing is re-fetched or re-paid for,
+    but neither is work. The default listing is the work-list; --all shows the whole file."""
+    leads = [{"url": "https://a/1", "kind": dl.KIND_HUB, "status": dl.STATUS_NEW},
+             {"url": "https://a/2", "kind": dl.KIND_NAMES, "status": dl.STATUS_DONE},
+             {"url": "https://a/3", "kind": None, "status": dl.STATUS_NOT_A_LEAD}]
+    assert [l["url"] for l in dl.leads_to_show(leads)] == ["https://a/1"]
+    assert len(dl.leads_to_show(leads, show_all=True)) == 3
+    assert [l["url"] for l in dl.leads_to_show(leads, show_all=True, kind=dl.KIND_NAMES)] \
+        == ["https://a/2"]
+
+
+def test_a_lead_with_no_status_counts_as_new():
+    """Every lead written before `status` existed must still appear as work, not vanish."""
+    assert dl.leads_to_show([{"url": "https://a/1", "kind": dl.KIND_HUB}]) != []

@@ -293,6 +293,24 @@ def discover(hub_url, off_domain=False, timeout=url_repair.DEFAULT_TIMEOUT, recu
     return final, trace
 
 
+def hubs_from_leads(leads):
+    """[(url, off_domain)] for queued hub leads -- WHICH WAY each one must be mined.
+
+    The direction travels ON the lead rather than being decided here, because only whatever
+    qualified the page knows it. The router qualifies a round-up by the distinct OTHER sites it
+    links (>= 6), so its programs are on those sites and it is mined OFF-domain; `walk_up_hubs`
+    qualifies an institution's own index by proving it links a program on ITS OWN site, so that
+    one is mined same-domain. Mining either the wrong way round follows exactly the links that
+    did not qualify it -- for a round-up, the page's own navigation.
+
+    This was a flat `True` for every lead, and before that a flat `False`. Both were right for
+    one kind of lead and wrong for the other, which is why the direction is now data.
+    """
+    import discovered_leads
+    return [(l["url"], discovered_leads.lead_scope(l) == discovered_leads.SCOPE_OFF_DOMAIN)
+            for l in (leads or []) if l.get("url")]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hubs", nargs="+", help="Hub page URL(s).")
@@ -322,16 +340,24 @@ def main():
     lead_urls = []
     if args.from_leads:
         import discovered_leads
-        lead_urls = [l["url"] for l in discovered_leads.pending(discovered_leads.KIND_HUB,
-                                                               limit=args.from_leads)]
-        # OFF-domain, and this is load-bearing. The router qualifies a hub lead by counting
-        # the distinct OTHER sites it links (>= 6) — so the programs are on those other sites,
-        # not on this one. Mining it same-domain would follow precisely the links the router
-        # did not count, i.e. the page's own navigation. (The comment here used to say the
-        # opposite; it predated the router being structural, when leads were picked by host
-        # list and every listicle went to name harvest instead.)
-        hubs += [(u, True) for u in lead_urls]
-        print(f"[OK] {len(lead_urls)} hub lead(s) taken from the queue.")
+        queued = discovered_leads.pending(discovered_leads.KIND_HUB, limit=args.from_leads)
+        lead_urls = [l["url"] for l in queued]
+        # Each lead says which way it must be mined, and this is load-bearing. The router
+        # qualifies a lead by counting the distinct OTHER sites it links (>= 6), so its programs
+        # are on those sites and it is mined OFF-domain; mining it same-domain would follow
+        # precisely the links the router did not count, i.e. the page's own navigation. A
+        # walk-up lead is the opposite case -- proven by linking a program on its OWN site -- so
+        # it is mined same-domain. The direction travels ON the lead rather than being decided
+        # here, because only whatever qualified the page knows it. (This was a flat `True` for
+        # every lead, and before that a flat `False`; both were wrong for half the queue.)
+        hubs += hubs_from_leads(queued)
+        by_scope = {}
+        for l in queued:
+            by_scope[discovered_leads.lead_scope(l)] = by_scope.get(
+                discovered_leads.lead_scope(l), 0) + 1
+        print(f"[OK] {len(lead_urls)} hub lead(s) taken from the queue"
+              + (" (" + ", ".join(f"{k}={v}" for k, v in sorted(by_scope.items())) + ")"
+                 if by_scope else "") + ".")
     if not hubs:
         print("[ERROR] Give --hubs or --hubs-file.")
         raise SystemExit(1)

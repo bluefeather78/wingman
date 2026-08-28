@@ -55,6 +55,16 @@ LEADS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "discovere
 KIND_NAMES = "names"          # a page that NAMES programs -> harvest_names.py
 KIND_HUB = "hub"              # a page that LINKS programs -> mine_hub_pages.py
 
+# WHICH WAY a hub lead must be mined, carried on the lead because it is a property of how the
+# lead QUALIFIED, not of the miner. A round-up earns its place by linking >= 6 distinct OTHER
+# sites, so its programs are on those sites; an institution's own index (walk_up_hubs.py) is
+# proven by linking a program on ITS OWN site. Mining either the wrong way round follows exactly
+# the links that did not qualify it -- for a round-up, its own navigation. Every lead written
+# before this field existed came from the router, which is why the default is off-domain.
+SCOPE_OFF_DOMAIN = "off-domain"
+SCOPE_SAME_DOMAIN = "same-domain"
+DEFAULT_SCOPE = SCOPE_OFF_DOMAIN
+
 # The ONE reject reason that feeds this system. Rejecting is not the trigger — rejecting FOR
 # THIS REASON is. Every other verdict ("wrong page", "dead link", "not a fit") says nothing
 # about the page being a round-up, and routing all of them would spend a fetch per rejection to
@@ -466,6 +476,26 @@ def mark_processed(urls, path=LEADS_PATH):
     return n
 
 
+def lead_scope(lead):
+    """Which way this hub lead must be mined. Never guess it from the URL -- see SCOPE_*."""
+    scope = (lead or {}).get("scope")
+    return scope if scope in (SCOPE_OFF_DOMAIN, SCOPE_SAME_DOMAIN) else DEFAULT_SCOPE
+
+
+def leads_to_show(leads, show_all=False, kind=None):
+    """The rows `--list` prints. Pure, so the listing can be regression-tested.
+
+    The default is the WORK-LIST: actionable leads only. A remembered NO (`not-a-lead`) and an
+    already-processed lead both stay ON FILE so neither is ever re-fetched or re-paid for, but a
+    work-list you have to mentally filter is not a work-list. `--all` shows every row.
+    """
+    rows = leads if show_all else [l for l in leads
+                                   if l.get("status", STATUS_NEW) == STATUS_NEW]
+    if kind:
+        rows = [l for l in rows if l.get("kind") == kind]
+    return rows
+
+
 def summarize(leads):
     """{kind: count} over unprocessed leads — what the run summary and console report."""
     out = {}
@@ -534,15 +564,19 @@ def main():
         print(f"[OK] No leads yet ({args.path} does not exist or is empty). Leads are captured "
               f"by scrape_opportunities.py as a free side-effect of a search run.")
         return
-    shown = leads if args.all else [l for l in leads if l.get("status") != STATUS_DONE]
-    if args.kind:
-        shown = [l for l in shown if l.get("kind") == args.kind]
+    shown = leads_to_show(leads, show_all=args.all, kind=args.kind)
     counts = summarize(leads)
+    nos = sum(1 for l in leads if l.get("status") == STATUS_NOT_A_LEAD)
     print(f"[OK] {len(leads)} lead(s) on file; unprocessed by kind: "
-          + (", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "none"))
+          + (", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "none")
+          + (f"; {nos} remembered NO(s)" if nos else ""))
     for lead in shown:
-        flag = "" if lead.get("status") != STATUS_DONE else "  [processed]"
-        print(f"  {lead.get('kind'):5}  {lead.get('url')}{flag}")
+        note = {STATUS_DONE: "  [processed]",
+                STATUS_NOT_A_LEAD: "  [not a lead]"}.get(lead.get("status"), "")
+        # A remembered NO has kind=None by construction, so the width format must not assume a
+        # verdict exists -- `f"{None:5}"` raises, and it raised on the real file.
+        scope = f" [{lead_scope(lead)}]" if lead.get("kind") == KIND_HUB else ""
+        print(f"  {(lead.get('kind') or '--'):5}{scope}  {lead.get('url')}{note}")
         print(f"         seed={lead.get('seed_id')}  {lead.get('signal')}")
     print(f"\n  {KIND_HUB:5} leads -> python mine_hub_pages.py --from-leads   (PAID extraction)")
     print(f"  {KIND_NAMES:5} leads -> python harvest_names.py --from-leads    (PAID search)")

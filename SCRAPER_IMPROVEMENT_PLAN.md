@@ -7,292 +7,117 @@ below before reading the phase specs, which are now the historical design record
 
 ---
 
-## ⭐ START HERE — session of 2026-08-27 (latest) — NEW SESSION PICK-UP
+## ⭐ START HERE — session of 2026-08-27 (evening). NEW SESSION PICK-UP.
 
-**Branch `hub-social-audience-fix` is MERGED into local `main` (`c54fc41`), and Phase 4N is
-BUILT on top of it (`83effca`). Neither is PUSHED yet — `main` is 2 commits ahead of
-`origin/main` (`6408993`).** Gates on the merge and on 4N alike: **1392 tests green,
-`grade_scraper_batch` url-dup 0 regressions, SAFE**. (The harness also prints a
-`[suppress-all] … UNSAFE` line — that is its own self-test probe proving it can detect a
-regression, not a failure.)
+**`main` is 25 commits ahead of `origin/main` and NOT PUSHED.** Gate on every commit:
+**1484 tests green, `grade_scraper_batch` url-dup 0 regressions, SAFE.** (The
+`[suppress-all] … UNSAFE` line is the harness's own self-test probe, not a failure.)
 
-What landed in the merge (previously stranded on the branch):
-- hub miner chaff filters: social/commerce/list-signup hosts (`_NONPROGRAM_HOSTS`),
-  wrong-audience named only in the URL, WordPress internals.
-- **the scraper resolves each new row's contact email** via `contact_email_common.
-  resolve_contact_email` (regex-first, ~free); `find_contact_emails.py` is now a backfill for
-  OLD rows only.
-- civic chaff filters (`_CIVIC_PATH_SEGMENTS`, template `{{}}` drop) + `hubs_seattle.json`.
-- **hub miner insert step WIRED**: `mine_hub_pages.py` writes real `is_active=false`/
-  `pending_review` rows (`agent_runs agent='hub_miner'`, snapshot, `--dry-run`). Extraction is
-  still PAID and gated.
-
-### Phase 4N — BUILT this session (`harvest_names.py`, +53 tests). NOT YET RUN PAID.
-
-Reads the program NAMES off a page and resolves each to its own page through the refind
-primitive (one narrow search → grounding-resolved → title-proven). Three FREE gates run
-before a single search is paid for — `name_is_on_page`, `name_is_resolvable`,
-`is_known_name`; see the module docstring, which carries the reasoning for each.
-
-**Validated FREE against the real target and 1673 live catalog rows** (no model call, no
-spend). The College Transitions competitions table is at
-`https://www.collegetransitions.com/dataverse/academic-competitions-and-contests/` — fetches
-to **14,355 chars**, matching the figure this plan measured, and lists ~70 named competitions
-in a table with 0 harvestable program links. Feeding 35 of its names through the gates:
-**24 would be searched, 6 correctly matched to rows we already have** (Congressional App
-Challenge = ec18605, National Science Bowl = ec17913, …), and a planted off-page control
-("Telluride Association Summer Seminar") was rejected by gate 1.
-
-Two things that measurement changed, both worth not re-deriving:
-- **`is_known_name` carries the DIGITS `identity_words` discards, and NOT short alphabetic
-  tokens.** "1-Week" and "3-Week Medical Academy" both reduce to {week, medical} — the digit
-  is the whole difference, which is CLAUDE.md's measured 0.95-ratio collision. But treating
-  short ALPHA tokens as marks made "Academic Decathlon" miss the row we already hold ("US
-  Academic Decathlon", ec17937) on the "us" alone, i.e. re-paying for a program we have. A
-  digit says WHICH program; "US" says where.
-- **Known recall gap, reported per run rather than hidden: single-token brand names cannot be
-  title-proven.** `title_proves` needs two identity words, so CyberPatriot, DECA, iGEM and
-  Model UN are dropped as `unprovable`. Three of those four are already in the catalog; **iGEM
-  is a genuine miss.** The gate is not wrong — it refuses to pay for a name whose answer
-  could never be verified — but the class is real, so every dropped name is printed in full
-  (never a head slice) for a person to pick up.
-
-`--preview` is free, prices the run over the **fetchable** pages only, and prints an excerpt so
-a cookie banner and a program table are distinguishable. Measured on the national registry:
-3 of 5 hubs fetchable (CEISMC 403s, medicine.illinois URLErrors — the client fact this plan
-already records).
-
-### Session 2026-08-27 (late) — 4F built, both channels LIVE-TESTED (PAID $0.24)
-
-**Phase 4F BUILT** (`discovered_leads.py`, +46 tests). Free capture of the pages a search
-already paid to consult; acting on a lead stays separately gated. Two measured findings:
-- **Not every content mill is a listicle.** Fetching one of each: lumiere/immerse/aralia
-  19.5-24k chars of real listicle prose, en.wikipedia 7.7k of real prose, **youtube 24k chars
-  of `ytcfg` JS config** (billable junk), **reddit 0** (refuses our client). YouTube was 20 of
-  109 mill hits. youtube/youtu.be/reddit excluded; wikipedia kept.
-- **Free link-counting CANNOT identify a hub page — automatic hub capture ships OFF**
-  (`HUB_PROBE_PER_SEED = 0`). At budget 8 it called **204 of 273 probed pages (75%)** hubs,
-  including /faq/, /apply/, /contact/, a PR release and a job posting. Two discriminators
-  measured on 6 known indexes vs 7 known non-indexes: **raw count good 11-94 vs bad 7-53**;
-  **nav-subtracted good 0-57 vs bad 0-35** — both fully overlapping. Same-domain links on any
-  page are dominated by shared nav, and nav subtraction cannot fix it (`precollege.wisc.edu`,
-  a good hub, scores 0 because it IS the site root). The machinery is kept and tested;
-  `capture(probe_budget=N)` re-enables it if a real discriminator is ever found.
-- The names half needs no probe and works: replaying the 40 archived seed logs queued **70
-  clean listicle leads**. `mine_hub_pages --from-leads` / `harvest_names --from-leads` consume.
-
-**HUB MINING — first live run ever (PAID $0.0461).** 3 hubs → 30 candidates → **19 rows**,
-0 errors. Real programs (USNA Summer STEM + Summer Seminar, UW-Madison BEL, Badger Summer
-Scholars, Summer Music Clinic, Engineering/Pharmacy summer programs). Rows ec18756-ec18774,
-`is_active=false`, **awaiting operator review.** Known residual: several rows are sub-pages of
-one program (Music Clinic senior/mini/auditions) and "Candidate Visit Weekend" is an admissions
-visit, not an extracurricular — reviewer calls, not code bugs.
-
-**NAME HARVEST — first live run ever (PAID $0.1926).** 3 listicle leads → 24 names → 10
-searched → **3 rows** (ec18775-ec18777). **The result is a negative finding and matters more
-than the rows: ALL THREE are Immerse Education products**, two from Immerse's own listicle,
-while every independent program the same pages named (Parsons, Otis, Drexel, NYU Tisch,
-Columbia, MAD) came back UNPROVEN.
-- **Cause: a listicle heading is a DESCRIPTION, not a canonical name.** "Drawing: Eye and Idea
-  Pre-College Course at Columbia University" is not what Columbia calls it, so `title_proves`
-  can never match — whereas a company names its OWN products canonically in its own article.
-  **The evidence bar therefore selects self-promotion.** `FLAG_SELF_PROMOTED` now marks a row
-  that resolved back onto the site that named it (flag, never reject — a provider can host a
-  real program, per the operator's Immerse ruling).
-- **So 4N works on canonical-name DIRECTORIES, not on marketing listicles.** The free
-  validation on College Transitions' competition table produced 24 clean canonical names
-  ("Academic Decathlon", "BEST Robotics Competition"); the listicles produced descriptions.
-  **That directly changes what 4F should feed 4N** — the 70 queued leads are mostly marketing
-  listicles, i.e. the weak case. Before draining them, consider: ask the naming call for the
-  program's canonical name AND host org as separate fields, and search on org+name.
-
-**Four bugs the live runs found and fixed** (commit `2601577`): the hub extract prompt never
-listed the legal `type` values (**19 of 19 rows** carried FLAG_NO_TYPE); the hub miner did not
-collapse in-run twins (one index links a program and its sub-pages — `/accelerated-learning-
-program/` + `/alp/`); `agent_common.safe_console()` — a **U+2011 in model output crashed a run
-after its paid call had returned** (cp1252 console); and the self-promotion flag above.
-
-### Ranking before the cap — measured fix, A/B'd live (2026-08-27)
-
-The `--max-names` cap was POSITIONAL and that was actively harmful, not merely blunt. On the
-Ladder listicle it cut at char ~7,300 and bought the top of the article — dropping Interlochen,
-FIT and NYU Steinhardt while keeping the source's own products, which sit high on a marketing
-page by construction. **The cap was selecting for self-promotion.**
-
-`name_rank_score()` now orders eligible names AFTER the free gates and BEFORE the cap. It never
-drops a name; a wrong score costs position, never eligibility. Weights come from the 10 names
-the first run actually resolved or failed:
-- **identity-word count, FEWER IS BETTER** — resolved `[2,3,4]` vs unproven `[4,4,4,5,5,5,7]`.
-  Opposite of the obvious guess, and `title_proves` is why: it needs EVERY identity word in the
-  page title, so each extra word is another chance to fail.
-- **a descriptive marker** (a colon, or `" at <Institution>"`): −3. Perfect precision on the
-  sample — 0 of 3 resolved carry one, 5 of 7 unproven do. Parentheses are NOT a marker.
-- **the source site's brand in the name**: −4. Low recall by construction, so
-  `FLAG_SELF_PROMOTED` stays the real post-resolution check.
-
-**A/B, same page, same cap of 5 (PAID $0.1015 vs ~$0.10):**
-
-| | old (page order) | new (ranked) |
-|---|---|---|
-| searched | 5 | 5 |
-| rows | **1** | **3** |
-| self-promotion | 1 of 1 | **0 of 3** |
-| cost per row | $0.10 | **$0.034** |
-
-The three names ranking demoted out of the selection (Parsons, OTIS, Immerse Track) had all
-come back unproven live. New rows ec18778-ec18780 (ACA Summer, The Fashion Class, Interlochen),
-zero quality flags. `rank=False` keeps the old rule reachable so the two stay comparable.
-
-**Cost note settled:** there is NO economy of scale to lose by raising the cap. 73% of a name
-harvest run is the flat `$0.014` per-search fee, charged per name, at `MAX_SEARCHES=1`. Observed
-**~$0.019/name**. The cap rations; it does not economise. The FREE gates are what actually save
-money — they rejected 4 names for $0.00 that would have cost ~$0.08 to reject by searching.
-Hub mining is a different cost class entirely: **$0.0015/page**, no search fee at all.
-
-### Score floor replaces the count cap (2026-08-27, verified live)
-
-`--max-names` is now a spend CEILING (default 20); `--min-score` (default 1) chooses. A "15
-programs" listicle yields only **8-11** names past the free gates, so a count cap near the list
-length never binds — it rationed rather than economised. Bands: **score >= 1 resolved 3/5, score
-<= 0 resolved 0/3.** Floor is 1 not 2 on purpose (Interlochen scored 1 and resolved).
-`below_score` and `over_cap` report separately — only the latter is a reason to re-run bigger.
-
-| page | cap 5, page order | cap 5, ranked | **floor >= 1** |
-|---|---|---|---|
-| ladder | 5 searched, 1 row | 5, 3 rows | **5, 3 rows** (identical set) |
-| immerse | 5, 2 rows | 5, 2 rows | **2 searched, $0.097 -> $0.042** |
-
-**Live verification, fresh AI listicle (PAID $0.2048):** 18 named -> 5 already in catalog, 2
-below score, **10 searched, 6 resolved (60%)**; the ceiling never bound. It exposed three bugs,
-all fixed: `dup_candidates` was hardcoded `None` (a row went in on the SAME URL as ec17751 with
-no flag); one page names one program twice with different identity words, so we paid twice and
-inserted twins (`collapse_name_variants` — subset incl. equal, never a ratio; replay: 10
-searches -> 8); and `veritasai.com`/`collegevine.com`/`novascholar.org`/`deltainstitute.co`
-joined `CONTENT_MILL_HOSTS` after a veritasai round-up was stored as NYU Tandon's own page.
-
-**Residual, stated not hidden:** ec18781 twins ec18343 via a catalog-level near-duplicate (stored
-row says "(BWSI)", new one does not). Gate 3's exact-set match cannot see it, and loosening it to
-a subset would risk suppressing a genuinely more specific program — reviewer's Duplicate button.
-
-**Cost model, fitted to both runs (reconciles to $0.0001):** naming call **$0.0038/page**, per
-name searched **$0.0167** (84% of it the flat $0.014 search fee), extraction **$0.0047/row**.
-Draining all 70 queued leads: ~**$7** at cap 5, ~**$12-13** at cap 10-20 — but with the floor it
-self-sizes, so budget on names-worth-searching, not on the cap.
-
-### The routing system, restated simply (2026-08-27) — THIS is the shape of 4F
+### The system, in one screen
 
 ```
 search angle -> search -> URLs
-  |- the program's own page ----------------> catalog row        (unchanged)
-  '- a third-party page mentioning programs -> classify, never discard
-       |- LINKS them   -> hub mining    (free: follow the links)
-       '- NAMES them   -> name harvest  (paid: one search per name)
+  |- the program's own page ------------------> catalog row      (unchanged)
+  '- a third-party page about programs -------> ROUTER, never discarded
+       |- LINKS them  -> hub mining    (free to follow, ~$0.0015/page to read)
+       '- NAMES them  -> name harvest  (PAID, ~$0.019/name)   [operator-pointed only]
 ```
-A second feed: **rows the operator REJECTED in the review queue** for being third-party
-round-ups. `python discovered_leads.py --from-rejects [--commit]`.
+Second feed: **rejecting a row as a round-up in the console queues it automatically.**
 
-**One rule decides everything, and it is structural — no host list:**
+**The router's whole rule** (`discovered_leads.classify_page`, FREE):
 ```
-title promises many opportunities?  no -> not a lead
->= 6 distinct OFF-domain domains       -> hub lead
->= 2000 chars of HS-audience prose     -> names lead
+0 anchors in the html?              -> we never received the page. no verdict.
+title promises many opportunities?  -> no: not a lead   (site name stripped first)
+>= 6 distinct OFF-domain domains    -> hub lead
+>= 2000 chars of HS-audience prose  -> names lead
 ```
-Measured, 6 real round-ups vs 5 real non-round-ups: collegevine 20, aralia 16, veritasai 13,
-ladder 13, immerse 9 **against** Cornell program page 3, job posting 2, university FAQ 1, cost
-page 1. **Off-domain** and **distinct domains** are both load-bearing — an earlier attempt
-counted SAME-domain links and could not separate the populations at all, because a third-party
-page's same-domain links are its own nav; and the FAQ's 11 off-domain links all pointed at one
-repeated footer destination. The title gate runs before BOTH branches (structure alone called a
-school district jobs page and a press release hubs) and catches wrong audience for free.
+It opens **every** candidate concurrently — 17 pages in 1.4s — so nothing is rationed.
 
-**Impact of going structural, measured on the live queue:** the 67 leads the old host-list rule
-had marked "names" (all paid searches) reclassify as **25 hub (free extraction) + 11 names
-(paid) + 31 not round-ups at all**. Several known round-up hosts — ladderinternships,
-collegevine — actually LINK their programs (15/18/27 distinct sites) and belong in the free
-extractor. On the real rejected pile: 40 rows -> 8 leads.
+### Where we stopped: the operator's re-framing, and the open problem
 
-### No per-seed budget — and why the prioritiser was never needed (2026-08-27)
+The operator's position, which the measurements support: the useful split is not links-vs-no-
+links, it is **(A) pages linking programs on OTHER domains** (third-party round-ups) versus
+**(B) pages linking programs on their OWN domain** (Stanford/Berkeley pre-college indexes).
 
-The router capped itself at 12 pages per seed, which created a second problem: **which 12?**
-Two answers were designed for it — a grounding-footnote signal (a URL cited across many program
-spans is a round-up) and a paid classifier call after phase 1. **Both were solving a problem the
-cap invented.**
+- **Kind A works.** Off-domain links are rare on a normal page, so >= 6 distinct off-domain
+  domains separates cleanly (round-ups 9-20, ordinary pages 1-3).
+- **Kind B is NOT detectable from link structure, measured three ways.** Over 6 real seeds
+  (109 candidates): raw same-domain count calls **42% of everything** an index — FIT's *costs*
+  page scores 401, a PR release 318, Berkeley's *FAQ* 93; nav-subtraction overlaps (good 0-57
+  vs bad 0-35); and links-under-own-path gives **0 for 3 of 6 real indexes** (Georgetown,
+  Ringling, LIM keep programs at a different path than the index). Cause is structural:
+  same-domain links on any page are dominated by the shared nav.
 
-**Measured:** 17 candidates from a real seed classify in **15s one at a time and 1.4s across 12
-workers**. End to end over 6 real seeds: 141 resolved URLs, 111 looked at, **6.5s/seed, nothing
-skipped**, 28 leads. Against a seed that costs minutes of paid search, that is free.
+**THE NEXT BUILD, agreed but NOT STARTED — derive kind B instead of detecting it.** When a
+search returns `ced.berkeley.edu/academics/summer-programs/**summer-institute**` and it becomes
+a row, its **parent** is very likely the index of its siblings. Walk UP from a program we
+already trust: free, no classification, and it aims hub mining at institutions where we already
+know a real program exists. Curation (`hub_pilot_national.json`) remains the other working
+route — it produced the only successful hub-mining run.
 
-So the cap is gone. `MAX_PAGES_PER_SEED = 60` remains as a runaway guard, not a cost control,
-and reports what it drops. Verdicts are zipped back onto the input order, so a run is
-reproducible however the concurrent fetches finish.
+### What shipped this session
 
-**Why a classifier LLM call was rejected as the router** (costed properly, since cost was
-assumed to be the objection and is not): folded into phase 2 ~**$0.02/30-seed run**, standalone
-~**$0.07**. Cheap. It was rejected on *evidence*: at that point in the flow we have the URL
-string and phase 1's prose — **not the pages** — so it would infer from a slug what a free fetch
-reads from the page. Folding it into phase 2 is additionally unsafe: that call is capped at 6000
-tokens and `extractJSON` silently REPAIRS a truncated array, so competing for its budget can
-lose candidates invisibly.
+- **Phase 4N `harvest_names.py`** — names off a page, resolved via the refind primitive. Three
+  free gates; ranking before the cap (**A/B'd live: 1 row -> 3 rows at identical cost**, self-
+  promotion 1-of-1 -> 0-of-3); a **score floor** replaced the count cap.
+- **Phase 4F `discovered_leads.py`** — the router. Structural, no host list, no budget.
+- **Live runs (PAID $0.55 total):** hub mining 19 rows, name harvest 12 rows across 3 runs.
+  **31 rows await review.**
+- **Console:** *Harvest Names From a Page* joins *Mine Hub Pages*. Free preview by default.
+- **Reject hook:** the reason `third-party-roundup` (split out from the old lumped
+  "article / listicle / video") queues the page automatically, fire-and-forget.
 
-**The one place either idea still has an edge — deferred by the operator:** across 6 seeds,
-**22% of candidates cannot be read at all** (403 / PDF / JS-built). Those get no verdict and the
-lead is dropped silently. Footnote counts (free, evidential) then an LLM call (~$0.02/run) are
-the only tools that can see anything there. Order if resumed: footnotes first.
+### Bugs the live runs and the operator found — all fixed, all worth not repeating
+1. Hub extract prompt never listed the legal `type` values — **19 of 19 rows** needed a human.
+2. Hub miner did not collapse in-run twins (`/accelerated-learning-program/` + `/alp/`).
+3. A **U+2011 in model output crashed a run** after its paid call returned (cp1252 console).
+4. `FLAG_SELF_PROMOTED` — the first name-harvest run returned 3 rows, **all 3 the source
+   site's own products**, because a round-up names its own products canonically and everyone
+   else's descriptively.
+5. `dup_candidates` was hardcoded `None` — a row went in on the SAME URL as ec17751, unflagged.
+6. One page names one program twice (`…(BWSI)` and without) — paid twice, inserted twins.
+7. Title test matched the **site's own name** in the suffix (`… - Opportunities for Youth`).
+8. **A page with 0 anchors is a page we never received, not one without links.** A Wix round-up
+   returned 400KB and 0 `<a>` tags; it was routed to PAID name harvest where the same fetch
+   finds the same nothing. **10 of the 11 queued name leads were this.**
+9. **`--from-leads` mined hub leads SAME-domain while the router qualifies them OFF-domain** —
+   all 25 queued leads would have been mined for their own nav.
 
-### Rejecting AS A ROUND-UP feeds the page back in, automatically (2026-08-27)
-
-**The trigger is the REASON, not the rejection.** "Wrong page", "dead link", "not a fit" say
-nothing about a page being a round-up; routing every rejection would spend a fetch each to
-mostly learn no.
-
-The console's reject list lumped three things into one option ("article / listicle / video ABOUT
-it"). A video is unreadable junk, an article about ONE program is not feedstock, only the
-round-up is. Now:
-
-| reason | effect |
-|---|---|
-| `third-party-roundup` — *lists MANY programs* | queued for hub mining / name harvest |
-| `third-party-url` — *article or video about this ONE program* | nothing |
-
-- `moderate_opportunities` fires on that reason alone, **fire-and-forget on a daemon thread**:
-  rejecting is the operation that matters, and a hung fetch must never make the button wait or
-  the verdict fail. A failure is logged, not surfaced — the page waits for the backfill instead.
-- **`classify_confirmed_roundup` deliberately SKIPS the title test.** That test asks "is this a
-  page about many programs?", which the operator just answered having actually looked at it;
-  re-asking with a heuristic could only overrule them — and that test was fooled by a site-name
-  suffix the same day. Only "does it LINK them or NAME them" is left. It **defaults to names,
-  never to nothing**: an unreadable page costs zero to queue (`harvest_names` makes no model
-  call on empty text), and dropping a lead a person explicitly flagged is the one outcome this
-  path must not produce.
-- **NOs are remembered** (`STATUS_NOT_A_LEAD`). Without it every sweep re-opened the whole
-  rejected pile to re-learn answers it had — 40 pages to recover 24 known nos, growing with the
-  pile. Tombstones are neither queued work nor counted, but they ARE known, so the next sweep
-  skips them.
-- `ROUNDUP_REJECT_REASON` is defined **once**, in `discovered_leads`; `ops/core` reads it from
-  there, so the hook and the backfill can never disagree. `--from-rejects` filters on it too,
-  with `--any-reason` as the escape hatch for rows rejected before it existed.
-
-Nothing routes automatically until a row is rejected under the new reason — the live sweep
-currently returns 0, which is correct.
+### Costs, fitted to real runs (reconcile to $0.0001)
+| step | per | cost |
+|---|---|---|
+| hub mining — read a page | page | **$0.0015** |
+| name harvest — read the names | page | $0.0038 |
+| name harvest — search one name | name | **$0.0167** (84% is the flat search fee) |
+| name harvest — make a row | row | $0.0047 |
+| re-find a dead link | row | $0.02–0.05 |
+| router, filters, dedupe, review, loop | — | **$0.00** |
 
 ### OPEN / do next
-1. **Push `main`** — now 11 commits ahead of `origin/main` (the merge brought 5 branch commits with it). Scraper-only (no `app/`,
-   `render.yaml`, `requirements.txt`, `server.py`), so a Render deploy is a no-op for the web
-   service.
-2. **Review the 22 new pending rows** in the console: ec18756-ec18774 (hub-mined, mostly good)
-   and ec18775-ec18777 (name-harvested, all three self-promotion — the honest verdict is
-   probably to keep the two real Immerse program pages and reject the `/pathways/career`
-   marketing page).
-3. **Decide 4N's next input before spending more on it.** Point it at the College Transitions
-   table (24 canonical names, ~$0.75 at `--max-names 10`) rather than at more listicles, OR
-   build the canonical-name + org change first.
-4. **4L (local) stays PINNED** — rethinking from scratch. 4F does not replace it.
-5. Standing backlog: ~167-row refind (~$4-8 in small PAID batches), gated hub extraction on
-   more registry hubs.
+1. **Push `main`** (25 commits, scraper-only — a Render deploy is a no-op for the web service).
+2. **Build the walk-up-from-a-program idea** for kind B. Agreed, not started.
+3. **Review the 31 pending rows** (19 hub-mined, 12 name-harvested).
+4. Queue today: **25 hub leads, 1 names lead.** The hub leads are now mined correctly
+   (off-domain); mining them is PAID and gated.
+5. Catch-up for the pre-hook rejected backlog: `python discovered_leads.py --from-rejects
+   --any-reason --commit` (free; it remembers its NOs).
+6. **~22% of candidates cannot be read at all** (403/PDF/JS). They are dropped with no verdict.
+   That bucket — and only that bucket — is where grounding footnotes or an LLM classifier could
+   help. Deferred by the operator.
+7. **4L (local) stays PINNED.** Two designs measured, neither worked.
+8. Two files from a concurrent session sit untracked and were deliberately left alone:
+   `ANGLE_STRATEGY_PLAN.md`, `MATCHING_UX_REQUIREMENTS.md`.
 
-**The visual map of all of this (live/built/unbuilt, colour-coded) is a published artifact —
-ask the operator for the "Scraper Logic Map" link if you need it.** It predates Phase 4N being
-built and shows it as unbuilt.
+### Rejected ideas, with the reason (do not re-propose without new evidence)
+- **An LLM classifier at the search-results step.** Costed at **$0.02–0.07 per 30-seed run**, so
+  cost is NOT the objection. It was rejected on evidence: at that point we hold the URL string
+  and phase 1's prose, **not the pages**, so it would infer from a slug what a free fetch reads
+  from the page. Folding it into phase 2 is additionally unsafe — that call is capped at 6000
+  tokens and `extractJSON` silently REPAIRS a truncated array, so competing for its budget can
+  lose candidates invisibly.
+- **A grounding-footnote prioritiser.** Sound idea (a URL cited across many program spans is a
+  round-up), but it existed to rank a 12-page budget that no longer exists.
+- **Same-domain link counting for kind B.** See the three measurements above.
 
 ---
 

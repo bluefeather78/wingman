@@ -88,7 +88,11 @@ _NAV_SLUGS = url_repair.GENERIC_SLUGS | {
     "program-policies", "policies", "policy", "compare-programs", "explore-courses",
     "publications", "publications-and-funding", "funding", "grants", "grants-collaborations",
     "work-with-us", "partnerships", "successful-partnerships", "partnership-opportunities",
-    "map", "maps", "projects", "financial-aid", "scholarships-and-financial-aid",
+    "map", "maps", "projects",
+    # NOT here, deliberately: anything naming a scholarship or financial aid. The operator wants
+    # SCHOLARSHIPS in the catalog (2026-08-28), so a page at /scholarships-and-financial-aid is a
+    # lead, not chaff -- and this list existing at all is why that had to be caught by hand
+    # rather than by a rule. Anything added here must be a page nobody would ever want as a row.
 }
 # A non-HTML target (a viewbook PDF, a flyer image) can never be a program's landing page.
 _NONHTML_EXT = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip",

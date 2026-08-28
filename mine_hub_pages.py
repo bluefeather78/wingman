@@ -447,6 +447,9 @@ def main():
     ap.add_argument("--preview", action="store_true",
                     help="FREE: discover + dedup against the catalog, print candidates, make NO "
                          "model call and write nothing.")
+    ap.add_argument("--max-pages", type=int, default=None, metavar="N",
+                    help="Hard ceiling on how many pages this run may EXTRACT (i.e. pay for), "
+                         "across every hub. What it skips is reported, never dropped silently.")
     ap.add_argument("--mode", default="national")
     ap.add_argument("--min-delay", type=int, default=5)
     ap.add_argument("--timeout", type=int, default=40)
@@ -528,6 +531,27 @@ def main():
         for u in fresh:
             print(f"    candidate: {u}")
         all_new.append((hub_url, fresh))
+
+    # A per-hub cap bounds one page; nothing bounded the RUN. Worst case here is 25 candidates
+    # plus three sub-hubs of 25 each, so a 43-hub run could reach thousands of paid extractions
+    # rather than the few hundred expected -- and the whole point of the ~$30-overspend rule is
+    # that the ceiling exists before the run, not after the bill.
+    capped_hubs = set()
+    if args.max_pages is not None:
+        budget, capped = args.max_pages, []
+        for i, (hub_url, fresh) in enumerate(all_new):
+            if len(fresh) > budget:
+                capped.append((hub_url, len(fresh) - budget))
+                capped_hubs.add(hub_url)
+                all_new[i] = (hub_url, fresh[:budget])
+            budget -= len(all_new[i][1])
+        if capped:
+            skipped = sum(n for _, n in capped)
+            print(f"[LIMIT] --max-pages {args.max_pages} reached: {skipped} candidate(s) across "
+                  f"{len(capped)} hub(s) NOT extracted. They stay queued; raise the ceiling to "
+                  f"reach them.")
+            for hub_url, n in capped:
+                print(f"    skipped {n}: {hub_url[:88]}")
 
     total = sum(len(f) for _, f in all_new)
     if args.preview:
@@ -631,7 +655,10 @@ def main():
     # run with --hubs while its lead sat in the queue as "new", so the next --from-leads run would
     # have re-mined and re-PAID for the same 14 pages. marking a URL that is not in the file is a
     # no-op, so this is safe for a hub that was never a lead.
-    lead_urls = list(dict.fromkeys(lead_urls + [h for h, _off in hubs]))
+    # A hub the ceiling truncated is NOT finished -- marking it processed would drop the rest of
+    # its candidates out of the queue silently, which is the failure the ceiling exists to avoid.
+    lead_urls = [u for u in dict.fromkeys(lead_urls + [h for h, _off in hubs])
+                 if u not in capped_hubs]
     if lead_urls and not args.dry_run and not args.preview:
         # Stamped only on a real run: a dry run proved the extraction works but wrote nothing,
         # so the lead still has work left in it and must stay in the queue.

@@ -86,6 +86,12 @@ CONTENT_MILL_HOSTS = {
     "borderless.so", "aralia.com", "indigoresearch.org", "ladderinternships.com",
     "opportunitiesforyouth.org", "youtube.com", "youtu.be", "reddit.com",
     "wikipedia.org", "lithub.com",
+    # Added 2026-08-27 after a name-harvest run stored `veritasai.com/veritasaiblog/
+    # everything-you-need-to-know-about-nyu-tandons-machine-learning-summer-program` as the
+    # NYU Tandon program's own URL (ec18783). Same shape as the operators already listed: it
+    # appeared 15 times across the archived grounding logs, always as a "N programs for high
+    # school students" round-up, never as a program's own page.
+    "veritasai.com", "collegevine.com", "novascholar.org", "deltainstitute.co",
 }
 # Path-aware: a host that is a mill ONLY under a sub-path. immerse.education is a legitimate
 # provider at /summer-schools/ but a content mill at /knowledge-base/, so a bare host match

@@ -399,3 +399,103 @@ def test_ranking_is_stable_for_equal_scores():
     names = ["Alpha Scholars Institute", "Omega Robotics Challenge"]
     keep, _ = nh.select_names(names, " ".join(names), [], cap=2)
     assert keep == names
+
+
+# ---------- the score floor: the cap became a ceiling ----------
+
+def test_floor_drops_the_band_that_measured_zero():
+    """score <= 0 resolved 0 of 3 live. Those names go to `below_score`, not `over_cap` —
+    'not worth a search fee' and 'ran out of budget' are different facts about a run."""
+    names = ["Epsilon Robotics Challenge",                              # clean, short -> 4
+             "NYU Tisch School of the Arts: Drama, Production, and Design Workshop"]  # -> -3
+    keep, dropped = nh.select_names(names, " ".join(names), [], cap=20, min_score=1)
+    assert keep == ["Epsilon Robotics Challenge"]
+    assert dropped["below_score"] == [names[1]]
+    assert dropped["over_cap"] == []
+
+
+def test_floor_self_sizes_rather_than_spending_to_the_ceiling():
+    """The point of the floor: a ceiling of 20 must not mean 20 paid searches on a page that
+    only has 1 name worth one."""
+    # Five-plus identity words AND a descriptive marker, i.e. the shape that measured 0/3 —
+    # a SHORT descriptive name scores 1 and is meant to pass (Interlochen scored 1, resolved).
+    # Each filler needs its OWN distinctive token, or collapse_name_variants folds them into
+    # one (digits are not identity words) and this stops testing the floor.
+    names = ["Epsilon Robotics Challenge"] + [
+        f"Zeta{i}world Quantum Robotics Alpha Beta Gamma: an elaborate gloss at Somewhere College"
+        for i in range(19)]
+    keep, dropped = nh.select_names(names, " ".join(names), [], cap=20, min_score=1)
+    assert len(keep) == 1 and len(dropped["below_score"]) == 19
+
+
+def test_ceiling_still_bounds_a_pathological_page():
+    """The floor chooses; the ceiling is the spend backstop and must still bind."""
+    names = [f"Alpha{i} Robotics Challenge" for i in range(30)]
+    keep, dropped = nh.select_names(names, " ".join(names), [], cap=20, min_score=1)
+    assert len(keep) == 20 and len(dropped["over_cap"]) == 10
+
+
+def test_floor_cuts_a_resolvable_name_when_it_is_self_promotion():
+    """Measured trade, stated so it is not mistaken for a regression: on the Immerse listicle
+    the floor drops 'Immerse Education's Fashion & Design Summer School' (score -2 from the
+    source-brand penalty) even though it resolved live — the row it produced carries
+    FLAG_SELF_PROMOTED, so not paying for it is the intent."""
+    src = "https://www.immerse.education/knowledge-base/x/"
+    name = "Immerse Education's Fashion & Design Summer School"
+    assert nh.name_rank_score(name, src) < 1
+    keep, dropped = nh.select_names([name], name, [], cap=20, source_url=src, min_score=1)
+    assert keep == [] and dropped["below_score"] == [name]
+
+
+def test_min_score_none_disables_the_floor():
+    """So the old count-capped behaviour stays reachable for comparison."""
+    names = ["NYU Tisch School of the Arts: Drama, Production, and Design Workshop"]
+    keep, _ = nh.select_names(names, names[0], [], cap=5, min_score=None)
+    assert keep == names
+
+
+# ---------- name variants: one page naming one program twice ----------
+
+def test_collapse_name_variants_keeps_the_higher_ranked_form():
+    """Measured live: an AI listicle named both 'MIT Beaver Works Summer Institute (BWSI)' and
+    'MIT Beaver Works Summer Institute'. Their identity sets DIFFER, so is_known_name cannot
+    see them as one — we paid for the second and inserted a twin of ec18343."""
+    kept, collapsed = nh.collapse_name_variants(
+        ["MIT Beaver Works Summer Institute (BWSI)", "MIT Beaver Works Summer Institute",
+         "Cornell Summer Innovation Intensives"])
+    assert kept == ["MIT Beaver Works Summer Institute", "Cornell Summer Innovation Intensives"]
+    assert len(collapsed) == 1 and "(BWSI)" in collapsed[0]
+
+
+def test_collapse_requires_a_subset_not_a_similarity():
+    """url_dedupe measured what a ratio does here: 0.85 matched 264 catalog pairs, 257 of them
+    genuinely distinct. Two names that merely overlap must both survive."""
+    names = ["Stanford AI Scholars", "Carnegie Mellon AI Scholars"]
+    kept, collapsed = nh.collapse_name_variants(names)
+    assert sorted(kept) == sorted(names) and collapsed == []
+
+
+def test_collapse_records_every_variant_it_removed():
+    kept, collapsed = nh.collapse_name_variants(
+        ["Georgetown University - Artificial Intelligence Academy",
+         "Georgetown Artificial Intelligence Academy"])
+    assert len(kept) == 1 and len(collapsed) == 1
+
+
+def test_select_names_reports_variants_separately_from_the_cap():
+    names = ["MIT Beaver Works Summer Institute", "MIT Beaver Works Summer Institute (BWSI)"]
+    keep, dropped = nh.select_names(names, " ".join(names), [], cap=20)
+    assert keep == ["MIT Beaver Works Summer Institute"]
+    assert len(dropped["name_variant"]) == 1
+    assert dropped["over_cap"] == [] and dropped["below_score"] == []
+
+
+def test_a_listicle_operator_can_never_become_a_program_url():
+    """ec18783 stored a veritasai.com round-up as NYU Tandon's own page. best_resolved_url
+    rejects mills, so adding the host is what prevents it."""
+    import url_validate as uv
+    assert uv.is_content_mill(
+        "https://www.veritasai.com/veritasaiblog/nyu-tandons-machine-learning-summer-program")
+    assert nh.best_resolved_url(
+        ["https://www.veritasai.com/veritasaiblog/nyu-tandons-ml-program"],
+        "NYU Tandon Machine Learning Summer Program") is None

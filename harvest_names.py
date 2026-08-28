@@ -65,7 +65,18 @@ from scrape_opportunities import (build_row, next_id_generator, insert_rows, VAL
 MAX_SIBLING_FETCH = 3
 # Default ceiling on names resolved per hub page. A directory naming 70 competitions would
 # otherwise turn one approved run into ~$2-3 of searches without the operator seeing a figure.
-DEFAULT_MAX_NAMES = 10
+# The per-page COUNT cap is now a spend CEILING, not the selector — the score floor below does
+# the choosing. Measured: a "15 programs" listicle yields only 8-11 names that clear the free
+# gates (the model names 60-90% of the list, the gates drop ~25% more), so a count cap set
+# anywhere near the list length never binds. It exists so one pathological page cannot run away
+# with an approved run's budget.
+DEFAULT_MAX_NAMES = 20
+# Below this rank score a name is not worth a search fee. Measured on the 8 names with live
+# outcomes: score >= 1 resolved 3 of 5 (60%), score <= 0 resolved 0 of 3. The floor is 1 rather
+# than 2 deliberately — Interlochen scored 1 (docked for the " - " in its listicle label) and
+# resolved fine, so a floor of 2 would have bought one fewer real program. Small sample: this
+# is a spending heuristic, and the free gates above it are what actually protect correctness.
+DEFAULT_MIN_SCORE = 1
 # Whole-word tokenisation for the on-page check. Substring matching would let "art" pass on a
 # page that only says "start" — the identity words are short by construction (the generic ones
 # have already been stripped), so whole words are the only honest test.
@@ -262,15 +273,54 @@ def name_rank_score(name, source_url=""):
     return score
 
 
+def collapse_name_variants(names, source_url=""):
+    """(kept, collapsed) — one entry per program when a page names it more than one way.
+
+    A listicle routinely writes the same program twice, and the two forms have DIFFERENT
+    identity words, so `is_known_name`'s exact-set match cannot see them as one. Measured live
+    2026-08-27 on an AI listicle: it named both "MIT Beaver Works Summer Institute (BWSI)" and
+    "MIT Beaver Works Summer Institute", and both "Georgetown's Artificial Intelligence
+    Academy" and "Georgetown University - Artificial Intelligence Academy". We paid for the
+    second of each and inserted a duplicate row both times (ec18781 twins ec18343, ec18786
+    twins ec17751).
+
+    A variant is a SUBSET (equal included) of another name's identity words. Equal matters
+    as much as strict: the page wrote "Georgetown University - Artificial Intelligence Academy"
+    and "Georgetown Artificial Intelligence Academy", whose identity sets are IDENTICAL, and
+    `is_known_name` only ever compares against the catalog. Never a similarity ratio,
+    the rule `url_dedupe` measured into the ground (0.85 matched 264 catalog pairs, 257 of them
+    genuinely distinct). The survivor is the higher-ranked form, which is normally the shorter
+    one, and that is also the one `title_proves` is likeliest to verify.
+
+    Scope is ONE page. Collapsing across pages would be a catalog-level judgement, and that is
+    `url_dedupe`'s job at insert time, on the URL — the signal this repo actually trusts.
+    """
+    ranked = sorted(names, key=lambda n: -name_rank_score(n, source_url))
+    kept, collapsed = [], []
+    for name in ranked:
+        words = url_repair.identity_words(name)
+        if not words:
+            kept.append(name)
+            continue
+        winner = next((k for k in kept
+                       if url_repair.identity_words(k) and
+                       url_repair.identity_words(k) <= words), None)
+        if winner:
+            collapsed.append(f"{name} (variant of {winner!r})")
+        else:
+            kept.append(name)
+    return kept, collapsed
+
+
 def select_names(raw_names, text, existing_rows, cap=DEFAULT_MAX_NAMES, source_url="",
-                 rank=True):
+                 rank=True, min_score=DEFAULT_MIN_SCORE):
     """(keep, dropped) — the three free gates, in order, with a per-page cap. Pure.
 
     `dropped` maps a reason to the names it cost, so a run that resolves nothing says WHY
     instead of reading as "the page named nothing".
     """
     eligible, dropped = [], {"not_on_page": [], "unprovable": [], "already_in_catalog": [],
-                             "over_cap": []}
+                             "name_variant": [], "below_score": [], "over_cap": []}
     for name in raw_names:
         if not name_is_on_page(name, text):
             dropped["not_on_page"].append(name)
@@ -285,8 +335,18 @@ def select_names(raw_names, text, existing_rows, cap=DEFAULT_MAX_NAMES, source_u
         eligible.append(name)
     # Rank AFTER the gates and BEFORE the cap, so the cap cuts the weakest candidates instead
     # of the ones furthest down the page. Sorted stably, so equal scores keep page order.
+    if rank:
+        eligible, dropped["name_variant"] = collapse_name_variants(eligible, source_url)
     ordered = (sorted(eligible, key=lambda n: -name_rank_score(n, source_url))
                if rank else eligible)
+    # The FLOOR self-sizes to the page and the CEILING bounds the spend. They are reported
+    # separately because they mean different things to a reader: `below_score` is "we judged
+    # this not worth a search fee", `over_cap` is "we ran out of budget" — and only the second
+    # is a reason to re-run the page with a bigger number.
+    if rank and min_score is not None:
+        worth = [n for n in ordered if name_rank_score(n, source_url) >= min_score]
+        dropped["below_score"] = [n for n in ordered if n not in worth]
+        ordered = worth
     keep, dropped["over_cap"] = ordered[:cap], ordered[cap:]
     return keep, dropped
 
@@ -413,7 +473,12 @@ def main():
                     help="FREE: fetch the page(s) and report what would be harvested. No model "
                          "call, no search, no writes.")
     ap.add_argument("--max-names", type=int, default=DEFAULT_MAX_NAMES,
-                    help=f"Names resolved per page (default {DEFAULT_MAX_NAMES}). Each one is a paid search.")
+                    help=f"Spend CEILING on names resolved per page (default "
+                         f"{DEFAULT_MAX_NAMES}). Rarely binds — --min-score does the choosing.")
+    ap.add_argument("--min-score", type=int, default=DEFAULT_MIN_SCORE,
+                    help=f"Minimum rank score worth a paid search (default {DEFAULT_MIN_SCORE}). "
+                         f"Measured: score >= 1 resolved 3 of 5, score <= 0 resolved 0 of 3. "
+                         f"Pass a very low number to search every eligible name.")
     ap.add_argument("--mode", default="national")
     ap.add_argument("--min-delay", type=int, default=5)
     ap.add_argument("--timeout", type=int, default=40)
@@ -511,7 +576,7 @@ def main():
             continue
         named += len(raw_names)
         keep, dropped = select_names(raw_names, text, existing, cap=args.max_names,
-                                     source_url=hub_url)
+                                     source_url=hub_url, min_score=args.min_score)
         print(f"[HUB] {hub_url}: named {len(raw_names)}, resolving {len(keep)}. "
               + ", ".join(f"{k}={len(v)}" for k, v in dropped.items() if v))
         # Every dropped name is printed, never a head slice. This list IS the record of what a
@@ -540,7 +605,7 @@ def main():
             if not url:
                 print(f"  [UNPROVEN] {name}  — no grounding page whose title proves it; wrote nothing.")
                 continue
-            exact, _ = url_dedupe.find_duplicates(url, name, existing)
+            exact, dup_candidates = url_dedupe.find_duplicates(url, name, existing)
             if exact:
                 print(f"  [DUPE] {name} -> {url} already in the catalog as {exact}.")
                 continue
@@ -561,9 +626,10 @@ def main():
                 continue
             row["found_via"] = hub_url
             review_by_id[row["id"]] = {
-                "moderation_status": "pending_review", "dup_candidates": None,
+                "moderation_status": "pending_review",
                 "quality_flags": _row_flags(url, row.get("name"), row.get("org"), cand,
-                                            source_url=hub_url) or None}
+                                            source_url=hub_url) or None,
+                "dup_candidates": (dup_candidates or None)}
             rows.append(row)
             existing.append({"id": row["id"], "name": row["name"], "url": row["url"]})
             print(f"  [RESOLVED] {name} -> {url}")

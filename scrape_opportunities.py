@@ -1057,6 +1057,13 @@ def main():
     total_searches = silent_search_count = flagged_rows = dead_links = 0
     # Stage 1b (per-name URL resolution) run-level totals + the shared run budget.
     resolve_run_count = names_attempted = names_resolved = names_dropped = 0
+    # Spread the 1b run budget EVENLY across angles, so a first-come global cap does not let the
+    # early angles eat it all and starve the last ones of resolution (the mine_hub_pages lesson,
+    # learned again — a per-item cap is not a run cap, and a run cap alone is not an even spread).
+    # floor(run / seeds) guarantees the even shares sum within the run cap; a single-angle run
+    # keeps the full per-angle budget. The global cap below stays as a hard backstop.
+    resolve_budget_per_seed = min(args.resolve_per_angle,
+                                  max(1, args.resolve_per_run // max(1, len(seeds))))
     # Phase 4F: the hub/listicle pages this run consulted but did not turn into rows.
     # Captured free; acted on later by a separately-approved gated run.
     captured_leads = []
@@ -1139,7 +1146,7 @@ def main():
                     # (both mean "don't spend on URL work").
                     can_resolve = (not args.no_resolve and not args.no_verify_urls
                                    and resolve_run_count < args.resolve_per_run
-                                   and resolve_seed_count < args.resolve_per_angle)
+                                   and resolve_seed_count < resolve_budget_per_seed)
                     if can_resolve:
                         r_url, r_cost, r_queries = resolve_missing_url(
                             name, candidate.get("org"), existing, today, gemini_key, args)

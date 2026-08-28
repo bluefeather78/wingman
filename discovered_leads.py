@@ -34,6 +34,7 @@ table stays the mature form.
     python discovered_leads.py --list --kind hub   # just the hub-mining leads
 """
 import argparse
+import concurrent.futures
 import datetime
 import json
 import os
@@ -87,7 +88,10 @@ _MANY_RE = re.compile(r"\b(programs|competitions|internships|camps|scholarships|
                       r"schools|academies|institutes|summits|olympiads)\b", re.I)
 # Free HTTP fetches per seed. Classification is a side-effect of a scrape, not the job, and a
 # broad seed resolves dozens of pages.
-PROBE_PER_SEED = 12
+# A runaway guard, NOT a cost control — looking at a page is free and fast. Measured on a real
+# seed: 17 candidates classify in 1.4s across 12 workers (15s one at a time). A seed resolves
+# ~20 pages, so this only ever fires on something pathological.
+MAX_PAGES_PER_SEED = 60
 
 # Hosts that are content mills but are NOT round-ups, so they are never leads of either kind.
 # Measured 2026-08-27 by fetching one of each: youtube returns 24,000 chars of `ytcfg` JS config
@@ -190,8 +194,50 @@ def classify_page(url, timeout=url_repair.DEFAULT_TIMEOUT):
     return KIND_NAMES, f"names many programs: {title[:60]!r}"
 
 
+def _shortlist(urls, used, known, trace, seen=None):
+    """The candidates worth looking at, after the free pure filters. No page is fetched here."""
+    seen = seen if seen is not None else set()
+    out = []
+    for url in urls or []:
+        k = _key(url)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        if k in used:
+            trace["already_used"] += 1
+        elif k in known:
+            trace["already_known"] += 1
+        elif is_ignorable(url):
+            trace["ignored"] += 1
+        else:
+            out.append(url)
+    return out
+
+
+def _classify_all(urls, classify, timeout=None):
+    """[(url, kind, signal)] — every candidate looked at, CONCURRENTLY. FREE.
+
+    Measured on a real seed: 17 candidates take **15s one at a time and 1.4s across 12
+    workers**. That is why there is no per-seed budget any more. An earlier version capped this
+    at 12 pages and would have needed a prioritiser to choose which 12 — a whole extra mechanism
+    (and, in the version before that, a paid model call) to ration something that costs a second
+    and a half. Same thread-pool width the liveness checker already uses.
+
+    Classification is pure per URL — nothing is shared between them — so this parallelises with
+    no coordination. The verdicts are assembled back in input order by the caller, so a run is
+    reproducible regardless of which fetch finishes first.
+    """
+    if not urls:
+        return []
+    call = classify if timeout is None else (lambda u: classify(u, timeout))
+    width = min(url_validate.MAX_WORKERS, len(urls))
+    with concurrent.futures.ThreadPoolExecutor(width) as pool:
+        verdicts = list(pool.map(call, urls))
+    return [(u, v[0], v[1]) for u, v in zip(urls, verdicts)]
+
+
 def capture(resolved_urls, used_urls, existing_rows=None, seed_id=None, angle="",
-            known_keys=None, probe_budget=PROBE_PER_SEED, timeout=None, classify=None):
+            known_keys=None, max_pages=MAX_PAGES_PER_SEED, timeout=None, classify=None):
     """The leads one seed's grounding yields. FREE. Returns (leads, trace).
 
     `used_urls` are the pages that BECAME rows — a page the run already turned into an
@@ -206,31 +252,18 @@ def capture(resolved_urls, used_urls, existing_rows=None, seed_id=None, angle=""
     known = set(known_keys or set())
     known |= {_key(r.get("url")) for r in (existing_rows or []) if r.get("url")}
     trace = {"resolved": len(resolved_urls or []), "already_used": 0, "already_known": 0,
-             "ignored": 0, "probed": 0, "no_verdict": 0, KIND_NAMES: 0, KIND_HUB: 0}
-    leads, seen = [], set()
+             "ignored": 0, "looked_at": 0, "over_cap": 0, "no_verdict": 0,
+             KIND_NAMES: 0, KIND_HUB: 0}
+
+    shortlist = _shortlist(resolved_urls, used, known, trace)
+    if len(shortlist) > max_pages:
+        trace["over_cap"] = len(shortlist) - max_pages
+        shortlist = shortlist[:max_pages]
+    trace["looked_at"] = len(shortlist)
+
+    leads = []
     stamp = datetime.date.today().isoformat()
-    probed = 0
-    for url in resolved_urls or []:
-        k = _key(url)
-        if not k or k in seen:
-            continue
-        seen.add(k)
-        if k in used:
-            trace["already_used"] += 1
-            continue
-        if k in known:
-            trace["already_known"] += 1
-            continue
-        if is_ignorable(url):
-            trace["ignored"] += 1
-            continue
-        # Every candidate earns a look. The verdict is structural — does this page LINK the
-        # programs it mentions, or merely NAME them — and nothing about its domain shortcuts it.
-        if probed >= probe_budget:
-            continue
-        probed += 1
-        trace["probed"] += 1
-        kind, signal = classify(url) if timeout is None else classify(url, timeout)
+    for url, kind, signal in _classify_all(shortlist, classify, timeout):
         if kind is None:
             trace["no_verdict"] += 1
             continue
@@ -240,41 +273,36 @@ def capture(resolved_urls, used_urls, existing_rows=None, seed_id=None, angle=""
     return leads, trace
 
 
-def from_rejected_rows(rows, known_keys=None, classify=None, limit=None):
+def from_rejected_rows(rows, known_keys=None, classify=None, limit=None, timeout=None):
     """Leads from the review queue's REJECTED pile. FREE. Returns (leads, trace).
 
     The operator's second source, and it is free evidence of exactly the right kind: a row
     rejected as a third-party round-up is a page a HUMAN has already confirmed is not a
-    program's own page but does talk about programs. That is the premise this whole classifier
-    has to guess at when it works from raw grounding — here it is given.
+    program's own page but does talk about programs. That is the premise this classifier has to
+    guess at when it works from raw grounding — here it is given.
 
     The URL is still classified structurally, because "not a program page" does not say whether
     it LINKS the programs or merely NAMES them, and that is what decides which extractor gets it.
     """
     classify = classify or classify_page
     known = set(known_keys or set())
-    trace = {"rejected": len(rows or []), "already_known": 0, "ignored": 0, "no_verdict": 0,
-             KIND_NAMES: 0, KIND_HUB: 0}
-    leads, seen = [], set()
-    stamp = datetime.date.today().isoformat()
+    trace = {"rejected": len(rows or []), "already_known": 0, "ignored": 0, "already_used": 0,
+             "no_verdict": 0, KIND_NAMES: 0, KIND_HUB: 0}
+    by_url = {}
     for row in rows or []:
-        if limit and len(leads) >= limit:
-            break
-        url = row.get("url")
-        k = _key(url)
-        if not k or k in seen:
-            continue
-        seen.add(k)
-        if k in known:
-            trace["already_known"] += 1
-            continue
-        if is_ignorable(url):
-            trace["ignored"] += 1
-            continue
-        kind, signal = classify(url)
+        if row.get("url") and _key(row["url"]) not in by_url:
+            by_url[_key(row["url"])] = row
+    shortlist = _shortlist([r["url"] for r in by_url.values()], set(), known, trace)
+    if limit:
+        shortlist = shortlist[:limit]
+
+    leads = []
+    stamp = datetime.date.today().isoformat()
+    for url, kind, signal in _classify_all(shortlist, classify, timeout):
         if kind is None:
             trace["no_verdict"] += 1
             continue
+        row = by_url.get(_key(url)) or {}
         trace[kind] += 1
         leads.append({"url": url, "kind": kind, "seed_id": row.get("seed_id"),
                       "angle": f"rejected row {row.get('id')}: {(row.get('name') or '')[:60]}",

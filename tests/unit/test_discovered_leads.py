@@ -56,7 +56,7 @@ def test_capture_splits_round_ups_from_hubs():
     kinds = {l["url"]: l["kind"] for l in leads}
     assert kinds == {"https://www.aralia.com/info/list": dl.KIND_NAMES,
                      "https://x.edu/programs": dl.KIND_HUB}
-    assert trace["names"] == 1 and trace["hub"] == 1 and trace["probed"] == 3
+    assert trace["names"] == 1 and trace["hub"] == 1 and trace["looked_at"] == 3
 
 
 def test_capture_skips_a_page_that_became_a_row():
@@ -94,17 +94,42 @@ def test_capture_dedupes_within_one_seed():
     assert len(leads) == 1
 
 
-def test_capture_honours_the_probe_budget():
-    """The budget bounds free FETCHES, so lead capture stays a side-effect of a scrape rather
-    than becoming its own crawl. Nothing bypasses it now that routing is structural."""
-    urls = [f"https://x{i}.edu/p" for i in range(10)]
+def test_capture_looks_at_every_candidate():
+    """No per-seed budget any more. Measured: 17 candidates classify in 1.4s across 12 workers
+    (15s serially), so rationing them was bounding a second and a half — and it needed a
+    prioritiser to decide WHICH ones, a whole mechanism to solve a problem that does not exist."""
+    urls = [f"https://x{i}.edu/p" for i in range(30)]
     calls = []
 
     def probe(url, timeout=None):
         calls.append(url)
         return None, "stub"
-    leads, trace = dl.capture(urls, used_urls=[], classify=probe, probe_budget=3)
-    assert len(calls) == 3 and trace["probed"] == 3 and leads == []
+    leads, trace = dl.capture(urls, used_urls=[], classify=probe)
+    assert len(calls) == 30 and trace["looked_at"] == 30 and trace["over_cap"] == 0
+    assert leads == []
+
+
+def test_capture_still_has_a_runaway_guard():
+    """A ceiling remains, but it is a guard against something pathological, not a cost control —
+    and what it dropped is reported rather than silently vanishing."""
+    urls = [f"https://x{i}.edu/p" for i in range(30)]
+    leads, trace = dl.capture(urls, used_urls=[], classify=lambda u, t=None: (None, "s"),
+                              max_pages=8)
+    assert trace["looked_at"] == 8 and trace["over_cap"] == 22
+
+
+def test_capture_preserves_input_order_regardless_of_fetch_order():
+    """Verdicts are zipped back onto the input list, so a run is reproducible however the
+    concurrent fetches happen to finish."""
+    import time
+    urls = ["https://slow.example/a", "https://fast.example/b", "https://mid.example/c"]
+    delays = {"https://slow.example/a": 0.05, "https://mid.example/c": 0.02}
+
+    def probe(url, timeout=None):
+        time.sleep(delays.get(url, 0))
+        return dl.KIND_HUB, "stub"
+    leads, _ = dl.capture(urls, used_urls=[], classify=probe)
+    assert [l["url"] for l in leads] == urls
 
 
 def test_capture_records_attribution_and_a_signal():

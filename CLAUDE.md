@@ -2,6 +2,35 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Marquee decisions — STOP before changing these
+
+[MARQUEE_DECISIONS.md](MARQUEE_DECISIONS.md) lists load-bearing decisions that must **never** be
+changed, reverted, or quietly softened without an explicit, extensive discussion with Shama in chat
+and a clear "yes." This overrides any default, inference, or "plausible improvement."
+
+- **Before editing code or config a marquee entry protects, STOP** — name the entry, say what you'd
+  change and why, and get an explicit yes first. Never proceed on a default.
+- Protected sites carry a `# MARQUEE M<n>:` sentinel comment. Seeing one is the trigger to stop and
+  read MARQUEE_DECISIONS.md.
+- A marquee change is **always its own dedicated commit** that names the entry — never bundled into an
+  unrelated feature commit. (A marquee decision was once reversed silently inside an unrelated commit;
+  that is the failure this rule prevents — see M1 in that file.)
+- Only Shama decides what is on the list. Claude may *propose* entries but may not treat a proposal as
+  ratified until Shama confirms.
+
+Two entries are broad enough that they touch most substantive work, so know them without opening the
+file: **M8 — any prompt sent to a model** (changing/adding/removing prompt text) and **M9 — any code
+path that makes a paid API call** (toggling `use_web_search`/`max_searches`/`max_uses`, model pins,
+per-row model calls, provider swaps) are both marquee. Approval first, dedicated commit. The M1
+reversal was both at once: a paid call turned off and its prompt rewritten to hide it.
+
+**Prompt-writing convention (operator directive, 2026-08-28): always use concrete examples in
+prompts.** Models follow do/don't *examples* far better than adjectives — "broad", "distinct",
+"high quality" alone don't steer behaviour; a good/bad example pair does. When writing or editing any
+prompt, define the key terms with examples (see `DISCOVERY_SYSTEM` in `scrape_opportunities.py`: it
+defines "opportunity" structurally with counter-examples and "broad vs named search" with good/bad
+query pairs). This is measured house style here (it fixed the 73% named-query rate), not a preference.
+
 ## Project
 
 "Highschool Wingman" — an app that helps high schoolers find and track extracurricular

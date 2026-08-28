@@ -360,7 +360,11 @@ WEB_SEARCH_PRICE_PER_SEARCH = 14 / 1000
 
 def call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=4000, timeout=None,
                  max_searches=None, thinking_level="low", model=None, return_grounding=False):
-    """POSTs directly to the Gemini generateContent API. Returns (text, usage) — text is
+    """MARQUEE M9 (MARQUEE_DECISIONS.md): this is a money seam. Changing whether/how callers
+    spend here — `use_web_search`, `max_searches`, `max_tokens` ceilings, the model pin — is a
+    marquee change: get Shama's approval first and make it its own dedicated commit.
+
+    POSTs directly to the Gemini generateContent API. Returns (text, usage) — text is
     the concatenated text output with any ```json fences stripped, usage is a dict shaped
     like {"input_tokens", "output_tokens", "server_tool_use": {"web_search_requests"}} —
     deliberately mirroring claude_common.call_claude()'s usage shape so estimate_cost()

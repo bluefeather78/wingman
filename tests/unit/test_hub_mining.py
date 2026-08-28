@@ -192,3 +192,79 @@ def test_a_lead_written_before_scope_existed_is_still_mined_off_domain():
     """Every lead already on file came from the router, which qualifies off-domain. A missing
     field must not silently flip 25 queued leads onto the wrong side."""
     assert hub.hubs_from_leads([{"url": "https://a.example/list"}])[0][1] is True
+
+
+# ---------- the address we asked for vs the page we got ----------
+
+def _hub_html(links):
+    return "<html><body>" + "".join(
+        f'<a href="{u}">{t}</a>' for u, t in links) + "</body></html>"
+
+
+def test_candidates_landing_on_the_same_page_are_extracted_once(monkeypatch):
+    """CMU's pre-college index links nine of its programs twice, at /pre-college/... and at
+    /student-affairs/pre-college/..., and every one of the second set redirects back. Deduping on
+    the REQUESTED url left 24 candidates where 15 pages exist, and each extra one is a paid call
+    that inserts a row saying what another row already says."""
+    HUB = "https://x.edu/pre-college/"
+    monkeypatch.setattr(hub, "fetch_html", lambda u, t=None: _hub_html([
+        ("https://x.edu/pre-college/art.html", "Art for high school students"),
+        ("https://x.edu/student-affairs/pre-college/art.html", "Art for high school students"),
+        ("https://x.edu/pre-college/drama.html", "Drama for high school students")]))
+    landings = {"https://x.edu/student-affairs/pre-college/art.html":
+                "https://x.edu/pre-college/art.html"}
+    import page_text
+    monkeypatch.setattr(page_text, "fetch_page_text_resolved",
+                        lambda u, t=None: ("high school students " * 30, "ok",
+                                           landings.get(u, u)))
+    found, trace = hub.discover(HUB, recurse=False)
+    assert found == ["https://x.edu/pre-college/art.html",
+                     "https://x.edu/pre-college/drama.html"]
+    assert trace["same_page_twice"] == 1
+
+
+def test_a_candidate_that_redirects_onto_the_hub_is_dropped(monkeypatch):
+    """There is no program at the other end of that link -- it lands on the index we are already
+    standing on, so extracting it would pay to describe the hub itself."""
+    HUB = "https://x.edu/pre-college/"
+    monkeypatch.setattr(hub, "fetch_html", lambda u, t=None: _hub_html([
+        ("https://x.edu/student-affairs/pre-college/gone.html", "Gone program for high school")]))
+    import page_text
+    monkeypatch.setattr(page_text, "fetch_page_text_resolved",
+                        lambda u, t=None: ("high school students " * 30, "ok", HUB))
+    found, trace = hub.discover(HUB, recurse=False)
+    assert found == [] and trace["redirects_to_hub"] == 1
+
+
+def test_a_candidate_landing_above_the_hub_is_dropped(monkeypatch):
+    """A bare `== hub` check misses the real shape. On CMU the dead links redirect to
+    /pre-college/, the PARENT of the /pre-college/academic-programs/ index being mined -- so the
+    row would have described a section, not a program. A program page is never an ancestor of
+    the index listing it, so this cannot drop a real find."""
+    HUB = "https://x.edu/pre-college/academic-programs/"
+    monkeypatch.setattr(hub, "fetch_html", lambda u, t=None: _hub_html([
+        ("https://x.edu/student-affairs/pre-college/ai.html", "AI for high school students"),
+        ("https://x.edu/pre-college/academic-programs/art.html", "Art for high school")]))
+    landing = {"https://x.edu/student-affairs/pre-college/ai.html": "https://x.edu/pre-college/"}
+    import page_text
+    monkeypatch.setattr(page_text, "fetch_page_text_resolved",
+                        lambda u, t=None: ("high school students " * 30, "ok",
+                                           landing.get(u, u)))
+    found, trace = hub.discover(HUB, recurse=False)
+    assert found == ["https://x.edu/pre-college/academic-programs/art.html"]
+    assert trace["redirects_to_hub"] == 1
+
+
+def test_a_sibling_section_is_not_treated_as_an_ancestor(monkeypatch):
+    """The guard must key on the hub's own path, not merely on being shallower -- a genuine
+    redirect to a shorter canonical URL elsewhere on the site is a real program page."""
+    HUB = "https://x.edu/pre-college/academic-programs/"
+    monkeypatch.setattr(hub, "fetch_html", lambda u, t=None: _hub_html([
+        ("https://x.edu/pre-college/academic-programs/art-camp.html", "Art for high school")]))
+    import page_text
+    monkeypatch.setattr(page_text, "fetch_page_text_resolved",
+                        lambda u, t=None: ("high school students " * 30, "ok",
+                                           "https://x.edu/artcamp"))
+    found, trace = hub.discover(HUB, recurse=False)
+    assert found == ["https://x.edu/pre-college/academic-programs/art-camp.html"]
+    assert trace.get("redirects_to_hub", 0) == 0

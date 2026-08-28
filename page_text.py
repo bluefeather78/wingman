@@ -100,8 +100,27 @@ MIN_CONTENT_WORDS = 5
 
 
 def fetch_page_text(url, timeout=DEFAULT_TIMEOUT):
-    """(text, reason). text is None when the page could not be read; reason names why so a
-    run report can say 'blocked' rather than leaving a silent hole.
+    """(text, reason) -- the two-value form every existing caller uses.
+
+    `fetch_page_text_resolved` adds the URL the fetch actually LANDED on. This wrapper keeps the
+    old arity so adding that could not touch a single call site, the same way
+    `call_gemini(return_grounding=True)` was added.
+    """
+    text, reason, _final = fetch_page_text_resolved(url, timeout)
+    return text, reason
+
+
+def fetch_page_text_resolved(url, timeout=DEFAULT_TIMEOUT):
+    """(text, reason, final_url). `final_url` is where the request ENDED UP after redirects.
+
+    A caller that decides what to spend money on needs this, because the address we asked for
+    and the page we got are routinely different things. Measured on CMU: nine
+    `/student-affairs/pre-college/academic-programs/<program>.html` links all redirect to the
+    pre-college INDEX -- so deduping on the requested URL leaves nine candidates that are one
+    page, and paying to extract each would buy nine rows describing the same thing.
+
+    text is None when the page could not be read; reason names why so a run report can say
+    'blocked' rather than leaving a silent hole.
 
     A failure here is NOT evidence about the program — it is evidence about our HTTP
     client. check_links.py measured ~9% of this catalog 403ing a non-browser agent plus 41
@@ -110,30 +129,32 @@ def fetch_page_text(url, timeout=DEFAULT_TIMEOUT):
     requirements".
     """
     if not url or not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
-        return None, "no-url"
+        return None, "no-url", url
+    final = url
     try:
         req = urllib.request.Request(url, headers={"User-Agent": uv.USER_AGENT})
         with urllib.request.urlopen(req, timeout=timeout) as r:
+            final = getattr(r, "url", None) or url
             # Anything but a plain 200 is not a page we can quote from. nyu.edu answers a
             # bot wall with 202 and an EMPTY body, which would otherwise be reported as
             # "empty-or-js" and read as a JavaScript app rather than as a refusal.
             if r.status != 200:
-                return None, f"http-{r.status}"
+                return None, f"http-{r.status}", final
             ctype = (r.headers.get("Content-Type") or "").lower()
             if "html" not in ctype and "xml" not in ctype and "text/plain" not in ctype:
-                return None, "not-html"
+                return None, "not-html", final
             raw = r.read(PAGE_BYTES).decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
-        return None, f"http-{e.code}"
+        return None, f"http-{e.code}", final
     except Exception as e:
-        return None, f"error-{type(e).__name__}"
+        return None, f"error-{type(e).__name__}", final
     text = html_to_text(raw)
     if len(text) < 200:
         # A near-empty body is almost always a JavaScript-rendered page. Treating it as a
         # real read would let a model "quote" from nothing and have the quote pass, because
         # an empty haystack fails every check EXCEPT the ones that short-circuit on it.
-        return None, "empty-or-js"
-    return text[:MAX_TEXT_CHARS], "ok"
+        return None, "empty-or-js", final
+    return text[:MAX_TEXT_CHARS], "ok", final
 
 
 def html_to_text(raw):

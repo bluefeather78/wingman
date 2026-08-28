@@ -76,6 +76,11 @@ _NAV_SLUGS = url_repair.GENERIC_SLUGS | {
     "our-team", "team", "history", "mission", "accessibility", "privacy", "terms",
     "gallery", "photos", "media", "international-student-resources", "employment-opportunities",
     "wp-admin", "wp-login", "wp-json",   # WordPress internals — never a program page
+    # A signup form is not a program. CMU's pre-college index links
+    # apply-precollege.studentaffairs.cmu.edu/register/join-our-mailing-list, which passes every
+    # other filter (same registrable domain, deep path, high-school wording) and would have been
+    # extracted and inserted as a row.
+    "join-our-mailing-list", "mailing-list", "newsletter", "subscribe",
 }
 # A non-HTML target (a viewbook PDF, a flyer image) can never be a program's landing page.
 _NONHTML_EXT = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip",
@@ -281,13 +286,52 @@ def discover(hub_url, off_domain=False, timeout=url_repair.DEFAULT_TIMEOUT, recu
         seen.add(k)
         cand.append((url, anchor))
     trace["after_anchor_filter"] = len(cand)
-    # stage 2: page-level high-school-audience check (free fetch of each target)
-    final = []
+    # stage 2: page-level high-school-audience check (free fetch of each target).
+    #
+    # This is also where a candidate is resolved to the page it actually LANDS on, and both
+    # checks below exist because of one measured run. CMU's pre-college index links nine of its
+    # programs twice -- once at /pre-college/... and once at /student-affairs/pre-college/... --
+    # and every one of the second set 302s back to the index itself. Deduping on the requested
+    # URL, this hub offered 24 candidates; nine were one page wearing nine addresses and would
+    # have been extracted, paid for, and inserted as nine rows saying the same thing.
+    #
+    # The fetch already happens here, so the final URL is free -- it was simply being discarded.
+    final, landed = [], set()
+    hub_key = url_dedupe.match_key(hub_url)
+    hub_parts = urllib.parse.urlsplit(hub_url)
+    hub_segments = [seg for seg in hub_parts.path.split("/") if seg]
+
+    def _lands_above_the_hub(landing):
+        """True when the redirect ended on the hub itself or on a section ABOVE it.
+
+        A program page is never an ancestor of the index that lists it, so this cannot drop a
+        real find -- and it catches the soft 404 that a bare `== hub` check misses. Measured on
+        CMU: /student-affairs/pre-college/academic-programs/<program>.html redirects to
+        /pre-college/, which is the parent of the hub being mined rather than the hub itself.
+        """
+        try:
+            parts = urllib.parse.urlsplit(landing or "")
+        except ValueError:
+            return False
+        if parts.netloc != hub_parts.netloc:
+            return False
+        segments = [seg for seg in parts.path.split("/") if seg]
+        return len(segments) <= len(hub_segments) and hub_segments[:len(segments)] == segments
     for url, anchor in cand:
-        text, _reason = page_text.fetch_page_text(url, timeout)
+        text, _reason, landing = page_text.fetch_page_text_resolved(url, timeout)
         if text and not has_hs_audience(text) and not has_hs_audience(anchor):
             trace["dropped_no_hs_audience"] += 1
             continue
+        land_key = url_dedupe.match_key(landing or url)
+        if land_key == hub_key or _lands_above_the_hub(landing):
+            # It redirected onto the hub, or onto a section above it. There is no program page
+            # at the other end, and extracting it would describe an index rather than a program.
+            trace["redirects_to_hub"] = trace.get("redirects_to_hub", 0) + 1
+            continue
+        if land_key in landed:
+            trace["same_page_twice"] = trace.get("same_page_twice", 0) + 1
+            continue
+        landed.add(land_key)
         final.append(url)
     trace["kept"] = len(final)
     return final, trace

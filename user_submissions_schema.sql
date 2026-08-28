@@ -48,16 +48,24 @@ ALTER TABLE opportunities
 -- boolean, a rejected row sits at is_active=false forever and gets re-triaged every time
 -- the queue is opened.
 --
---   pending_review  awaiting a human. The only value server.py ever writes on insert.
---   approved        a human accepted it; only now may is_active be flipped true.
---   rejected        a human declined it. Stays in the table as a dedupe tombstone.
---   duplicate       superseded by another row; see duplicate_of.
+--   pending_review      awaiting a human. The only value server.py ever writes on insert.
+--   approved            a human accepted it; only now may is_active be flipped true.
+--   rejected            a human declined it. Stays in the table as a dedupe tombstone.
+--   duplicate           superseded by another row; see duplicate_of.
+--   suspected_duplicate flag-in-place: the strict offline dedupe sweep suspects this is a
+--                       duplicate but left it is_active=true (a suspected dupe is still a
+--                       working opportunity; hiding it on a guess would pull a real program
+--                       from students). Surfaces in the console's 'Flagged' queue slice —
+--                       the ONE slice that lists live rows — for a human to release
+--                       (approve, stays live) or confirm (duplicate, which then deactivates).
+-- NOTE: this CHECK is re-run idempotently (DROP + ADD). Re-run this file after adding the
+-- suspected_duplicate value, or a write of it 400s.
 ALTER TABLE opportunities
   DROP CONSTRAINT IF EXISTS opportunities_moderation_status_check;
 ALTER TABLE opportunities
   ADD CONSTRAINT opportunities_moderation_status_check
   CHECK (moderation_status IS NULL OR moderation_status IN
-         ('pending_review', 'approved', 'rejected', 'duplicate'));
+         ('pending_review', 'approved', 'rejected', 'duplicate', 'suspected_duplicate'));
 
 -- Existing rows predate moderation entirely. Leaving them NULL rather than backfilling
 -- 'approved' keeps "never went through this workflow" distinguishable from "a human

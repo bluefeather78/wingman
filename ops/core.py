@@ -1568,10 +1568,29 @@ MODERATION_REASON_MAX_LEN = 500
 
 # A human's verdict on a queued row. Mirrors the CHECK constraint in
 # user_submissions_schema.sql — keep the two in step or a write here 400s.
-MODERATION_STATUSES = ("pending_review", "approved", "rejected", "duplicate")
+MODERATION_STATUSES = ("pending_review", "approved", "rejected", "duplicate",
+                       "suspected_duplicate")
 
 # Statuses that mean "a human has already dealt with this", i.e. the rows the queue hides.
+# These force is_active=False.
 ADJUDICATED_STATUSES = ("rejected", "duplicate")
+
+# Flag-in-place: the strict offline dedupe sweep marks a row it suspects is a duplicate but
+# leaves it LIVE. Unlike an adjudicated status this does NOT deactivate — a suspected
+# duplicate is still a working opportunity, and hiding it on a guess would pull a real
+# program from students until a human looked (the cost check_links never pays, because a dead
+# link really is broken). It surfaces in the 'flagged' queue slice for a human to release
+# (Activate -> approved, stays live) or confirm (moderate -> duplicate, which then deactivates).
+FLAGGED_STATUSES = ("suspected_duplicate",)
+
+# Statuses that carry a duplicate_of survivor pointer, and statuses that may carry a reason.
+POINTER_STATUSES = ("duplicate", "suspected_duplicate")
+STATUSES_WITH_REASON = ADJUDICATED_STATUSES + FLAGGED_STATUSES
+
+# The default 'queue' slice: awaiting a human, still inactive — neither adjudicated away nor
+# flagged-in-place (a suspected_duplicate is active and lives in its own slice).
+QUEUE_STATUSES = tuple(s for s in MODERATION_STATUSES
+                       if s not in ADJUDICATED_STATUSES and s not in FLAGGED_STATUSES)
 
 
 def list_pending_opportunities(limit=500, source=None, status="queue"):
@@ -1588,10 +1607,12 @@ def list_pending_opportunities(limit=500, source=None, status="queue"):
                   NOT "rejected", so it must stay in the queue.
       rejected  — already adjudicated away (rejected/duplicate). Kept reachable so a
                   mistaken rejection can be put back without a database console.
+      flagged   — flag-in-place: rows still LIVE (is_active=true) that the dedupe sweep
+                  suspects are duplicates. This is the one slice that lists ACTIVE rows —
+                  they still show to students and need a human to release or confirm them.
       all       — everything inactive, which is what the pre-moderation queue showed.
     """
     base = {
-        "is_active": "eq.false",
         "order": "created_at.desc,id.desc",
         "limit": str(max(1, min(limit, 2000))),
     }
@@ -1599,14 +1620,21 @@ def list_pending_opportunities(limit=500, source=None, status="queue"):
         base["source"] = f"eq.{source}"
 
     filters = {}
-    if status == "queue":
-        # NOT IN would drop the NULL rows too — in SQL, NULL NOT IN (...) is NULL, not
-        # true. Every scraper row has a NULL moderation_status, so that would empty the
-        # queue outright. Spell the null case out.
-        filters["or"] = ("(moderation_status.is.null,moderation_status.in."
-                         f"({','.join(s for s in MODERATION_STATUSES if s not in ADJUDICATED_STATUSES)}))")
-    elif status == "rejected":
-        filters["moderation_status"] = f"in.({','.join(ADJUDICATED_STATUSES)})"
+    if status == "flagged":
+        # The only slice that lists is_active=TRUE rows: a suspected duplicate is left live
+        # on purpose, so it cannot come from the is_active=false base every other slice uses.
+        base["is_active"] = "eq.true"
+        filters["moderation_status"] = f"in.({','.join(FLAGGED_STATUSES)})"
+    else:
+        base["is_active"] = "eq.false"
+        if status == "queue":
+            # NOT IN would drop the NULL rows too — in SQL, NULL NOT IN (...) is NULL, not
+            # true. Every scraper row has a NULL moderation_status, so that would empty the
+            # queue outright. Spell the null case out.
+            filters["or"] = ("(moderation_status.is.null,moderation_status.in."
+                             f"({','.join(QUEUE_STATUSES)}))")
+        elif status == "rejected":
+            filters["moderation_status"] = f"in.({','.join(ADJUDICATED_STATUSES)})"
 
     # Degrade one step at a time rather than failing: moderation_reason arrived after the
     # other moderation columns (2026-08-25), so a DB migrated before then must keep its
@@ -1628,8 +1656,10 @@ def list_pending_opportunities(limit=500, source=None, status="queue"):
             break
     if rows is None:
         return {"ok": False, "error": "Could not read opportunities from Supabase."}
-    if not moderation_ready and status == "rejected":
-        # Nothing can have been rejected yet if the column does not exist.
+    if not moderation_ready and status in ("rejected", "flagged"):
+        # Nothing can have been rejected or flagged yet if the column does not exist — and
+        # for `flagged` the fallback select (no moderation filter) would otherwise return the
+        # whole LIVE catalog, since that slice reads is_active=true.
         rows = []
 
     sources, statuses = {}, {}
@@ -1856,15 +1886,17 @@ def _moderation_updates(status, duplicate_of, reason, now):
         "reviewed_at": now,
         "updated_at": now,
         # Always written, never merely set: restoring or rejecting a row that was previously
-        # marked duplicate must clear the pointer, or it keeps naming a survivor for a
-        # relationship that no longer exists.
-        "duplicate_of": duplicate_of if status == "duplicate" else None,
-        _MODERATION_REASON_COLUMN: reason if status in ADJUDICATED_STATUSES and reason else None,
+        # marked duplicate (or suspected) must clear the pointer, or it keeps naming a
+        # survivor for a relationship that no longer exists.
+        "duplicate_of": (duplicate_of or None) if status in POINTER_STATUSES else None,
+        _MODERATION_REASON_COLUMN: reason if status in STATUSES_WITH_REASON and reason else None,
     }
     if status in ADJUDICATED_STATUSES:
         # An adjudicated-away row must not be left visible to students, whatever it was
         # before. Approving, by contrast, does NOT activate: that stays an explicit,
-        # separate decision on the Activate button.
+        # separate decision on the Activate button. A flag-in-place (suspected_duplicate) is
+        # deliberately absent here too — the whole point is that it stays LIVE until a human
+        # either releases it (approve) or confirms it (duplicate, which lands here).
         updates["is_active"] = False
     return updates
 
@@ -1925,12 +1957,17 @@ def moderate_opportunities(ids, status, reviewed_by="admin-console", duplicate_o
         return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
 
     duplicate_of = str(duplicate_of or "").strip()
-    if status == "duplicate":
-        # A duplicate with no survivor names nothing — it reads as "rejected" with a
-        # misleading label, and there is then no row for a reader to follow to.
-        if not duplicate_of:
-            return {"ok": False, "error": "Marking a row as a duplicate needs the id of the "
-                                          "row it duplicates."}
+    # A survivor pointer belongs only to the two statuses that name one. It is REQUIRED for a
+    # hard 'duplicate' (a duplicate with no survivor reads as a mislabelled rejection with
+    # nowhere to follow to) and OPTIONAL for 'suspected_duplicate' (the sweep may flag a
+    # cluster before a survivor is settled), but when present it is validated identically.
+    if duplicate_of and status not in POINTER_STATUSES:
+        return {"ok": False, "error": "duplicate_of only applies to the 'duplicate' or "
+                                      "'suspected_duplicate' status."}
+    if status == "duplicate" and not duplicate_of:
+        return {"ok": False, "error": "Marking a row as a duplicate needs the id of the "
+                                      "row it duplicates."}
+    if duplicate_of:
         if duplicate_of in ids:
             return {"ok": False, "error": "A row cannot be a duplicate of itself."}
         target = _supabase_request("opportunities", params={
@@ -1946,8 +1983,6 @@ def moderate_opportunities(ids, status, reviewed_by="admin-console", duplicate_o
                     "error": f"{duplicate_of} is itself marked "
                              f"{target[0]['moderation_status']} — point at the row that "
                              f"survives, not at another discarded one."}
-    elif duplicate_of:
-        return {"ok": False, "error": "duplicate_of only applies to the 'duplicate' status."}
 
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     updates = _moderation_updates(status, duplicate_of, reason, now)
@@ -2000,6 +2035,143 @@ def moderate_opportunities(ids, status, reviewed_by="admin-console", duplicate_o
                           "moderation_reason column does not exist yet. Re-run "
                           "user_submissions_schema.sql (idempotent) to keep reasons.")
     return result
+
+
+def _pick_survivor(a, b):
+    """Suggest which of two suspected-duplicate rows to KEEP and which to FLAG.
+
+    Higher score keeps: a human-approved row, then a live row, then the more specific
+    (deeper-path) URL. Only a suggestion — the operator can swap keep/flag in the console
+    before anything is written. Returns (keep, flag).
+    """
+    import url_dedupe
+
+    def score(r):
+        s = 0
+        if r.get("moderation_status") == "approved":
+            s += 8
+        if r.get("is_active"):
+            s += 4
+        try:
+            _, _, path, _ = url_dedupe.split_url(r.get("url") or "")
+            s += min(len([seg for seg in path.split("/") if seg]), 3)
+        except Exception:
+            pass
+        return s
+
+    sa, sb = score(a), score(b)
+    if sb > sa:
+        return b, a
+    return a, b  # tie keeps `a`, which the finder orders id.asc (the incumbent)
+
+
+def duplicate_report_pairs(limit=2000):
+    """Run the read-only catalog duplicate finder and return FLAG-ELIGIBLE pairs.
+
+    Flag-eligible means BOTH rows are live (is_active=true) — those are the pairs where
+    pulling either one would hide a working opportunity from students, so flag-in-place
+    (suspected_duplicate) is the right tool. A pair where one row is already inactive is NOT
+    returned: the inactive row is the natural loser and belongs in the ordinary queue's
+    Duplicate action, not flagged live. Writes nothing; this only proposes.
+    """
+    import find_catalog_dups as fcd
+
+    if not SUPABASE_URL:
+        return {"ok": False, "error": "SUPABASE_URL not configured."}
+    key = SUPABASE_SERVICE_KEY or SUPABASE_ANON_KEY
+    try:
+        rows = fcd.fetch_all_rows(SUPABASE_URL, key)
+    except Exception as e:
+        return {"ok": False, "error": f"Could not read the catalog: {str(e)[:200]}"}
+
+    groups = fcd.key_collisions(rows)
+    hints = fcd.name_hints(rows, include_inactive=False)   # active-only, matches flag-eligibility
+
+    pairs, seen = [], set()
+
+    def add(keep, flag, reason, confidence, cut):
+        # Both live, or it is not a flag-in-place case.
+        if not (keep.get("is_active") and flag.get("is_active")):
+            return
+        pkey = tuple(sorted([str(keep.get("id")), str(flag.get("id"))]))
+        if pkey in seen or keep.get("id") == flag.get("id"):
+            return
+        seen.add(pkey)
+        pairs.append({
+            "keep": {"id": keep.get("id"), "name": keep.get("name"),
+                     "url": keep.get("url"), "org": keep.get("org")},
+            "flag": {"id": flag.get("id"), "name": flag.get("name"),
+                     "url": flag.get("url"), "org": flag.get("org")},
+            "reason": reason, "confidence": confidence, "cut": cut,
+        })
+
+    # Cut 1: identical normalized URL. Pick one survivor for the whole live group, flag the rest.
+    for g in groups:
+        members = [m for m in g["rows"] if m.get("is_active")]
+        if len(members) < 2:
+            continue
+        confidence = "strong" if g["same_name"] else "weak"
+        why = ("identical URL, same name" if g["same_name"] else
+               "identical URL, different name — confirm it is not a shared application portal")
+        survivor = members[0]
+        for m in members[1:]:
+            survivor, _ = _pick_survivor(survivor, m)
+        for m in members:
+            if m.get("id") != survivor.get("id"):
+                add(survivor, m, why, confidence, "same-url")
+
+    # Cut 2: same registrable domain, name >= 0.90 similar (finder's stricter threshold).
+    for h in hints:
+        a, b = h["rows"]
+        keep, flag = _pick_survivor(a, b)
+        add(keep, flag, f"same site, name {int(h['ratio'] * 100)}% similar", "weak", "same-name")
+
+    # Cut 3: acronym<->expansion and token-set overlap, cross-host allowed — the misses the
+    # strict cuts cannot see (an acronym vs its spelled-out name, a program at a second URL on
+    # another domain). Hint-only; the scan never auto-actions, a human keeps or confirms.
+    for p in fcd.extra_name_pairs(rows):
+        a, b = p["rows"]
+        keep, flag = _pick_survivor(a, b)
+        add(keep, flag, p["reason"], p["confidence"], "name-overlap")
+
+    # Strongest first so the near-certain same-URL/same-name pairs are reviewed at the top.
+    order = {"strong": 0, "weak": 1}
+    pairs.sort(key=lambda p: order.get(p["confidence"], 9))
+    return {"ok": True, "pairs": pairs[:max(1, limit)], "total": len(pairs),
+            "scanned": len(rows)}
+
+
+def flag_suspected_duplicate_pairs(pairs, reviewed_by="admin-console"):
+    """Flag the weaker row of each reviewed pair as suspected_duplicate, pointing at the
+    survivor and leaving BOTH rows live.
+
+    Reuses moderate_opportunities per pair so every write goes through the same validation
+    (the survivor exists, is not itself adjudicated, is not the row being flagged). One extra
+    survivor lookup per pair is fine for a hand-reviewed batch.
+    """
+    pairs = pairs or []
+    if not pairs:
+        return {"ok": False, "error": "No pairs to flag."}
+    flagged, errors, details = 0, 0, []
+    for p in pairs:
+        fid = str((p or {}).get("id") or "").strip()
+        survivor = str((p or {}).get("duplicate_of") or "").strip()
+        reason = str((p or {}).get("reason") or "").strip() \
+            or f"dedupe sweep: suspected duplicate of {survivor}"
+        if not fid or not survivor:
+            errors += 1
+            if len(details) < 5:
+                details.append(f"{fid or '?'}: missing row id or survivor id")
+            continue
+        r = moderate_opportunities([fid], "suspected_duplicate", reviewed_by=reviewed_by,
+                                   duplicate_of=survivor, reason=reason)
+        if r.get("ok") and r.get("moderated"):
+            flagged += r["moderated"]
+        else:
+            errors += 1
+            if len(details) < 5:
+                details.append(f"{fid}: {r.get('error') or 'flag failed'}")
+    return {"ok": errors == 0, "flagged": flagged, "errors": errors, "error_details": details}
 
 
 def activate_opportunities(ids, active=True):
@@ -3234,13 +3406,10 @@ MAINTENANCE_TOOLS = {
         "script": "check_refresh_progress.py",
         "free": True, "writes": False, "params": [],
     },
-    "dupfinder": {
-        "name": "Duplicate Finder",
-        "description": "List rows that are secretly the same opportunity (URL or near-name "
-                       "collisions). Writes nothing — a report only.",
-        "script": "find_catalog_dups.py",
-        "free": True, "writes": False, "params": [],
-    },
+    # NOTE: the old "dupfinder" tool card was retired 2026-08-28. The same catalog scan now
+    # backs the Run → Duplicates tab (duplicate_report_pairs / flag_suspected_duplicate_pairs),
+    # which not only lists suspected pairs but lets a human flag them in place — a superset of
+    # the report-only card. find_catalog_dups.py is still imported by duplicate_report_pairs.
     "minehub": {
         # Hub-first discovery: one page that LISTS many programs yields many real rows without
         # a per-search fee. Preview (discover + dedup) is free; extraction is one no-search

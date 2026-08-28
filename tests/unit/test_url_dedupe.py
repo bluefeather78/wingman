@@ -169,6 +169,28 @@ def test_find_duplicates_bare_institution_names_emit_no_strong_hint():
     assert all(c["confidence"] != "strong" or "similar" not in c["reason"] for c in cands)
 
 
+def test_find_duplicates_same_url_bare_institution_flags_not_rejects():
+    # Same exact URL, but both names are just the institution ('Tulane University'). That is
+    # NOT real name agreement, so this must NOT silently reject (the loss direction) — it
+    # falls through to the strong 'identical URL' flag for a human. Guards the one reject path
+    # against the same false-match Fix 3 removed from the hint branches.
+    rows = [_row("ec1", "Tulane University", "https://tulane.edu/programs")]
+    exact, cands = ud.find_duplicates("https://tulane.edu/programs", "Tulane University", rows)
+    assert exact is None
+    assert len(cands) == 1
+    assert cands[0]["confidence"] == "strong"
+    assert "identical URL" in cands[0]["reason"]
+
+
+def test_find_duplicates_same_url_real_name_still_rejects():
+    # The guard must not weaken the genuine case: same URL + a real, agreeing program name
+    # still rejects as a hard duplicate.
+    rows = [_row("ec1", "Clark Scholars Program", "https://ttu.edu/clark")]
+    exact, cands = ud.find_duplicates("https://ttu.edu/clark", "Clark Scholars Program", rows)
+    assert exact is rows[0]
+    assert cands == []
+
+
 def test_find_duplicates_same_url_containment_rename_rejects():
     # Same page, one name a rename of the other (>=2 distinctive shared words) -> hard dup.
     rows = [_row("ec1", "Harvard Secondary School Program (SSP)",

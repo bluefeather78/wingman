@@ -513,6 +513,58 @@ def test_moderation_updates_reason_is_capped():
     assert len(u["moderation_reason"]) == core.MODERATION_REASON_MAX_LEN
 
 
+def test_moderation_updates_suspected_duplicate_stays_live():
+    # Flag-in-place: keeps the survivor pointer and reason, but must NOT deactivate — the
+    # whole point is the row stays visible to students until a human decides.
+    u = core._moderation_updates("suspected_duplicate", "ec17096", "dedupe sweep: 92% name", NOW)
+    assert u["moderation_status"] == "suspected_duplicate"
+    assert u["duplicate_of"] == "ec17096"
+    assert u["moderation_reason"] == "dedupe sweep: 92% name"
+    assert "is_active" not in u          # NEVER hidden on a suspicion
+
+
+def test_moderation_updates_suspected_duplicate_no_survivor_is_allowed():
+    # The sweep may flag before a survivor is settled; pointer just stays empty.
+    u = core._moderation_updates("suspected_duplicate", "", None, NOW)
+    assert u["moderation_status"] == "suspected_duplicate"
+    assert u["duplicate_of"] is None
+    assert "is_active" not in u
+
+
+def test_pick_survivor_prefers_approved_then_deeper_url():
+    bare = {"id": "a", "is_active": True, "url": "https://x.com/", "moderation_status": None}
+    good = {"id": "b", "is_active": True, "url": "https://x.com/programs/deep",
+            "moderation_status": "approved"}
+    keep, flag = core._pick_survivor(bare, good)
+    assert keep["id"] == "b" and flag["id"] == "a"
+    # symmetric — order of args must not change the verdict
+    keep2, flag2 = core._pick_survivor(good, bare)
+    assert keep2["id"] == "b" and flag2["id"] == "a"
+
+
+def test_pick_survivor_tie_keeps_first():
+    a = {"id": "a", "is_active": True, "url": "https://x.com/p", "moderation_status": None}
+    b = {"id": "b", "is_active": True, "url": "https://x.com/q", "moderation_status": None}
+    keep, flag = core._pick_survivor(a, b)
+    assert keep["id"] == "a" and flag["id"] == "b"
+
+
+def test_flag_suspected_pairs_rejects_incomplete():
+    assert core.flag_suspected_duplicate_pairs([]) == {"ok": False, "error": "No pairs to flag."}
+    r = core.flag_suspected_duplicate_pairs([{"id": "", "duplicate_of": "b"}])
+    assert r["ok"] is False and r["errors"] == 1
+
+
+def test_status_groupings_are_consistent():
+    # suspected_duplicate is a valid status, is flag-in-place (not adjudicated), and is kept
+    # out of the default queue slice so it cannot show up twice.
+    assert "suspected_duplicate" in core.MODERATION_STATUSES
+    assert "suspected_duplicate" in core.FLAGGED_STATUSES
+    assert "suspected_duplicate" not in core.ADJUDICATED_STATUSES
+    assert "suspected_duplicate" not in core.QUEUE_STATUSES
+    assert set(core.QUEUE_STATUSES) == {"pending_review", "approved"}
+
+
 # --------------------------------------------------------------------------- #
 # Maintenance tools — the runnable standalone scripts in the Run view. Pure over
 # the registry + argv builder; no subprocess is launched here.

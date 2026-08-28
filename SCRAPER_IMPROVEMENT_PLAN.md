@@ -62,22 +62,70 @@ a cookie banner and a program table are distinguishable. Measured on the nationa
 3 of 5 hubs fetchable (CEISMC 403s, medicine.illinois URLErrors — the client fact this plan
 already records).
 
+### Session 2026-08-27 (late) — 4F built, both channels LIVE-TESTED (PAID $0.24)
+
+**Phase 4F BUILT** (`discovered_leads.py`, +46 tests). Free capture of the pages a search
+already paid to consult; acting on a lead stays separately gated. Two measured findings:
+- **Not every content mill is a listicle.** Fetching one of each: lumiere/immerse/aralia
+  19.5-24k chars of real listicle prose, en.wikipedia 7.7k of real prose, **youtube 24k chars
+  of `ytcfg` JS config** (billable junk), **reddit 0** (refuses our client). YouTube was 20 of
+  109 mill hits. youtube/youtu.be/reddit excluded; wikipedia kept.
+- **Free link-counting CANNOT identify a hub page — automatic hub capture ships OFF**
+  (`HUB_PROBE_PER_SEED = 0`). At budget 8 it called **204 of 273 probed pages (75%)** hubs,
+  including /faq/, /apply/, /contact/, a PR release and a job posting. Two discriminators
+  measured on 6 known indexes vs 7 known non-indexes: **raw count good 11-94 vs bad 7-53**;
+  **nav-subtracted good 0-57 vs bad 0-35** — both fully overlapping. Same-domain links on any
+  page are dominated by shared nav, and nav subtraction cannot fix it (`precollege.wisc.edu`,
+  a good hub, scores 0 because it IS the site root). The machinery is kept and tested;
+  `capture(probe_budget=N)` re-enables it if a real discriminator is ever found.
+- The names half needs no probe and works: replaying the 40 archived seed logs queued **70
+  clean listicle leads**. `mine_hub_pages --from-leads` / `harvest_names --from-leads` consume.
+
+**HUB MINING — first live run ever (PAID $0.0461).** 3 hubs → 30 candidates → **19 rows**,
+0 errors. Real programs (USNA Summer STEM + Summer Seminar, UW-Madison BEL, Badger Summer
+Scholars, Summer Music Clinic, Engineering/Pharmacy summer programs). Rows ec18756-ec18774,
+`is_active=false`, **awaiting operator review.** Known residual: several rows are sub-pages of
+one program (Music Clinic senior/mini/auditions) and "Candidate Visit Weekend" is an admissions
+visit, not an extracurricular — reviewer calls, not code bugs.
+
+**NAME HARVEST — first live run ever (PAID $0.1926).** 3 listicle leads → 24 names → 10
+searched → **3 rows** (ec18775-ec18777). **The result is a negative finding and matters more
+than the rows: ALL THREE are Immerse Education products**, two from Immerse's own listicle,
+while every independent program the same pages named (Parsons, Otis, Drexel, NYU Tisch,
+Columbia, MAD) came back UNPROVEN.
+- **Cause: a listicle heading is a DESCRIPTION, not a canonical name.** "Drawing: Eye and Idea
+  Pre-College Course at Columbia University" is not what Columbia calls it, so `title_proves`
+  can never match — whereas a company names its OWN products canonically in its own article.
+  **The evidence bar therefore selects self-promotion.** `FLAG_SELF_PROMOTED` now marks a row
+  that resolved back onto the site that named it (flag, never reject — a provider can host a
+  real program, per the operator's Immerse ruling).
+- **So 4N works on canonical-name DIRECTORIES, not on marketing listicles.** The free
+  validation on College Transitions' competition table produced 24 clean canonical names
+  ("Academic Decathlon", "BEST Robotics Competition"); the listicles produced descriptions.
+  **That directly changes what 4F should feed 4N** — the 70 queued leads are mostly marketing
+  listicles, i.e. the weak case. Before draining them, consider: ask the naming call for the
+  program's canonical name AND host org as separate fields, and search on org+name.
+
+**Four bugs the live runs found and fixed** (commit `2601577`): the hub extract prompt never
+listed the legal `type` values (**19 of 19 rows** carried FLAG_NO_TYPE); the hub miner did not
+collapse in-run twins (one index links a program and its sub-pages — `/accelerated-learning-
+program/` + `/alp/`); `agent_common.safe_console()` — a **U+2011 in model output crashed a run
+after its paid call had returned** (cp1252 console); and the self-promotion flag above.
+
 ### OPEN / do next
-1. **Push `main`** (2 commits ahead of `origin/main`). Scraper-only — no `app/`, `render.yaml`,
-   `requirements.txt` or `server.py` changes, so a Render deploy is a no-op for the web service.
-2. **Run 4N PAID over the College Transitions table** (needs fresh approval): 1 naming call
-   (~$0.001) + up to `--max-names` searches (~$0.02-0.05 each). At `--max-names 10` that is
-   **~$0.50** for the pilot; all 24 eligible names would be ~$1.20. Success bar from the spec:
-   ≥15 real competitions at title-proven pages, operator approval ≥70%.
-3. **Phase 4F (feed-forward) is still UNBUILT** and is the remaining high-value piece — see its
-   spec below. It would stop the ~71 listicles/run the search already paid to consult from being
-   discarded, and feed them to 4N and hub mining.
-4. **Phase 4L (local) is PINNED** — the operator wants to rethink local strategy from scratch
-   (2026-08-27). Do not invest further in it, and do not treat 4F as its replacement without
-   asking; the redesigned 4L spec below is kept as the measured record, not as a work item.
-5. Standing backlog, unchanged: drain the ~167-row refind backlog in small PAID batches
-   (~$4-8), review the pending scraped rows, run the gated hub extraction (~$0.09 for the 29
-   candidates already surfaced).
+1. **Push `main`** — now 11 commits ahead of `origin/main` (the merge brought 5 branch commits with it). Scraper-only (no `app/`,
+   `render.yaml`, `requirements.txt`, `server.py`), so a Render deploy is a no-op for the web
+   service.
+2. **Review the 22 new pending rows** in the console: ec18756-ec18774 (hub-mined, mostly good)
+   and ec18775-ec18777 (name-harvested, all three self-promotion — the honest verdict is
+   probably to keep the two real Immerse program pages and reject the `/pathways/career`
+   marketing page).
+3. **Decide 4N's next input before spending more on it.** Point it at the College Transitions
+   table (24 canonical names, ~$0.75 at `--max-names 10`) rather than at more listicles, OR
+   build the canonical-name + org change first.
+4. **4L (local) stays PINNED** — rethinking from scratch. 4F does not replace it.
+5. Standing backlog: ~167-row refind (~$4-8 in small PAID batches), gated hub extraction on
+   more registry hubs.
 
 **The visual map of all of this (live/built/unbuilt, colour-coded) is a published artifact —
 ask the operator for the "Scraper Logic Map" link if you need it.** It predates Phase 4N being
@@ -601,7 +649,9 @@ fixture (fake page text in, resolved rows out); (2) a gated run over College Tra
 Dataverse lands ≥15 real competitions at title-proven pages, operator approval ≥70%; (3)
 per-name cost logged, capped, and attributed to the source page.
 
-### Phase 4F — Feed-forward: search discovers hubs/listicles → leads queue (UNBUILT)
+### Phase 4F — Feed-forward (**BUILT 2026-08-27 as `discovered_leads.py`**; hub half OFF)
+
+*Spec below is the design record. What shipped differs in one measured respect: the hub-lead half does not work and is disabled by default — free link-counting cannot tell an index from a page with a big nav (both discriminators measured, fully overlapping). The names half shipped and queued 70 leads. See the session block above.*
 
 **The gap:** the search scraper, hub mining, and name-harvest are three disconnected channels.
 But WHILE searching, the scraper constantly hits hub indexes and listicles and then throws them

@@ -2460,6 +2460,10 @@ function relocateConsole() {
   move(cardOf('userCostSummary'), 'slot-money-users');
   move(cardOf('historyBody'), 'slot-log-history');
   move(cardOf('snapshotBody'), 'slot-log-snapshots');
+  // The discovery lead queue belongs in the New-opportunities workflow, next to the tool that
+  // drains it. A card left out of this function is not merely misplaced -- it stays in a hidden
+  // legacy container and is never visible at all, which is what happened to this one.
+  move(cardOf('leadsBody'), 'slot-newopp-angles');
   move(cardOf('seedBody'), 'slot-newopp-angles');
   move(cardOf('queryBody'), 'slot-newopp-angles');
   move(cardOf('timingBody'), 'slot-log-timing');
@@ -2485,7 +2489,7 @@ function initSubtabs() {
         const sub = btn.dataset.sub;
         document.querySelectorAll('#view-run .subview').forEach(
           v => v.classList.toggle('active', v.id === 'rsub-' + sub));
-        if (sub === 'newopp') loadAggregators();
+        if (sub === 'newopp') { loadAggregators(); loadLeads(); }
         if (sub === 'lists') loadSignups();
       };
     });
@@ -3549,7 +3553,6 @@ async function loadSeeds() {
   }
   loadMerges();
   loadQueryRuns();
-  loadLeads();
 }
 
 async function loadLeads() {

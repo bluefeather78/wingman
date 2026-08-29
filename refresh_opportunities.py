@@ -14,6 +14,14 @@ cannot happen again. The extraction call runs use_web_search=False on purpose an
 page text is handed to the model in the prompt, so there is nothing to search and no memory answer
 to invite.
 
+Since 2026-08-28 the fetch has a HEADLESS-BROWSER FALLBACK (allow_browser=True → page_text runs a
+headless Chromium when plain HTTP fails). This is fully M1-consistent — the browser still reads the
+program's LIVE page (running its JS, real fingerprint), never memory — and it exists because ~22%
+of catalog pages bot-wall or JS-render against a plain-HTTP client (measured recovery: 156 of 329,
+47%; catalog fetchability 78%→88%). Playwright is an OPTIONAL install; absent it, the fetch degrades
+to plain HTTP and this agent stays runnable stdlib-only. A page the browser also cannot read is
+still SKIPPED, never invented — the M1 rule is unchanged, only the fetcher got more capable.
+
 Fields NEVER touched by this agent (reserved for other agents):
   - status, important_dates, was_estimated, important_date_note, dates_last_checked_at (deadline agent)
   - review_status, review_summary, review_sources, last_reviewed_at (review agent)
@@ -172,6 +180,19 @@ Return ONLY the raw JSON object, no markdown, no preamble. Keep response under 8
 For anything the page does not state, use null rather than guessing."""
 
 
+def _default_fetch(url):
+    """M1 fetch: the free plain-HTTP GET first, then a headless-browser fallback when it fails.
+
+    allow_browser=True is the 2026-08-28 addition. The browser still reads the LIVE page (it
+    runs the page's own JS and presents a real fingerprint) — never model memory — so MARQUEE
+    M1 is intact and, if anything, strengthened: we now read what a student's browser sees, so
+    the ~22% of catalog pages that bot-wall or JS-render (measured recovery: 156 of 329, 47%)
+    stop being silently skipped. Playwright is an OPTIONAL install; if absent the fallback
+    degrades to plain HTTP and this agent stays runnable stdlib-only.
+    """
+    return page_text.fetch_page_text(url, allow_browser=True)
+
+
 def check_one(opp, gemini_key, fetch=None):
     """MARQUEE M1 (MARQUEE_DECISIONS.md): read the program's LIVE page and extract metadata
     FROM IT. Never from model memory.
@@ -195,7 +216,7 @@ def check_one(opp, gemini_key, fetch=None):
     and retried, never condemned.
     """
     if fetch is None:
-        fetch = page_text.fetch_page_text
+        fetch = _default_fetch
     page, reason = fetch(opp.get("url"))
     if reason != "ok" or not (page or "").strip():
         return {}, 0.0, "no-fetch"

@@ -48,6 +48,16 @@ run) — it does **not** mean fall back to memory.
 - **Protected sites:** `refresh_opportunities.py` `check_one()` / `build_system()` — the fetch and the
   prompt. Any change back toward `use_web_search=False` / "no web access" / memory-only requires
   re-approval.
+- **Amendment 2026-08-28 (approved by Shama, offline-agents only):** the fetch gained a
+  **headless-browser fallback** — `page_text.fetch_page_text(allow_browser=True)` retries through a
+  headless Chromium (Playwright) when the free plain-HTTP GET fails. This is **within M1, not a
+  relaxation of it**: the browser still reads the program's **live page** (running its JS, presenting a
+  real fingerprint), never model memory, and a page it still cannot read is still **skipped, never
+  invented**. It exists because ~22% of catalog pages bot-wall or JS-render against a plain-HTTP client
+  (measured: recovers 156 of 329, 47%; fetchability 78%→88%). Playwright is an **optional** install
+  (`requirements-agents.txt`); absent it, the fetch degrades to plain HTTP and the agent stays runnable
+  stdlib-only. The fallback is **off by default** and turned on only by this agent, never by the
+  on-demand server path. Removing the fallback, or extending it toward memory, requires re-approval.
 
 ---
 

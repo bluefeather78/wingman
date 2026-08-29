@@ -1,0 +1,19 @@
+# OPTIONAL dependencies for the offline agents at the repo root. NOT installed on Render —
+# the shipped web service (requirements.txt) stays light and stdlib-only where it can.
+#
+# The offline agents remain runnable WITHOUT anything here: every dependency below is a
+# graceful-degrade enhancement, not a hard requirement. Install it on the operator's machine
+# to turn the enhancement on.
+#
+#   playwright — headless-browser fallback for page_text.fetch_page_text(allow_browser=True),
+#     used by refresh_opportunities.py (MARQUEE M1). When the free plain-HTTP GET fails
+#     (bot walls: 403/202/429; JS-rendered SPAs; some TLS errors), the agent retries through a
+#     headless Chromium that runs the page's JS and presents a real browser fingerprint — still
+#     reading the LIVE page, never model memory. Measured 2026-08-28: recovers 156 of the 329
+#     catalog pages plain HTTP could not read (47%), lifting fetchability 78% -> 88%. If
+#     Playwright is absent the fetch silently degrades to plain HTTP, so the agent still runs.
+#
+# Setup (both steps — the pip package plus the browser binary it drives):
+#   pip install -r requirements-agents.txt
+#   python -m playwright install chromium
+playwright>=1.40

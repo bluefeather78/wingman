@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """Dumps the current Supabase `opportunities` table back to opportunities.json,
-in the same 12-field shape the frontend used to fetch directly. Supabase itself
-is the runtime source of truth (see server.py's /api/opportunities); this file
-is kept git-tracked purely as a human-diffable snapshot for backup/review — run
-manually after editing the DB, before committing.
+as a human-diffable snapshot for backup/review — run manually after editing the DB,
+before committing. Supabase itself is the runtime source of truth (see server.py's
+/api/opportunities); this file is not fetched at runtime.
+
+Exports EVERY column (`select=*`), not the 12-field shape the frontend once fetched.
+Two reasons the widening matters: (1) a before/after snapshot is only as diffable as
+the columns it carries — a refresh_opportunities.py pass writes eligibility / grade /
+cost / contact_email / category, none of which the old 12-field export captured, so a
+diff could not see the fields that changed most; (2) `*` auto-includes any column added
+to the table later, so this never silently drops a new field again. The cost is a noisier
+git diff: agent-managed columns that move on every pass (updated_at, link_checked_at,
+dates_last_checked_at, important_dates, review_*) now appear in the snapshot too.
 
 USAGE:
     python export_json.py
@@ -14,7 +22,7 @@ import os
 from supabase_common import load_dotenv, supabase_get
 
 OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opportunities.json")
-FIELDS = "id,name,org,summary,url,subject_tags,type,price,state,location,intl,season"
+FIELDS = "*"
 
 
 def main():

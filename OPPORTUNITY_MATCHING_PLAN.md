@@ -497,6 +497,65 @@ findings, not features.
 - Location/residential inference feasibility (keywords) — for ranking only, not blocking.
 **Gate:** a one-page findings note appended here; each later phase's schema references it.
 
+#### Phase 0 FINDINGS (2026-08-28, read-only live pull; full report + verbatim ground-truth samples in [PHASE0_ELIGIBILITY_FINDINGS.md](PHASE0_ELIGIBILITY_FINDINGS.md))
+
+**Catalog has grown: 1488 active rows** (was ~1261 on 2026-08-26). Eligibility text present on
+**1073 (72%)**. Numbers below supersede the "Measured data state" table above where they differ.
+
+1. **Eligibility parse-quality** (keyword buckets over the 1073, a row can hit several):
+   grade/age **96%**, geographic **18%**, prereq **11%**, citizenship **8%**, demographic **8%**.
+   **~35% of eligibility rows carry more than one restriction type** — the parser must extract
+   MULTIPLE gates per row, not classify a row into one axis. Top overlaps: geo+grade, grade+prereq,
+   citizenship+grade, demographic+grade.
+
+2. **Hard-vs-soft demographic is the real risk, and it fails in BOTH directions** (n=86 demographic
+   rows). A naive "only / must / required" keyword rule tags just **6** hard and misses the rest:
+   - **16 rows are HARD-BY-SCOPE** — the demographic term IS the eligible population with no "only"
+     ("Female-identifying and non-binary high school students", "BIPOC students aged 15-19", "Native
+     American or Indigenous rising juniors"). A verb-only classifier reads these as non-restrictive
+     and would show a girls-only program to a boy. So **hard total ≈ 22**, soft **31**, unclear **33**.
+   - **The mirror failure:** a gender-scoped (hard) program can contain a stray inclusive verb —
+     `ec18636` Girls Who Code SIP ("female, non-binary… Beginners **welcome**") is HARD but reads
+     soft; `ec18889` Stanford Next Gen Women in Physics ("Students of **any gender are welcome**") is
+     genuinely SOFT. **Same "Women"-titled framing, opposite verdicts, decided by one phrase — Phase 1
+     MUST be shown this exact contrast pair as its worked example** (house style: teach with do/don't
+     examples, [[feedback_prompts_use_examples]]).
+   - **33 "unclear" residual = income / first-gen / "underrepresented" with no verb and no gender/race
+     scope.** These split hard (a NUMERIC/AMI income threshold — "household income under $80,000",
+     "income ≤ 80% AMI") vs soft (unquantified "low-income background" as priority). The surface text
+     alone cannot separate them — this is where the paid LLM earns its cost over keywords, and where
+     hand-labeled ground truth is most needed. Ground-truth row ids captured in the scratchpad report:
+     6 hard, 16 hard-scope, 31 soft, 33 unclear — a ready labeled sample for the Phase-1 gate metric.
+   - Parser false-positive to guard: `ec18818` "passionate about **Asian community**" is a topical
+     interest, not an ethnicity gate; several YoungArts rows are citizenship gates the income regex
+     mis-swept into demographic.
+
+3. **Grade-capture: 68–71% have a grade bound. Extractor-miss = 38 rows** (double the ~16 assumed) —
+   almost all **age-only phrasings the grade extractor never maps** ("Youth age 13-19", "Ages 12–17",
+   "15-18 years old") plus enrollment-scoped rows ("High school researchers", "enrolled in Durham
+   Public Schools"). **Phase 1's grade step should map age→grade (age 14 ≈ grade 9)** to recover most.
+
+4. **`subject_tags` is 929 distinct FREE-FORM values (99.9% coverage), NOT a 17-bucket vocabulary** —
+   so the catalog *data* is not the bottleneck, but two structural problems make B/C urgent anyway:
+   (a) the top layer is coarse + STEM-weighted — "STEM" alone tags ~45% of rows, Biology/Eng/Med/CS/
+   Physics pile on, humanities/arts/social-science spread thin across an 869-tag tail; (b) the tags are
+   **dirty** — case dupes ("Leadership" 213 vs "leadership" 15; "Art" vs "Arts"), synonyms (CS/Coding/
+   Programming, Medicine/Healthcare/Public Health, AI/ML/Data Science). Exact-string matching over-recalls
+   STEM and under-recalls everything else. This is the CATALOG side; the profile side (`inferSubjects`,
+   17 STEM-only buckets) is separately narrow. **Both halves need the semantic rework** — neither exact
+   tags nor 17-bucket inference bridges a humanities profile to humanities opportunities today.
+
+5. **Location shape confirmed:** `location` is a FORMAT enum — In-Person **58.5%**, In-Person+Remote
+   **14.8%**, Remote **13%**, null **13.7%**. `state` carries the place, populated **86%**. Gate geography
+   on `state` (+ eligibility geo text); use `location` only for the delivery-format facet. Treat null
+   format (13.7%) and null state (14%) as **unknown, never excluded**.
+
+**Net effect on the phase plan:** Phase 1's schema needs a demographic MODALITY field (hard / hard-scope /
+soft) with the exclusion-vs-encouragement examples baked into the prompt, an age→grade mapping step, and
+a numeric-income-threshold vs unquantified-priority distinction. Phase 5 (B/C) is confirmed urgent for
+BOTH catalog-tag normalization and profile-side breadth. The 33 unclear demographic rows are the labeled
+gate sample for Phase 1's "zero open programs wrongly marked exclusive" acceptance test.
+
 ### Phase 1 — Feasibility inputs, OPPORTUNITY side (paid agent pass; gated)
 
 Parse eligibility prose into structured gate flags on each row: `citizenship`,

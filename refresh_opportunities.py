@@ -281,6 +281,12 @@ def main():
                        help="Refresh queued rows (is_active=false, moderation_status pending/null) "
                             "so a scraped batch can be enriched from its live pages before a human "
                             "reviews it, instead of landing in the queue thin.")
+    group.add_argument("--awaiting-refresh", action="store_true",
+                       help="Refresh only ACTIVE rows currently enqueued for a metadata refresh "
+                            "(activation_refresh_queued_at is set) — rows activated in the admin "
+                            "console and not yet read from their live page. This DRAINS the "
+                            "console's Awaiting-refresh queue: each row processed here has its "
+                            "marker cleared. Needs activation_refresh_schema.sql.")
     parser.add_argument("--dry-run", action="store_true", help="No writes — just prints and dumps results to JSON.")
     parser.add_argument("--exclude-source", type=str, default=None, help="Exclude opportunities with this source value.")
     parser.add_argument("--skip-contact-email", action="store_true",
@@ -338,6 +344,26 @@ def main():
         }, service_key)
         mode = "pending"
         all_active = items
+    elif args.awaiting_refresh:
+        # Drain the console's Awaiting-refresh queue: active rows that carry the marker set at
+        # activation. The FILTER (not just the select) references the queue column, so
+        # _get_opportunities' select-only fallback cannot rescue a missing migration here —
+        # catch that 400 and say which file to run rather than dumping a stack trace.
+        print("[OK] Fetching active rows awaiting a metadata refresh (draining the queue)...")
+        try:
+            items = supabase_get(supabase_url, "opportunities", {
+                "select": select, "is_active": "eq.true",
+                ACTIVATION_REFRESH_COLUMN: "not.is.null",
+            }, service_key)
+        except urllib.error.HTTPError as e:
+            if e.code == 400:
+                print(f"[ERROR] The activation-refresh queue column is missing — run "
+                      f"activation_refresh_schema.sql in the Supabase SQL editor first.")
+                sys.exit(1)
+            raise
+        mode = "awaiting"
+        all_active = items
+        print(f"[OK] {len(items)} row(s) awaiting refresh.")
     else:
         print("[OK] Fetching all active catalog rows from Supabase...")
         params = {"select": select, "is_active": "eq.true"}

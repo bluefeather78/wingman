@@ -3056,13 +3056,19 @@ def build_agent_args(agent_name, config, preview=False):
     defaults = agent_defaults(agent_name)  # built-ins with saved overrides applied
 
     if agent_name == "metadata":
-        # refresh_opportunities.py: [--sample N | --all] [--dry-run] [--exclude-source S]
+        # refresh_opportunities.py: [--sample N | --all | --awaiting-refresh] [--dry-run]
+        # [--exclude-source S]
         scope = config.get("scope")
         if scope == "sample":
             args += ["--sample", str(_int_or_none(config.get("sampleSize")) or 50)]
+        elif scope == "awaiting":
+            # Drain the Awaiting-refresh queue: only active rows carrying the activation
+            # marker. --exclude-source does not apply here (the agent ignores it in this
+            # mode), so it is not forwarded.
+            args.append("--awaiting-refresh")
         else:
             args.append("--all")
-        if config.get("excludeSource"):
+        if scope != "awaiting" and config.get("excludeSource"):
             args += ["--exclude-source", str(config["excludeSource"])]
 
     elif agent_name == "reviews":

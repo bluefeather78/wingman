@@ -1044,6 +1044,124 @@ def _activity_apply(uid, day, delta):
             "first_at": delta["first_at"], "last_at": delta["last_at"]}])
 
 
+# ---------- user_events: the append-only behavioral event log ----------
+# The matcher's revealed-preference loop (recent saves up, dismisses down) and its
+# "not interested -> re-rank" need per-EVENT grain that user_activity (a daily rollup)
+# throws away. Capture ships EARLY even though nothing reads it for weeks, because an
+# unlogged click is unrecoverable — the same logic as the metrics daily snapshot.
+#
+# Unlike user_activity this is APPEND-ONLY, so the flush is a single batch INSERT with no
+# read-modify-write (there is no existing row to merge into). Same three postures as
+# activity, for the same reasons: buffered + background flush (this table takes every
+# impression, the highest-volume UI event there is); latch off on a missing table/column so
+# an un-run migration is a quiet no-op, not a broken request; and fail-open — event capture
+# must NEVER be the reason a student's request fails or the UI blocks.
+_events_lock = threading.Lock()
+_events_buffer = []            # list of ready-to-insert row dicts
+_events_available = True       # latched off if the table/columns aren't there
+_events_flusher = None
+EVENTS_FLUSH_SECONDS = 20.0
+EVENTS_MAX_BUFFER = 5000       # backstop: a wedged flush can't grow memory without bound
+# Free text in the column (a new action is a code change, not a DDL migration), but the write
+# path whitelists so a malformed/hostile body can't seed arbitrary rows. Keep in step with the
+# action list documented in user_events_schema.sql.
+_VALID_EVENT_ACTIONS = {
+    "impression", "open", "save", "track", "apply_click",
+    "dismiss", "untrack", "search", "tag_filter",
+}
+
+
+def record_user_events(userid, events):
+    """Buffer a batch of behavioral events for this user. Never raises, never blocks.
+
+    `events` is the list the client batched for one tick — each a
+    {action, opportunity_id?, context?} dict. Returns the count ACCEPTED (unknown actions
+    and non-dicts are dropped), or 0 when capture is off / the caller is unidentified.
+    Server-stamps ts on arrival: client clocks are not trusted, and arrival order is all the
+    aggregate reads need.
+    """
+    if not userid or not _events_available or not events:
+        return 0
+    accepted = 0
+    try:
+        uid = str(userid).strip().lower()
+        if not uid:
+            return 0
+        stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        rows = []
+        for ev in events:
+            if not isinstance(ev, dict):
+                continue
+            action = str(ev.get("action") or "").strip()
+            if action not in _VALID_EVENT_ACTIONS:
+                continue
+            opp = ev.get("opportunity_id")
+            opp = str(opp).strip() if opp not in (None, "") else None
+            context = ev.get("context")
+            if not isinstance(context, dict):
+                context = {}
+            rows.append({"userid": uid, "ts": stamp, "action": action,
+                         "opportunity_id": opp, "context": context})
+        if not rows:
+            return 0
+        with _events_lock:
+            overflow = len(_events_buffer) + len(rows) - EVENTS_MAX_BUFFER
+            if overflow > 0:
+                # Drop the OLDEST to bound memory when a flush is wedged. Telemetry read
+                # only in aggregate — a dropped interval is a gap, never a correctness bug.
+                del _events_buffer[:overflow]
+            _events_buffer.extend(rows)
+            accepted = len(rows)
+        _start_events_flusher()
+    except Exception as e:
+        # Same posture as touch_user_activity(): capture must never break a request.
+        print(f"[WARN] Could not buffer events for {userid}: {e}")
+    return accepted
+
+
+def _start_events_flusher():
+    global _events_flusher
+    if _events_flusher is not None:
+        return
+    with _events_lock:
+        if _events_flusher is not None:
+            return
+        _events_flusher = threading.Thread(target=_events_flush_loop, daemon=True)
+        _events_flusher.start()
+
+
+def _events_flush_loop():
+    while True:
+        time.sleep(EVENTS_FLUSH_SECONDS)
+        if not _events_available:
+            return
+        flush_user_events()
+
+
+def flush_user_events():
+    """Drain the event buffer into user_events in one batch INSERT. Called on a timer (and
+    available for a consumer to call before reading, the way flush_user_activity is)."""
+    global _events_available
+    with _events_lock:
+        pending = list(_events_buffer)
+        _events_buffer.clear()
+    if not pending:
+        return
+    try:
+        _supabase_request_strict("user_events", method="POST", data=pending,
+                                 extra_headers={"Prefer": "return=minimal"})
+    except Exception as e:
+        if _missing_table_error(e) or _is_missing_column_error(e):
+            _events_available = False
+            print(f"[WARN] user_events table unavailable - behavioral capture is off. "
+                  f"Run {USER_EVENTS_SETUP_SQL} in the Supabase SQL editor.")
+            return
+        # Transient failure: drop this batch rather than re-buffering it. Retrying forever
+        # would let one poisoned batch grow the buffer without bound, and what this loses is
+        # a slice of an aggregate stream, not a fact anyone reads on its own.
+        print(f"[WARN] Could not record {len(pending)} events: {e}")
+
+
 def _is_missing_column_error(exc):
     """True when PostgREST rejected a call because a migration has not been run.
 

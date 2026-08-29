@@ -1,4 +1,4 @@
-import { AuthExpiredError, type ActionItemsResponse, type ApiClient, type CalendarSyncResult, type UserOpportunitySubmission } from './ApiClient';
+import { AuthExpiredError, type ActionItemsResponse, type ApiClient, type CalendarSyncResult, type EventInput, type UserOpportunitySubmission, type WingmanEventAction } from './ApiClient';
 import type { TrackerInfo } from '@/lib/tracker';
 import { sha256Hex } from './hash';
 import { clearSession, clearTokens, loadSession, loadTokens, saveSession, saveTokens } from './tokenStore';
@@ -120,6 +120,35 @@ function queueLoad(key: string): Promise<unknown> {
     if (waiters) waiters.push({ resolve, reject });
     else _pendingLoads.set(key, [{ resolve, reject }]);
   });
+}
+
+// --- POST /api/events: fire-and-forget behavioral capture ------------------
+//
+// emitEvent() coalesces a tick's worth of events into one request, exactly like queueLoad
+// above — a card list emitting an `impression` per visible row all lands in one POST. It is
+// deliberately NOT routed through request(): capture must never trigger the 401 refresh flow,
+// never flip the 402 paywall, and never throw. A dropped batch is a gap in an aggregate
+// stream the matcher reads later, not a fact any single caller depends on.
+let _pendingEvents: EventInput[] | null = null;
+
+function flushEvents(): void {
+  const batch = _pendingEvents;
+  _pendingEvents = null;
+  if (!batch || !batch.length) return;
+  void rawFetch('/api/events', { method: 'POST', body: JSON.stringify({ events: batch }) })
+    .catch(() => {
+      /* telemetry: a failed send is a gap, never surfaced */
+    });
+}
+
+function queueEvent(ev: EventInput): void {
+  if (!_pendingEvents) {
+    _pendingEvents = [];
+    // Microtask flush, matching queueLoad: collapses this tick's events without adding a
+    // macrotask of latency to one that turns out to be alone.
+    Promise.resolve().then(flushEvents);
+  }
+  _pendingEvents.push(ev);
 }
 
 // The `exp` claim of a JWT, in ms, or null if it cannot be read. No verification — this
@@ -601,6 +630,17 @@ export const httpClient: ApiClient = {
     });
     // Mock mode returns no stop_reason; a missing one reads as a clean finish.
     return { text: cleanAiText(data), truncated: data.stop_reason === 'max_tokens' };
+  },
+
+  // --- Behavioral event capture (P-A) ---
+  emitEvent(action: WingmanEventAction, opportunityId?: string | null, context?: Record<string, unknown>): void {
+    // No-op when signed out: an unidentified caller cannot be attributed, so the server
+    // would only drop it — skip the round trip. (rawFetch attaches the bearer when present.)
+    if (!_access) return;
+    const ev: EventInput = { action };
+    if (opportunityId) ev.opportunity_id = opportunityId;
+    if (context && Object.keys(context).length) ev.context = context;
+    queueEvent(ev);
   },
 
   // --- Google Calendar sync ---

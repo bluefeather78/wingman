@@ -8,6 +8,29 @@ import type {
   SessionUser,
 } from './types';
 
+// Behavioral event capture (P-A) — the append-only telemetry the matcher's revealed-
+// preference loop will read (saves up, dismisses down, "not interested" -> re-rank). The
+// action set is kept in step with app.core._VALID_EVENT_ACTIONS, which the server whitelists;
+// anything else is dropped server-side.
+export type WingmanEventAction =
+  | 'impression'  // the row was SHOWN (context: {rank, tier, kind, query}) — the weak denominator
+  | 'open'        // opened the card / detail
+  | 'save'        // saved for later
+  | 'track'       // added to the Quest Log (a real commitment)
+  | 'apply_click' // clicked through to apply / learn more (strongest positive)
+  | 'dismiss'     // "not interested" (explicit negative; context: {reason})
+  | 'untrack'     // removed from the Quest Log (explicit negative)
+  | 'search'      // ran a search (context: {query})
+  | 'tag_filter'; // toggled a profile-tag facet (context: {tag})
+
+export interface EventInput {
+  action: WingmanEventAction;
+  // The opportunity this event is about; omit for search / tag_filter.
+  opportunity_id?: string | null;
+  // Per-action detail: {rank, tier, kind, query, reason, ...}.
+  context?: Record<string, unknown>;
+}
+
 export interface ActionItemsResponse {
   action_items?: RawActionItem[];
   // How the list was arrived at — 'page-verified', 'page-empty', 'generic-fallback',
@@ -128,6 +151,13 @@ export interface ApiClient {
   redeemPromo(code: string): Promise<Record<string, unknown>>;
   // Returns the Stripe checkout URL, or throws when payments aren't configured.
   subscriptionCheckout(promoCode: string): Promise<string | null>;
+
+  // --- Behavioral event capture (P-A) ---
+  // Fire-and-forget: record that the student did something. Batched per tick and POSTed to
+  // /api/events. NEVER throws, never blocks the UI, and is a no-op when signed out — capture
+  // is telemetry the matcher reads later, so a dropped event is a gap in an aggregate stream,
+  // never an error the caller has to handle.
+  emitEvent(action: WingmanEventAction, opportunityId?: string | null, context?: Record<string, unknown>): void;
 
   // --- Google Calendar sync ---
   // The backend URL to open to grant calendar access. This is a SEPARATE grant from

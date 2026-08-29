@@ -216,6 +216,17 @@ class TestBuildAgentArgs:
         args = core.build_agent_args("metadata", {"scope": "all", "excludeSource": "scraper-x"})
         assert args[args.index("--exclude-source") + 1] == "scraper-x"
 
+    def test_metadata_awaiting_drains_the_queue(self):
+        args = core.build_agent_args("metadata", {"scope": "awaiting"})
+        assert "--awaiting-refresh" in args
+        assert "--all" not in args and "--sample" not in args
+
+    def test_metadata_awaiting_ignores_exclude_source(self):
+        # --exclude-source does not apply in awaiting mode and must not be forwarded.
+        args = core.build_agent_args("metadata",
+                                     {"scope": "awaiting", "excludeSource": "scraper-x"})
+        assert "--awaiting-refresh" in args and "--exclude-source" not in args
+
     # -- reviews ---------------------------------------------------------- #
     def test_reviews_sample(self):
         args = core.build_agent_args("reviews", {"scope": "sample"})

@@ -4219,9 +4219,10 @@ const SCOPE_FIELDS = {
       <label for="cfgScope">Scope</label>
       <select id="cfgScope" onchange="onScopeChange()">
         <option value="all">All active rows</option>
+        <option value="awaiting">Awaiting-refresh queue (activated, not yet refreshed)</option>
         <option value="sample" selected>Random sample</option>
       </select>
-      <div class="help">Refreshes name, org, summary, eligibility, pricing and similar fields. Never touches deadlines or review status.</div>
+      <div class="help">Refreshes name, org, summary, eligibility, pricing and similar fields. Never touches deadlines or review status. <b>Awaiting-refresh queue</b> drains the rows you activated but have not yet enriched &mdash; run Preview to see how many.</div>
     </div>
     <div class="field" id="sampleWrap">
       <label for="cfgSampleSize">Sample size</label>

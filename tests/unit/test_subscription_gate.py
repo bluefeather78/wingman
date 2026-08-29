@@ -17,8 +17,8 @@ from fastapi import HTTPException
 
 import app.deps as deps
 from app.auth import AuthedUser
-from app.routes import (account, auth, email, google_oauth, mailing_list, opportunities,
-                        resume, subscription, user_data)
+from app.routes import (account, auth, email, events, google_oauth, mailing_list,
+                        opportunities, resume, subscription, user_data)
 
 
 def _iso(delta_days):
@@ -124,6 +124,10 @@ UNGATED = {
     ("POST", "/api/auth/refresh"),
     ("POST", "/api/auth/logout-all"),
     ("GET", "/api/email/unsubscribe"),
+    # Behavioral capture (P-A) is pure telemetry — it must stay reachable to a lapsed
+    # account (we still record what they do) and never 402, so it uses get_optional_user,
+    # not the subscription gate.
+    ("POST", "/api/events"),
 }
 
 GATE_DEPENDENCIES = {deps.require_subscription, deps.optional_subscribed_user}
@@ -131,7 +135,7 @@ GATE_DEPENDENCIES = {deps.require_subscription, deps.optional_subscribed_user}
 
 # Walk the routers themselves rather than app.main's FastAPI instance: recent FastAPI
 # defers include_router into a wrapper, so app.routes does not list the real APIRoutes.
-_ROUTE_MODULES = (account, auth, email, google_oauth, mailing_list, opportunities,
+_ROUTE_MODULES = (account, auth, email, events, google_oauth, mailing_list, opportunities,
                   resume, subscription, user_data)
 
 

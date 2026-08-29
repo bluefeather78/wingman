@@ -216,6 +216,10 @@ REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 # the `users` table as it stands today, which is why they shipped first.
 USER_ACTIVITY_SETUP_SQL = "user_activity_schema.sql"
 USER_METRICS_SETUP_SQL = "user_metrics_daily_schema.sql"
+# The append-only behavioral event log the matcher's revealed-preference loop reads. Capture
+# ships early (unlogged clicks are unrecoverable); the consumer comes later. Until this runs,
+# record_user_events() latches off after one warning and the UI is unaffected (fail-open).
+USER_EVENTS_SETUP_SQL = "user_events_schema.sql"
 
 
 # ---------- Lifecycle email (Resend) ----------

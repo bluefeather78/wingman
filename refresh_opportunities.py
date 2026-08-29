@@ -83,6 +83,19 @@ from contact_email_common import resolve_contact_email
 from gemini_common import call_gemini, extract_json, estimate_cost
 from supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
 
+# Windows consoles default stdout to cp1252, which raises UnicodeEncodeError on any character
+# outside that codepage — an opportunity name with a ʻokina (ʻ), a curly quote or an em
+# dash. A crash in a PROGRESS print then aborts the whole (paid, ~2h) run: a full-catalog pass
+# died at row 984/1488 on 2026-08-28 printing "Summer Science Program (SSP) ʻBiochemistry".
+# Force UTF-8 with replacement so no console print can ever kill the loop again. Guarded: not
+# every stream supports reconfigure (a pipe/StringIO under pytest does not), and this must not
+# itself raise at import. This is console output only — it touches NOTHING in MARQUEE M1.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 VALID_TYPES = {'Program', 'Internship', 'Competition', 'Research', 'Volunteer', 'Journal', 'Conference'}
 VALID_SUBJECTS = ['Mixed', 'STEM', 'Medicine', 'Humanities', 'Art', 'Business', 'Engineering',
                   'Computer Science', 'Mathematics', 'Biology', 'Physics', 'Astronomy',
@@ -408,8 +421,10 @@ def main():
     dequeued = 0                # activation-refresh markers cleared (rows drained off the queue)
 
     for i, opp in enumerate(items):
-        # Handle Unicode chars in opportunity names that may not render in console
-        opp_name = opp['name'][:60].encode('utf-8', errors='ignore').decode('utf-8')
+        # The stdout reconfigure above makes this print encoding-safe on Windows; just
+        # truncate the name for a tidy progress line. (The old encode/decode round-trip here
+        # did nothing — UTF-8 happily keeps the very characters cp1252 stdout then choked on.)
+        opp_name = opp['name'][:60]
         print(f"[{i + 1}/{len(items)}] {opp_name}...", end=" ")
         try:
             info, cost, reason = check_one(opp, gemini_key)

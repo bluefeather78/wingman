@@ -189,6 +189,16 @@ async def handle_pending_update(request: Request):
     return json_response(200 if result.get("ok") else 400, result, default=str)
 
 
+@router.get("/api/agents/metadata-refresh-queue")
+def handle_metadata_refresh_queue(request: Request):
+    """Read-only: rows activated but not yet run through refresh_opportunities.py. Backs the
+    Core Details card. Localhost-gated like the rest of /api/agents/* (this list carries row
+    names/urls)."""
+    limit = _qs_int(request, "limit", 200) or 200
+    result = core.metadata_refresh_queue(limit=limit)
+    return json_response(200 if result.get("ok") else 400, result, default=str)
+
+
 @router.get("/api/agents/duplicate-report")
 def handle_duplicate_report(request: Request):
     """Read-only scan for flag-eligible duplicate pairs (both rows live). Writes nothing —

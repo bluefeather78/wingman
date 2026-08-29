@@ -539,6 +539,20 @@ tr.disabled-seed { opacity: .48; }
       <div class="agents" id="wf-core"></div>
       <div class="section-label">Reports</div>
       <div class="agents" id="tools-core"></div>
+
+      <!-- Rows the console activated but that have not yet been read from their live page by
+           refresh_opportunities.py. Activation enqueues them; the agent (run manually) drains
+           them. Read-only. Off until activation_refresh_schema.sql is run. -->
+      <div class="card">
+        <div class="card-head">
+          <h2>Awaiting refresh</h2>
+          <div class="spacer"></div>
+          <div class="hint">Activated rows still on scraper metadata &mdash; run the agent above to enrich them</div>
+        </div>
+        <div class="card-body tight">
+          <div id="mrqBody" class="hint" style="padding:10px 14px">Loading&hellip;</div>
+        </div>
+      </div>
     </div>
 
     <div class="subview" id="rsub-upkeep">
@@ -2768,6 +2782,7 @@ function initSubtabs() {
           v => v.classList.toggle('active', v.id === 'rsub-' + sub));
         if (sub === 'newopp') { loadAggregators(); loadLeads(); }
         if (sub === 'dupes') renderDupes();
+        if (sub === 'core') loadMetadataRefreshQueue();
         if (sub === 'lists') loadSignups();
       };
     });
@@ -3870,6 +3885,51 @@ async function loadLeads() {
     el.innerHTML = head + rows + more;
   } catch (e) {
     el.textContent = 'Could not load leads: ' + e.message;
+  }
+}
+
+// Rows activated in the console but not yet run through refresh_opportunities.py. The agent
+// run stays manual — this is just the visible queue of what is waiting for it. Cleared per
+// row when a manual refresh reads that row's page.
+async function loadMetadataRefreshQueue() {
+  const el = $('mrqBody');
+  if (!el) return;
+  try {
+    const d = await api('/api/agents/metadata-refresh-queue?limit=200');
+    if (!d.ok) { el.textContent = 'Could not read the queue: ' + (d.error || 'unknown'); return; }
+    if (!d.queue_ready) {
+      el.innerHTML = `<div>Not tracking yet &mdash; run <span class="mono">${esc(d.queue_sql || 'activation_refresh_schema.sql')}</span>
+        in the Supabase SQL editor (idempotent), then restart with <span class="mono">restart_server.ps1</span>.
+        Until then, activation still works; it just is not recorded here.</div>`;
+      return;
+    }
+    if (!d.count) {
+      el.innerHTML = `<div>Nothing waiting &mdash; every activated row has been read from its live page.</div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:4px">A row lands here the moment you
+        activate it, and clears when a manual <span class="mono">refresh_opportunities.py</span> run reads its page.</div>`;
+      return;
+    }
+    const head = `<div style="padding:2px 0 10px">
+      <b>${d.count}</b> activated row${d.count === 1 ? '' : 's'} still on their original (often scraper) metadata.
+      <div style="font-size:12px;color:var(--text-3);margin-top:4px">Enrich them by running the Core Details
+        agent above &mdash; a whole pass, or just these:
+        <span class="mono">python refresh_opportunities.py --ids ${esc((d.rows || []).slice(0, 8).map(r => r.id).join(','))}${d.count > 8 ? ',…' : ''}</span>.
+        Oldest first.</div></div>`;
+    const rows = (d.rows || []).map(r => {
+      const when = r.activation_refresh_queued_at
+        ? new Date(r.activation_refresh_queued_at).toISOString().slice(0, 10) : '';
+      return `<div style="padding:7px 0;border-top:1px solid var(--border)">
+        <div><span class="mono">${esc(r.id || '')}</span> &middot; ${esc(r.name || '(no name)')}
+          ${r.org ? '<span style="color:var(--text-3)">&mdash; ' + esc(r.org) + '</span>' : ''}</div>
+        <div style="font-size:12px;color:var(--text-3)">${esc(r.source || '')}${when ? ' &middot; queued ' + when : ''}
+          &middot; <span class="mono" title="${esc(r.url || '')}">${esc((r.url || '').slice(0, 80))}</span></div>
+      </div>`;
+    }).join('');
+    const more = d.truncated
+      ? `<div class="hint" style="padding-top:8px">Showing the oldest 200; more are queued.</div>` : '';
+    el.innerHTML = head + rows + more;
+  } catch (e) {
+    el.textContent = 'Could not load the refresh queue: ' + e.message;
   }
 }
 

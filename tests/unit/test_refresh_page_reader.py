@@ -6,6 +6,9 @@ row, not answer from the model's training data. The fetch (`fetch`, page_text.fe
 touches the network.
 """
 import json
+import urllib.error
+
+import pytest
 
 import refresh_opportunities as r
 
@@ -99,3 +102,49 @@ def test_real_cost_values_survive():
     for keep in ("$700", "$10-20", "Free", "$2,400",
                  "$675.00 per course; $1,225.00 for Full Day Combo"):
         assert r.clean_update_dict({"cost": keep})["cost"] == keep, keep
+
+
+def test_activation_queue_fetch_degrades_when_migration_not_run(monkeypatch):
+    # If activation_refresh_schema.sql has not been run, the queue column is absent and a
+    # select naming it 400s. The agent must keep running (drop the column, latch the drain
+    # off) rather than dying — the metadata refresh itself does not depend on the column.
+    calls = []
+
+    def fake_get(url, table, params, key):
+        calls.append(params["select"])
+        if r.ACTIVATION_REFRESH_COLUMN in params["select"]:
+            raise urllib.error.HTTPError(url, 400, "column does not exist", {}, None)
+        return [{"id": "ec1"}]
+
+    monkeypatch.setattr(r, "supabase_get", fake_get)
+    monkeypatch.setattr(r, "_queue_col_enabled", True)
+    sel = "id,name," + r.ACTIVATION_REFRESH_COLUMN
+    rows = r._get_opportunities("http://x", {"select": sel, "is_active": "eq.true"}, "k")
+    assert rows == [{"id": "ec1"}]
+    assert r._queue_col_enabled is False          # latched off for the rest of the run
+    assert len(calls) == 2                         # tried with the column, then without
+    assert r.ACTIVATION_REFRESH_COLUMN not in calls[1]
+
+
+def test_activation_queue_fetch_passes_through_when_column_present(monkeypatch):
+    # Happy path: the column exists, one call, drain stays enabled.
+    monkeypatch.setattr(r, "supabase_get",
+                        lambda url, table, params, key: [{"id": "ec1",
+                                                          r.ACTIVATION_REFRESH_COLUMN: "2026-08-28T00:00:00Z"}])
+    monkeypatch.setattr(r, "_queue_col_enabled", True)
+    rows = r._get_opportunities("http://x",
+                                {"select": "id," + r.ACTIVATION_REFRESH_COLUMN}, "k")
+    assert rows[0]["id"] == "ec1"
+    assert r._queue_col_enabled is True
+
+
+def test_activation_queue_fetch_reraises_unrelated_400(monkeypatch):
+    # A 400 that is NOT about the queue column (retry without it still fails) must surface,
+    # not be silently swallowed as "migration missing".
+    def fake_get(url, table, params, key):
+        raise urllib.error.HTTPError(url, 400, "some other error", {}, None)
+
+    monkeypatch.setattr(r, "supabase_get", fake_get)
+    monkeypatch.setattr(r, "_queue_col_enabled", True)
+    with pytest.raises(urllib.error.HTTPError):
+        r._get_opportunities("http://x", {"select": "id,name"}, "k")  # no queue col -> reraise

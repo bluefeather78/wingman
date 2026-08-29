@@ -2174,6 +2174,45 @@ def flag_suspected_duplicate_pairs(pairs, reviewed_by="admin-console"):
     return {"ok": errors == 0, "flagged": flagged, "errors": errors, "error_details": details}
 
 
+# The queue marker added by activation_refresh_schema.sql. Set when a row is activated,
+# cleared by refresh_opportunities.py once it reads the page. A one-shot queue flag, NOT a
+# staleness clock — see that file's header.
+ACTIVATION_REFRESH_COLUMN = "activation_refresh_queued_at"
+ACTIVATION_REFRESH_SQL = "activation_refresh_schema.sql"
+
+
+def metadata_refresh_queue(limit=200):
+    """Rows ACTIVATED but not yet run through refresh_opportunities.py.
+
+    Read-only. Backs the console's Core Details card. A row is in the queue while its
+    `activation_refresh_queued_at` is non-null; the refresh agent nulls it on a successful
+    page read. Oldest-queued first, so the top of the list is what has waited longest.
+
+    Degrades if activation_refresh_schema.sql has not been run: the column does not exist,
+    the select 400s, and we return queue_ready=False + the file name rather than an error —
+    the card then shows the setup line, exactly like the moderation queue does.
+    """
+    params = {
+        "select": f"id,name,org,url,source,{ACTIVATION_REFRESH_COLUMN}",
+        ACTIVATION_REFRESH_COLUMN: "not.is.null",
+        "is_active": "eq.true",
+        "order": f"{ACTIVATION_REFRESH_COLUMN}.asc",
+        "limit": str(max(1, min(int(limit or 200), 2000))),
+    }
+    rows = _supabase_request("opportunities", params=params)
+    if rows is None:
+        # Could be the missing column (feature off) or a transient read failure. A HEAD
+        # count on the bare table tells them apart: if that also fails it is a real outage.
+        probe = _supabase_request("opportunities", params={"select": "id", "limit": "1"})
+        if probe is not None:
+            return {"ok": True, "queue_ready": False, "count": 0, "rows": [],
+                    "queue_sql": ACTIVATION_REFRESH_SQL}
+        return {"ok": False, "error": "Could not read opportunities from Supabase."}
+    return {"ok": True, "queue_ready": True, "count": len(rows), "rows": rows,
+            "truncated": len(rows) >= max(1, min(int(limit or 200), 2000)),
+            "queue_sql": ACTIVATION_REFRESH_SQL}
+
+
 def activate_opportunities(ids, active=True):
     """Flip is_active for an explicit list of ids. Never called with anything but an
     operator's explicit selection — there is no "activate all matching" path on purpose."""
@@ -2187,20 +2226,36 @@ def activate_opportunities(ids, active=True):
     # Activating IS a human verdict, so stamp it as one — otherwise an activated row keeps
     # a NULL moderation_status and comes back round the queue on the next pass. Dropped
     # from the payload (not the whole write) if the migration has not been run.
+    #
+    # Enqueue for a metadata refresh: an activated row goes live with whatever metadata it
+    # had (often a scraper's thin extraction), so mark it "awaiting refresh_opportunities"
+    # here; the agent clears the mark when it reads the page. Deactivating CLEARS the mark
+    # (a hidden row is not awaiting anything). See activation_refresh_schema.sql. This is a
+    # SEPARATE column from the moderation one, so it degrades on its OWN ladder rung — a
+    # missing queue column must never cost the moderation stamp (which would send the row
+    # back round the queue). Rungs, most→least complete: full → moderation-only → plain.
     stamped = {"is_active": bool(active), "updated_at": now}
     if active:
         stamped.update({"moderation_status": "approved", "reviewed_by": "admin-console",
                         "reviewed_at": now})
+    # full = stamped + the queue marker (now when activating, cleared when deactivating).
+    full = dict(stamped, **{ACTIVATION_REFRESH_COLUMN: (now if active else None)})
     plain = {"is_active": bool(active), "updated_at": now}
+    # Ladder rungs by index: 0 full, 1 moderation-only (queue column missing), 2 plain
+    # (moderation columns also missing). `rung` latches at the first level that works, so
+    # the rest of the batch does not re-probe a column we already know is absent.
+    ladder = [full, stamped, plain]
+    rung = 0
     for opp_id in ids:
         try:
-            try:
-                _commit_patch(opp_id, stamped)
-            except Exception as e:
-                if not _is_missing_column_error(e):
-                    raise
-                stamped = plain  # migration not run; stop trying for the rest of the batch
-                _commit_patch(opp_id, plain)
+            while True:
+                try:
+                    _commit_patch(opp_id, ladder[rung])
+                    break
+                except Exception as e:
+                    if not _is_missing_column_error(e) or rung >= len(ladder) - 1:
+                        raise
+                    rung += 1  # drop to the next rung and retry this same row
             done += 1
         except Exception as e:
             errors += 1
@@ -2213,7 +2268,10 @@ def activate_opportunities(ids, active=True):
             _opportunities_cache["fetched_at"] = 0.0
     return {"ok": errors == 0, "activated": done if active else 0,
             "deactivated": 0 if active else done,
-            "errors": errors, "error_details": details}
+            "errors": errors, "error_details": details,
+            # False means activation_refresh_schema.sql has not been run: the row was still
+            # (de)activated, it just was not enqueued for a refresh.
+            "queue_ready": rung == 0}
 
 
 # ---------------- Deadline cache ----------------

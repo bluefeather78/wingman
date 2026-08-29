@@ -82,3 +82,20 @@ def test_prompt_no_longer_claims_no_web_access():
     sys_prompt = r.build_system(OPP)
     assert "NO WEB ACCESS" not in sys_prompt
     assert "extract" in sys_prompt.lower()
+
+
+def test_numeric_zero_cost_is_dropped_not_written():
+    # The model returns a bare "0"/"$0"/"0.00" for a free program. `price` already
+    # carries Free/Paid, so a numeric-zero cost is noise that would OVERWRITE a good
+    # curated value ("Free", "No cost; volunteer hours count...") — measured on the
+    # 2026-08-28 sample (ASPIRE, ARC, Legacy). It must be dropped.
+    for zero in ("0", "0.00", "$0", "$0.00", " 0 ", "$0.0"):
+        assert "cost" not in r.clean_update_dict({"cost": zero}), zero
+
+
+def test_real_cost_values_survive():
+    # Anything that is not numeric-zero is preserved verbatim, including the word "Free"
+    # (a real, informative cost string) and complex/range prices.
+    for keep in ("$700", "$10-20", "Free", "$2,400",
+                 "$675.00 per course; $1,225.00 for Full Day Combo"):
+        assert r.clean_update_dict({"cost": keep})["cost"] == keep, keep

@@ -72,6 +72,7 @@ import datetime
 import json
 import os
 import random
+import re
 import sys
 import urllib.error
 
@@ -188,10 +189,22 @@ def clean_update_dict(info):
     # model still sees a url in its input (for identification) and may still echo one back;
     # dropping it here is what makes that harmless, and is the half that has to hold even
     # if the prompt is later reworded.
-    for field in ["name", "org", "summary", "eligibility", "cost"]:
+    for field in ["name", "org", "summary", "eligibility"]:
         val = info.get(field)
         if isinstance(val, str) and val.strip():
             update[field] = val.strip()
+
+    # `cost` is a string like "$2000-3500", but the model routinely returns a bare "0"
+    # (or "$0", "0.00") for a free program — a valid non-empty string, so without this it
+    # OVERWRITES a good curated value ("Free", "No cost; volunteer hours count...") with a
+    # meaningless "0". Pricing free/paid is already carried by the `price` enum, so a
+    # numeric-zero cost carries no information and is dropped rather than written.
+    cost = info.get("cost")
+    if isinstance(cost, str) and cost.strip():
+        cost = cost.strip()
+        stripped = cost.lstrip("$").replace(",", "").strip()
+        if not re.fullmatch(r"0+(\.0+)?", stripped):
+            update["cost"] = cost
 
     contact_email = clean_email(info.get("contact_email"))
     if contact_email:

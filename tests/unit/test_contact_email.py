@@ -135,3 +135,43 @@ def test_candidate_urls_all_slugs_present():
 
 def test_candidate_urls_invalid_returns_landing_only():
     assert ce.candidate_urls("garbage") == ["garbage"]
+
+
+# --------------------------------------------------- resolve_contact_email (M9: Gemini)
+
+_OPP = {"id": "ec1", "name": "Prog", "org": "Org", "url": "https://ex.com/prog"}
+
+
+def test_resolve_single_candidate_makes_no_model_call(monkeypatch):
+    # Exactly one candidate resolves for free — the model function must NOT be called.
+    monkeypatch.setattr(ce, "scan_pages", lambda opp: (["dir@ex.com"], ["u"]))
+    monkeypatch.setattr(ce, "call_gemini", lambda *a, **k: pytest.fail("no model call expected"))
+    email, cost, used_model, _ = ce.resolve_contact_email(_OPP, "gkey")
+    assert email == "dir@ex.com" and cost == 0.0 and used_model is False
+
+
+def test_resolve_multi_candidate_uses_gemini_and_picks_choice(monkeypatch):
+    # Two candidates -> one Gemini call (M9 provider swap). The chosen index is applied,
+    # and the call is pinned to the cheap no-search model.
+    seen = {}
+
+    def fake_gemini(system, user_content, api_key, **kw):
+        seen.update(kw, api_key=api_key)
+        return '{"choice": 1, "reason": "program-specific"}', {"usage": "x"}
+
+    monkeypatch.setattr(ce, "scan_pages", lambda opp: (["info@ex.com", "prog@ex.com"], ["u"]))
+    monkeypatch.setattr(ce, "call_gemini", fake_gemini)
+    monkeypatch.setattr(ce, "estimate_cost", lambda usage: 0.001)
+    email, cost, used_model, _ = ce.resolve_contact_email(_OPP, "gkey")
+    assert email == "prog@ex.com"          # candidates[1]
+    assert used_model is True and cost == 0.001
+    assert seen["model"] == ce.CONTACT_MODEL and seen["use_web_search"] is False
+    assert seen["api_key"] == "gkey"       # the Gemini key is what gets passed through
+
+
+def test_resolve_multi_candidate_no_key_leaves_unresolved(monkeypatch):
+    # Without a key the multi-candidate row is left unresolved rather than erroring.
+    monkeypatch.setattr(ce, "scan_pages", lambda opp: (["info@ex.com", "prog@ex.com"], ["u"]))
+    monkeypatch.setattr(ce, "call_gemini", lambda *a, **k: pytest.fail("no model call without key"))
+    email, cost, used_model, _ = ce.resolve_contact_email(_OPP, "")
+    assert email is None and cost == 0.0 and used_model is False

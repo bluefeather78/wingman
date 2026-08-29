@@ -16,8 +16,8 @@ signup forms, applied to a much simpler question):
      id — e.g. a Sentry DSN — can't be mistaken for an address).             free
   3. Exactly one plausible candidate -> use it directly. NO MODEL CALL.      free
   4. Zero candidates -> leave contact_email untouched. NO MODEL CALL.        free
-  5. More than one candidate -> ONE Haiku call to say which, if any, is this
-     program's own address rather than a shared institutional one.          ~$0.002
+  5. More than one candidate -> ONE gemini-3.5-flash-lite call to say which,
+     if any, is this program's own address vs a shared institutional one.   ~$0.001
 
 Step 5 exists for the same reason find_mailing_lists.py needs a model at all: a page can
 carry several plausible addresses (a specific program contact plus a general admissions or
@@ -25,16 +25,26 @@ webmaster address), and regex has no way to tell them apart. Unlike that feature
 answer here costs a reader a bounced or misdirected draft email, not an unattended automated
 subscribe — so there is deliberately no pending_review/verified lifecycle; this writes
 straight to opportunities.contact_email.
+
+PROVIDER (MARQUEE M9, changed 2026-08-29 with Shama's approval, its own dedicated commit):
+step 5 runs on GEMINI (gemini-3.5-flash-lite), not Claude Haiku. It is a trivial no-web-search
+classification ("which of these N addresses is this program's own") that either model does
+equally well, so there was no technical reason for the Anthropic dependency. Moving it to
+Gemini means it uses the key its only two callers ALREADY require (refresh_opportunities.py
+and find_contact_emails.py both need GEMINI_API_KEY), so multi-candidate rows now resolve
+without a second key. This is a paid-call provider swap — do not swap it back (or forward)
+without Shama's approval and a dedicated commit.
 """
 import html as html_module
 import re
 import urllib.parse
 
 from agent_common import clean_email
-from claude_common import call_claude, estimate_cost, extract_json
+from gemini_common import call_gemini, estimate_cost, extract_json
 from mailing_list_common import fetch_page  # reused fetch plumbing
 
 MAX_PAGES_PER_OPP = 5  # landing page + up to 4 contact-page guesses
+CONTACT_MODEL = "gemini-3.5-flash-lite"  # cheap, no web search — matches refresh_opportunities
 
 # Slugs tried at two levels below, in this order. "contact" and "contact-us" are by far
 # the most common; "contactus" (no separator) catches older/static sites that don't use
@@ -193,10 +203,11 @@ def build_user_content(opp, candidates):
 def resolve_contact_email(opp, api_key):
     """One opportunity -> (email or None, cost, used_model, pages_fetched).
 
-    `api_key` may be None or empty — a caller with no ANTHROPIC_API_KEY (refresh_
-    opportunities.py runs on Gemini and doesn't require one) still gets every row that
-    resolves for free (0 or exactly 1 candidate); only the rare multi-candidate row is
-    left unresolved rather than erroring.
+    `api_key` is a GEMINI key (see the PROVIDER note in the module docstring — step 5 runs
+    on Gemini, M9). It may be None or empty and every free-resolving row (0 or exactly 1
+    candidate) still resolves; only the rare multi-candidate row is left unresolved rather
+    than erroring. In practice both callers already require GEMINI_API_KEY, so the key is
+    present and multi-candidate rows do get resolved.
     """
     candidates, fetched = scan_pages(opp)
     if not candidates:
@@ -206,8 +217,8 @@ def resolve_contact_email(opp, api_key):
     if not api_key:
         return None, 0.0, False, fetched
 
-    text, usage = call_claude(build_system(), build_user_content(opp, candidates), api_key,
-                              use_web_search=False, max_tokens=200)
+    text, usage = call_gemini(build_system(), build_user_content(opp, candidates), api_key,
+                              use_web_search=False, max_tokens=200, model=CONTACT_MODEL)
     cost = estimate_cost(usage)
     verdict = extract_json(text) or {}
     choice = verdict.get("choice")

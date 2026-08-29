@@ -47,8 +47,9 @@ signal that anything happened. Do not put `url` back without a grounded source f
 Reads each program's live page (free plain-HTTP GET, then gemini-3.5-flash-lite extracts from the
 fetched text). The fetch itself is free; only the extraction call costs money, and only for rows
 that actually fetch — a blank/JS shell or a non-200 is skipped cheaply (~1300 rows, roughly a
-fraction of a cent each that fetches). GEMINI_API_KEY is required; ANTHROPIC_API_KEY is optional
-(only the contact-email fallback uses it).
+fraction of a cent each that fetches). GEMINI_API_KEY is required and is the ONLY key this
+agent needs: the contact-email fallback also runs on Gemini as of 2026-08-29 (MARQUEE M9
+provider swap), so ANTHROPIC_API_KEY is no longer used here at all.
 
 WALL TIME: dominated by the rate limiter, not by the API. gemini_common enforces a minimum
 delay between every Gemini call (default 5s, see --min-delay), so 1200+ rows is roughly
@@ -304,17 +305,13 @@ def main():
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     service_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not supabase_url or not service_key or not gemini_key:
         print("[ERROR] SUPABASE_URL / SUPABASE_SERVICE_KEY / GEMINI_API_KEY not set in .env.")
         sys.exit(1)
-    # MARQUEE M1: the page fetch is a FREE plain-HTTP GET, so no Anthropic key is needed to read
-    # the page. ANTHROPIC_API_KEY is only used for the optional contact-email fallback below;
-    # without it, multi-candidate contact pages are simply left unresolved (a warning, not a stop).
-    if not args.skip_contact_email and not anthropic_key:
-        print("[WARN] ANTHROPIC_API_KEY not set — contact-email lookups will only resolve pages "
-              "with 0 or 1 candidate address; multi-candidate pages are left unresolved. "
-              "(Metadata itself is read from the live page and does not need this key.)")
+    # GEMINI_API_KEY is the only key this agent needs. The page fetch is a FREE plain-HTTP GET
+    # (MARQUEE M1), the metadata extraction is Gemini, and as of the M9 provider swap the
+    # contact-email fallback is Gemini too — so a multi-candidate contact page always resolves
+    # rather than being left unresolved for want of a second key.
 
     select = ("id,name,org,url,summary,type,price,location,intl,season,eligibility,"
               "grade_min,grade_max,cost,subject_tags,contact_email,"
@@ -438,7 +435,7 @@ def main():
             # (contact_email_common) for any row that doesn't already have one, so a normal
             # pass fills it without needing find_contact_emails.py run separately.
             if not args.skip_contact_email and "contact_email" not in updates and not opp.get("contact_email"):
-                email, c_cost, used_model, _ = resolve_contact_email(opp, anthropic_key)
+                email, c_cost, used_model, _ = resolve_contact_email(opp, gemini_key)
                 total_cost += c_cost
                 contact_model_calls += 1 if used_model else 0
                 if email:

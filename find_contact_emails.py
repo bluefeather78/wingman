@@ -14,9 +14,10 @@ this script on its own for the initial backfill, or later to force a re-check
 (--force) without paying for a full metadata refresh alongside it.
 
 SETUP:
-    .env needs SUPABASE_URL, SUPABASE_SERVICE_KEY. ANTHROPIC_API_KEY is optional — without
+    .env needs SUPABASE_URL, SUPABASE_SERVICE_KEY. GEMINI_API_KEY is optional — without
     it, every row that resolves for free (0 or 1 candidate email) still gets checked; only
-    the rare multi-candidate row is left unresolved instead of erroring.
+    the rare multi-candidate row is left unresolved instead of erroring. (The disambiguation
+    call runs on Gemini as of the 2026-08-29 M9 provider swap — see contact_email_common.py.)
     Run opportunities_contact_email_schema.sql once in the Supabase SQL editor first.
 
 USAGE:
@@ -85,17 +86,17 @@ def main():
                              "local JSON snapshot instead.")
     add_agent_args(parser, default_timeout=60, default_min_delay=5)
     args = parser.parse_args()
-    apply_timing(args, claude=True)
+    apply_timing(args, gemini=True)  # M9: the disambiguation call is Gemini, so use its limiter
 
     load_dotenv()
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     service_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
     if not supabase_url or not service_key:
         print("[ERROR] SUPABASE_URL / SUPABASE_SERVICE_KEY not set in .env.")
         sys.exit(1)
-    if not anthropic_key:
-        print("[WARN] ANTHROPIC_API_KEY not set — multi-candidate pages will be left "
+    if not gemini_key:
+        print("[WARN] GEMINI_API_KEY not set — multi-candidate pages will be left "
               "unresolved. Rows with 0 or 1 candidate email still resolve for free.")
 
     print("[OK] Fetching active catalog from Supabase...")
@@ -126,7 +127,7 @@ def main():
     for i, opp in enumerate(items):
         print(f"[{i + 1}/{len(items)}] {opp['name'][:55]}...", end=" ")
         try:
-            email, cost, used_model, fetched = resolve_contact_email(opp, anthropic_key)
+            email, cost, used_model, fetched = resolve_contact_email(opp, gemini_key)
             total_cost += cost
             model_calls += 1 if used_model else 0
             entry = {"id": opp["id"], "name": opp["name"], "url": opp["url"],

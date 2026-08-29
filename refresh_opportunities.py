@@ -91,6 +91,33 @@ VALID_LOCATION = {'In-Person', 'Remote', 'In-Person and Remote'}
 VALID_INTL = {'International Students', 'Domestic Students'}
 VALID_SEASON = {'Summer', 'Year-Long', 'Spring', 'Fall', 'Winter'}
 
+# Queue marker from activation_refresh_schema.sql: a row the console activated and enqueued
+# for a metadata refresh. This agent is the DRAIN — it clears the marker once it successfully
+# reads the row's page (reason == 'ok'), whether or not any field changed, so the console's
+# "awaiting refresh" list empties as rows are processed. A one-shot queue flag, not a
+# staleness clock. Absent until the migration is run; the fetch below degrades and the drain
+# then no-ops (see _get_opportunities).
+ACTIVATION_REFRESH_COLUMN = "activation_refresh_queued_at"
+_queue_col_enabled = True
+
+
+def _get_opportunities(supabase_url, params, service_key):
+    """supabase_get for the opportunities table, tolerant of activation_refresh_schema.sql
+    not being run. If the queue column is in the select and PostgREST 400s, drop it and
+    latch it off for the rest of the run — the drain then simply does nothing, and the
+    metadata refresh itself is unaffected."""
+    global _queue_col_enabled
+    try:
+        return supabase_get(supabase_url, "opportunities", params, service_key)
+    except urllib.error.HTTPError as e:
+        sel = params.get("select", "")
+        if e.code == 400 and _queue_col_enabled and ACTIVATION_REFRESH_COLUMN in sel:
+            _queue_col_enabled = False
+            trimmed = [c for c in sel.split(",") if c != ACTIVATION_REFRESH_COLUMN]
+            return supabase_get(supabase_url, "opportunities",
+                                dict(params, select=",".join(trimmed)), service_key)
+        raise
+
 
 def build_system(opp):
     today = datetime.date.today().isoformat()
@@ -284,7 +311,8 @@ def main():
               "(Metadata itself is read from the live page and does not need this key.)")
 
     select = ("id,name,org,url,summary,type,price,location,intl,season,eligibility,"
-              "grade_min,grade_max,cost,subject_tags,contact_email")
+              "grade_min,grade_max,cost,subject_tags,contact_email,"
+              + ACTIVATION_REFRESH_COLUMN)
 
     # --ids / --pending target queued or just-activated rows (they ignore the is_active
     # filter), which is how the new-angle pipeline enriches a scraped batch from its live
@@ -292,8 +320,8 @@ def main():
     if args.ids:
         id_list = [x.strip() for x in args.ids.split(",") if x.strip()]
         print(f"[OK] Fetching {len(id_list)} row(s) by id (is_active ignored)...")
-        items = supabase_get(supabase_url, "opportunities",
-                             {"select": select, "id": f"in.({','.join(id_list)})"}, service_key)
+        items = _get_opportunities(supabase_url,
+                                   {"select": select, "id": f"in.({','.join(id_list)})"}, service_key)
         missing = set(id_list) - {o["id"] for o in items}
         if missing:
             print(f"[WARN] {len(missing)} id(s) not found: {sorted(missing)}")
@@ -304,7 +332,7 @@ def main():
         # and `in.(pending_review)` never matches a NULL, so a plain filter would miss every
         # pre-review-column row. Same trap the console's queue filter documents.
         print("[OK] Fetching queued rows (is_active=false, moderation pending/null)...")
-        items = supabase_get(supabase_url, "opportunities", {
+        items = _get_opportunities(supabase_url, {
             "select": select, "is_active": "eq.false",
             "or": "(moderation_status.is.null,moderation_status.eq.pending_review)",
         }, service_key)
@@ -315,7 +343,7 @@ def main():
         params = {"select": select, "is_active": "eq.true"}
         if args.exclude_source:
             params["source"] = f"neq.{args.exclude_source}"
-        all_active = supabase_get(supabase_url, "opportunities", params, service_key)
+        all_active = _get_opportunities(supabase_url, params, service_key)
         filter_note = f" (excluding source='{args.exclude_source}')" if args.exclude_source else ""
         print(f"[OK] {len(all_active)} active rows{filter_note}.")
         mode = "all"
@@ -354,6 +382,7 @@ def main():
     dry_run_results = []
     contact_found = 0
     contact_model_calls = 0
+    dequeued = 0                # activation-refresh markers cleared (rows drained off the queue)
 
     for i, opp in enumerate(items):
         # Handle Unicode chars in opportunity names that may not render in console
@@ -390,8 +419,24 @@ def main():
                     updates["contact_email"] = email
                     contact_found += 1
 
+            # Real page-derived field count, captured before any bookkeeping column
+            # (updated_at, the queue-marker clear) is folded into the PATCH.
+            n_fields = len(updates)
+
+            # DRAIN the activation queue: this row has now been run through refresh, so its
+            # "awaiting refresh" marker is cleared — whether or not any field changed (a page
+            # that states nothing new has still been read). Only rows actually queued are
+            # touched, so no extra writes on a normal --all pass; skipped entirely in dry-run
+            # (no writes) and when the column is absent (feature off).
+            queued = _queue_col_enabled and bool(opp.get(ACTIVATION_REFRESH_COLUMN))
+
             if not updates:
-                print(f"page read, nothing the page changed, ${cost:.4f}")
+                if queued and not args.dry_run:
+                    supabase_patch(supabase_url, "opportunities", {"id": f"eq.{opp['id']}"},
+                                   {ACTIVATION_REFRESH_COLUMN: None}, service_key)
+                    dequeued += 1
+                print(f"page read, nothing the page changed, ${cost:.4f}"
+                      + (" [dequeued]" if queued and not args.dry_run else ""))
                 if args.dry_run:
                     dry_run_results.append({
                         "id": opp["id"], "name": opp["name"], "url": opp["url"],
@@ -407,10 +452,14 @@ def main():
             else:
                 # Apply changes to the database
                 updates["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                if queued:
+                    updates[ACTIVATION_REFRESH_COLUMN] = None  # drained in the same PATCH
+                    dequeued += 1
                 supabase_patch(supabase_url, "opportunities", {"id": f"eq.{opp['id']}"}, updates, service_key)
 
             updated += 1
-            print(f"{len(updates)} field(s) from page, ${cost:.4f}")
+            print(f"{n_fields} field(s) from page, ${cost:.4f}"
+                  + (" [dequeued]" if queued and not args.dry_run else ""))
         except urllib.error.HTTPError as e:
             errors += 1
             print(f"[ERROR] HTTP {e.code}")
@@ -426,7 +475,8 @@ def main():
     print(f"\n[SUMMARY] checked: {len(items)}, pages read: {fetched}, updated: {updated}, "
           f"unfetchable(skipped): {skipped_unfetchable}, unreadable(skipped): {unparsed}, "
           f"errors: {errors}, contact emails found: {contact_found} "
-          f"({contact_model_calls} model call(s)), cost: ${total_cost:.4f}  "
+          f"({contact_model_calls} model call(s)), activation-queue drained: {dequeued}, "
+          f"cost: ${total_cost:.4f}  "
           f"(metadata read from each program's live page — MARQUEE M1)")
     if mode == "sample" and items:
         per_item = total_cost / len(items)
@@ -456,7 +506,8 @@ def main():
             "silent_search_count": silent_search_count,
             "notes": f"pages_read={fetched}, unfetchable={skipped_unfetchable}, "
                      f"unparsed={unparsed}, contact_emails_found={contact_found}, "
-                     f"contact_model_calls={contact_model_calls}",
+                     f"contact_model_calls={contact_model_calls}, "
+                     f"activation_queue_drained={dequeued}",
         }, service_key)
         print(f"[OK] Logged agent_runs id={run_id}.")
 

@@ -206,6 +206,22 @@ def test_recall_cost_pref_free_cuts_paid_keeps_free_and_unknown():
     assert {r["id"] for r in m.recall(rows, themes)} == {"free", "paid", "unknown"}
 
 
+def test_recall_project_match_boosted_over_theme_match():
+    # A row matching a PROJECT vector out-ranks a row matching a THEME vector at the same cosine.
+    themes = [[1.0, 0.0]]
+    projects = [[0.0, 1.0]]
+    rows = [_row("theme_hit", [1.0, 0.0]),      # cosine 1.0 with theme, 0 with project
+            _row("project_hit", [0.0, 1.0])]    # cosine 0 with theme, 1.0 with project -> *1.2
+    out = m.recall(rows, themes, project_vectors=projects)
+    assert [r["id"] for r in out] == ["project_hit", "theme_hit"]   # boosted project wins
+
+
+def test_recall_projects_only_still_scores():
+    # No themes, only a project vector -> ranks by the (boosted) project cosine, still works.
+    out = m.recall([_row("a", [0.0, 1.0]), _row("b", [1.0, 0.0])], [], project_vectors=[[0.0, 1.0]])
+    assert [r["id"] for r in out] == ["a", "b"]
+
+
 def test_recall_time_pref_summer_keeps_summer_yearlong_unknown():
     themes = [[1.0, 0.0]]
     rows = [_row("summer", [1.0, 0.0], season="Summer"),

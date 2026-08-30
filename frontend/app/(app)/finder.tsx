@@ -52,6 +52,16 @@ interface Result {
   kind?: string;
 }
 const callGemini = httpClient.callGemini.bind(httpClient);
+
+// A short chip label for a highlight-project paragraph (which carries a "Passion Project:" /
+// "Research Project:" prefix). Keeps the kind, trims the body — the full paragraph is still the
+// selected value that recall embeds.
+function projectLabel(p: string): string {
+  const kind = p.startsWith('Research Project:') ? 'Research' : p.startsWith('Passion Project:') ? 'Passion' : 'Project';
+  const body = p.replace(/^(Passion|Research) Project:\s*/, '').trim();
+  const short = body.length > 70 ? `${body.slice(0, 67).trimEnd()}…` : body;
+  return `${kind}: ${short}`;
+}
 // The profile-derived slots need both providers and a place to persist to. Defined once at
 // module scope: they hold no state, so a new object per render would only defeat the
 // in-flight de-duplication inside getProfileDerived.
@@ -243,9 +253,10 @@ export default function Finder() {
   // The "Show my matches now" full-list escape: the FULL remaining pool at the current funnel
   // stage (client-side, from pool_ids x catalog, best-fit-first), paginated 10/page.
   const [fullPool, setFullPool] = useState<Opportunity[]>([]);
-  // The profile's theme names, offered as a pre-recall pick-list (the 'interests' stage) so the
-  // student focuses recall on what they're actually pursuing this cycle.
+  // The profile's theme names + highlight projects, offered as a pre-recall pick-list (the
+  // 'interests'/setup stage) so the student focuses recall on what they're pursuing this cycle.
   const [interestThemes, setInterestThemes] = useState<string[]>([]);
+  const [interestProjects, setInterestProjects] = useState<{ label: string; value: string }[]>([]);
   // Hover-lift for result cards (.pop-card:hover in the live app) — one shared id rather
   // than a hook per card, since the card list is rendered via .map(), not its own component.
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
@@ -523,6 +534,8 @@ export default function Finder() {
         // profile spans 2+ themes (nothing to choose between otherwise).
         const themeNames = (blob.profile_themes || []).map((t) => t.theme).filter(Boolean);
         setInterestThemes(themeNames.length >= 2 ? themeNames : []);
+        // The passion/research projects become selectable, boosted recall query vectors.
+        setInterestProjects((blob.highlight_projects || []).map((p) => ({ label: projectLabel(p), value: p })));
         setStage('interests');
         return;
       }
@@ -826,15 +839,17 @@ export default function Finder() {
     void suggestForMe();
   }
 
-  // Pre-recall setup confirmed: focus recall on the chosen themes (empty = all), and carry the
-  // budget + timing choices in funnel_answers so recall filters the catalog by them (cost/time
-  // are applied in recall now, not as post-recall funnel rungs). Then run rung 0.
+  // Pre-recall setup confirmed: focus recall on the chosen themes + projects (empty = all), and
+  // carry the budget + timing choices in funnel_answers so recall filters the catalog by them
+  // (cost/time are applied in recall now, not as post-recall funnel rungs). Then run rung 0.
   function beginFunnel(choice: SearchSetupChoice) {
     const blob = funnelBlob.current;
-    if (blob && choice.themes.length) {
+    // Any pick (theme OR project) means "focus on exactly these"; picking nothing = use all.
+    if (blob && (choice.themes.length || choice.projects.length)) {
       funnelBlob.current = {
         ...blob,
         profile_themes: (blob.profile_themes || []).filter((t) => choice.themes.includes(t.theme)),
+        highlight_projects: (blob.highlight_projects || []).filter((p) => choice.projects.includes(p)),
       };
     }
     const answers: Record<string, string> = { cost: choice.cost, time_commitment: choice.time };
@@ -1219,7 +1234,7 @@ export default function Finder() {
   // (funnelLoading), show the loading screen.
   if (stage === 'interests') {
     if (funnelLoading) return <FunnelLoading />;
-    return <SearchSetup themes={interestThemes} onConfirm={beginFunnel} />;
+    return <SearchSetup themes={interestThemes} projects={interestProjects} onConfirm={beginFunnel} />;
   }
 
   // ---------- Funnel stage (Phase 4) ----------

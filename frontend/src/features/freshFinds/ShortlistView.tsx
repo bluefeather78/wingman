@@ -101,14 +101,20 @@ function ActivitySpinner() {
 // These three FILTERS run before the vector matching, so the ~100-row pool is already
 // on-interest, affordable, and available. Interest focuses recall on the theme(s) picked (none =
 // all); budget and timing filter the catalog by price/season inside recall.
-export interface SearchSetupChoice { themes: string[]; cost: 'free' | 'any'; time: 'summer' | 'school_year' | 'any'; }
-export function SearchSetup({ themes, onConfirm }: {
-  themes: string[]; onConfirm: (choice: SearchSetupChoice) => void;
+export interface SearchSetupProject { label: string; value: string; }
+export interface SearchSetupChoice {
+  themes: string[]; projects: string[]; cost: 'free' | 'any'; time: 'summer' | 'school_year' | 'any';
+}
+export function SearchSetup({ themes, projects, onConfirm }: {
+  themes: string[]; projects: SearchSetupProject[]; onConfirm: (choice: SearchSetupChoice) => void;
 }) {
   const [sel, setSel] = useState<Set<string>>(new Set());
+  const [selProj, setSelProj] = useState<Set<string>>(new Set());
   const [cost, setCost] = useState<'free' | 'any'>('any');
   const [time, setTime] = useState<'summer' | 'school_year' | 'any'>('any');
   const toggle = (t: string) => setSel((s) => { const n = new Set(s); n.has(t) ? n.delete(t) : n.add(t); return n; });
+  const toggleProj = (v: string) => setSelProj((s) => { const n = new Set(s); n.has(v) ? n.delete(v) : n.add(v); return n; });
+  const anyFocus = sel.size + selProj.size;
 
   const chip = (label: string, on: boolean, onPress: () => void) => (
     <Pressable key={label} onPress={onPress} style={{
@@ -129,13 +135,20 @@ export function SearchSetup({ themes, onConfirm }: {
             <Txt style={type_body}>We’ll use these to pull your best ~100 matches, then help you narrow from there.</Txt>
           </View>
 
-          {themes.length > 0 && (
+          {(themes.length > 0 || projects.length > 0) && (
             <View style={{ gap: space.sm }}>
-              <Txt style={type.label}>WHICH INTERESTS ARE YOU PURSUING?</Txt>
+              <Txt style={type.label}>WHICH OF THESE ARE YOU PURSUING?</Txt>
               <Txt style={{ ...type_body, marginTop: -4 }}>Pick any that apply — or leave blank for all of them.</Txt>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md, marginTop: space.xs }}>
-                {themes.map((t) => chip(t, sel.has(t), () => toggle(t)))}
-              </View>
+              {themes.length > 0 && (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md, marginTop: space.xs }}>
+                  {themes.map((t) => chip(t, sel.has(t), () => toggle(t)))}
+                </View>
+              )}
+              {projects.length > 0 && (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md, marginTop: themes.length ? space.xs : space.xs }}>
+                  {projects.map((p) => chip(p.label, selProj.has(p.value), () => toggleProj(p.value)))}
+                </View>
+              )}
             </View>
           )}
 
@@ -157,8 +170,8 @@ export function SearchSetup({ themes, onConfirm }: {
           </View>
 
           <View style={{ marginTop: space.sm }}>
-            <PopButton label={sel.size ? `Find my matches (${sel.size} focus)` : 'Find my matches'}
-              onPress={() => onConfirm({ themes: [...sel], cost, time })} />
+            <PopButton label={anyFocus ? `Find my matches (${anyFocus} focus)` : 'Find my matches'}
+              onPress={() => onConfirm({ themes: [...sel], projects: [...selProj], cost, time })} />
           </View>
         </View>
       </ScrollView>

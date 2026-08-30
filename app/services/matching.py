@@ -251,6 +251,14 @@ def best_theme_scores(row_vectors: np.ndarray, theme_vectors: np.ndarray) -> np.
 RECALL_POOL_SIZE = 100
 
 
+# A match against one of the student's PROJECT vectors (passion / research) counts for more
+# than a theme match — a project is the most specific, distinctive signal a student has, so a
+# project-aligned opportunity should out-rank a merely theme-aligned one at the same cosine.
+# It's a ranking nudge (the score can exceed 1.0, which is fine — it only orders rows), not a
+# gate; keep it modest so a strong theme match still beats a weak project match.
+PROJECT_MATCH_BOOST = 1.2
+
+
 def recall(
     rows: list[dict],
     theme_vectors: list,
@@ -259,18 +267,20 @@ def recall(
     cost_pref: str | None = None,
     time_pref: str | None = None,
     limit: int = RECALL_POOL_SIZE,
+    project_vectors: list | None = None,
 ) -> list[dict]:
     """Narrow the active catalog to the top-`limit` semantic matches for a student.
 
     `rows` are catalog rows, each expected to carry a `match_vector` (list[float]) — rows
     without one are dropped (they cannot be scored; an unembedded row is a gap, not a match).
-    `theme_vectors` are the student's per-theme embeddings (one per profile theme). With no
-    theme vectors (thin/empty profile) the semantic signal is absent, so this returns the
-    filtered rows unscored/untruncated order-preserved — the caller falls back to whatever
-    non-semantic ordering it wants; recall's contract is "never silently drop a feasible row".
+    `theme_vectors` are the student's per-theme embeddings; `project_vectors` are per-project
+    embeddings (passion / research), which score with a PROJECT_MATCH_BOOST multiplier. A row's
+    score is the MAX over (theme cosines) and (boosted project cosines). With NEITHER theme nor
+    project vectors (thin/empty profile) the semantic signal is absent, so this returns the
+    filtered rows unscored/untruncated order-preserved — recall's contract is "never silently
+    drop a feasible row".
 
-    Pure: no I/O, no wall-clock. Ordering is by descending best-theme cosine; ties keep input
-    order (stable sort)."""
+    Pure: no I/O, no wall-clock. Ordering is by descending best score; ties keep input order."""
     # 1. Objective filters — status, loosened grade, geo scope, and the pre-recall cost/time asks.
     survivors = [
         r for r in rows
@@ -282,7 +292,8 @@ def recall(
     ]
 
     tmat = _to_matrix([v for v in (theme_vectors or []) if v])
-    if tmat.shape[0] == 0:
+    pmat = _to_matrix([v for v in (project_vectors or []) if v])
+    if tmat.shape[0] == 0 and pmat.shape[0] == 0:
         # No semantic signal available — return the filtered set (capped), order preserved.
         return survivors[:limit]
 
@@ -291,14 +302,18 @@ def recall(
     if not scorable:
         return survivors[:limit]
     rmat = _to_matrix([r["match_vector"] for r in scorable])
-    if rmat.shape[1] != tmat.shape[1]:
-        # Dimensionality mismatch means the row and theme vectors came from different embedding
-        # models/dims — cosine between them is meaningless. Refuse to score rather than return
-        # garbage; the caller/eval should catch this (a pinned single model prevents it).
-        raise ValueError(
-            f"embedding dim mismatch: rows={rmat.shape[1]} themes={tmat.shape[1]} "
-            "(row and student vectors must come from the same pinned model)"
-        )
-    scores = best_theme_scores(rmat, tmat)
+    for qmat, name in ((tmat, "themes"), (pmat, "projects")):
+        if qmat.shape[0] and qmat.shape[1] != rmat.shape[1]:
+            # Dimensionality mismatch means the row and student vectors came from different
+            # embedding models/dims — cosine between them is meaningless. Refuse to score.
+            raise ValueError(
+                f"embedding dim mismatch: rows={rmat.shape[1]} {name}={qmat.shape[1]} "
+                "(row and student vectors must come from the same pinned model)"
+            )
+    # best_theme_scores returns zeros for an empty query set, so a student with only themes or
+    # only projects still scores correctly. Projects get the boost, then max-pool with themes.
+    theme_scores = best_theme_scores(rmat, tmat)
+    project_scores = best_theme_scores(rmat, pmat) * PROJECT_MATCH_BOOST
+    scores = np.maximum(theme_scores, project_scores)
     ranked = sorted(zip(scores, range(len(scorable)), scorable), key=lambda t: (-t[0], t[1]))
     return [row for _, _, row in ranked[:limit]]

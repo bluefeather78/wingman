@@ -51,14 +51,32 @@ def theme_embed_text(theme) -> str:
     return ". ".join(p for p in parts if p)
 
 
+# The "Passion Project:" / "Research Project:" prefixes are metadata, not content — strip them
+# before embedding so the vector keys on what the project IS about, not the label.
+_PROJECT_PREFIXES = ("Passion Project:", "Research Project:")
+
+
+def project_embed_text(project) -> str:
+    """The text embedded for one highlight project — the paragraph with its kind prefix stripped."""
+    s = str(project or "").strip()
+    for pre in _PROJECT_PREFIXES:
+        if s.startswith(pre):
+            return s[len(pre):].strip()
+    return s
+
+
 def recall_pool(rows, student, embed_themes_fn, recall_limit=RECALL_POOL_SIZE):
-    """The recall half: embed the student's themes, run recall. Returns (pool, embed_cost).
-    A thin/empty profile (no themes) still gets a filtered, unscored pool — recall's contract."""
-    themes = student.get("profile_themes") or []
-    theme_texts = [t for t in (theme_embed_text(x) for x in themes) if t]
-    theme_vecs, embed_cost = ([], 0.0)
-    if theme_texts:
-        theme_vecs, embed_cost = embed_themes_fn(theme_texts)
+    """The recall half: embed the student's themes AND highlight projects, run recall. Returns
+    (pool, embed_cost). A thin/empty profile (no themes, no projects) still gets a filtered,
+    unscored pool — recall's contract. Themes + projects are embedded in ONE call, then split, so
+    it stays a single embed round-trip; project matches carry PROJECT_MATCH_BOOST in recall."""
+    theme_texts = [t for t in (theme_embed_text(x) for x in (student.get("profile_themes") or [])) if t]
+    project_texts = [t for t in (project_embed_text(x) for x in (student.get("highlight_projects") or [])) if t]
+    theme_vecs, project_vecs, embed_cost = ([], [], 0.0)
+    if theme_texts or project_texts:
+        vecs, embed_cost = embed_themes_fn(theme_texts + project_texts)
+        theme_vecs = vecs[:len(theme_texts)]
+        project_vecs = vecs[len(theme_texts):]
     location = student.get("location") or {}
     state = location.get("state") if isinstance(location, dict) else None
     # cost + time are asked BEFORE recall (alongside interest), carried in funnel_answers, and
@@ -66,7 +84,8 @@ def recall_pool(rows, student, embed_themes_fn, recall_limit=RECALL_POOL_SIZE):
     answers = student.get("funnel_answers") or {}
     pool = recall(rows, theme_vecs, student_grade=student.get("grade"),
                   student_state=state, cost_pref=answers.get("cost"),
-                  time_pref=answers.get("time_commitment"), limit=recall_limit)
+                  time_pref=answers.get("time_commitment"), limit=recall_limit,
+                  project_vectors=project_vecs)
     return pool, embed_cost
 
 

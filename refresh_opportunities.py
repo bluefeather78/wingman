@@ -105,9 +105,13 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 VALID_TYPES = {'Program', 'Internship', 'Competition', 'Research', 'Volunteer', 'Journal', 'Conference'}
-VALID_SUBJECTS = ['Mixed', 'STEM', 'Medicine', 'Humanities', 'Art', 'Business', 'Engineering',
-                  'Computer Science', 'Mathematics', 'Biology', 'Physics', 'Astronomy',
-                  'Chemistry', 'Leadership', 'Law', 'Logic', 'Education']
+# subject_tags is deliberately free-form — no fixed vocabulary. A prior VALID_SUBJECTS list
+# constrained every row's first tag to one of 17 broad categories, and this agent's own code
+# then discarded any tag outside that list on every refresh pass — silently stripping specific
+# tags (like "Marine Biology" or "Creative Writing") off the ALREADY-LIVE catalog every time it
+# ran. That's why "STEM" alone tagged ~45% of the catalog. See OPPORTUNITY_MATCHING_PLAN.md
+# Phase 5/6. Do not reintroduce a fixed list here.
+MAX_SUBJECT_TAGS = 8
 VALID_PRICE = {'Free', 'Paid'}
 VALID_LOCATION = {'In-Person', 'Remote', 'In-Person and Remote'}
 VALID_INTL = {'International Students', 'Domestic Students'}
@@ -172,8 +176,11 @@ or null", "type": "one of {', '.join(sorted(VALID_TYPES))} or null", \
 "intl": "International Students or Domestic Students or null", "season": "Summer, Year-Long, \
 Spring, Fall, or Winter or null", "eligibility": "concise description or null", \
 "grade_min": "integer (9-12) or null", "grade_max": "integer (9-12) or null", \
-"cost": "string (e.g. '$2000-3500') or null", "subject_tags": "[array of tags from the list: \
-{', '.join(VALID_SUBJECTS)}] or null", "contact_email": "a real contact email address for the \
+"cost": "string (e.g. '$2000-3500') or null", "subject_tags": "[3-6 specific free-form tags \
+naming the actual field, skill, or activity this program covers, e.g. 'Robotics', 'Marine \
+Biology', 'Creative Writing', 'Public Health' — NOT a category picked from any fixed list. \
+Base tags only on what the page actually describes.] or null", "contact_email": "a real \
+contact email address for the \
 program if you find one (e.g. admissions or info@), else null — never guess or construct one"}}.
 
 Return ONLY the raw JSON object, no markdown, no preamble. Keep response under 800 tokens. \
@@ -292,10 +299,12 @@ def clean_update_dict(info):
     if isinstance(grade_max, int) and 9 <= grade_max <= 12:
         update["grade_max"] = grade_max
 
-    # Array field (subject tags)
+    # Array field (subject tags) — free-form, no fixed vocabulary to filter against. Only
+    # basic shape validation: real, non-empty strings, capped so a runaway response can't
+    # write an unbounded array.
     tags = info.get("subject_tags")
     if isinstance(tags, list):
-        valid_tags = [t for t in tags if isinstance(t, str) and t in VALID_SUBJECTS]
+        valid_tags = [t.strip() for t in tags if isinstance(t, str) and t.strip()][:MAX_SUBJECT_TAGS]
         if valid_tags:
             update["subject_tags"] = valid_tags
 

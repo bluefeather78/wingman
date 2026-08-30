@@ -71,9 +71,11 @@ from gemini_common import call_gemini, extract_json, estimate_cost
 from seeds_common import load_seeds, record_seed_result, select_seeds
 from supabase_common import load_dotenv, supabase_get, supabase_post, supabase_insert_one, supabase_patch
 
-VALID_SUBJECTS = ['Mixed', 'STEM', 'Medicine', 'Humanities', 'Art', 'Business', 'Engineering',
-                   'Computer Science', 'Mathematics', 'Biology', 'Physics', 'Astronomy',
-                   'Chemistry', 'Leadership', 'Law', 'Logic', 'Education']
+# subject_tags is deliberately free-form — no fixed vocabulary. This list used to force every
+# candidate's first tag into one of 17 broad categories (same list refresh_opportunities.py
+# carried, and its own code went on to actively strip anything outside it from the ALREADY-LIVE
+# catalog on every refresh). Perpetuated the STEM skew at the point of insertion. See
+# OPPORTUNITY_MATCHING_PLAN.md Phase 5/6. Do not reintroduce a fixed list here.
 VALID_TYPES = {'Program', 'Internship', 'Competition', 'Research', 'Volunteer', 'Journal', 'Conference'}
 VALID_PRICE = {'Free', 'Paid'}
 VALID_LOCATION = {'In-Person', 'Remote', 'In-Person and Remote'}
@@ -451,8 +453,9 @@ useful detail (this is the only descriptive text shown to students, so don't be 
 "season": "one of Summer, Year-Long, Spring, Fall, Winter, or null", \
 "grade_min": integer or null, "grade_max": integer or null, \
 "eligibility": "short freeform eligibility note, or null", \
-"subject_tags": ["3-5 short tags: one broad category from {subjects}, plus 2-4 more specific tags \
-naming the actual field, skill, or activity"], \
+"subject_tags": ["3-5 short, specific tags naming the actual field, skill, or activity this \
+opportunity covers, e.g. Robotics, Marine Biology, Creative Writing — do NOT pick a category \
+from any fixed list, just describe what it actually is"], \
 "contact_email": "a real contact email address for the program if the notes contain one, else null — \
 never guess or construct one"}}
 
@@ -795,7 +798,7 @@ def resolve_missing_url(name, org, existing, today, gemini_key, args):
 
 def extract_candidates(notes, resolved_urls, gemini_key, args):
     """Phase 2. Notes + real URLs in, strict JSON out. No search, so no grounding to keep."""
-    system = EXTRACT_SYSTEM.format(subjects=", ".join(VALID_SUBJECTS))
+    system = EXTRACT_SYSTEM.format()
     source_block = "\n".join(f"- {u}" for u in resolved_urls) or "(none retrieved)"
     user_content = (f"SOURCE PAGES actually retrieved (copy these verbatim where they match):\n"
                     f"{source_block}\n\nRESEARCH NOTES:\n{notes}\n\n"

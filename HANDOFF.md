@@ -34,27 +34,42 @@ funnel.** Neither branch is merged to `main`; which one becomes `main` (and reti
 is the open decision. Full status table: **`OPPORTUNITY_MATCHING_PLAN.md` → "Implementation
 status (2026-08-30)"** (that doc was reconciled in the same pass as this one).
 
-**What's live-verified now:** recall (embeddings) → funnel (**filter axes + behavioral vibe
-rungs**, backend-owned) → curated ≤10 shortlist, PLUS "Show my matches now" → the full remaining
-pool paginated 10/page (client-side, free). Ported UI in
-`frontend/src/features/freshFinds/ShortlistView.tsx` (RungStep, ShortlistView/Card, FullListView,
-NotInterestedModal, ReviewDrawer), wired in `finder.tsx`; legacy browse grid kept for the browse
-path. 1,509 rows embedded; eligibility eval 9/9; vibe rung + shortlist + full list + restart all
-verified on :8091.
+**What's live-verified now:** a pre-recall SETUP screen (interest + budget + timing) → recall
+(embeddings, interest-focused + cost/time-filtered) → funnel (engagement filter → outcome rerank
+→ eligibility → vibe, backend-owned) → curated ≤10 with journey-contextual "why you", PLUS "Show
+my matches now" → the full remaining pool paginated 10/page (client-side, free). Ported UI in
+`frontend/src/features/freshFinds/ShortlistView.tsx` (SearchSetup, RungStep, ShortlistView/Card,
+FullListView, NotInterestedModal, ReviewDrawer), wired in `finder.tsx`; legacy browse grid kept
+for the browse path. 1,509 rows embedded; eligibility eval 9/9; all funnel dimensions verified on
+:8091 (see the funnel section in OPPORTUNITY_MATCHING_PLAN.md's Implementation status for the
+filter-vs-rerank map + config knobs).
 
-**Port/UX commits (newest last), on top of the backend-spine commits listed further below:**
-- `b67178f` — funnel + shortlist UI re-skin (ShortlistView.tsx) driven by /api/match.
-- `e2b6e14` — `curate_now` escape (later superseded by the full-list view; now unused).
-- `9ab0cd9` — **MARQUEE M8**: behavioral vibe questions server-side (prompts ported verbatim
-  from `opportunity-matching`), folded into curation as rerank-only `preferences`.
-- `22bf299` — funnel guards against re-asking an already-answered filter axis.
-- `f82bf09` — funnel-question token budget (`FUNNEL_MAX_TOKENS=8000`); the 2000 cap truncated
-  the 100-row classification and silently skipped ALL filter questions (jumped to vibe).
-- `0350ea9` — "Show my matches now" = full paginated pool (not curated); restart loading state.
+**Funnel dimensions (2026-08-30), the shape a fresh session most needs to know:**
+- **Pre-recall SearchSetup** asks interest + budget + timing before the vector match. Interest =
+  themes AND passion/research **projects** (selectable; projects boosted ×1.2 in recall). Budget
+  (`price`) + timing (`season`) are recall FILTERS (`recall_cost_ok`/`recall_time_ok`), so the
+  100 is already affordable + available.
+- **In-funnel order:** engagement (LOCAL pool-derived FILTER on `type`, + free-text "Something
+  else" that reranks) → outcome (pool-derived RERANK) → eligibility (citizenship/hard_demographic,
+  the ONLY model-classified axes now) → vibe. Filters gate on CURATE_AT; rerank on POOL_FLOOR.
+- **"Why you" is contextual to the whole journey** — curation gets `collect_preferences` +
+  `describe_funnel_choices` and the prompt (M8) requires the reason to cite a profile specific
+  and/or the student's choices (enjoy/want/budget/timing).
+- Retired: the binary `output` vibe axis; cost/time as post-recall funnel rungs (moved pre-recall).
 
-**Remaining:** eligibility caveats on cards (DEFERRED — another M8 curation-prompt change);
-Phase C polish (EntryScreen ported but not wired — finder uses its own hero; ManageCriteria not
-ported); remove the now-unused `curate_now`; decide which branch becomes `main`.
+**Port/UX + funnel commits (newest last), on top of the backend-spine commits below:**
+- `b67178f` funnel+shortlist UI · `e2b6e14` curate_now escape · `9ab0cd9` **M8** vibe questions ·
+  `22bf299` axis-dedup guard · `f82bf09` FUNNEL_MAX_TOKENS fix · `0350ea9` full paginated list +
+  restart loading · `ca57c83` interest-before-recall · `2a5feec` engagement filter · `660c8db`
+  **M8** outcome rerank + sequencing fix · `13d36cd` pool-size header fix · `3d955cb` local
+  cost/time filters · `a10bee2` **M8** cost/time pre-recall · `acddde4` projects feed recall
+  (boosted) · `61fa750` **M8** contextual "why you".
+
+**Remaining:** full-list ("Show my matches now") cards use free local reasons, not the
+journey-aware curation reason (deliberate — no model call on that path); eligibility caveats on
+cards (DEFERRED — another M8 curation-prompt change); Phase C polish (EntryScreen ported but not
+wired — finder uses its own hero; ManageCriteria not ported); remove the now-unused `curate_now`;
+decide which branch becomes `main`.
 
 ### Earlier: backend spine (2026-08-29)
 

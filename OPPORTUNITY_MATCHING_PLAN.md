@@ -75,17 +75,53 @@ from `opportunity-matching`'s Shama-approved M8 prompts (per Shama's 2026-08-30 
 moved server-side. A vibe rung never filters (empty classification); its answer folds into
 curation as a soft `preferences` phrase that reorders, never excludes.
 
-**Key config knobs:** `RECALL_POOL_SIZE=100` (matching.py — top-N after cosine over the full
-catalog; the funnel-question call classifies every candidate so its cost scales with this),
-`CURATE_AT=15`, `MAX_RUNGS=5`, `CURATED_LIMIT=10`, `FUNNEL_MAX_TOKENS=8000` (the funnel call
-needs ~3k output tokens for a 100-row classification; the generic 2000 truncated it and
-silently skipped filter questions).
+### Funnel redesign — the elicitation dimensions (2026-08-30)
+
+The funnel was reshaped around the student's *intent*, in this order:
+
+1. **Pre-recall SETUP screen** (`SearchSetup`, client) — asked BEFORE the vector match:
+   - **Interest** — the profile's themes AND its passion/research **projects**, as selectable
+     chips. The picks become the recall query (blank = all). *Projects are boosted*
+     (`PROJECT_MATCH_BOOST=1.2` in matching.py): a row matching a project out-ranks one matching
+     only a theme at the same cosine — the student's most distinctive signal wins. Themes +
+     projects are embedded in one call; recall scores `max(theme cosines, boosted project cosines)`.
+   - **Budget** (`price`) and **Timing** (`season`) — carried in `funnel_answers` and applied as
+     **recall filters** (`recall_cost_ok`/`recall_time_ok` in matching.py), so the top-100 is
+     already affordable + available. Unknown price/season is never cut.
+2. **Recall** → top-100 from the interest/cost/time-constrained catalog.
+3. **In-funnel rungs**, in order: **engagement** (dim 2, a LOCAL pool-derived FILTER on `type`,
+   exact counts, + a free-text "Something else" that reranks) → **outcome** (dim 3, a pool-derived
+   RERANK question, M8 prompt) → **eligibility** filters (citizenship/hard_demographic, the only
+   axes still classified by the model) → **vibe** rerank axes. Filters gate on `CURATE_AT`;
+   rerank questions gate on `POOL_FLOOR` so they fire right up to the shortlist.
+4. **Curation** → ≤10, each "why you" reason **contextual to the whole journey** (M8): it may
+   cite a profile specific and/or the student's choices (what they enjoy, want, budget/timing).
+   `collect_preferences` (vibe/outcome/free-text) + `describe_funnel_choices` (engagement/cost/
+   timing) are passed to curation as `preferences`.
+
+Filter-vs-rerank summary — **filters (cut):** interest (focuses recall), engagement, cost, time,
+citizenship, hard_demographic (+ recall's grade/geo/status). **rerank (reorder):** outcome,
+selectivity, residential, collaboration, structure, intensity. The old binary `output` vibe axis
+was retired (outcome supersedes it).
+
+**Key config knobs:** `RECALL_POOL_SIZE=100` (matching.py — top-N after cosine; raising it trades
+a wider net against bigger engagement/eligibility classification), `PROJECT_MATCH_BOOST=1.2`,
+`CURATE_AT=15` (filter stop), `POOL_FLOOR=5` (rerank stop), `MAX_RUNGS=5`, `CURATED_LIMIT=10`,
+`FUNNEL_MAX_TOKENS=8000` (the eligibility classification call needs ~3k output tokens; 2000
+truncated it and silently skipped questions).
 
 **Commits (this branch, newest last):** `b67178f` funnel+shortlist UI · `e2b6e14` curate_now
 escape · `9ab0cd9` **M8** vibe questions · `22bf299` funnel axis-dedup guard · `f82bf09` funnel
-token-budget fix · `0350ea9` full paginated list + restart loading.
+token-budget fix · `0350ea9` full paginated list + restart loading · `ca57c83` interest-before-
+recall · `2a5feec` engagement filter · `660c8db` **M8** outcome rerank + sequencing fix ·
+`13d36cd` pool-size header fix · `3d955cb` local cost/time filters (fix inverted counts) ·
+`a10bee2` **M8** cost/time become pre-recall filters · `acddde4` projects feed recall (boosted) ·
+`61fa750` **M8** contextual "why you".
 
 **REMAINING / open:**
+- Full-list ("Show my matches now") cards use free local reasons, not the journey-aware curation
+  reason (deliberate — no model call on that path). Could add journey-aware annotation later.
+- Eligibility caveats on cards — DEFERRED (would be another M8 curation-prompt change).
 - Eligibility caveats on cards — DEFERRED (would be another M8 curation-prompt change).
 - Phase C polish — `EntryScreen` is ported in ShortlistView.tsx but not wired (finder uses its
   own home hero); `ManageCriteria` (grade/location editing in My Vibe) not ported.

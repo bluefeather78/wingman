@@ -147,6 +147,7 @@ export function PopCard({
   offset = 4,
   borderColor = colors.navy,
   borderWidth = 3,
+  onHoverChange,
 }: {
   children: ReactNode;
   color?: string;
@@ -154,11 +155,19 @@ export function PopCard({
   offset?: number;
   borderColor?: string;
   borderWidth?: number;
+  onHoverChange?: (hovered: boolean) => void; // fires alongside the internal hover-lift
 }) {
   const { handlers, shadowStyle } = usePopInteraction(offset, borderColor, 2);
+  const composed = onHoverChange
+    ? {
+        ...handlers,
+        onHoverIn: () => { handlers.onHoverIn(); onHoverChange(true); },
+        onHoverOut: () => { handlers.onHoverOut(); onHoverChange(false); },
+      }
+    : handlers;
   return (
     <Pressable
-      {...handlers}
+      {...composed}
       style={[
         styles.popCard,
         { backgroundColor: color, borderColor, borderWidth },

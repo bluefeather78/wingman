@@ -33,12 +33,19 @@ import {
   type TrackerInfo,
 } from '@/lib/tracker';
 import { MiniBadge, PopButton, ReviewBadge, Screen, SoftCard, Txt, usePopInteraction } from '@/ui/components';
+import {
+  NotInterestedModal, ReviewDrawer, RungStep, ShortlistView,
+  type ShortlistItem, type Tier,
+} from '@/features/freshFinds/ShortlistView';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
 interface Result {
   opp: Opportunity;
   reason: string;
   tier: 'strong' | 'look';
+  // The server marked this a stretch/exploration pick (MatchResultCard.exploration_pick) — the
+  // curated shortlist renders it as a distinct "Stretch pick" tier. Absent on browse/form results.
+  exploration?: boolean;
   // Which kind's ranking call surfaced this. Set by the profile-driven fan-out; absent on a
   // single-kind form search. Preferred over deriving a kind from opp.type, which only ever
   // guessed at what the search actually did.
@@ -226,6 +233,13 @@ export default function Finder() {
   >([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [trackedIds, setTrackedIds] = useState<Set<string>>(new Set());
+  // Curated-shortlist (suggest path) UI state, ported from the opportunity-matching branch:
+  // not-interested dismissals (a client-only "show me fewer like this" — nothing is deleted),
+  // the review-your-answers drawer, and the running record of funnel answers that drawer shows.
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [dismissTargetId, setDismissTargetId] = useState<string | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [funnelReview, setFunnelReview] = useState<{ label: string; value: string }[]>([]);
   // Hover-lift for result cards (.pop-card:hover in the live app) — one shared id rather
   // than a hook per card, since the card list is rendered via .map(), not its own component.
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
@@ -234,8 +248,6 @@ export default function Finder() {
   const [openReviewId, setOpenReviewId] = useState<string | null>(null);
   const [hoveredSaveBtnId, setHoveredSaveBtnId] = useState<string | null>(null);
   const [pressedSaveBtnId, setPressedSaveBtnId] = useState<string | null>(null);
-  const [hoveredQuizOption, setHoveredQuizOption] = useState<number | null>(null);
-  const [pressedQuizOption, setPressedQuizOption] = useState<number | null>(null);
   const [hoveredFacetKey, setHoveredFacetKey] = useState<string | null>(null);
   const [pressedFacetKey, setPressedFacetKey] = useState<string | null>(null);
   const profileFacetPop = usePopInteraction(2, colors.slate900, 1);
@@ -628,6 +640,7 @@ export default function Finder() {
           opp,
           reason: r.reason || '',
           tier: (r.tier === 'strong' ? 'strong' : 'look') as 'strong' | 'look',
+          exploration: !!r.exploration_pick,
           kind: kindForOpp(opp),
         };
       })
@@ -702,6 +715,54 @@ export default function Finder() {
       setStage('funnel');
       return h.slice(0, -1);
     });
+  }
+
+  // ---- Curated-shortlist wiring (the funnel + shortlist re-skin) ----
+  // Short, friendly labels for the review drawer, keyed on the rung axis the server returned.
+  const AXIS_LABEL: Record<string, string> = {
+    cost: 'Budget', time_commitment: 'Time', citizenship: 'Citizenship', hard_demographic: 'Eligibility',
+    type: 'Type', season: 'Timing', format: 'Format', subject: 'Subject',
+  };
+  // A rung is a "vibe" question (rerank-only, never filters) when the server says so — Phase D
+  // adds these server-side; until then no rung is a vibe rung and this stays false.
+  function rungIsVibe(rung: MatchResponse | null): boolean {
+    return !!rung && (rung as { kind?: string }).kind === 'vibe';
+  }
+  function rungPick(value: string) {
+    const rung = funnelRung;
+    if (!rung || !rung.axis) return;
+    const opt = (rung.options ?? []).find((o) => o.value === value);
+    if (!opt) return;
+    setFunnelReview((r) => [...r, { label: AXIS_LABEL[rung.axis!] ?? rung.axis!, value: opt.label }]);
+    answerFunnel(opt);
+  }
+  function rungSkip() {
+    const rung = funnelRung;
+    if (rung?.axis) setFunnelReview((r) => [...r, { label: AXIS_LABEL[rung.axis!] ?? rung.axis!, value: 'Skipped' }]);
+    skipFunnel();
+  }
+  function rungBack() {
+    setFunnelReview((r) => r.slice(0, -1));
+    funnelBack();
+  }
+  function buildReviewSections(): { title: string; items: { label: string; value: string }[] }[] {
+    const secs: { title: string; items: { label: string; value: string }[] }[] = [];
+    const blob = funnelBlob.current;
+    const about: { label: string; value: string }[] = [];
+    if (blob?.grade != null) about.push({ label: 'Grade', value: `${blob.grade}th grade` });
+    if (blob?.location?.state) about.push({ label: 'Location', value: String(blob.location.state) });
+    if (about.length) secs.push({ title: 'About you', items: about });
+    if (funnelReview.length) secs.push({ title: 'This search', items: funnelReview });
+    return secs;
+  }
+  // Start the funnel over from scratch, clearing the session cache and every per-run choice.
+  function restartFunnel() {
+    setFunnelReview([]);
+    setDismissedIds(new Set());
+    setReviewOpen(false);
+    setSelected(new Set());
+    sessionSearch = null;
+    void suggestForMe();
   }
 
   async function suggestForMe() {
@@ -1078,58 +1139,72 @@ export default function Finder() {
   // one or skips. Answering/skipping advances; Back restores the previous question.
   if (stage === 'funnel' && funnelRung) {
     const opts = funnelRung.options ?? [];
+    const isVibe = rungIsVibe(funnelRung);
+    // Live pool count for the header: the largest surviving-option count is the size of the
+    // pool the student is choosing within (skipping keeps all of it).
+    const poolCount = isVibe
+      ? null
+      : opts.reduce((m, o) => (typeof o.count === 'number' && o.count > m ? o.count : m), 0) || null;
     return (
-      <Screen>
-        <SoftCard style={{ gap: 20, padding: 32 }}>
-          {funnelLoading ? (
-            <LoadingRow title="Narrowing your matches…" sub="One quick question at a time." />
-          ) : (
-            <>
-              <Text style={styles.fieldLabel}>NARROWING YOUR MATCHES</Text>
-              <Txt variant="h2">{funnelRung.question}</Txt>
-              {!!funnelRung.rationale && (
-                <Text style={[styles.heroSub, styles.heroSubItalic]}>{funnelRung.rationale}</Text>
-              )}
-              <View style={{ gap: 12 }}>
-                {opts.map((o, i) => (
-                  <Pressable
-                    key={o.value}
-                    onHoverIn={() => setHoveredQuizOption(i)}
-                    onHoverOut={() => setHoveredQuizOption((cur) => (cur === i ? null : cur))}
-                    onPressIn={() => setPressedQuizOption(i)}
-                    onPressOut={() => setPressedQuizOption((cur) => (cur === i ? null : cur))}
-                    style={[
-                      styles.quizOption,
-                      popShadow(pressedQuizOption === i ? 1 : hoveredQuizOption === i ? 4 : 3),
-                      pressedQuizOption === i
-                        ? styles.quizOptionPressed
-                        : hoveredQuizOption === i && styles.quizOptionHovered,
-                    ]}
-                    onPress={() => answerFunnel(o)}
-                  >
-                    <Text style={styles.quizOptTitle}>{o.label}</Text>
-                    {typeof o.count === 'number' && (
-                      <Text style={styles.quizOptDesc}>
-                        {o.count} match{o.count === 1 ? '' : 'es'} left
-                      </Text>
-                    )}
-                  </Pressable>
-                ))}
-              </View>
-              <View style={styles.heroActions}>
-                <Pressable onPress={skipFunnel}>
-                  <Text style={styles.link}>Skip this question</Text>
-                </Pressable>
-                {funnelHistory.length > 0 && (
-                  <Pressable onPress={funnelBack}>
-                    <Text style={styles.link}>← Back</Text>
-                  </Pressable>
-                )}
-              </View>
-            </>
-          )}
-        </SoftCard>
-      </Screen>
+      <RungStep
+        question={funnelRung.question || 'Which fits you best?'}
+        rationale={funnelRung.rationale}
+        options={opts.map((o) => ({ label: o.label, value: o.value, count: o.count }))}
+        isVibe={isVibe}
+        poolCount={poolCount}
+        canBack={funnelHistory.length > 0}
+        loading={funnelLoading}
+        onPick={rungPick}
+        onSkip={rungSkip}
+        onBack={rungBack}
+      />
+    );
+  }
+
+  // ---------- Curated shortlist (the suggest/funnel path) ----------
+  // The polished shortlist re-skin, driven by the server-curated `results` (tier + why-it-fits).
+  // The legacy grid + facets below is kept only for the browse/form path (suggestMode === false).
+  if (suggestMode) {
+    const picks: ShortlistItem[] = results.map((r) => ({
+      opp: r.opp,
+      reason: r.reason,
+      tier: (r.exploration ? 'stretch' : r.tier) as Tier,
+      flags: [],
+    }));
+    const dismissName = dismissTargetId
+      ? (results.find((r) => r.opp.id === dismissTargetId)?.opp.name ?? 'this')
+      : 'this';
+    return (
+      <>
+        <ShortlistView
+          picks={picks}
+          pendingIds={selected}
+          savedIds={trackedIds}
+          dismissedIds={dismissedIds}
+          onToggle={toggleSelect}
+          onNotInterested={(id) => setDismissTargetId(id)}
+          onSubmit={addSelectedToTracker}
+          onStartFresh={restartFunnel}
+          onReview={() => setReviewOpen(true)}
+        />
+        {dismissTargetId && (
+          <NotInterestedModal
+            name={dismissName}
+            onPick={() => {
+              setDismissedIds((d) => new Set(d).add(dismissTargetId));
+              setSelected((p) => { const n = new Set(p); n.delete(dismissTargetId); return n; });
+              setDismissTargetId(null);
+            }}
+            onClose={() => setDismissTargetId(null)}
+          />
+        )}
+        <ReviewDrawer
+          open={reviewOpen}
+          onClose={() => setReviewOpen(false)}
+          sections={buildReviewSections()}
+          onAdjust={() => { setReviewOpen(false); restartFunnel(); }}
+        />
+      </>
     );
   }
 

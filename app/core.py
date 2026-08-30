@@ -318,6 +318,8 @@ FEATURE_LABELS = {
     "profile_basics":    "Profile basics",
     "profile_extract":   "Profile extraction (tags + basics)",
     "deadline_check":    "Deadline check",
+    "match_curation":    "Match curation",
+    "match_funnel":      "Match funnel question",
     "other":             "Other",
 }
 
@@ -394,6 +396,11 @@ _FEATURE_SIGNATURES = [
     ("interests/goals to the best opportunities",                 "tag_intent"),
     ("Write directly to them in second person",                   "tag_suggestions"),
     ("extracting specific interests, goals, and pursuits",        "infer_subjects"),
+    # The curated-matching pipeline's two live calls (OPPORTUNITY_MATCHING_PLAN.md Phase 1).
+    # Distinctive opening lines; appended last since neither is a substring of an earlier
+    # prompt (and 'other' is the only thing they'd otherwise fall to).
+    ("building a high schooler's CURATED shortlist",              "match_curation"),
+    ("narrowing a high schooler's list",                          "match_funnel"),
 ]
 
 

@@ -40,7 +40,18 @@ SIGNATURE_CASES = [
     ("interests/goals to the best opportunities",                 "tag_intent"),
     ("Write directly to them in second person",                   "tag_suggestions"),
     ("extracting specific interests, goals, and pursuits",        "infer_subjects"),
+    ("building a high schooler's CURATED shortlist",              "match_curation"),
+    ("narrowing a high schooler's list",                          "match_funnel"),
 ]
+
+
+def test_real_matching_prompts_classify():
+    """The actual Phase-1 prompt constants must route to their feature, not 'other' — a
+    reworded opening line would silently dump match spend into 'other'."""
+    from app.services.curation import CURATION_SYSTEM
+    from app.services.funnel import FUNNEL_QUESTION_SYSTEM
+    assert core.classify_feature(CURATION_SYSTEM) == "match_curation"
+    assert core.classify_feature(FUNNEL_QUESTION_SYSTEM) == "match_funnel"
 
 
 @pytest.mark.parametrize("needle,expected", SIGNATURE_CASES)

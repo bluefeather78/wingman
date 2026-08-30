@@ -52,6 +52,10 @@ filter-vs-rerank map + config knobs).
 - **In-funnel order:** engagement (LOCAL pool-derived FILTER on `type`, + free-text "Something
   else" that reranks) → outcome (pool-derived RERANK) → eligibility (citizenship/hard_demographic,
   the ONLY model-classified axes now) → vibe. Filters gate on CURATE_AT; rerank on POOL_FLOOR.
+  **If a PROJECT was picked in setup (`project_focus`), a project-goal RERANK question (M8) replaces
+  engagement + outcome** ("what do you want to do with your project", pool-derived, project-framed).
+- **Review drawer** shows ABOUT YOU (grade/location) + YOUR SEARCH (interests/budget/timing from
+  `setupChoiceRef`) + YOUR ANSWERS (in-funnel picks).
 - **"Why you" is contextual to the whole journey** — curation gets `collect_preferences` +
   `describe_funnel_choices` and the prompt (M8) requires the reason to cite a profile specific
   and/or the student's choices (enjoy/want/budget/timing).
@@ -63,7 +67,8 @@ filter-vs-rerank map + config knobs).
   restart loading · `ca57c83` interest-before-recall · `2a5feec` engagement filter · `660c8db`
   **M8** outcome rerank + sequencing fix · `13d36cd` pool-size header fix · `3d955cb` local
   cost/time filters · `a10bee2` **M8** cost/time pre-recall · `acddde4` projects feed recall
-  (boosted) · `61fa750` **M8** contextual "why you".
+  (boosted) · `61fa750` **M8** contextual "why you" · `2848abc` **M8** project-goal question ·
+  `1f1af43` review drawer shows setup choices + project-focus wiring.
 
 **Remaining:** full-list ("Show my matches now") cards use free local reasons, not the
 journey-aware curation reason (deliberate — no model call on that path); eligibility caveats on

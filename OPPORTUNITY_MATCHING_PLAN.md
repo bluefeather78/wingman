@@ -94,6 +94,10 @@ The funnel was reshaped around the student's *intent*, in this order:
    RERANK question, M8 prompt) → **eligibility** filters (citizenship/hard_demographic, the only
    axes still classified by the model) → **vibe** rerank axes. Filters gate on `CURATE_AT`;
    rerank questions gate on `POOL_FLOOR` so they fire right up to the shortlist.
+   - **Project-focus branch:** when the student picked a passion/research PROJECT in setup
+     (`project_focus`), the first rung is a **project-goal** RERANK question (M8,
+     `PROJECT_GOAL_QUESTION_SYSTEM`, pool-derived, given the project text — "what do you want to
+     do with your project") that REPLACES both engagement and the generic outcome question.
 4. **Curation** → ≤10, each "why you" reason **contextual to the whole journey** (M8): it may
    cite a profile specific and/or the student's choices (what they enjoy, want, budget/timing).
    `collect_preferences` (vibe/outcome/free-text) + `describe_funnel_choices` (engagement/cost/
@@ -116,7 +120,9 @@ token-budget fix · `0350ea9` full paginated list + restart loading · `ca57c83`
 recall · `2a5feec` engagement filter · `660c8db` **M8** outcome rerank + sequencing fix ·
 `13d36cd` pool-size header fix · `3d955cb` local cost/time filters (fix inverted counts) ·
 `a10bee2` **M8** cost/time become pre-recall filters · `acddde4` projects feed recall (boosted) ·
-`61fa750` **M8** contextual "why you".
+`61fa750` **M8** contextual "why you" · `2848abc` **M8** project-goal question (replaces
+engagement when a project is picked) · `1f1af43` review drawer shows setup choices + project-focus
+wiring.
 
 **REMAINING / open:**
 - Full-list ("Show my matches now") cards use free local reasons, not the journey-aware curation

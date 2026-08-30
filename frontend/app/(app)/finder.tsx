@@ -656,7 +656,7 @@ export default function Finder() {
   // One funnel round trip: POST the current answers + narrowed pool; either show the next
   // question or, when the server says done, the curated list. Recall only runs on rung 0
   // (no pool_ids); later rungs carry the client-narrowed pool_ids so nothing re-embeds.
-  async function runFunnelStep(answers: Record<string, string>, poolIds: string[] | null) {
+  async function runFunnelStep(answers: Record<string, string>, poolIds: string[] | null, curateNow = false) {
     setFunnelLoading(true);
     try {
       const resp = await httpClient.match({
@@ -664,6 +664,7 @@ export default function Finder() {
         funnel: true,
         funnel_answers: answers,
         pool_ids: poolIds ?? undefined,
+        curate_now: curateNow || undefined,
       });
       if (resp.done !== false) {
         finishFunnelToResults(resp);
@@ -744,6 +745,12 @@ export default function Finder() {
   function rungBack() {
     setFunnelReview((r) => r.slice(0, -1));
     funnelBack();
+  }
+  // "Show my matches now": curate the pool narrowed so far, skipping the remaining questions.
+  function showAllNow() {
+    const rung = funnelRung;
+    const poolIds = rung?.pool_ids || funnelPoolIds.current || null;
+    void runFunnelStep(funnelAnswers.current, poolIds, true);
   }
   function buildReviewSections(): { title: string; items: { label: string; value: string }[] }[] {
     const secs: { title: string; items: { label: string; value: string }[] }[] = [];
@@ -1157,6 +1164,7 @@ export default function Finder() {
         onPick={rungPick}
         onSkip={rungSkip}
         onBack={rungBack}
+        onShowAll={showAllNow}
       />
     );
   }

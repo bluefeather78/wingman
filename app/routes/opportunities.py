@@ -99,6 +99,10 @@ def handle_match(body: dict = Depends(json_body),
     }
     funnel_mode = bool(body.get("funnel"))
     pool_ids = body.get("pool_ids") if isinstance(body.get("pool_ids"), list) else None
+    # "Show my matches now" (the funnel escape hatch): curate whatever pool the student has
+    # narrowed to so far instead of asking another question. No recall re-run — it rides on the
+    # client-narrowed pool_ids like any later rung.
+    curate_now = bool(body.get("curate_now"))
 
     if not GEMINI_API_KEY:
         # Mock/offline: no embeddings (recall returns the filtered set unscored) and no
@@ -147,7 +151,8 @@ def handle_match(body: dict = Depends(json_body),
             else:
                 pool, embed_cost = recall_pool(rows, student, _embed)
             rungs_done = len(student.get("funnel_answers") or {})
-            rung = next_funnel_rung(pool, student, _ask, extract_json, rungs_done)
+            # curate_now short-circuits the "ask another question?" decision.
+            rung = None if curate_now else next_funnel_rung(pool, student, _ask, extract_json, rungs_done)
             if rung is None:
                 out = curate_pool(pool, student, _curate, extract_json)
                 out["done"] = True

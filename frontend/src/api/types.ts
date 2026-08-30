@@ -118,6 +118,9 @@ export interface MatchStudentBlob {
   // client-narrowed survivors to the next rung so recall/embedding never re-runs.
   funnel?: boolean;
   pool_ids?: string[] | null;
+  // "Show my matches now": curate the current narrowed pool immediately instead of asking
+  // another question. Rides on pool_ids — no recall re-run.
+  curate_now?: boolean;
 }
 // One curated card the endpoint returns (display fields + the curation verdict).
 export interface MatchResultCard {

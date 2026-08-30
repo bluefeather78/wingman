@@ -2068,13 +2068,19 @@ def _pick_survivor(a, b):
 def duplicate_report_pairs(limit=2000):
     """Run the read-only catalog duplicate finder and return FLAG-ELIGIBLE pairs.
 
-    Flag-eligible means BOTH rows are live (is_active=true) — those are the pairs where
-    pulling either one would hide a working opportunity from students, so flag-in-place
-    (suspected_duplicate) is the right tool. A pair where one row is already inactive is NOT
-    returned: the inactive row is the natural loser and belongs in the ordinary queue's
-    Duplicate action, not flagged live. Writes nothing; this only proposes.
+    find_catalog_dups.fetch_all_rows only reads active rows, so every pair here is flag-eligible
+    by construction — both rows live, which is exactly when flag-in-place (suspected_duplicate)
+    is the right tool. A pair involving an inactive row belongs in the ordinary queue's Duplicate
+    action instead, not here. Writes nothing; this only proposes.
+
+    As of 2026-08-30 this runs on the SAME embedding + dedupe_confidence tier engine
+    dedupe_queue.py uses for the review queue (find_catalog_dups.find_duplicate_pairs), not a
+    separate free heuristic scan — that scan (URL/name-similarity/acronym cuts) is retired. See
+    find_catalog_dups.py's module docstring for why: it was three hand-tuned approximations of
+    what one semantic-similarity pass now does directly, on rows already embedded for free.
     """
     import find_catalog_dups as fcd
+    import dedupe_confidence as dc
 
     if not SUPABASE_URL:
         return {"ok": False, "error": "SUPABASE_URL not configured."}
@@ -2084,61 +2090,39 @@ def duplicate_report_pairs(limit=2000):
     except Exception as e:
         return {"ok": False, "error": f"Could not read the catalog: {str(e)[:200]}"}
 
-    groups = fcd.key_collisions(rows)
-    hints = fcd.name_hints(rows, include_inactive=False)   # active-only, matches flag-eligibility
+    verdicts, unembedded = fcd.find_duplicate_pairs(rows)
 
-    pairs, seen = [], set()
+    # PROOF/CONFIDENT read as near-certain and are pre-selected in the console's scan modal;
+    # ADJUDICATE/HINT need a deliberate tick. Keeps the modal's existing "strong"/"weak" contract
+    # so neither the modal nor the sort below had to change for the new engine.
+    _STRONG_TIERS = (dc.TIER_PROOF, dc.TIER_CONFIDENT)
 
-    def add(keep, flag, reason, confidence, cut):
-        # Both live, or it is not a flag-in-place case.
-        if not (keep.get("is_active") and flag.get("is_active")):
-            return
-        pkey = tuple(sorted([str(keep.get("id")), str(flag.get("id"))]))
-        if pkey in seen or keep.get("id") == flag.get("id"):
-            return
-        seen.add(pkey)
+    pairs = []
+    for v in verdicts:
+        a, b = v["rows"]
+        keep, flag = _pick_survivor(a, b)
+        # v["reasons"] already carries "cos=0.NNN" when a cosine was available (classify_pair
+        # inserts it) — do not add it again here.
         pairs.append({
             "keep": {"id": keep.get("id"), "name": keep.get("name"),
                      "url": keep.get("url"), "org": keep.get("org")},
             "flag": {"id": flag.get("id"), "name": flag.get("name"),
                      "url": flag.get("url"), "org": flag.get("org")},
-            "reason": reason, "confidence": confidence, "cut": cut,
+            "reason": f"{v['tier']}: {', '.join(v['reasons'])}",
+            "confidence": "strong" if v["tier"] in _STRONG_TIERS else "weak",
+            "cut": v["tier"],
         })
 
-    # Cut 1: identical normalized URL. Pick one survivor for the whole live group, flag the rest.
-    for g in groups:
-        members = [m for m in g["rows"] if m.get("is_active")]
-        if len(members) < 2:
-            continue
-        confidence = "strong" if g["same_name"] else "weak"
-        why = ("identical URL, same name" if g["same_name"] else
-               "identical URL, different name — confirm it is not a shared application portal")
-        survivor = members[0]
-        for m in members[1:]:
-            survivor, _ = _pick_survivor(survivor, m)
-        for m in members:
-            if m.get("id") != survivor.get("id"):
-                add(survivor, m, why, confidence, "same-url")
-
-    # Cut 2: same registrable domain, name >= 0.90 similar (finder's stricter threshold).
-    for h in hints:
-        a, b = h["rows"]
-        keep, flag = _pick_survivor(a, b)
-        add(keep, flag, f"same site, name {int(h['ratio'] * 100)}% similar", "weak", "same-name")
-
-    # Cut 3: acronym<->expansion and token-set overlap, cross-host allowed — the misses the
-    # strict cuts cannot see (an acronym vs its spelled-out name, a program at a second URL on
-    # another domain). Hint-only; the scan never auto-actions, a human keeps or confirms.
-    for p in fcd.extra_name_pairs(rows):
-        a, b = p["rows"]
-        keep, flag = _pick_survivor(a, b)
-        add(keep, flag, p["reason"], p["confidence"], "name-overlap")
-
-    # Strongest first so the near-certain same-URL/same-name pairs are reviewed at the top.
+    # Strongest first so the near-certain pairs are reviewed at the top.
     order = {"strong": 0, "weak": 1}
     pairs.sort(key=lambda p: order.get(p["confidence"], 9))
-    return {"ok": True, "pairs": pairs[:max(1, limit)], "total": len(pairs),
-            "scanned": len(rows)}
+    result = {"ok": True, "pairs": pairs[:max(1, limit)], "total": len(pairs),
+              "scanned": len(rows)}
+    if unembedded:
+        # Surfaced, not silently dropped: these rows were never compared by the embedding pass
+        # because the index has no vector for them yet — "Refresh Dedupe Index" covers them.
+        result["unembedded"] = len(unembedded)
+    return result
 
 
 def flag_suspected_duplicate_pairs(pairs, reviewed_by="admin-console"):

@@ -2818,10 +2818,16 @@ async function openDupScan() {
     S.dupScan.pairs = r.pairs || [];
     // Pre-select the near-certain (strong) pairs; leave the weak ones for a deliberate tick.
     S.dupScan.pairs.forEach((p, i) => { if (p.confidence === 'strong') S.dupScan.sel.add(i); });
-    $('dupScanStatus').textContent = S.dupScan.pairs.length
+    // unembedded rows were never compared by the embedding pass — surfaced, not silently
+    // skipped, so a quiet scan can't be misread as "nothing to find" (see find_catalog_dups.py).
+    const unembeddedNote = r.unembedded
+      ? ` ${num(r.unembedded)} row(s) aren't in the dedupe index yet and were skipped — run `
+        + `Refresh Dedupe Index to cover them.`
+      : '';
+    $('dupScanStatus').textContent = (S.dupScan.pairs.length
       ? `${S.dupScan.pairs.length} live pair(s) found across ${num(r.scanned)} rows. Strong `
         + `matches are pre-selected.`
-      : `No live duplicate pairs found across ${num(r.scanned)} rows.`;
+      : `No live duplicate pairs found across ${num(r.scanned)} rows.`) + unembeddedNote;
     renderDupScan();
   } catch (e) {
     $('dupScanStatus').textContent = '';

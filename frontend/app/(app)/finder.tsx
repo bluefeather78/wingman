@@ -723,6 +723,9 @@ export default function Finder() {
   const AXIS_LABEL: Record<string, string> = {
     cost: 'Budget', time_commitment: 'Time', citizenship: 'Citizenship', hard_demographic: 'Eligibility',
     type: 'Type', season: 'Timing', format: 'Format', subject: 'Subject',
+    // Behavioral vibe axes (rerank-only) — labelled "Vibe" in the review drawer.
+    selectivity: 'Vibe', residential: 'Vibe', collaboration: 'Vibe',
+    structure: 'Vibe', intensity: 'Vibe', output: 'Vibe',
   };
   // A rung is a "vibe" question (rerank-only, never filters) when the server says so — Phase D
   // adds these server-side; until then no rung is a vibe rung and this stays false.

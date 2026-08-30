@@ -212,6 +212,145 @@ def option_counts(pool: list[dict], rung: dict) -> dict:
     return counts
 
 
+# ==================== BEHAVIORAL (vibe) rungs — rerank-only, never filter ====================
+#
+# Ported from the opportunity-matching branch's adaptiveFunnel.ts (Shama-approved M8), moved
+# SERVER-SIDE because this branch's backend owns the funnel. A vibe axis has no per-row catalog
+# data: it NEVER filters and NEVER moves the count. Its answer becomes a soft PREFERENCE phrase
+# (behavioral_pref) folded into the student blob and handed to curation to RE-RANK. Asked only
+# after the filter axes are exhausted and while the pool is still larger than CURATE_AT.
+#
+# Each axis: a blurb (for the model) and its TWO options — the app-owned `value`, the `pref`
+# phrase curation reads, and an `example` label (local-fallback wording + a voice hint). "No
+# preference" is a third choice the UI renders; it emits no phrase, just marks the axis asked.
+BEHAVIORAL_AXES = {
+    "selectivity": {"blurb": "how competitive / selective the program is to get into", "opts": [
+        {"value": "competitive", "pref": "Leans toward selective, competitive programs", "example": "Bring it on"},
+        {"value": "open", "pref": "Prefers open-access, low-pressure programs", "example": "Easy in"},
+    ]},
+    "residential": {"blurb": "living away from home vs staying local or online", "opts": [
+        {"value": "away", "pref": "Prefers residential / live-away-from-home experiences", "example": "Somewhere new"},
+        {"value": "home", "pref": "Prefers staying local or online, at home", "example": "Stay home"},
+    ]},
+    "collaboration": {"blurb": "working on a team vs solo", "opts": [
+        {"value": "team", "pref": "Prefers team / cohort settings", "example": "Squad up"},
+        {"value": "solo", "pref": "Prefers working independently", "example": "Just me"},
+    ]},
+    "structure": {"blurb": "a set curriculum vs open-ended self-direction", "opts": [
+        {"value": "guided", "pref": "Prefers structured, guided programs", "example": "Set plan"},
+        {"value": "freestyle", "pref": "Prefers open-ended, self-directed work", "example": "Freestyle"},
+    ]},
+    "intensity": {"blurb": "a full-time immersive commitment vs a light one", "opts": [
+        {"value": "immersive", "pref": "Prefers full-time, immersive commitments", "example": "All in"},
+        {"value": "light", "pref": "Prefers a light, few-hours-a-week commitment", "example": "Keep it light"},
+    ]},
+    "output": {"blurb": "producing something tangible (paper, project, award) vs exploring and learning", "opts": [
+        {"value": "output", "pref": "Wants to produce something tangible (paper, project, award)", "example": "Make something"},
+        {"value": "explore", "pref": "Here to explore and learn, no deliverable needed", "example": "Just explore"},
+    ]},
+}
+
+# Local-fallback question wording per axis (used when the model output is unusable), ported verbatim.
+_BEHAVIORAL_FALLBACK_Q = {
+    "selectivity": "Fight to get in, or an easy yes?",
+    "residential": "Somewhere new, or your own bed?",
+    "collaboration": "Team sport, or solo mission?",
+    "structure": "A set plan, or freestyle it?",
+    "intensity": "All in, or keep it light?",
+    "output": "Make something, or just soak it up?",
+}
+
+
+def behavioral_pref(axis: str, value: str) -> str:
+    """The rerank phrase for a vibe answer (empty for 'no preference'/unknown — no signal)."""
+    for o in BEHAVIORAL_AXES.get(axis, {}).get("opts", []):
+        if o["value"] == value:
+            return o["pref"]
+    return ""
+
+
+def collect_preferences(funnel_answers: dict | None) -> list[str]:
+    """The soft preference phrases from every vibe axis the student answered — handed to curation
+    to rerank. Skipped/unknown answers contribute nothing."""
+    prefs = []
+    for axis, val in (funnel_answers or {}).items():
+        if axis in BEHAVIORAL_AXES:
+            phrase = behavioral_pref(axis, str(val))
+            if phrase:
+                prefs.append(phrase)
+    return prefs
+
+
+def build_behavioral_user_content(pool: list[dict], remaining_axes: list[str]) -> str:
+    """User payload for a vibe-question rung: the remaining axes (with options) + a sample of the
+    program names still on the list, so the model picks the axis that best fits them."""
+    axis_lines = "\n".join(
+        f"- {a}: {BEHAVIORAL_AXES[a]['blurb']}. options: "
+        + ", ".join(f'"{o["value"]}" (e.g. "{o["example"]}")' for o in BEHAVIORAL_AXES[a]["opts"])
+        for a in remaining_axes
+    )
+    samples = "; ".join(str(r.get("name")) for r in pool[:14] if r.get("name"))
+    return (f"Vibe axes:\n{axis_lines}\n\nSample programs still on the list: {samples}"
+            f"\n\nDesign the single best vibe question.")
+
+
+def _local_vibe_rung(axis: str, pool: list[dict]) -> dict:
+    """A locally-worded vibe rung (no model), used as the fallback and when the model output is bad."""
+    opts = BEHAVIORAL_AXES[axis]["opts"]
+    return {
+        "axis": axis, "kind": "vibe",
+        "question": _BEHAVIORAL_FALLBACK_Q[axis], "rationale": None,
+        "options": [{"label": o["example"], "value": o["value"]} for o in opts],
+        "classification": {},                       # empty -> every candidate KEEPS under every option
+        "pool_ids": [c.get("id") for c in pool],
+    }
+
+
+def build_vibe_rung(parsed: dict | None, axis: str, pool: list[dict]) -> dict:
+    """Turn the model's vibe-question output into a rung. The model may only PHRASE the question
+    and LABEL the axis's two (fixed) options — it cannot add, drop, or invent an option. Any
+    deviation falls back to the local wording. A vibe rung never filters: its classification is
+    empty, so the client's naive narrowing keeps every candidate."""
+    opts = BEHAVIORAL_AXES[axis]["opts"]
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("question"), str) or not parsed["question"].strip():
+        return _local_vibe_rung(axis, pool)
+    raw_opts = parsed.get("options") if isinstance(parsed.get("options"), list) else []
+    label_by_value = {o.get("value"): o.get("label") for o in raw_opts if isinstance(o, dict)}
+    options = []
+    for o in opts:
+        lbl = label_by_value.get(o["value"])
+        options.append({"label": lbl if isinstance(lbl, str) and lbl.strip() else o["example"], "value": o["value"]})
+    return {
+        "axis": axis, "kind": "vibe",
+        "question": parsed["question"].strip(), "rationale": None,
+        "options": options, "classification": {},
+        "pool_ids": [c.get("id") for c in pool],
+    }
+
+
+def next_vibe_rung(pool, student, funnel_answers, ask_fn, parse_fn, rungs_done=0):
+    """Decide the next VIBE question over the current pool, or None to stop and curate.
+
+    Returns None when the rung cap is reached, the pool is already small enough to curate, or
+    every vibe axis has been asked. Otherwise asks the model to pick + phrase one of the
+    remaining axes (falling back to local wording on any bad output) and returns a rerank-only
+    rung. Injected: ask_fn(system, user_content) -> raw_text ; parse_fn(raw_text) -> dict|None."""
+    if rungs_done >= MAX_RUNGS or len(pool) <= CURATE_AT:
+        return None
+    remaining = [a for a in BEHAVIORAL_AXES if a not in (funnel_answers or {})]
+    if not remaining:
+        return None
+    raw = ask_fn(BEHAVIORAL_QUESTION_SYSTEM, build_behavioral_user_content(pool, remaining))
+    try:
+        parsed = parse_fn(raw) if raw else None
+    except Exception:
+        parsed = None
+    axis = parsed.get("axis") if isinstance(parsed, dict) else None
+    if axis not in remaining:
+        axis = remaining[0]           # model picked an already-asked/invalid axis -> first remaining
+    return build_vibe_rung(parsed, axis, pool)
+
+
 # --------------------------------------------------------------------------- the prompt (M8)
 #
 # One call PER RUNG. Sees the pool as narrowed by every prior answer + the student blob, and
@@ -257,3 +396,29 @@ Respond with ONLY raw JSON, no markdown, no preamble, matching:
 "rationale":"why this splits the pool","options":[{"label":"...","value":"..."}],\
 "classification":{"<id>":{"per_option":{"<value>":"cut|keep|caveat"},"quote":"...or omit",\
 "source_field":"eligibility|summary|name|org or omit"}}}"""
+
+
+# The vibe-question prompt (M8). Ported VERBATIM from the opportunity-matching branch's
+# adaptiveFunnel.ts designBehavioralQuestion (VOICE + system), Shama-approved 2026-08-29. The
+# model may only PICK one of the given axes and PHRASE it + label its two fixed options; the
+# server validates the choice and falls back to local wording on any mismatch.
+_BEHAVIORAL_VOICE = (
+    'Voice: warm, casual and a little playful — like a friend who gets you, not a form. '
+    'Write ONE natural sentence (roughly 10-18 words) that sets up the choice with a bit of context or a scenario, so it reads as a real question rather than a label. '
+    'Do NOT just restate the two options, and do NOT use the word "vibe". Second person. '
+    'GOOD: "When you picture this, are you living somewhere new for a while, or staying close to home?" '
+    'GOOD: "Would you rather earn a spot in something selective, or keep it low-key and open to anyone?" '
+    'GOOD (filter): "Would you rather be there in person, or join in from wherever you already are?" '
+    'BAD (just repeats the options): "Team or solo?". BAD (too formal): "Which type of environment do you prefer?". BAD (forced slang): "Yo, you tryna grind fr fr?". '
+    'The option LABELS carry the SAME casual voice — short (1-3 words), concrete and human, never a bare category word. '
+    'GOOD labels: "In the room" / "From my couch" / "Squad up" / "Just me" / "This summer" / "All year". '
+    'BAD labels: "In-Person" / "Remote" / "Team" / "Solo" / "Summer".'
+)
+
+BEHAVIORAL_QUESTION_SYSTEM = (
+    'You write ONE friendly question to learn what a high-schooler is looking for in an extracurricular — a preference we cannot read from data. '
+    'You are given candidate AXES (each such a preference) with two options each. Pick the ONE axis that best fits the programs still on their list, then write the question and a punchy 1-3 word LABEL for each of that axis\'s two options. '
+    + _BEHAVIORAL_VOICE + ' '
+    + 'Rules: (1) pick an axis from the given list ONLY, by its exact key; (2) return BOTH of that axis\'s options, exact strings in `value`, each with a short natural `label`; (3) never add, drop, or invent an option or axis. '
+    'Respond with ONLY raw JSON: {"axis":"<key>","question":"...","options":[{"value":"<exact>","label":"..."}]}'
+)

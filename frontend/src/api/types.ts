@@ -158,6 +158,8 @@ export interface MatchResponse {
   note?: string | null;
   // funnel-rung shape (present when done === false)
   axis?: string;
+  // "vibe" marks a rerank-only behavioral rung (no counts, no filtering); absent = a filter rung.
+  kind?: string;
   question?: string | null;
   rationale?: string | null;
   options?: MatchFunnelOption[];

@@ -32,10 +32,17 @@ def build_candidate_view(row: dict) -> dict:
 def build_curation_user_content(student: dict, candidate_views: list[dict]) -> str:
     """The user-message payload for the curation call: the student blob + the candidate JSON.
     Pure string assembly (the system prompt is CURATION_SYSTEM). `student` is the Phase-2
-    blob (grade, location, profile_themes, highlight_projects, funnel_answers)."""
+    blob (grade, location, profile_themes, highlight_projects, funnel_answers), plus the
+    optional `preferences` list — soft vibe phrases from the funnel that RE-RANK only."""
     import json
+    prefs = [p for p in (student.get("preferences") or []) if isinstance(p, str) and p.strip()]
+    # Surfaced as an explicit line (ported from the opportunity-matching curate prompt's
+    # "What matters to them right now") so the model weights them in ordering, never as a filter.
+    pref_text = ("\n\nWHAT MATTERS TO THEM RIGHT NOW (soft preferences — use to ORDER, never to exclude):\n"
+                 + "; ".join(prefs)) if prefs else ""
     return (
         "STUDENT PROFILE (JSON):\n" + json.dumps(student, ensure_ascii=False)
+        + pref_text
         + "\n\nCANDIDATE OPPORTUNITIES (JSON):\n" + json.dumps(candidate_views, ensure_ascii=False)
         + "\n\nSelect and rank the curated shortlist per the schema."
     )
@@ -117,8 +124,10 @@ women" is NOT — anyone may apply.
 candidate's own text that states the restriction, and name which field it is in ("eligibility", \
 "summary", "name", or "org"). If you cannot quote it verbatim, do not exclude — mark them eligible.
 
-PART 2 — FIT. Among the eligible candidates, pick the best <=10. Rank by genuine fit with this \
-student's stated interests, goals, and projects — name a real detail of THEIRS in each reason \
+PART 2 — FIT. Among the eligible candidates, pick the best <=10. Most slots go to the strongest, \
+most SPECIFIC fits to this student's stated interests, goals, projects, AND their stated preferences \
+(the "what matters to them right now" list, when present — use it to ORDER and break ties, never to \
+exclude a candidate). Name a real detail of THEIRS in each reason \
 (under 15 words, second person: "Great fit for your grapheme-to-phoneme research", never generic). \
 Reserve 2-3 slots as deliberate EXPLORATION picks: a real stretch outside the student's usual lane \
 that is still excellent AND still feasible — mark those exploration_pick:true. Assign each a tier: \

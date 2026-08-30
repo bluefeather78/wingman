@@ -25,7 +25,10 @@ from app.services.match_pipeline import (
     run_match, recall_pool, curate_pool, next_funnel_rung,
 )
 from app.services.curation import CURATION_SYSTEM
-from app.services.funnel import FUNNEL_QUESTION_SYSTEM
+from app.services.funnel import (
+    FUNNEL_QUESTION_SYSTEM, BEHAVIORAL_QUESTION_SYSTEM, CURATE_AT,
+    next_vibe_rung, collect_preferences,
+)
 from app.services.embeddings import embed_student_themes
 from gemini_common import call_gemini, extract_json
 # Imported, never re-declared: user_costs.model must name the model that was actually
@@ -150,11 +153,18 @@ def handle_match(body: dict = Depends(json_body),
                 embed_cost = 0.0
             else:
                 pool, embed_cost = recall_pool(rows, student, _embed)
-            rungs_done = len(student.get("funnel_answers") or {})
-            # curate_now short-circuits the "ask another question?" decision.
+            answers = student.get("funnel_answers") or {}
+            rungs_done = len(answers)
+            # curate_now short-circuits the "ask another question?" decision entirely.
             rung = None if curate_now else next_funnel_rung(pool, student, _ask, extract_json, rungs_done)
+            # Filter axes exhausted but the pool is still large -> ask a rerank-only VIBE question
+            # (backend owns the funnel; vibe never cuts, so it only reorders the final curation).
+            if rung is None and not curate_now and len(pool) > CURATE_AT:
+                rung = next_vibe_rung(pool, student, answers, _ask, extract_json, rungs_done)
             if rung is None:
-                out = curate_pool(pool, student, _curate, extract_json)
+                # Fold the answered vibe axes into curation as soft preference phrases (rerank).
+                student_for_curation = {**student, "preferences": collect_preferences(answers)}
+                out = curate_pool(pool, student_for_curation, _curate, extract_json)
                 out["done"] = True
             else:
                 out = {"done": False, **rung}

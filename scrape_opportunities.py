@@ -1025,6 +1025,12 @@ def main():
                          help="Stage-1b spend ceiling for the WHOLE run, spread across angles "
                               "(the mine_hub_pages lesson: a per-item cap is not a run cap). "
                               "Default 150.")
+    parser.add_argument("--gate-observe", action="store_true",
+                         help="Discovery-gate OBSERVE mode: still classify + enrich + dedupe every "
+                              "candidate, but insert ALL of them into the review queue labeled "
+                              "(nothing dropped or diverted) so a human can look first. Default "
+                              "(off) is the acting gate: stale programs are dropped and hubs are "
+                              "routed to the mining queue. Same paid calls either way (not M9).")
     # --timeout comes from add_agent_args at 280s: broad national seeds with multiple
     # search rounds routinely take longer than the 120s the other agents use.
     add_agent_args(parser, default_timeout=280)
@@ -1320,15 +1326,12 @@ def main():
                     total_cost += gate.cost
                     gclass = gate.classification
                     gate_flag = gclass.flag() if gclass else None
-                    if gate.route == classify_page.ROUTE_DROP_STALE:
-                        invalid_skipped += 1
-                        rejected.append({"reason": "discovery gate: stale program (latest year "
-                                         f"{getattr(gclass, 'latest_year', None)})",
-                                         "raw": candidate})
-                        continue
-                    if gate.route in (classify_page.ROUTE_SAME_DOMAIN_LEAD,
-                                      classify_page.ROUTE_OFF_DOMAIN_LEAD):
-                        # A hub page: its PROGRAMS belong in the mining queue, not a row of its own.
+                    is_hub = gate.route in (classify_page.ROUTE_SAME_DOMAIN_LEAD,
+                                            classify_page.ROUTE_OFF_DOMAIN_LEAD)
+                    # A hub's PROGRAMS are worth mining in EITHER mode, so record the lead (free)
+                    # regardless. In act mode the hub is not also kept as a row; in observe mode it
+                    # is, so a human can see it in the queue.
+                    if is_hub:
                         scope = (discovered_leads.SCOPE_SAME_DOMAIN
                                  if gate.route == classify_page.ROUTE_SAME_DOMAIN_LEAD
                                  else discovered_leads.SCOPE_OFF_DOMAIN)
@@ -1338,16 +1341,28 @@ def main():
                             "angle": f"scraper discovery gate: {(row.get('name') or '')[:60]}",
                             "signal": f"page classifier: {gclass.klass}",
                             "first_seen": today, "status": discovered_leads.STATUS_NEW})
-                        rejected.append({"reason": f"discovery gate: {gclass.klass} -> fed to "
-                                         "hub-mining queue", "raw": candidate})
-                        continue
-                    # program (fresh): enrich with the page's own metadata. none / unreadable keep
-                    # the row (v1 conservative — a non-program stays queued, flagged, for a human).
+                    # ACT mode (default) disposes by class: DROP a stale program, and do NOT insert
+                    # a hub as its own row (its lead was recorded above). OBSERVE mode skips both,
+                    # so every candidate lands in the review queue labeled for a human to look at
+                    # first — nothing dropped or diverted. Same paid calls either way.
+                    if not args.gate_observe:
+                        if gate.route == classify_page.ROUTE_DROP_STALE:
+                            invalid_skipped += 1
+                            rejected.append({"reason": "discovery gate: stale program (latest year "
+                                             f"{getattr(gclass, 'latest_year', None)})",
+                                             "raw": candidate})
+                            continue
+                        if is_hub:
+                            rejected.append({"reason": f"discovery gate: {gclass.klass} -> fed to "
+                                             "hub-mining queue", "raw": candidate})
+                            continue
+                    # program (fresh): enrich with the page's own metadata. none / unreadable and,
+                    # in observe mode, hub / stale keep the row with its classify label.
                     if gate.route == classify_page.ROUTE_ROW:
                         gate_metadata_overlay(row, gate.metadata)
                     # The embedding dedupe hint (populated only for a program row) catches the
                     # same program at a URL that url_dedupe's name/URL match cannot see. A no-op
-                    # for none/unreadable rows, which carry no hint.
+                    # for hub/none/stale/unreadable rows, which carry no hint (url_dedupe still ran).
                     dup_candidates = gate_dup_candidates(gate.dup_candidates, gate_by_id,
                                                          dup_candidates)
                 # Actively resolve the program's OWN contact email from its page instead of

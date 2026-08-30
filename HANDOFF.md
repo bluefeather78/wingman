@@ -54,8 +54,17 @@ activation hook yet). `python matching_eval.py --run` grades eligibility (watch 
 The frontend change shows on Metro (`:8081`), NOT on `:8000` (which serves the prebuilt bundle).
 
 **NOT built yet:**
-- **PHASE 4 — the progressive elicitation funnel (laid out below).** The per-rung apply logic
-  + prompt are built/tested (`funnel.py`); the interactive endpoint + UI are not.
+- **PHASE 4 — the progressive elicitation funnel: ENDPOINT DONE (`0cb3681`), UI remaining.**
+  `POST /api/match` with `funnel:true` runs the stateless rung flow (rung 0 recalls, returns
+  the next question with per-option counts + a quote-sanitized classification + pool_ids;
+  client narrows locally and carries pool_ids to the next rung; curates when done). Verified
+  live over HTTP. **What's left: the finder.tsx funnel UI** — a stage between the suggest
+  trigger and results that renders the question + options with live counts, a "leaves N —
+  relax?" affordance near POOL_FLOOR (T3), and a back-up control, then hands off to the
+  existing results rendering. Client narrowing is trivial (keep every id not marked "cut" in
+  the returned classification under the chosen option — the guard already ran server-side).
+  The client sends {funnel:true, funnel_answers, pool_ids} each rung. Deprecate the taxonomy
+  quiz here (a Phase 6 item).
 - **PHASE 6 — retire the old logic** (the 7-kind fan-out still runs for the FORM/quiz path;
   the 17-bucket `inferSubjects`/`filterValues` slot still exist). Each item gated on ITS
   replacement being live — Phase 3 is now live, so the fan-out on the SUGGEST path is already

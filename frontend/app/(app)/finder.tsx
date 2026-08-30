@@ -34,7 +34,7 @@ import {
 } from '@/lib/tracker';
 import { MiniBadge, PopButton, ReviewBadge, Screen, SoftCard, Txt, usePopInteraction } from '@/ui/components';
 import {
-  FullListView, FunnelLoading, NotInterestedModal, ReviewDrawer, RungStep, ShortlistView,
+  FullListView, FunnelLoading, InterestSelect, NotInterestedModal, ReviewDrawer, RungStep, ShortlistView,
   type ShortlistItem, type Tier,
 } from '@/features/freshFinds/ShortlistView';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
@@ -63,7 +63,7 @@ const profileStore: ProfileStore = {
   load: () => httpClient.loadData<ProfileRecord>('student-profile'),
   save: (record) => httpClient.saveData('student-profile', record),
 };
-type Stage = 'home' | 'form' | 'funnel' | 'results' | 'fulllist';
+type Stage = 'home' | 'form' | 'interests' | 'funnel' | 'results' | 'fulllist';
 
 // Quiet retries before the catalog failure is shown to the student. Two is enough to ride
 // out a cold backend or a dropped connection without leaving them staring at a spinner.
@@ -243,6 +243,9 @@ export default function Finder() {
   // The "Show my matches now" full-list escape: the FULL remaining pool at the current funnel
   // stage (client-side, from pool_ids x catalog, best-fit-first), paginated 10/page.
   const [fullPool, setFullPool] = useState<Opportunity[]>([]);
+  // The profile's theme names, offered as a pre-recall pick-list (the 'interests' stage) so the
+  // student focuses recall on what they're actually pursuing this cycle.
+  const [interestThemes, setInterestThemes] = useState<string[]>([]);
   // Hover-lift for result cards (.pop-card:hover in the live app) — one shared id rather
   // than a hook per card, since the card list is rendered via .map(), not its own component.
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
@@ -508,11 +511,21 @@ export default function Finder() {
       // answerFunnel/skipFunnel/funnelBack, not by search(). The 7-kind client fan-out this
       // replaced returned 40-70 rows to wade through.
       if (!k) {
-        funnelBlob.current = await buildStudentBlob();
+        const blob = await buildStudentBlob();
+        funnelBlob.current = blob;
         funnelAnswers.current = {};
         funnelPoolIds.current = null;
         setFunnelHistory([]);
         setFunnelRung(null);
+        // Interest focus BEFORE recall: if the profile spans 2+ themes, ask which the student is
+        // pursuing this cycle so recall is drawn against those, not the whole profile blended.
+        // A single-theme (or thin) profile has nothing to choose between — go straight to recall.
+        const themeNames = (blob.profile_themes || []).map((t) => t.theme).filter(Boolean);
+        if (themeNames.length >= 2) {
+          setInterestThemes(themeNames);
+          setStage('interests');
+          return;
+        }
         await runFunnelStep({}, null);
         return;
       }
@@ -782,6 +795,9 @@ export default function Finder() {
     const about: { label: string; value: string }[] = [];
     if (blob?.grade != null) about.push({ label: 'Grade', value: `${blob.grade}th grade` });
     if (blob?.location?.state) about.push({ label: 'Location', value: String(blob.location.state) });
+    // The interests recall was focused on (the pre-recall pick, or all themes if none chosen).
+    const pursuing = (blob?.profile_themes || []).map((t) => t.theme).filter(Boolean);
+    if (pursuing.length) about.push({ label: 'Pursuing', value: pursuing.join(', ') });
     if (about.length) secs.push({ title: 'About you', items: about });
     if (funnelReview.length) secs.push({ title: 'This search', items: funnelReview });
     return secs;
@@ -794,6 +810,20 @@ export default function Finder() {
     setSelected(new Set());
     sessionSearch = null;
     void suggestForMe();
+  }
+
+  // Interest selection confirmed: focus recall on the chosen themes (empty = use all), then run
+  // rung 0. Narrowing profile_themes here is the whole mechanism — recall scores against only
+  // these, so the top-100 is drawn for what the student is actually pursuing this cycle.
+  function beginFunnel(selected: string[]) {
+    const blob = funnelBlob.current;
+    if (blob && selected.length) {
+      funnelBlob.current = {
+        ...blob,
+        profile_themes: (blob.profile_themes || []).filter((t) => selected.includes(t.theme)),
+      };
+    }
+    void runFunnelStep({}, null);
   }
 
   async function suggestForMe() {
@@ -1161,6 +1191,14 @@ export default function Finder() {
         </SoftCard>
       </Screen>
     );
+  }
+
+  // ---------- Interest selection (BEFORE recall) ----------
+  // Ask which profile theme(s) to pursue this cycle, so recall focuses the pool on them. While
+  // the confirmed selection is recalling (funnelLoading), show the loading screen.
+  if (stage === 'interests') {
+    if (funnelLoading) return <FunnelLoading />;
+    return <InterestSelect themes={interestThemes} onConfirm={beginFunnel} />;
   }
 
   // ---------- Funnel stage (Phase 4) ----------

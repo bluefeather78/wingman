@@ -97,6 +97,48 @@ function ActivitySpinner() {
   return <ActivityIndicator size="large" color={colors.orange} />;
 }
 
+// ---------- interest selection (BEFORE recall) ----------
+// The profile's themes, offered as a pick-list so the student focuses THIS search on the
+// interest(s) they're actually pursuing right now — instead of recall blending every theme in
+// their profile into one 100-row pool. Selected themes become the recall query; picking none
+// (or "Use all my interests") recalls against everything, the old behavior.
+export function InterestSelect({ themes, onConfirm }: {
+  themes: string[]; onConfirm: (selected: string[]) => void;
+}) {
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const toggle = (t: string) => setSel((s) => { const n = new Set(s); n.has(t) ? n.delete(t) : n.add(t); return n; });
+  return (
+    <Screen>
+      <ScrollView contentContainerStyle={{ padding: space.lg, maxWidth: 760, alignSelf: 'center', width: '100%' }}>
+        <View style={{ gap: space.lg }}>
+          <Badge label="WHAT ARE YOU HERE FOR" bg={colors.peach} fg={colors.orangeDeep} outline />
+          <Txt style={type_h1}>Which of these are you looking to pursue right now?</Txt>
+          <Txt style={type_body}>Pick one or more and we’ll focus your matches there. Nothing’s lost — start fresh anytime to explore the rest.</Txt>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
+            {themes.map((t) => {
+              const on = sel.has(t);
+              return (
+                <Pressable key={t} onPress={() => toggle(t)} style={{
+                  borderWidth: 3, borderColor: colors.navy, borderRadius: radius.lg,
+                  paddingVertical: space.md, paddingHorizontal: space.lg, backgroundColor: on ? colors.orange : colors.card,
+                }}>
+                  <Txt style={{ fontFamily: fonts.bodyBold, fontSize: 15, color: on ? colors.white : colors.ink }}>{on ? '✓ ' : ''}{t}</Txt>
+                </Pressable>
+              );
+            })}
+          </View>
+          <View style={{ flexDirection: 'row', gap: space.lg, alignItems: 'center', marginTop: space.sm }}>
+            <PopButton label={sel.size ? `Find my matches (${sel.size})` : 'Find my matches'} onPress={() => onConfirm([...sel])} />
+            {sel.size > 0 && (
+              <Pressable onPress={() => onConfirm([])}><Txt style={{ ...type_body, color: colors.slate500 }}>Use all my interests</Txt></Pressable>
+            )}
+          </View>
+        </View>
+      </ScrollView>
+    </Screen>
+  );
+}
+
 // ---------- funnel rung ----------
 // One question per screen: options as chips carrying their live survivor count, a "Show my
 // matches now" escape (optional — only when the container supports it), Back and Skip.

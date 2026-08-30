@@ -26,7 +26,7 @@ from app.services.match_pipeline import (
 )
 from app.services.curation import CURATION_SYSTEM
 from app.services.funnel import (
-    FUNNEL_QUESTION_SYSTEM, BEHAVIORAL_QUESTION_SYSTEM, CURATE_AT,
+    FUNNEL_QUESTION_SYSTEM, BEHAVIORAL_QUESTION_SYSTEM, CURATE_AT, FUNNEL_MAX_TOKENS,
     next_vibe_rung, collect_preferences,
 )
 from app.services.embeddings import embed_student_themes
@@ -131,17 +131,22 @@ def handle_match(body: dict = Depends(json_body),
     def _embed(texts):
         return embed_student_themes(texts, GEMINI_API_KEY)
 
-    def _model_call(usage_sink):
+    def _model_call(usage_sink, max_tokens=2000):
         def _fn(system, user_content):
             text, usage = call_gemini(system, user_content, GEMINI_API_KEY,
-                                      use_web_search=False, max_tokens=2000, model=MESSAGES_MODEL)
+                                      use_web_search=False, max_tokens=max_tokens, model=MESSAGES_MODEL)
             usage_sink.clear()
             usage_sink.update(usage)
             return text
         return _fn
 
     _curate = _model_call(curation_usage)
-    _ask = _model_call(funnel_usage)
+    # The funnel-question call classifies EVERY candidate in the pool (up to RECALL_POOL_SIZE),
+    # so its JSON is large — a full 100-row classification runs ~3k output tokens. At the 2000
+    # default it truncated, the parse failed, and next_funnel_rung returned None, silently
+    # dropping the student straight to the vibe questions with no filter rung. Give it real
+    # headroom (also covers Gemini 3.x thinking tokens, which draw from the same budget).
+    _ask = _model_call(funnel_usage, max_tokens=FUNNEL_MAX_TOKENS)
 
     try:
         if not funnel_mode:

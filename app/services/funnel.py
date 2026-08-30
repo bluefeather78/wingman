@@ -53,6 +53,14 @@ CURATE_AT = 15
 # A longer funnel is a chore (and a latency/cost budget — each rung is a model call).
 MAX_RUNGS = 5
 
+# Output-token budget for the funnel-QUESTION call. It classifies every candidate in the pool
+# (up to RECALL_POOL_SIZE), so its JSON is large: a full ~100-row classification measures ~3k
+# output tokens. The generic 2000 default truncated it — the parse then failed and the funnel
+# silently skipped every filter question. 8000 gives headroom for the biggest (rung-0) pool
+# plus Gemini 3.x thinking tokens (which draw from the same budget). Billing is on tokens
+# produced, so unused headroom is free; a correct filter rung genuinely needs ~3k.
+FUNNEL_MAX_TOKENS = 8000
+
 # Fields the funnel-question model sees per candidate — enough to classify the whitelisted
 # axes (cost/time/citizenship/demographic), no more. Mirrors the curation view but trimmed.
 FUNNEL_CANDIDATE_FIELDS = (

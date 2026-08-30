@@ -257,6 +257,9 @@ export default function Finder() {
   // 'interests'/setup stage) so the student focuses recall on what they're pursuing this cycle.
   const [interestThemes, setInterestThemes] = useState<string[]>([]);
   const [interestProjects, setInterestProjects] = useState<{ label: string; value: string }[]>([]);
+  // The pre-recall SearchSetup choice (interests picked, budget, timing), captured so the review
+  // drawer can show it. A ref because it's read during render, not a render trigger itself.
+  const setupChoiceRef = useRef<{ interests: string[]; cost: string; time: string } | null>(null);
   // Hover-lift for result cards (.pop-card:hover in the live app) — one shared id rather
   // than a hook per card, since the card list is rendered via .map(), not its own component.
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
@@ -748,7 +751,8 @@ export default function Finder() {
   // Short, friendly labels for the review drawer, keyed on the rung axis the server returned.
   const AXIS_LABEL: Record<string, string> = {
     cost: 'Budget', time_commitment: 'Time', citizenship: 'Citizenship', hard_demographic: 'Eligibility',
-    type: 'Type', season: 'Timing', format: 'Format', subject: 'Subject', engagement: 'Enjoy', outcome: 'Goal',
+    type: 'Type', season: 'Timing', format: 'Format', subject: 'Subject', engagement: 'Enjoy',
+    outcome: 'Goal', project_goal: 'Project goal',
     // Behavioral vibe axes (rerank-only) — labelled "Vibe" in the review drawer.
     selectivity: 'Vibe', residential: 'Vibe', collaboration: 'Vibe',
     structure: 'Vibe', intensity: 'Vibe', output: 'Vibe',
@@ -822,11 +826,20 @@ export default function Finder() {
     const about: { label: string; value: string }[] = [];
     if (blob?.grade != null) about.push({ label: 'Grade', value: `${blob.grade}th grade` });
     if (blob?.location?.state) about.push({ label: 'Location', value: String(blob.location.state) });
-    // The interests recall was focused on (the pre-recall pick, or all themes if none chosen).
-    const pursuing = (blob?.profile_themes || []).map((t) => t.theme).filter(Boolean);
-    if (pursuing.length) about.push({ label: 'Pursuing', value: pursuing.join(', ') });
     if (about.length) secs.push({ title: 'About you', items: about });
-    if (funnelReview.length) secs.push({ title: 'This search', items: funnelReview });
+    // The pre-recall setup: what they're pursuing + budget + timing (always shown, defaults too).
+    const setup = setupChoiceRef.current;
+    if (setup) {
+      secs.push({
+        title: 'Your search', items: [
+          { label: 'Pursuing', value: setup.interests.length ? setup.interests.join(', ') : 'All my interests' },
+          { label: 'Budget', value: setup.cost === 'free' ? 'Free only' : 'Open to paid' },
+          { label: 'Timing', value: setup.time === 'summer' ? 'Summer' : setup.time === 'school_year' ? 'School year' : 'Any time' },
+        ],
+      });
+    }
+    // The in-funnel answers (engagement / outcome / vibe) as the student gave them.
+    if (funnelReview.length) secs.push({ title: 'Your answers', items: funnelReview });
     return secs;
   }
   // Start the funnel over from scratch, clearing the session cache and every per-run choice.
@@ -843,6 +856,10 @@ export default function Finder() {
   // carry the budget + timing choices in funnel_answers so recall filters the catalog by them
   // (cost/time are applied in recall now, not as post-recall funnel rungs). Then run rung 0.
   function beginFunnel(choice: SearchSetupChoice) {
+    const projectFocus = choice.projects.length > 0;
+    // project_focus (explicit project pick) makes the funnel ask a project-goal question instead
+    // of engagement. Set it regardless of the focus branch below.
+    funnelBlob.current = { ...(funnelBlob.current ?? {}), project_focus: projectFocus };
     const blob = funnelBlob.current;
     // Any pick (theme OR project) means "focus on exactly these"; picking nothing = use all.
     if (blob && (choice.themes.length || choice.projects.length)) {
@@ -854,11 +871,14 @@ export default function Finder() {
     }
     const answers: Record<string, string> = { cost: choice.cost, time_commitment: choice.time };
     funnelAnswers.current = answers;
-    // Seed the review drawer with the non-default setup choices.
-    const review: { label: string; value: string }[] = [];
-    if (choice.cost === 'free') review.push({ label: 'Budget', value: 'Free only' });
-    if (choice.time !== 'any') review.push({ label: 'Timing', value: choice.time === 'summer' ? 'Summer' : 'School year' });
-    setFunnelReview(review);
+    // Capture the setup for the review drawer (interests picked + budget + timing). In-funnel
+    // answers (engagement/outcome/vibe) accumulate separately in funnelReview.
+    setupChoiceRef.current = {
+      interests: [...choice.themes, ...choice.projects.map(projectLabel)],
+      cost: choice.cost,
+      time: choice.time,
+    };
+    setFunnelReview([]);
     void runFunnelStep(answers, null);
   }
 

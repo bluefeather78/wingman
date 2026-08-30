@@ -113,6 +113,9 @@ export interface MatchStudentBlob {
   location?: { state?: string | null; city?: string | null };
   profile_themes?: MatchTheme[];
   highlight_projects?: string[];
+  // Set when the student explicitly picked a passion/research project in setup — the funnel then
+  // asks a project-goal question instead of the engagement question.
+  project_focus?: boolean;
   funnel_answers?: Record<string, unknown>;
   // Phase 4: set `funnel:true` to run the progressive funnel; `pool_ids` carries the
   // client-narrowed survivors to the next rung so recall/embedding never re-runs.

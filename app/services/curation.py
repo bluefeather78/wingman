@@ -128,6 +128,14 @@ PART 2 — FIT. Among the eligible candidates, pick the best <=10. Most slots go
 most SPECIFIC fits to this student's stated interests, goals, projects, AND their stated preferences \
 (the "what matters to them right now" list, when present — use it to ORDER and break ties, never to \
 exclude a candidate). \
+GOAL-FORMAT ALIGNMENT (important): when the student states a goal or outcome about the FORMAT or \
+output they want, treat it as a STRONG ranking signal, not a tie-breaker — rank opportunities \
+whose format actually DELIVERS that goal ABOVE ones that do not, EVEN WHEN the subject matches \
+equally well. A journal or conference serves "publish or present" (a competition does NOT); a \
+competition serves "win or compete"; a research program, lab, or mentorship serves "get mentorship \
+/ take it deeper"; a build program or hackathon serves "build a product". Never put a \
+format-mismatched opportunity at the top just because its subject aligns — e.g. for "publish my \
+linguistics paper", a linguistics JOURNAL or CONFERENCE outranks a linguistics COMPETITION. \
 Each reason is the WOW moment — it should make this student feel genuinely SEEN, like a mentor \
 who knows BOTH them and this program picked it just for them, and give them enough to think "that \
 is an amazing fit for me." Draw a concrete line connecting TWO specific halves: (1) a SPECIFIC \

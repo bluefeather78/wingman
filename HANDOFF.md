@@ -9,28 +9,58 @@ it's kept current. This folder **is** a git repo (`origin` =
 
 ---
 
-# CURRENT THREAD: Opportunity matching redesign — BACKEND SPINE BUILT (2026-08-29)
+# CURRENT THREAD: Opportunity matching — FULL PORT BUILT + LIVE (2026-08-30)
 
 **This thread runs in a separate worktree**: `opportunity-matching-improvement-fb6134`
-(branch `claude/opportunity-matching-improvement-fb6134`), not the worktree the threads below
-this one were done in. Check which worktree a fresh session opens in before assuming file
-state. **This worktree has NO `node_modules` (can't run tsc/expo) and NO `.env` (can't hit
-live Gemini/Supabase)** — backend pure logic is pytest-verified here; frontend + live calls
-are write-only here and must be verified in a real checkout.
+(branch `claude/opportunity-matching-improvement-fb6134`). Check which worktree a fresh session
+opens in before assuming file state. **This worktree NOW HAS `node_modules` AND `.env`** (an
+earlier version of this note said it didn't — that is no longer true): `npx tsc --noEmit` runs
+clean here, the pytest suite is green, and the dev server hits live Gemini/Supabase. The API
+server on **:8000** is run from THIS worktree (`./restart_server.ps1`); Metro serves the new
+frontend on **:8091** (NOT :8081 — that's the separate `opportunity-matching` checkout with the
+old code). The in-app Browser pane can't dispatch synthetic clicks to RN-web, so UI
+interactions are verified via real JS-dispatched DOM clicks and at the API level.
 
-## IMPLEMENTATION STATUS (2026-08-29) — PHASES 1/2/3/5/7 BUILT + LIVE + VERIFIED end-to-end
+## STATUS (2026-08-30) — the reconciled base: backend+embeddings pipeline wearing the ported UI
 
-The curated-matching redesign is FUNCTIONALLY LIVE. Recall + curation run SERVER-SIDE (the
-embedding vectors live server-side — shipping ~9MB/load to clients would regress mobile).
-Verified against the live embedded catalog: schema applied, **1,509 rows embedded ($0.026)**,
-eligibility eval **9/9 (0 under-exclusions)**, `POST /api/match` proven over HTTP, and the
-**Fresh Finds UI rendered the curated cards** (VEX Robotics, a local WA makerspace, Lemelson-
-MIT, NASA Rover — each ⭐ Strong Fit with a specific "why you" reason) driven through the real
-RN-web app on Metro.
+**Two parallel matchers existed.** A separate session built branch `opportunity-matching` — a
+**client-side** matcher (keyword+IDF recall, browser funnel/curation, a **batch**
+`parse_eligibility.py` → `eligibility_flags` column) with a polished Fresh Finds UI behind
+`EXPO_PUBLIC_NEW_FINDER`. THIS branch forked from `ab7ab03` (before that work) and independently
+built the **backend-orchestrated + embeddings** design (the P5 that branch deferred) + a live
+quote-verified eligibility guard. **Shama decided (2026-08-30):** keep THIS branch's
+backend+embeddings as the base, **port the `opportunity-matching` UI onto it, backend owns the
+funnel.** Neither branch is merged to `main`; which one becomes `main` (and retiring the other)
+is the open decision. Full status table: **`OPPORTUNITY_MATCHING_PLAN.md` → "Implementation
+status (2026-08-30)"** (that doc was reconciled in the same pass as this one).
 
-**Commits (branch `claude/opportunity-matching-improvement-fb6134`), ~90 unit tests, full
-matching suite green (the only failing suite is the pre-existing email-template tests, which
-need EMAIL_POSTAL_ADDRESS set in .env — unrelated):**
+**What's live-verified now:** recall (embeddings) → funnel (**filter axes + behavioral vibe
+rungs**, backend-owned) → curated ≤10 shortlist, PLUS "Show my matches now" → the full remaining
+pool paginated 10/page (client-side, free). Ported UI in
+`frontend/src/features/freshFinds/ShortlistView.tsx` (RungStep, ShortlistView/Card, FullListView,
+NotInterestedModal, ReviewDrawer), wired in `finder.tsx`; legacy browse grid kept for the browse
+path. 1,509 rows embedded; eligibility eval 9/9; vibe rung + shortlist + full list + restart all
+verified on :8091.
+
+**Port/UX commits (newest last), on top of the backend-spine commits listed further below:**
+- `b67178f` — funnel + shortlist UI re-skin (ShortlistView.tsx) driven by /api/match.
+- `e2b6e14` — `curate_now` escape (later superseded by the full-list view; now unused).
+- `9ab0cd9` — **MARQUEE M8**: behavioral vibe questions server-side (prompts ported verbatim
+  from `opportunity-matching`), folded into curation as rerank-only `preferences`.
+- `22bf299` — funnel guards against re-asking an already-answered filter axis.
+- `f82bf09` — funnel-question token budget (`FUNNEL_MAX_TOKENS=8000`); the 2000 cap truncated
+  the 100-row classification and silently skipped ALL filter questions (jumped to vibe).
+- `0350ea9` — "Show my matches now" = full paginated pool (not curated); restart loading state.
+
+**Remaining:** eligibility caveats on cards (DEFERRED — another M8 curation-prompt change);
+Phase C polish (EntryScreen ported but not wired — finder uses its own hero; ManageCriteria not
+ported); remove the now-unused `curate_now`; decide which branch becomes `main`.
+
+### Earlier: backend spine (2026-08-29)
+
+Recall + curation run SERVER-SIDE (the embedding vectors live server-side — shipping ~9MB/load
+to clients would regress mobile). Backend-spine commits (branch
+`claude/opportunity-matching-improvement-fb6134`):
 - `d07d978` — retire the 17-bucket subject_tags vocabulary from both catalog agents (M8/M9).
 - `0916f81` — recall core (`app/services/matching.py`: numpy cosine, LOOSENED grade_min filter
   w/ rising/age escapes, geo-scope, content hash, `recall()`) + eligibility quote-verification
@@ -53,28 +83,36 @@ re-run after activating/refreshing rows so new/edited rows get embedded — ther
 activation hook yet). `python matching_eval.py --run` grades eligibility (watch under-exclusions).
 The frontend change shows on Metro (`:8081`), NOT on `:8000` (which serves the prebuilt bundle).
 
-**NOT built yet:**
-- **PHASE 4 — the progressive elicitation funnel: DONE (endpoint `0cb3681`, UI `d966828`).**
-  `POST /api/match` with `funnel:true` runs the stateless rung flow; `finder.tsx` has a
-  'funnel' stage rendering the question + options with live "N matches left" counts, Skip, and
-  Back. "Suggest for me" drives it and degrades to the Phase-3 curated list when the model has
-  nothing worth asking. Verified on Metro: the question card renders with correct live counts
-  (Free-only 74 / Open-to-paid 100), the curated done-path and the curation-unavailable
-  fallback both render; the answer→narrow→next→curate flow is curl-proven end-to-end. Only the
-  in-browser option CLICK wasn't captured (dev token expired mid-session + the model asks
-  ~1/4 of the time) — same code path as the curl-verified flow, tsc-clean. NOTE: the taxonomy
-  quiz (`QUIZ_ROOT`/`QUIZ_SUB`) still exists — retiring it is a Phase 6 item.
-- **PHASE 6 — retire the old logic** (the 7-kind fan-out still runs for the FORM/quiz path;
-  the 17-bucket `inferSubjects`/`filterValues` slot still exist). Each item gated on ITS
-  replacement being live — Phase 3 is now live, so the fan-out on the SUGGEST path is already
-  gone; the FORM-path fan-out + `inferSubjects` retire once the form path is settled.
-- Inline activation-hook wiring (immediacy; backfill covers correctness).
+**NOW BUILT (were "not built" as of the 2026-08-29 spine):**
+- **PHASE 4 — progressive funnel: DONE**, and extended 2026-08-30 with backend-owned
+  **behavioral vibe rungs** (`9ab0cd9`, M8) + the "Show my matches now" full paginated list
+  (`0350ea9`). `POST /api/match` `funnel:true` runs the stateless rung flow; `finder.tsx`
+  renders it via the ported `RungStep`.
+- **PHASE 6 — retire the 17-bucket logic: DONE** (`3e7a58c`) — `inferSubjects`, `VALID_SUBJECTS`
+  (all copies), the `filterValues` slot, `mock_infer_subjects`, and the taxonomy quiz
+  (`QUIZ_ROOT`/`QUIZ_SUB`) are deleted; the catalog-agent prompts were retired earlier
+  (`d07d978`). The SUGGEST path uses `/api/match`; the FORM/browse path keeps `preFilter`
+  (keyword + type + grade) deliberately.
+
+**Still open:**
+- Eligibility caveats on cards (DEFERRED — another M8 curation-prompt change).
+- Phase C polish: `EntryScreen` ported but not wired (finder uses its own hero); `ManageCriteria`
+  not ported.
+- Remove the now-unused `curate_now` backend capability (the full-list view replaced it).
+- Inline activation-hook wiring (immediacy; `backfill_match_vectors.py` covers correctness).
 - Phase 7 real-catalog labeled samples (the 9 crafted cases run today; catalog cases are additive).
+- Decide which branch becomes `main` (`opportunity-matching` vs this one); retire/reconcile the
+  other. Nothing merged to `main`.
 
 **Deferred (your calls):** `cleanup_subject_tags.py` run; embed-cost recording (sub-cent gap,
 documented in c9ccae8).
 
-## PHASE 4 — the progressive elicitation funnel (design, not yet built)
+## PHASE 4 — the progressive elicitation funnel (design — NOW BUILT; kept for the rationale)
+
+> Superseded by the shipped funnel (see the status block above). The design notes below record
+> WHY the stateless pool-ids rung contract was chosen; the funnel (filter axes + vibe rungs) is
+> live in `app/services/funnel.py` + `finder.tsx`.
+
 
 **Goal:** between recall (~100) and curation (≤10), ask the student 1-2 discriminating
 questions to narrow the pool — the "100 → 60 → 30 → curate" experience — instead of curating

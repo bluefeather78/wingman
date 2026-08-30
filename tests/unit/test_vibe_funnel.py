@@ -6,7 +6,7 @@ import json
 from app.services.funnel import (
     BEHAVIORAL_AXES, CURATE_AT, MAX_RUNGS, POOL_FLOOR, ENGAGEMENT_OTHER,
     behavioral_pref, collect_preferences, build_vibe_rung, next_vibe_rung, build_engagement_rung,
-    build_outcome_rung, next_outcome_rung, build_cost_rung, build_time_rung,
+    build_outcome_rung, next_outcome_rung,
 )
 from app.services.curation import build_curation_user_content
 
@@ -149,40 +149,6 @@ def test_outcome_answer_folds_into_preferences():
     assert collect_preferences({"outcome": "build a finished project"}) == ["Wants: build a finished project"]
     assert collect_preferences({"outcome": ENGAGEMENT_OTHER + "start a nonprofit"}) == ["Wants: start a nonprofit"]
     assert collect_preferences({"outcome": "__skip__"}) == []
-
-
-def test_cost_rung_open_option_never_smaller_than_free_only():
-    # The reported bug: "open to paid" must keep EVERYONE (never fewer than "free only").
-    pool = ([{"id": f"f{i}", "price": "Free"} for i in range(20)]
-            + [{"id": f"p{i}", "price": "Paid"} for i in range(7)]
-            + [{"id": "u0", "price": None}])          # unknown price -> never cut
-    rung = build_cost_rung(pool)
-    counts = {o["value"]: o["count"] for o in rung["options"]}
-    assert counts["any"] == 28                          # open keeps ALL 28
-    assert counts["free"] == 21                         # 20 free + 1 unknown (paid cut)
-    assert counts["any"] >= counts["free"]              # the invariant that was violated
-    assert rung["classification"]["p0"]["per_option"] == {"free": "cut", "any": "keep"}
-
-
-def test_cost_rung_none_when_no_split():
-    assert build_cost_rung([{"id": "a", "price": "Free"}, {"id": "b", "price": "Free"}]) is None
-    assert build_cost_rung([{"id": "a", "price": "Paid"}, {"id": "b", "price": "Paid"}]) is None
-
-
-def test_time_rung_any_option_keeps_everyone():
-    pool = ([{"id": f"s{i}", "season": "Summer"} for i in range(10)]
-            + [{"id": f"y{i}", "season": "Year-Long"} for i in range(5)]
-            + [{"id": f"w{i}", "season": "Fall"} for i in range(6)])
-    rung = build_time_rung(pool)
-    counts = {o["value"]: o["count"] for o in rung["options"]}
-    assert counts["any"] == 21                          # everyone
-    assert counts["summer"] == 15                        # 10 summer + 5 year-long
-    assert counts["school_year"] == 11                   # 6 fall + 5 year-long
-    assert counts["any"] >= counts["summer"] and counts["any"] >= counts["school_year"]
-
-
-def test_time_rung_none_when_one_season_kind():
-    assert build_time_rung([{"id": "a", "season": "Summer"}, {"id": "b", "season": "Year-Long"}]) is None
 
 
 def test_curation_payload_surfaces_folded_preferences():

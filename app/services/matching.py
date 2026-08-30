@@ -169,6 +169,49 @@ def geo_scope_ok(row: dict, student_state: str | None) -> bool:
     return row_state == student
 
 
+# --------------------------------------------------------------------------- cost / time scope
+#
+# cost + time are asked BEFORE recall (alongside interest), so they filter the catalog HERE and
+# the top-`limit` pool is already affordable + available. Both are structured fields (`price`,
+# `season`), so the check is exact; unknown values are NEVER cut ("unknown != ineligible", the
+# same posture grade/geo take).
+
+def _price_is_paid(row: dict) -> bool:
+    p = row.get("price")
+    s = str(p).strip().lower() if p is not None else ""
+    if s in ("", "none", "null", "free", "$0", "0", "0.0", "no cost"):
+        return False   # free or unknown -> not "paid"
+    return True
+
+
+def recall_cost_ok(row: dict, cost_pref: str | None) -> bool:
+    """Free-only cuts CLEARLY-paid rows; any other value (incl. "any"/None) keeps everything."""
+    if cost_pref != "free":
+        return True
+    return not _price_is_paid(row)
+
+
+def _season_bucket(row: dict) -> str:
+    s = str(row.get("season") or "").strip().lower()
+    if not s or s in ("none", "null"):
+        return "unknown"
+    if "year" in s:            # Year-Long / Year-Round
+        return "both"
+    if "summer" in s:
+        return "summer"
+    return "school_year"       # Spring / Fall / Winter
+
+
+def recall_time_ok(row: dict, time_pref: str | None) -> bool:
+    """'summer'/'school_year' keep that season + year-round + unknown; any other value keeps all."""
+    if time_pref not in ("summer", "school_year"):
+        return True
+    bucket = _season_bucket(row)
+    if bucket in ("both", "unknown"):
+        return True
+    return bucket == time_pref
+
+
 # --------------------------------------------------------------------------- cosine recall
 
 def _to_matrix(vectors: list) -> np.ndarray:
@@ -213,6 +256,8 @@ def recall(
     theme_vectors: list,
     student_grade: int | None = None,
     student_state: str | None = None,
+    cost_pref: str | None = None,
+    time_pref: str | None = None,
     limit: int = RECALL_POOL_SIZE,
 ) -> list[dict]:
     """Narrow the active catalog to the top-`limit` semantic matches for a student.
@@ -226,12 +271,14 @@ def recall(
 
     Pure: no I/O, no wall-clock. Ordering is by descending best-theme cosine; ties keep input
     order (stable sort)."""
-    # 1. Objective filters — status, loosened grade, geo scope.
+    # 1. Objective filters — status, loosened grade, geo scope, and the pre-recall cost/time asks.
     survivors = [
         r for r in rows
         if (r.get("status") != "not_running")
         and recall_grade_ok(r, student_grade)
         and geo_scope_ok(r, student_state)
+        and recall_cost_ok(r, cost_pref)
+        and recall_time_ok(r, time_pref)
     ]
 
     tmat = _to_matrix([v for v in (theme_vectors or []) if v])

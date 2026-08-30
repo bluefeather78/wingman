@@ -37,8 +37,6 @@ from app.services.eligibility import verify_exclusion_quote
 #                            constraint against a structured field (budget vs price, availability
 #                            vs season). No quote to verify; the model's disposition stands.
 FUNNEL_AXES = {
-    "cost":             {"requires_quote": False},
-    "time_commitment":  {"requires_quote": False},
     "citizenship":      {"requires_quote": True},
     "hard_demographic": {"requires_quote": True},
     # "What do you enjoy doing" — a FILTER on the pool's own `type` distribution (structured,
@@ -46,6 +44,10 @@ FUNNEL_AXES = {
     # build_engagement_rung), never by the model — exact counts, no truncation risk.
     "engagement":       {"requires_quote": False},
 }
+# NOTE: cost (`price`) and time_commitment (`season`) were REMOVED as funnel axes 2026-08-30 —
+# they are now asked BEFORE recall (alongside interest) and applied as recall filters
+# (matching.recall_cost_ok / recall_time_ok), so the ~100-row pool is already affordable +
+# available. They are no longer classified per-candidate here.
 
 # Below this many survivors, the funnel must stop / offer to relax rather than cut further —
 # a tight list is the goal, an empty one is a dead end (T3).
@@ -274,85 +276,6 @@ def build_engagement_rung(pool: list[dict]) -> dict | None:
     }
     counts_by_opt = option_counts(pool, rung)
     rung["options"] = [{**o, "count": counts_by_opt.get(o["value"])} for o in options]
-    return rung
-
-
-# ==================== COST + TIME — structured FILTERs, computed LOCALLY ====================
-#
-# cost (`price`) and time_commitment (`season`) are STRUCTURED fields, so their rungs are built
-# LOCALLY — exact counts, and a "more open" option can never come back SMALLER than a stricter
-# one. They used to be classified by the funnel-question MODEL, which inverted them (observed:
-# "open to paid" cut the free programs, so it read 9 when "free only" read 20). A structured
-# comparison never needs a model. Eligibility axes (citizenship / hard_demographic) still go to
-# the model — those need to read the eligibility PROSE, with the quote guard.
-
-def _price_bucket(row: dict) -> str:
-    p = row.get("price")
-    s = str(p).strip().lower() if p is not None else ""
-    if s in ("", "none", "null"):
-        return "unknown"
-    if s in ("free", "$0", "0", "0.0", "no cost"):
-        return "free"
-    return "paid"
-
-
-def build_cost_rung(pool: list[dict]) -> dict | None:
-    """Free-only vs open-to-paid, from the pool's `price`. 'Free only' cuts only CLEARLY-paid rows
-    (unknown price is kept, never cut); 'Open to paid' keeps everyone. None when there's nothing to
-    split on (no free, or no paid)."""
-    buckets = [_price_bucket(r) for r in pool]
-    if not any(b == "free" for b in buckets) or not any(b == "paid" for b in buckets):
-        return None
-    classification = {
-        r.get("id"): {"per_option": {"free": ("cut" if _price_bucket(r) == "paid" else "keep"), "any": "keep"}}
-        for r in pool
-    }
-    options = [{"label": "Free only", "value": "free"}, {"label": "Open to paid too", "value": "any"}]
-    rung = {"axis": "cost", "kind": "filter", "question": "What's your budget?", "rationale": None,
-            "options": options, "classification": classification, "pool_ids": [r.get("id") for r in pool]}
-    c = option_counts(pool, rung)
-    rung["options"] = [{**o, "count": c.get(o["value"])} for o in options]
-    return rung
-
-
-def _season_bucket(row: dict) -> str:
-    s = str(row.get("season") or "").strip().lower()
-    if not s or s in ("none", "null"):
-        return "unknown"
-    if "year" in s:            # Year-Long / Year-Round
-        return "both"
-    if "summer" in s:
-        return "summer"
-    return "school_year"       # Spring / Fall / Winter
-
-
-def build_time_rung(pool: list[dict]) -> dict | None:
-    """When the student is free, from the pool's `season`. 'Any time' keeps everyone; 'Summer'
-    keeps summer + year-round (+ unknown); 'School year' keeps school-year + year-round (+ unknown).
-    None when only one season kind is present (nothing to split on)."""
-    buckets = [_season_bucket(r) for r in pool]
-    has_summer = any(b == "summer" for b in buckets)
-    has_school = any(b == "school_year" for b in buckets)
-    if not (has_summer and has_school):
-        return None
-    def disp(bucket, opt):
-        if opt == "any":
-            return "keep"
-        if bucket in ("both", "unknown"):
-            return "keep"          # never cut on year-round or unknown
-        return "keep" if bucket == opt else "cut"
-    classification = {
-        r.get("id"): {"per_option": {o: disp(_season_bucket(r), o) for o in ("summer", "school_year", "any")}}
-        for r in pool
-    }
-    options = [{"label": "Summer", "value": "summer"},
-               {"label": "During the school year", "value": "school_year"},
-               {"label": "Any time works", "value": "any"}]
-    rung = {"axis": "time_commitment", "kind": "filter", "question": "When are you free to do this?",
-            "rationale": None, "options": options, "classification": classification,
-            "pool_ids": [r.get("id") for r in pool]}
-    c = option_counts(pool, rung)
-    rung["options"] = [{**o, "count": c.get(o["value"])} for o in options]
     return rung
 
 
@@ -587,26 +510,25 @@ and the CURRENT candidate pool (already narrowed by any earlier answers). Decide
 that would most usefully narrow THIS specific pool — or say there is nothing left worth asking.
 
 You may ONLY ask about one of these axes (nothing else, ever):
-- "cost": the student's hard budget for a program (some cost money).
-- "time_commitment": when the student is actually available (e.g. summer-only vs school-year).
 - "citizenship": a citizenship/residency requirement some programs state.
 - "hard_demographic": a program open ONLY to a specific group the student may not be in \
 (e.g. "female-identifying and non-binary students"). Ask ONLY when a program in the pool truly \
 restricts this way — never as a demographic survey.
+(Budget, timing, and interest are handled BEFORE this step and are never asked here.)
 
 RULES:
-- Ask an axis ONLY if the answer would actually change the pool. If every candidate agrees on it \
-(all are free, all are remote), it is useless — do not ask it.
+- Ask an axis ONLY if the answer would actually change the pool. If every candidate agrees on it, \
+it is useless — do not ask it.
 - Do NOT ask anything the student's profile already states.
-- Do NOT ask about subject, interest, activity type, work style, or fit — those decide RANKING \
-later, not who is cut, and are never funnel questions.
+- Do NOT ask about subject, interest, activity type, work style, cost, timing, or fit — those are \
+decided elsewhere (interest/cost/timing before recall, ranking after), and are never funnel questions.
 - If no whitelisted axis meaningfully splits the pool, return {"axis": null} to stop.
 
 For the axis you choose, classify EVERY candidate under EACH answer option: "cut" (this answer \
 makes them ineligible), "keep" (unaffected), or "caveat" (shown but flagged). For a "citizenship" \
 or "hard_demographic" cut you MUST also supply the verbatim sentence from that candidate's own \
 text that states the restriction, and name which field it is in — a cut with no real quote will be \
-dropped. For "cost"/"time_commitment" no quote is needed (it is a structured comparison).
+dropped.
 
 Worked examples of the eligibility distinction (read the WHOLE sentence):
 - "Open to female, non-binary, and gender non-conforming students" -> hard_demographic restriction \
@@ -617,7 +539,7 @@ restriction; anyone may apply. Do not cut.
 citizenship/residency cut.
 
 Respond with ONLY raw JSON, no markdown, no preamble, matching:
-{"axis":"cost|time_commitment|citizenship|hard_demographic"|null,"question":"one short question",\
+{"axis":"citizenship|hard_demographic"|null,"question":"one short question",\
 "rationale":"why this splits the pool","options":[{"label":"...","value":"..."}],\
 "classification":{"<id>":{"per_option":{"<value>":"cut|keep|caveat"},"quote":"...or omit",\
 "source_field":"eligibility|summary|name|org or omit"}}}"""

@@ -35,7 +35,7 @@ def test_preference_axis_cannot_cut():
 def test_cost_cut_no_quote_needed():
     pool = _pool("free1", "paid1")
     rung = {
-        "axis": "cost",
+        "axis": "engagement",
         "classification": {
             "free1": {"per_option": {"free_only": "keep"}},
             "paid1": {"per_option": {"free_only": "cut"}},
@@ -49,7 +49,7 @@ def test_cost_cut_no_quote_needed():
 
 def test_missing_entry_defaults_to_keep():
     pool = _pool("a", "b")
-    rung = {"axis": "cost", "classification": {"a": {"per_option": {"free_only": "cut"}}}}
+    rung = {"axis": "engagement", "classification": {"a": {"per_option": {"free_only": "cut"}}}}
     out = funnel.apply_rung_answer(pool, rung, "free_only")
     # 'b' has no classification entry -> kept (never cut on absence)
     assert set(r["id"] for r in out["narrowed"]) == {"b"}
@@ -59,7 +59,7 @@ def test_missing_entry_defaults_to_keep():
 
 def test_caveat_is_kept_and_flagged():
     pool = _pool("a")
-    rung = {"axis": "time_commitment", "classification": {"a": {"per_option": {"summer": "caveat"}}}}
+    rung = {"axis": "engagement", "classification": {"a": {"per_option": {"summer": "caveat"}}}}
     out = funnel.apply_rung_answer(pool, rung, "summer")
     assert [r["id"] for r in out["narrowed"]] == ["a"]
     assert out["caveat_ids"] == ["a"]
@@ -104,7 +104,7 @@ def test_citizenship_cut_reverts_when_quote_absent():
 def test_would_collapse_flag_and_count():
     pool = _pool("a", "b", "c")
     rung = {
-        "axis": "cost",
+        "axis": "engagement",
         "classification": {i: {"per_option": {"free_only": "cut"}} for i in ("a", "b")},
     }
     out = funnel.apply_rung_answer(pool, rung, "free_only")
@@ -114,7 +114,7 @@ def test_would_collapse_flag_and_count():
 
 def test_count_after_matches_apply():
     pool = _pool("a", "b", "c")
-    rung = {"axis": "cost", "classification": {"a": {"per_option": {"free_only": "cut"}}}}
+    rung = {"axis": "engagement", "classification": {"a": {"per_option": {"free_only": "cut"}}}}
     assert funnel.count_after(pool, rung, "free_only") == \
         funnel.apply_rung_answer(pool, rung, "free_only")["count"]
 
@@ -122,7 +122,7 @@ def test_count_after_matches_apply():
 # --------------------------------------------------------------------------- sanitize + counts
 
 def test_sanitize_structured_axis_passthrough():
-    rung = {"axis": "cost", "classification": {"a": {"per_option": {"free_only": "cut"}}}}
+    rung = {"axis": "engagement", "classification": {"a": {"per_option": {"free_only": "cut"}}}}
     assert funnel.sanitize_rung(_pool("a"), rung) is rung  # no quote needed, unchanged object
 
 
@@ -149,7 +149,7 @@ def test_sanitize_keeps_verified_quote_cut():
 def test_option_counts_reflect_survivors():
     pool = _pool("a", "b", "c")
     rung = {
-        "axis": "cost",
+        "axis": "engagement",
         "options": [{"label": "Free only", "value": "free_only"}, {"label": "Any", "value": "any"}],
         "classification": {
             "a": {"per_option": {"free_only": "cut", "any": "keep"}},

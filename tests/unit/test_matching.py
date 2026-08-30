@@ -192,3 +192,26 @@ def test_recall_thin_profile_returns_filtered_unscored():
 def test_recall_dim_mismatch_raises():
     with pytest.raises(ValueError):
         m.recall([_row("x", [1.0, 0.0, 0.0])], [[1.0, 0.0]])
+
+
+def test_recall_cost_pref_free_cuts_paid_keeps_free_and_unknown():
+    themes = [[1.0, 0.0]]
+    rows = [_row("free", [1.0, 0.0], price="Free"),
+            _row("paid", [1.0, 0.0], price="Paid"),
+            _row("unknown", [1.0, 0.0])]                 # no price -> never cut
+    ids = {r["id"] for r in m.recall(rows, themes, cost_pref="free")}
+    assert ids == {"free", "unknown"}                    # paid dropped
+    # "any"/None keeps everyone.
+    assert {r["id"] for r in m.recall(rows, themes, cost_pref="any")} == {"free", "paid", "unknown"}
+    assert {r["id"] for r in m.recall(rows, themes)} == {"free", "paid", "unknown"}
+
+
+def test_recall_time_pref_summer_keeps_summer_yearlong_unknown():
+    themes = [[1.0, 0.0]]
+    rows = [_row("summer", [1.0, 0.0], season="Summer"),
+            _row("fall", [1.0, 0.0], season="Fall"),
+            _row("year", [1.0, 0.0], season="Year-Long"),
+            _row("unknown", [1.0, 0.0])]                 # no season -> never cut
+    ids = {r["id"] for r in m.recall(rows, themes, time_pref="summer")}
+    assert ids == {"summer", "year", "unknown"}          # school-year-only (fall) dropped
+    assert {r["id"] for r in m.recall(rows, themes, time_pref="any")} == {"summer", "fall", "year", "unknown"}

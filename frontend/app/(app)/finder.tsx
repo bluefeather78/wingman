@@ -34,8 +34,8 @@ import {
 } from '@/lib/tracker';
 import { MiniBadge, PopButton, ReviewBadge, Screen, SoftCard, Txt, usePopInteraction } from '@/ui/components';
 import {
-  FullListView, FunnelLoading, InterestSelect, NotInterestedModal, ReviewDrawer, RungStep, ShortlistView,
-  type ShortlistItem, type Tier,
+  FullListView, FunnelLoading, SearchSetup, NotInterestedModal, ReviewDrawer, RungStep, ShortlistView,
+  type SearchSetupChoice, type ShortlistItem, type Tier,
 } from '@/features/freshFinds/ShortlistView';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
@@ -517,16 +517,13 @@ export default function Finder() {
         funnelPoolIds.current = null;
         setFunnelHistory([]);
         setFunnelRung(null);
-        // Interest focus BEFORE recall: if the profile spans 2+ themes, ask which the student is
-        // pursuing this cycle so recall is drawn against those, not the whole profile blended.
-        // A single-theme (or thin) profile has nothing to choose between — go straight to recall.
+        // Pre-recall SETUP (interest + budget + timing): always shown on the suggest path so all
+        // three filters apply BEFORE the vector matching and the ~100-row pool is already
+        // on-interest, affordable, and available. The interest section only appears when the
+        // profile spans 2+ themes (nothing to choose between otherwise).
         const themeNames = (blob.profile_themes || []).map((t) => t.theme).filter(Boolean);
-        if (themeNames.length >= 2) {
-          setInterestThemes(themeNames);
-          setStage('interests');
-          return;
-        }
-        await runFunnelStep({}, null);
+        setInterestThemes(themeNames.length >= 2 ? themeNames : []);
+        setStage('interests');
         return;
       }
 
@@ -829,18 +826,25 @@ export default function Finder() {
     void suggestForMe();
   }
 
-  // Interest selection confirmed: focus recall on the chosen themes (empty = use all), then run
-  // rung 0. Narrowing profile_themes here is the whole mechanism — recall scores against only
-  // these, so the top-100 is drawn for what the student is actually pursuing this cycle.
-  function beginFunnel(selected: string[]) {
+  // Pre-recall setup confirmed: focus recall on the chosen themes (empty = all), and carry the
+  // budget + timing choices in funnel_answers so recall filters the catalog by them (cost/time
+  // are applied in recall now, not as post-recall funnel rungs). Then run rung 0.
+  function beginFunnel(choice: SearchSetupChoice) {
     const blob = funnelBlob.current;
-    if (blob && selected.length) {
+    if (blob && choice.themes.length) {
       funnelBlob.current = {
         ...blob,
-        profile_themes: (blob.profile_themes || []).filter((t) => selected.includes(t.theme)),
+        profile_themes: (blob.profile_themes || []).filter((t) => choice.themes.includes(t.theme)),
       };
     }
-    void runFunnelStep({}, null);
+    const answers: Record<string, string> = { cost: choice.cost, time_commitment: choice.time };
+    funnelAnswers.current = answers;
+    // Seed the review drawer with the non-default setup choices.
+    const review: { label: string; value: string }[] = [];
+    if (choice.cost === 'free') review.push({ label: 'Budget', value: 'Free only' });
+    if (choice.time !== 'any') review.push({ label: 'Timing', value: choice.time === 'summer' ? 'Summer' : 'School year' });
+    setFunnelReview(review);
+    void runFunnelStep(answers, null);
   }
 
   async function suggestForMe() {
@@ -1210,12 +1214,12 @@ export default function Finder() {
     );
   }
 
-  // ---------- Interest selection (BEFORE recall) ----------
-  // Ask which profile theme(s) to pursue this cycle, so recall focuses the pool on them. While
-  // the confirmed selection is recalling (funnelLoading), show the loading screen.
+  // ---------- Pre-recall setup (interest + budget + timing, BEFORE recall) ----------
+  // These three filters run before the vector matching. While the confirmed choice is recalling
+  // (funnelLoading), show the loading screen.
   if (stage === 'interests') {
     if (funnelLoading) return <FunnelLoading />;
-    return <InterestSelect themes={interestThemes} onConfirm={beginFunnel} />;
+    return <SearchSetup themes={interestThemes} onConfirm={beginFunnel} />;
   }
 
   // ---------- Funnel stage (Phase 4) ----------

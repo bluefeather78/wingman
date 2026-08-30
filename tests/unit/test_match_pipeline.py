@@ -137,12 +137,12 @@ def test_next_rung_stops_when_model_reasks_an_answered_axis():
 def test_next_rung_returns_sanitized_rung_with_counts():
     pool = _big_pool(40)
     raw = json.dumps({
-        "axis": "cost", "question": "Budget?",
-        "options": [{"label": "Free only", "value": "free"}, {"label": "Any", "value": "any"}],
-        "classification": {"r0": {"per_option": {"free": "cut", "any": "keep"}}},
+        "axis": "engagement", "question": "What kind?",
+        "options": [{"label": "A", "value": "a"}, {"label": "B", "value": "b"}],
+        "classification": {"r0": {"per_option": {"a": "cut", "b": "keep"}}},
     })
     rung = mp.next_funnel_rung(pool, {}, lambda s, u: raw, json.loads)
-    assert rung["axis"] == "cost"
+    assert rung["axis"] == "engagement"
     counts = {o["value"]: o["count"] for o in rung["options"]}
-    assert counts["free"] == 39 and counts["any"] == 40   # r0 cut under 'free'
+    assert counts["a"] == 39 and counts["b"] == 40   # r0 cut under 'a'
     assert len(rung["pool_ids"]) == 40

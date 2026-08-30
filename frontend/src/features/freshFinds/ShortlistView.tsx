@@ -97,41 +97,68 @@ function ActivitySpinner() {
   return <ActivityIndicator size="large" color={colors.orange} />;
 }
 
-// ---------- interest selection (BEFORE recall) ----------
-// The profile's themes, offered as a pick-list so the student focuses THIS search on the
-// interest(s) they're actually pursuing right now — instead of recall blending every theme in
-// their profile into one 100-row pool. Selected themes become the recall query; picking none
-// (or "Use all my interests") recalls against everything, the old behavior.
-export function InterestSelect({ themes, onConfirm }: {
-  themes: string[]; onConfirm: (selected: string[]) => void;
+// ---------- pre-recall setup (interest + budget + timing, BEFORE recall) ----------
+// These three FILTERS run before the vector matching, so the ~100-row pool is already
+// on-interest, affordable, and available. Interest focuses recall on the theme(s) picked (none =
+// all); budget and timing filter the catalog by price/season inside recall.
+export interface SearchSetupChoice { themes: string[]; cost: 'free' | 'any'; time: 'summer' | 'school_year' | 'any'; }
+export function SearchSetup({ themes, onConfirm }: {
+  themes: string[]; onConfirm: (choice: SearchSetupChoice) => void;
 }) {
   const [sel, setSel] = useState<Set<string>>(new Set());
+  const [cost, setCost] = useState<'free' | 'any'>('any');
+  const [time, setTime] = useState<'summer' | 'school_year' | 'any'>('any');
   const toggle = (t: string) => setSel((s) => { const n = new Set(s); n.has(t) ? n.delete(t) : n.add(t); return n; });
+
+  const chip = (label: string, on: boolean, onPress: () => void) => (
+    <Pressable key={label} onPress={onPress} style={{
+      borderWidth: 3, borderColor: colors.navy, borderRadius: radius.lg,
+      paddingVertical: space.md, paddingHorizontal: space.lg, backgroundColor: on ? colors.orange : colors.card,
+    }}>
+      <Txt style={{ fontFamily: fonts.bodyBold, fontSize: 15, color: on ? colors.white : colors.ink }}>{on ? '✓ ' : ''}{label}</Txt>
+    </Pressable>
+  );
+
   return (
     <Screen>
       <ScrollView contentContainerStyle={{ padding: space.lg, maxWidth: 760, alignSelf: 'center', width: '100%' }}>
-        <View style={{ gap: space.lg }}>
-          <Badge label="WHAT ARE YOU HERE FOR" bg={colors.peach} fg={colors.orangeDeep} outline />
-          <Txt style={type_h1}>Which of these are you looking to pursue right now?</Txt>
-          <Txt style={type_body}>Pick one or more and we’ll focus your matches there. Nothing’s lost — start fresh anytime to explore the rest.</Txt>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
-            {themes.map((t) => {
-              const on = sel.has(t);
-              return (
-                <Pressable key={t} onPress={() => toggle(t)} style={{
-                  borderWidth: 3, borderColor: colors.navy, borderRadius: radius.lg,
-                  paddingVertical: space.md, paddingHorizontal: space.lg, backgroundColor: on ? colors.orange : colors.card,
-                }}>
-                  <Txt style={{ fontFamily: fonts.bodyBold, fontSize: 15, color: on ? colors.white : colors.ink }}>{on ? '✓ ' : ''}{t}</Txt>
-                </Pressable>
-              );
-            })}
+        <View style={{ gap: space.xl }}>
+          <View style={{ gap: space.sm }}>
+            <Badge label="LET’S SET UP YOUR SEARCH" bg={colors.peach} fg={colors.orangeDeep} outline />
+            <Txt style={type_h1}>A couple of quick things first</Txt>
+            <Txt style={type_body}>We’ll use these to pull your best ~100 matches, then help you narrow from there.</Txt>
           </View>
-          <View style={{ flexDirection: 'row', gap: space.lg, alignItems: 'center', marginTop: space.sm }}>
-            <PopButton label={sel.size ? `Find my matches (${sel.size})` : 'Find my matches'} onPress={() => onConfirm([...sel])} />
-            {sel.size > 0 && (
-              <Pressable onPress={() => onConfirm([])}><Txt style={{ ...type_body, color: colors.slate500 }}>Use all my interests</Txt></Pressable>
-            )}
+
+          {themes.length > 0 && (
+            <View style={{ gap: space.sm }}>
+              <Txt style={type.label}>WHICH INTERESTS ARE YOU PURSUING?</Txt>
+              <Txt style={{ ...type_body, marginTop: -4 }}>Pick any that apply — or leave blank for all of them.</Txt>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md, marginTop: space.xs }}>
+                {themes.map((t) => chip(t, sel.has(t), () => toggle(t)))}
+              </View>
+            </View>
+          )}
+
+          <View style={{ gap: space.sm }}>
+            <Txt style={type.label}>BUDGET</Txt>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
+              {chip('Free only', cost === 'free', () => setCost('free'))}
+              {chip('Open to paid', cost === 'any', () => setCost('any'))}
+            </View>
+          </View>
+
+          <View style={{ gap: space.sm }}>
+            <Txt style={type.label}>WHEN ARE YOU FREE?</Txt>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
+              {chip('Summer', time === 'summer', () => setTime('summer'))}
+              {chip('School year', time === 'school_year', () => setTime('school_year'))}
+              {chip('Any time', time === 'any', () => setTime('any'))}
+            </View>
+          </View>
+
+          <View style={{ marginTop: space.sm }}>
+            <PopButton label={sel.size ? `Find my matches (${sel.size} focus)` : 'Find my matches'}
+              onPress={() => onConfirm({ themes: [...sel], cost, time })} />
           </View>
         </View>
       </ScrollView>

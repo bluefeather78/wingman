@@ -61,8 +61,12 @@ def recall_pool(rows, student, embed_themes_fn, recall_limit=RECALL_POOL_SIZE):
         theme_vecs, embed_cost = embed_themes_fn(theme_texts)
     location = student.get("location") or {}
     state = location.get("state") if isinstance(location, dict) else None
+    # cost + time are asked BEFORE recall (alongside interest), carried in funnel_answers, and
+    # applied here so the top-`limit` pool is already affordable + available.
+    answers = student.get("funnel_answers") or {}
     pool = recall(rows, theme_vecs, student_grade=student.get("grade"),
-                  student_state=state, limit=recall_limit)
+                  student_state=state, cost_pref=answers.get("cost"),
+                  time_pref=answers.get("time_commitment"), limit=recall_limit)
     return pool, embed_cost
 
 

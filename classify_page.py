@@ -110,16 +110,22 @@ application DEADLINE, or "applications open/close" dates. A single clear apply-o
 action describing ONE opportunity is a strong signal for "program".
   YES: a "Stanford AI4ALL Summer Program" page with dates and an "Apply Now" button.
   YES: a "Regeneron Science Talent Search" page with an entry deadline and rules.
+  YES: a page that describes ONE opportunity in depth — its dates, who it is for, how to apply — \
+even if it also names or links a related or sibling program. A mention of another program does \
+not make it a hub.
   NO (this is a hub): a page titled "Summer Programs at Stanford" listing ten programs, each with \
 its own separate "Learn more" or "Apply" link.
   NO (this is none): a tuition page, a professor's bio, a generic "Admissions" page.
 
-- "first_party_hub" — a page run BY an institution that lists MANY of ITS OWN programs, each on \
-that same institution's site. The listed programs belong to whoever runs the page. It has no \
-single apply action of its own; each program links onward to apply.
+- "first_party_hub" — a page whose PURPOSE is to LIST or INDEX MANY of an institution's OWN \
+programs. Its body IS the list; it does not itself fully describe any single program — each one's \
+real details live on a separate page it links to. The listed programs belong to whoever runs the \
+page, and it has no single apply action of its own.
   YES: "CMU Pre-College — Academic Programs" listing 15 Carnegie Mellon summer programs.
   YES: a university's "Summer Opportunities for High School Students" index.
   NO: a page about ONE program (that is "program").
+  NO: a page that fully describes ONE program — its dates, eligibility, how to apply — and merely \
+names or links a sibling program (that is "program", not a hub).
   NO: a page whose listed programs are mostly on OTHER organizations' sites (that is \
 "third_party_hub").
 
@@ -140,7 +146,11 @@ Rules:
 - The ONLY difference between first_party_hub and third_party_hub is WHOSE programs are listed: \
 the site's own programs (first) versus other organizations' programs (third). Decide it from the \
 page text — who runs the listed programs.
-- A page that lists SEVERAL programs is NEVER "program". It is one of the two hub classes.
+- A hub's PURPOSE is to LIST or INDEX many programs — its body is the list, and each program's \
+real details are on a page it links to. A page that DESCRIBES ONE opportunity in depth (its own \
+dates, eligibility, how to apply) is a "program" EVEN IF it names or links a related or sibling \
+program — a mention or a link is not a listing. Ask what the page is FOR: presenting one \
+opportunity, or indexing many?
 - "confidence" is "high" only when the page text plainly settles the class. If the text is thin, \
 ambiguous, or you are guessing, say "low".
 - "evidence" MUST be a verbatim substring of the page text. If you cannot quote the page, the \

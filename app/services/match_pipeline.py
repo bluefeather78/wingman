@@ -145,6 +145,12 @@ def next_funnel_rung(pool, student, ask_fn, parse_fn, rungs_done=0):
         parsed = None
     if not isinstance(parsed, dict) or parsed.get("axis") is None:
         return None
+    # The model is given the prior answers but sometimes re-asks an axis already answered
+    # (observed live: hard_demographic twice), which wastes a rung and stalls the funnel. Guard
+    # server-side: an already-answered filter axis means the model has run out of genuinely new
+    # ones, so stop the filter phase and hand off (to a vibe question, then curation).
+    if parsed.get("axis") in (student.get("funnel_answers") or {}):
+        return None
     try:
         sanitized = sanitize_rung(pool, parsed)
     except FunnelAxisError:

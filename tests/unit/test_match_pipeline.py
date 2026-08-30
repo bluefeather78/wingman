@@ -122,6 +122,18 @@ def test_next_rung_stops_on_non_whitelisted_axis():
     assert mp.next_funnel_rung(_big_pool(40), {}, lambda s, u: raw, json.loads) is None
 
 
+def test_next_rung_stops_when_model_reasks_an_answered_axis():
+    # The model re-picks an axis already in funnel_answers (observed live) -> stop the filter
+    # phase (hand off to a vibe question / curation) rather than re-asking it.
+    raw = json.dumps({
+        "axis": "cost", "question": "Budget again?",
+        "options": [{"label": "Free", "value": "free"}, {"label": "Any", "value": "any"}],
+        "classification": {},
+    })
+    student = {"funnel_answers": {"cost": "free"}}
+    assert mp.next_funnel_rung(_big_pool(40), student, lambda s, u: raw, json.loads, rungs_done=1) is None
+
+
 def test_next_rung_returns_sanitized_rung_with_counts():
     pool = _big_pool(40)
     raw = json.dumps({

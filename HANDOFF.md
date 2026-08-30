@@ -1,111 +1,122 @@
-# HANDOFF — Scraper dedupe + page-classifier gate
+# HANDOFF — Discovery gate, review-queue surfacing, and console queue-tools
 
-## ⚠️ START HERE — which branch / where to work
+## ⚠️ START HERE — where to work
 
-**The work is on local branch `claude/opportunity-scraper-logic-a509f1`, in a git worktree at
-`C:\Users\shama\Documents\wingman\.claude\worktrees\opportunity-scraper-logic-a509f1`.**
-
-- **NOT pushed. NOT on `main`.** The two commits below exist ONLY on this branch/worktree:
-  - `2c6a8ae` — the whole dedupe + classifier gate (7 modules + 6 tests)
-  - `e7b402f` — MARQUEE M8 prompt sharpening + `classify_queue.py`
-- **Work in that worktree directory** (it is the cwd for this session). If you start elsewhere,
-  `git checkout claude/opportunity-scraper-logic-a509f1` first, or you will not see any of this.
-- `.env` is already copied into the worktree (gitignored). The catalog embedding index
-  `catalog_embeddings.jsonl` is built and sits in the worktree (gitignored, ~1509 rows). If you
-  ever work from a fresh checkout, both must be recreated (`.env` copied in;
-  `python build_catalog_embeddings.py --commit` to rebuild the index, ~$0.03, gated).
-- Read `CLAUDE.md` (repo root) and `SCRAPER_IMPROVEMENT_PLAN.md` (the "Session 2026-08-30" section
-  at the top is the authoritative design record). This file is the short version.
-
----
+- **Branch:** `claude/opportunity-scraper-logic-a509f1`
+- **Worktree:** `C:\Users\shama\Documents\wingman\.claude\worktrees\opportunity-scraper-logic-a509f1`
+- **`.env`** and the embedding index **`catalog_embeddings.jsonl`** (1,676 rows, active catalog) both
+  live in this worktree, gitignored. If you ever work from a fresh checkout, recreate both
+  (`.env` copied in; `python build_catalog_embeddings.py --commit` to rebuild the index).
+- **The dev server on `http://localhost:8000` runs from THIS worktree** (last PID 74508). Restart it
+  with `restart_server.ps1` from this worktree — never Bash `&`. Each git worktree has its OWN
+  gitignored `discovered_leads.jsonl`, so the console's lead counts follow whichever worktree the
+  server runs from (this caused a "leads count dropped" scare — it was just the serving worktree
+  changing, not data loss).
+- Read `CLAUDE.md` (marquee rules — M8 prompts, M9 paid calls) and `SCRAPER_IMPROVEMENT_PLAN.md`.
+  The **Scraper Logic Map** artifact is the plain-English picture:
+  https://claude.ai/code/artifact/5a5c5614-e561-4f28-9f0f-cac1c30ada99 (updated this session; WebFetch
+  it before republishing — a republish overwrites, it does not merge).
 
 ## Goal
 
-The review queue fills faster than the operator can clear it. Build the discovery-side gate that
-moves the operator toward **spot-checking**, on two axes, both from ONE page fetch:
+Close the review-queue loop for scraped/mined opportunities: every candidate should arrive
+**classified** (program / hub / none / stale), **enriched** (page metadata), and **deduped**
+(name/URL **and** content-embedding), land in the review queue **labelled**, and be drainable in a
+few clicks — with nothing auto-activated.
 
-1. **Page classifier** — read the full page, label it `program` / `first_party_hub` /
-   `third_party_hub` / `none` (+ deterministic staleness). Program → a queued row (pre-labelled);
-   hubs → discovery leads (fed to the hub-mining queue); none → flagged; stale → dropped.
-2. **Content-embedding dedupe** — catch the SAME program at a DIFFERENT URL (which URL+name miss),
-   as a tiered-confidence signal that can eventually AUTO-merge the safe cases.
+## Current progress — DONE, verified, committed
 
-**Also combines the new-opportunity scraper with `refresh_opportunities`' metadata extraction**
-(one page read does both). Deadlines, action items, reviews stay as SEPARATE standalone agents.
-`refresh_opportunities.py` is KEPT standalone (not retired). Nothing auto-activates.
+Full unit suite green throughout. Commits on this branch, oldest first:
 
-## Current progress — BUILT, TESTED, COMMITTED (full unit suite 1755+ green)
+| commit | pushed? | what |
+|---|---|---|
+| `01cd554` | ✅ pushed | Console surfacing: classify pills + tier-coloured dedupe back-links + class filter in the review queue |
+| `51d8d3a` | ✅ pushed | **MARQUEE M9** — discovery gate wired always-on into `scrape_opportunities.py` (classify + metadata enrich + embedding dedupe per candidate) |
+| `e5b029a` | ✅ pushed | `triage_queue.py` — bulk-reject the queue by classifier verdict (FREE, reversible) |
+| `67e3596` | ✅ pushed | `--gate-observe` — label-only gate mode (keep everything in the queue for review vs act=drop/divert) |
+| `da6910b` | ✅ pushed | **MARQUEE M9** — activation embeds the row into the dedupe index (keeps it current on its own) |
+| `7fe2746` | ❌ **UNPUSHED** | Console: gate-mode toggle (Observe/Act) on the scraper card |
+| `21c3278` | ❌ **UNPUSHED** | Console: Queue-tools cards (Classify / Dedupe / Triage / Refresh-index) |
 
-Modules (all model/embedding calls injected → hermetic tests):
-- `classify_page.py` — classifier + M8 prompt (CTA signal + purpose-based hub/program boundary) +
-  deterministic staleness gate (drop program if newest page date ≤ year−3; undated = KEEP).
-- `combined_reader.py` — fetch-once orchestrator: classify → (if program) refresh-metadata +
-  dedupe hint. Reuses `refresh_opportunities.build_system`/`clean_update_dict` read-only (no M1 edit).
-- `embed_common.py` — Gemini `gemini-embedding-001`, pure cosine/nearest (no numpy), jsonl index.
-- `build_catalog_embeddings.py` — fields-rep index backfill (RAN: 1509 rows).
-- `dedupe_confidence.py` — tiers PROOF/CONFIDENT/ADJUDICATE/SIBLING/HINT/NONE + two guards:
-  acronym tie-breaker (shared `(CSSI)` softens CONFLICT→SUBSET) + context guard (CONFIDENT needs
-  same domain OR agreeing org).
-- `dedupe_eval.py` — measurement harness (`--run` / `--signals` / `--tiers`).
-- `dedupe_queue.py` — read-only dedupe dry-run over the live review queue.
-- `classify_queue.py` — read-only classifier dry-run over the queue; FEEDS classified hubs into the
-  `discovered_leads` hub-mining queue (first_party→same-domain, third_party→off-domain).
+**➡️ First action for the next session: `git push origin claude/opportunity-scraper-logic-a509f1`**
+to ship `7fe2746` + `21c3278` (the user asked to push; it was the last open loop).
 
-## What worked (measured, keep)
+### The new pieces (all live)
 
-- **Fields representation beats page text for dedupe** — cleaner high-cosine band AND needs no
-  fetch (index is cheap/robust, covers dead-page rows). `combined_reader.default_representation`.
-- **Dedupe is a HINT, not auto-suppress, on a single score** — no clean threshold (same-org
-  siblings overlap true dups). But the TIERS make auto-merge safe: eval CONFIDENT **14/14 correct**,
-  live queue CONFIDENT **4/4 correct, 0 FP**.
-- **The two guards** fixed the two live-queue failure modes (abbreviation miss recovered;
-  cross-org generic-name collision blocked) with 0 new FP.
-- **Classifier works live** — 30-row pilot ($0.04): pulled out real junk (`none` = a dead "no
-  results" page, a wrong 2012 page), unreadables correctly got no verdict (M1), hub pipe fed.
-- **M8 prompt fix verified** — "lists SEVERAL programs = never program" was too blunt; replaced
-  with a PURPOSE test. Re-pilot: 2 false hubs flipped to program, genuine indexes stayed hubs.
+- **Discovery gate** (`combined_reader.py` + `classify_page.py` + `dedupe_confidence.py` +
+  `embed_common.py`), wired into the scraper's candidate loop. Per candidate: fetch page once →
+  classify → (if program) enrich metadata + embedding-dedupe hint. Pure shaping helpers
+  (`gate_metadata_overlay`, `gate_dup_candidates` in `scrape_opportunities.py`) are unit-tested.
+- **Queue tools** — surfaced in the console via the existing `MAINTENANCE_TOOLS` registry (NOT the
+  agent schema, so cost/history invariants are untouched). Under **Run → New Opportunities → Queue
+  tools**: `classify_queue.py`, `dedupe_queue.py`, `triage_queue.py`, `build_catalog_embeddings.py`,
+  each preview-first. `build_tool_args` has a branch per tool.
+- **Gate-mode toggle** on the scraper card — console default is **Observe** (review-first); CLI
+  default stays **Act**.
+
+### Runs executed this session (measured)
+
+- Full-queue **classify** (`classify_queue.py --write`): 279 rows, **$0.4631** → 159 program, 38+18
+  hub, 20 none, 44 unreadable, 11 stale.
+- Full-queue **dedupe** (`dedupe_queue.py --write`): 279 rows, **$0.0036** → 4 confident, 4 adjudicate,
+  10 hints.
+- **5-angle observe scrape** (seeds 6,10,15,16,22, `--gate-observe`): 94 candidates → **21 rows,
+  $0.4552**, all labelled, nothing dropped. Live in the review queue (`source scraper-national-20260830`).
+- Embedding index refreshed to **1,676** active rows ($0.0022).
+
+## What worked (keep)
+
+- **Reusing existing seams instead of new machinery**: the console tool cards went through
+  `MAINTENANCE_TOOLS`/`build_tool_args`/`run_tool_subprocess` (already there) — no new endpoints, and
+  the cards auto-render from the registry via `TOOL_SLOTS`.
+- **`quality_flags` / `dup_candidates` as the surfacing channel** — already flow to the review queue,
+  so no schema migration was needed to show class pills and dedupe back-links.
+- **Observe mode** for a review-first scrape — the operator sees hubs/stale in the queue rather than
+  having them dropped/diverted silently.
+- **Verifying claims against code + data** before answering (the "leads got replaced" scare was a
+  worktree/server artifact; first/third-party hubs ARE both queued — 38 same-domain + 21 off-domain).
 
 ## What didn't work / gotchas (do NOT repeat)
 
-- **`dedupe_queue`/`build_catalog_embeddings` need the GEMINI key, not the Supabase key** — they
-  are different creds (fixed; `_gemini_key()`). Supabase read is free; embeddings/classify are paid.
-- **Restrict dedupe eval to the ACTIVE catalog** — pending hub-batch rows are full of unresolved
-  dupes that pollute the "distinct" label bucket and make separation read worse than it is.
-- **The `--tiers` "precision 0.12" number is misleading** — it scores vs an incomplete label set
-  (real dupes marked "distinct"). Trust the sorted cosine list, not that aggregate.
-- **cp1252 console** — avoid em-dashes/unicode in `print()` strings (crashed other agents; here it
-  only mojibake'd). Page-content text you can't control; your own strings use ASCII.
-- **Classifier is rate-limited to one call / 5s** (Gemini floor). Full 279-row queue ≈ $1.12 / ~24m.
+- **The auto-mode permission classifier blocks paid script runs** from Bash/PowerShell even with chat
+  approval. Background runs sometimes pass; otherwise the **user runs the paid command themselves**.
+- **`tee` to a non-existent `agent_logs/`** silently broke a backgrounded run; use `python -u` and the
+  task's own `.output` file, no `tee`.
+- **cp1252 console**: set `PYTHONIOENCODING=utf-8` for any run that prints program names (en-dashes).
+- **Hub mining is a SEPARATE pipeline from the gate.** `mine_hub_pages.py` does NOT run
+  `combined_reader`/`classify_page` — it has its own URL-picker + URL-dedupe + `build_row`. So mined
+  rows arrive **URL-deduped and field-populated but NOT class-pilled or embedding-deduped**. The
+  intended way to finish them is the **queue-tools workflow**, not a miner rewrite (decided with the
+  user this session — do NOT rewrite the miner).
 
-## Next steps (all gated — each PAID run needs fresh chat approval, the ~$30-overspend rule)
+## Next steps — the user's active task
 
-1. **Full-queue classifier triage** — `python classify_queue.py` (no flag) over all 279 pending
-   rows (~$1.12, ~24 min): drops junk/stale, feeds every real hub into mining. Drains the backlog.
-   (Pilot with `--limit N` first; `--preview` is free.)
-2. **Wire `combined_reader` into `scrape_opportunities.py`'s candidate loop** — free to build; the
-   discovery gate then runs at scrape time so future rows arrive classified + deduped + hub-routed.
-   Grade with `python grade_scraper_batch.py` (0 regressions required).
-3. **Decide auto-merge** — flip CONFIDENT/PROOF tiers to actual (reversible, audited P3) auto-merge,
-   backed by the 14/14 + 4/4 measurement; re-confirm FP as operator verdicts accumulate.
-4. **Console** — surface class/confidence + the dedupe dup-hint/tier in the review queue UI
-   (`ops/` — localhost-only; note a concurrent session may edit `ops/*`, stage only your files).
+The user is **draining the queues from the admin dashboard**, in this order (all console cards,
+preview-first):
 
-## Key commands
+1. **Mine Hub Pages** (Run → New Opportunities) — leave URL blank, set **"take N from the discovery
+   queue"** (59 leads waiting: 38 first-party same-domain, 21 third-party off-domain). PAID.
+2. **Classify the Review Queue** → 3. **Dedupe the Review Queue** (tick "only rows already
+   classified") → 4. **Triage the Review Queue** (reject hubs/none/stale) → 5. review & activate.
 
-```
-python -m pytest tests/unit -q                 # full suite (1755+ green; hermetic)
-python dedupe_eval.py --tiers                   # FREE: dedupe tiers over the 90 curated pairs
-python dedupe_queue.py --preview                # FREE: queue dedupe cost preview
-python classify_queue.py --preview              # FREE: classifier cost preview
-python classify_queue.py --limit 30             # PAID pilot (~$0.12): classify 30 queue rows
-python discovered_leads.py --list               # the hub-mining work-list (5 hub leads queued)
-```
+**Open decision the user was about to make:** `classify_queue.py --write` re-classifies (re-pays for)
+the WHOLE queue each run. The user was offered a small non-marquee enhancement — an
+**"only-unclassified" guard** so the mine→classify loop skips already-stamped rows — and had not yet
+said yes/no. Offer it again if they mine repeatedly.
 
-## Marquee (never change without explicit chat yes + a DEDICATED commit that names the entry)
+### Deferred / open (not this session's task)
 
-- **M8** — the classifier prompt `classify_page.CLASSIFY_SYSTEM` (and the eval-only
-  `dedupe_eval.DESCRIPTOR_SYSTEM`). Any wording change is M8.
-- **M9** — the paid calls: one no-search classify call per page, and the embeddings. Toggling
-  spend / model pins is M9.
-- **M1** — `refresh_opportunities.py` reads the LIVE page, never memory. `combined_reader` only
-  CALLS its public helpers read-only; do not edit that file.
+- **Grade the M9 gate** with `grade_scraper_batch.py` (0 regressions) before a large-scale scrape. Paid, user-triggered.
+- **Auto-merge** the CONFIDENT/PROOF dedupe tiers (reversible, audited) once FP rate is measured — 4
+  confident pairs exist to start the count. Currently label-only by design.
+- **Rotate the GitHub PAT** embedded in the `origin` URL (flagged; user's call).
+- The concurrent **scraper-v2** session owns `mine_hub_pages.py` on `origin/main`; coordinate before
+  editing hub-mining files (merge-conflict risk).
+
+## Marquee reminders
+
+- **M8** — `classify_page.CLASSIFY_SYSTEM` and any model prompt. Wording change = approval + dedicated commit.
+- **M9** — paid calls: the gate's per-candidate classify/metadata/embedding, and the activation
+  embedding. Toggling spend / model pins = approval + dedicated commit.
+- **M1** — `refresh_opportunities.py` reads the live page; `combined_reader` only calls its public
+  helpers read-only. Do not edit that file.

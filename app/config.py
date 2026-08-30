@@ -106,7 +106,16 @@ SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
 # yet it never left the database — so the tracker prompt that invents prerequisites could
 # not see the column that knows them. Adding a field here widens what the client receives
 # AND what extractTrackerInfo can put in its prompt; keep it to columns students may see.
-OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject_tags,type,price,state,location,intl,season,review_status,review_summary,grade_min,grade_max,status,eligibility"
+#
+# match_vector is the ONE exception to "columns students may see": it is fetched into the
+# server-side cache so the recall stage can score it (app/services/matching.py), but it is
+# ~768 floats/row (~9MB across the catalog) and carries no display value, so the
+# /api/opportunities client route STRIPS it before responding (see handle_opportunities). Do
+# not remove the strip — shipping it to every client on every catalog load is the regression
+# that made recall server-side in the first place.
+OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject_tags,type,price,state,location,intl,season,review_status,review_summary,grade_min,grade_max,status,eligibility,match_vector"
+# The one field fetched into the cache for server-side recall but never sent to the client.
+OPPORTUNITIES_CLIENT_STRIP_FIELDS = ("match_vector",)
 OPPORTUNITIES_CACHE_TTL = 300  # seconds
 
 

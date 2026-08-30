@@ -29,6 +29,18 @@ def build_candidate_view(row: dict) -> dict:
     return {k: row.get(k) for k in CURATION_CANDIDATE_FIELDS}
 
 
+def build_curation_user_content(student: dict, candidate_views: list[dict]) -> str:
+    """The user-message payload for the curation call: the student blob + the candidate JSON.
+    Pure string assembly (the system prompt is CURATION_SYSTEM). `student` is the Phase-2
+    blob (grade, location, profile_themes, highlight_projects, funnel_answers)."""
+    import json
+    return (
+        "STUDENT PROFILE (JSON):\n" + json.dumps(student, ensure_ascii=False)
+        + "\n\nCANDIDATE OPPORTUNITIES (JSON):\n" + json.dumps(candidate_views, ensure_ascii=False)
+        + "\n\nSelect and rank the curated shortlist per the schema."
+    )
+
+
 def finalize_curation(parsed: dict, rows_by_id: dict[str, dict], limit: int = CURATED_LIMIT) -> dict:
     """Turn the raw curation output into the trusted final list, applying the eligibility guard.
 

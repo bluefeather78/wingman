@@ -11,14 +11,20 @@ from fastapi import APIRouter, Request, Depends
 
 from app.config import (
     SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
+    GEMINI_API_KEY, MESSAGES_MODEL, OPPORTUNITIES_CLIENT_STRIP_FIELDS,
 )
-from app.core import touch_user_activity, record_user_cost_async
+from app.core import (touch_user_activity, record_user_cost_async,
+                      record_interactive_cost_async)
 from app.deps import (json_response, json_error, require_subscription,
-                      optional_subscribed_user)
+                      optional_subscribed_user, json_body)
 from app.auth import AuthedUser
 from app.services.opportunities import fetch_opportunities
 from app.services import action_items as action_items_service
 from app.services import deadlines
+from app.services.match_pipeline import run_match
+from app.services.curation import CURATION_SYSTEM
+from app.services.embeddings import embed_student_themes
+from gemini_common import call_gemini, extract_json
 # Imported, never re-declared: user_costs.model must name the model that was actually
 # billed. The Sonnet/Haiku drift this repo already paid for came from exactly that — a pin
 # copied into a second file and left behind when the first one moved.
@@ -45,7 +51,82 @@ def handle_opportunities(user: AuthedUser = Depends(optional_subscribed_user)):
         data = fetch_opportunities()
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
+    # Strip the server-only match_vector (~9MB across the catalog, no display value) before it
+    # ever reaches a client. The cache holds it for the recall stage; the client never gets it.
+    strip = OPPORTUNITIES_CLIENT_STRIP_FIELDS
+    if strip:
+        data = [{k: v for k, v in row.items() if k not in strip} for row in data]
     return json_response(200, data)
+
+
+@router.post("/api/match")
+def handle_match(body: dict = Depends(json_body),
+                 user: AuthedUser = Depends(require_subscription)):
+    """The curated match (OPPORTUNITY_MATCHING_PLAN.md, Phase 3 spine: recall -> curation;
+    the progressive funnel, Phase 4, is not wired yet). Body is the Phase-2 student blob:
+      {grade, location:{state,...}, profile_themes:[{theme,intent,next_steps}|str],
+       highlight_projects:[str], funnel_answers:{}}
+    Returns {results:[<=10 curated cards], pool_size, rescued, guard_overrode_count, note}.
+
+    Gated by require_subscription: it makes paid model calls (theme embeddings + one curation
+    call). In mock/offline mode (no GEMINI_API_KEY) it degrades to a recall-ordered list
+    without embeddings or curation, so the app stays click-through-able."""
+    userid = user.id
+    touch_user_activity(userid, "match")
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        return json_error(500, "SUPABASE_URL/SUPABASE_ANON_KEY not configured.")
+    try:
+        rows = fetch_opportunities()
+    except Exception as e:
+        return json_error(502, f"Could not reach Supabase: {e}")
+
+    student = {
+        "grade": body.get("grade"),
+        "location": body.get("location") or {},
+        "profile_themes": body.get("profile_themes") or [],
+        "highlight_projects": body.get("highlight_projects") or [],
+        "funnel_answers": body.get("funnel_answers") or {},
+    }
+
+    if not GEMINI_API_KEY:
+        # Mock/offline: no embeddings (recall returns the filtered set unscored) and no
+        # curation model. Honest degraded list rather than a broken screen.
+        from app.services.matching import recall
+        loc = student["location"]
+        pool = recall(rows, [], student_grade=student["grade"],
+                      student_state=(loc.get("state") if isinstance(loc, dict) else None), limit=10)
+        from app.services.match_pipeline import RESULT_DISPLAY_FIELDS
+        results = [{**{k: r.get(k) for k in RESULT_DISPLAY_FIELDS},
+                    "reason": None, "tier": "look", "exploration_pick": False} for r in pool]
+        return json_response(200, {"results": results, "pool_size": len(pool), "rescued": [],
+                                   "guard_overrode_count": 0,
+                                   "note": "matching runs in mock mode (no model key) — showing catalog matches"})
+
+    # Real path. Capture the curation call's usage so its cost can be banked; the embedding
+    # cost is returned by run_match but recorded with the correct (cheaper) embed pricing in a
+    # follow-up (see the _FEATURE_SIGNATURES cost-wiring task) — recording it here through the
+    # generateContent pricer would overstate it ~4x.
+    curation_usage = {}
+
+    def _embed(texts):
+        return embed_student_themes(texts, GEMINI_API_KEY)
+
+    def _curate(system, user_content):
+        text, usage = call_gemini(system, user_content, GEMINI_API_KEY,
+                                  use_web_search=False, max_tokens=2000, model=MESSAGES_MODEL)
+        curation_usage.clear()
+        curation_usage.update(usage)
+        return text
+
+    try:
+        out = run_match(rows, student, _embed, _curate, extract_json)
+    except Exception as e:
+        return json_error(502, f"Matching failed: {e}")
+
+    if curation_usage:
+        record_interactive_cost_async("interactive_gemini", curation_usage, MESSAGES_MODEL,
+                                      userid=userid, system=CURATION_SYSTEM)
+    return json_response(200, out)
 
 
 @router.get("/api/opportunities/{opp_id}/deadline")

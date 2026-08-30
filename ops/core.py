@@ -2120,7 +2120,7 @@ def duplicate_report_pairs(limit=2000):
               "scanned": len(rows)}
     if unembedded:
         # Surfaced, not silently dropped: these rows were never compared by the embedding pass
-        # because the index has no vector for them yet — "Refresh Dedupe Index" covers them.
+        # because the index has no vector for them yet — "Refresh Dedupe Embeddings" covers them.
         result["unembedded"] = len(unembedded)
     return result
 
@@ -3692,7 +3692,7 @@ MAINTENANCE_TOOLS = {
         ],
     },
     "embedindex": {
-        "name": "Refresh Dedupe Index",
+        "name": "Refresh Dedupe Embeddings",
         "description": "Embed any active catalog rows missing from the dedupe index, so a scrape "
                        "matches new finds against everything live. Usually unnecessary — "
                        "activating a row now embeds it automatically. Preview is free; a commit "

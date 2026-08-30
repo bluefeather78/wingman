@@ -10,7 +10,7 @@ a queue pair are judged identically instead of by two different rulebooks.
 
 Two passes, both free — no embedding calls happen here, only vector comparisons against the
 prebuilt index (`catalog_embeddings.jsonl`, built by build_catalog_embeddings.py / the console's
-"Refresh Dedupe Index", and kept current automatically: every activation embeds its own row):
+"Refresh Dedupe Embeddings", and kept current automatically: every activation embeds its own row):
 
   1. Exact match_key collision — two active rows whose URL normalizes identically. Free, and
      found even for a row missing from the index. Judged HERE, not delegated to
@@ -26,7 +26,7 @@ prebuilt index (`catalog_embeddings.jsonl`, built by build_catalog_embeddings.py
      is a discriminator-confirmed DIFFERENT program, NONE isn't similar enough to matter.
 
 Rows the index has no vector for are reported as `unembedded`, never silently skipped — run
-"Refresh Dedupe Index" first if that list is nonzero and matters for this pass.
+"Refresh Dedupe Embeddings" first if that list is nonzero and matters for this pass.
 
 Nothing here writes. Catalog changes remain a human decision (prefer the console's
 duplicate/reject actions over SQL DELETE — see scraper_tombstones.json for why).
@@ -167,7 +167,7 @@ def main():
     pairs.sort(key=lambda p: (_TIER_ORDER[p["tier"]], -(p["cosine"] or 1.0)))
     print(f"\n=== {len(pairs)} duplicate pair(s) === "
           f"({len(unembedded)} row(s) not yet in the dedupe index"
-          + (' — run "Refresh Dedupe Index" to cover them)' if unembedded else ')'))
+          + (' — run "Refresh Dedupe Embeddings" to cover them)' if unembedded else ')'))
     for p in pairs:
         a, b = p["rows"]
         print(f"\n  [{p['tier'].upper()}] {', '.join(p['reasons'])}")

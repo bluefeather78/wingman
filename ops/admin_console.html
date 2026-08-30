@@ -749,7 +749,7 @@ tr.disabled-seed { opacity: .48; }
       <div id="newopp-scout">
         <div class="section-label">New opportunity scout</div>
         <div class="agents" id="wf-newopp"></div>
-        <div class="section-label">Queue tools <span style="font-weight:400;opacity:.7">classify &rarr; dedupe &rarr; triage &rarr; refresh index</span></div>
+        <div class="section-label">Queue tools <span style="font-weight:400;opacity:.7">classify &rarr; dedupe &rarr; triage &rarr; refresh embeddings</span></div>
         <div class="agents" id="tools-newopp-queue"></div>
         <div class="section-label">Review &amp; admit</div>
         <div id="slot-newopp-review"></div>
@@ -2822,7 +2822,7 @@ async function openDupScan() {
     // skipped, so a quiet scan can't be misread as "nothing to find" (see find_catalog_dups.py).
     const unembeddedNote = r.unembedded
       ? ` ${num(r.unembedded)} row(s) aren't in the dedupe index yet and were skipped — run `
-        + `Refresh Dedupe Index to cover them.`
+        + `Refresh Dedupe Embeddings to cover them.`
       : '';
     $('dupScanStatus').textContent = (S.dupScan.pairs.length
       ? `${S.dupScan.pairs.length} live pair(s) found across ${num(r.scanned)} rows. Strong `

@@ -2213,6 +2213,53 @@ def metadata_refresh_queue(limit=200):
             "queue_sql": ACTIVATION_REFRESH_SQL}
 
 
+# MARQUEE M9: this makes a PAID embedding call (Gemini) per newly-activated row. It keeps the
+# content-embedding dedupe index current so the NEXT scrape matches new candidates against rows a
+# human just made live. See MARQUEE_DECISIONS.md M9. Toggling/removing the paid call is a marquee
+# change.
+def _index_activated_rows(ids):
+    """Best-effort: embed the just-activated rows into the dedupe index (catalog_embeddings.jsonl)
+    so a later scrape's embedding dedupe can see them. Never raises and never blocks activation —
+    on any failure (no GEMINI_API_KEY, network, etc.) the rows are simply left for the next
+    build_catalog_embeddings.py run to pick up. Active-only, matching the index's design: a row is
+    embedded when a human makes it LIVE, not while it sits pending. Reuses the build script's own
+    incremental selection + representation so the index and the reader can never drift. Returns the
+    count added."""
+    ids = [str(i).strip() for i in (ids or []) if str(i).strip()]
+    if not ids:
+        return 0
+    try:
+        import os
+        key = os.environ.get("GEMINI_API_KEY")
+        if not key:
+            return 0  # mock / no-key env: skip silently, exactly like the AI proxies do
+        import embed_common
+        import build_catalog_embeddings as bce
+        rows = _supabase_request("opportunities", params={
+            "select": "id,name,org,type,summary,eligibility,is_active",
+            "id": f"in.({','.join(ids)})"})
+        if not rows:
+            return 0
+        existing = embed_common.load_index()
+        todo = bce.select_rows_to_embed(rows, {e.get("id") for e in existing})
+        if not todo:
+            return 0
+        entries = list(existing)
+        B = embed_common.DEFAULT_BATCH
+        for i in range(0, len(todo), B):
+            chunk = todo[i:i + B]
+            vectors, _cost = embed_common.embed_batch(
+                [bce.row_representation(r) for r in chunk], key)
+            for r, v in zip(chunk, vectors):
+                if v:
+                    entries.append(embed_common.index_entry(r["id"], v, rep="fields",
+                                                            source="catalog"))
+        embed_common.save_index(entries)
+        return len(todo)
+    except Exception:
+        return 0
+
+
 def activate_opportunities(ids, active=True):
     """Flip is_active for an explicit list of ids. Never called with anything but an
     operator's explicit selection — there is no "activate all matching" path on purpose."""
@@ -2222,6 +2269,7 @@ def activate_opportunities(ids, active=True):
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
     done, errors, details = 0, 0, []
+    activated_ids = []
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     # Activating IS a human verdict, so stamp it as one — otherwise an activated row keeps
     # a NULL moderation_status and comes back round the queue on the next pass. Dropped
@@ -2257,6 +2305,8 @@ def activate_opportunities(ids, active=True):
                         raise
                     rung += 1  # drop to the next rung and retry this same row
             done += 1
+            if active:
+                activated_ids.append(opp_id)
         except Exception as e:
             errors += 1
             if len(details) < 5:
@@ -2266,8 +2316,14 @@ def activate_opportunities(ids, active=True):
     if done:
         with _opportunities_cache_lock:
             _opportunities_cache["fetched_at"] = 0.0
+    # Keep the dedupe index current (MARQUEE M9): embed the rows just made live so the next scrape
+    # matches new candidates against them. Best-effort — never affects the activation result above.
+    indexed = _index_activated_rows(activated_ids) if active else 0
     return {"ok": errors == 0, "activated": done if active else 0,
             "deactivated": 0 if active else done,
+            # How many newly-activated rows were added to the embedding dedupe index (0 in a
+            # mock/no-key env or on any embed failure — activation itself still succeeded).
+            "indexed": indexed,
             "errors": errors, "error_details": details,
             # False means activation_refresh_schema.sql has not been run: the row was still
             # (de)activated, it just was not enqueued for a refresh.

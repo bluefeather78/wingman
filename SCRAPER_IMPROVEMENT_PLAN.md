@@ -231,9 +231,275 @@ and NOT built; the 5 known aliases are ec18774, ec18771, ec18856, ec18918, ec188
   from the page. Folding it into phase 2 is additionally unsafe — that call is capped at 6000
   tokens and `extractJSON` silently REPAIRS a truncated array, so competing for its budget can
   lose candidates invisibly.
+  **(2026-08-30: REVISITED — see "the page-classifier gate" section below. The objection was
+  "not the pages"; the new design FETCHES the full page first and classifies from its text,
+  which is exactly the missing premise. It is a SEPARATE no-search call, not folded into phase
+  2, so the token-budget objection also does not apply.)**
 - **A grounding-footnote prioritiser.** Sound idea (a URL cited across many program spans is a
   round-up), but it existed to rank a 12-page budget that no longer exists.
 - **Same-domain link counting for kind B.** See the three measurements above.
+
+---
+
+## Session 2026-08-30 — PLANNED (design AGREED with the operator, NOT yet built)
+
+**The page-classifier gate + content-embedding dedupe.** Two new signals, both computed from the
+FULL fetched page and both riding ONE fetch, aimed at one goal: **the review queue fills faster
+than the operator can clear it, so move the operator from in-the-loop toward spot-checking.** The
+gate does not replace review — it pre-sorts and pre-justifies it, and starts routing the
+extractor's discards into discovery leads instead of losing them.
+
+**Conservative by explicit operator choice:** in v1 the MODEL's judgment never drops a would-be
+program row and nothing auto-activates. The only new DROP is a deterministic date rule the
+operator asked for (below). Everything else is a label, a reroute, or a hint.
+
+**Two marquee asks stand, un-ratified until the prompt/paid path are approved per M8/M9:** the
+classifier PROMPT (M8) and the new PAID calls — one classify call per candidate + embeddings
+(M9). Building and unit-testing the modules is FREE; money only lands on the eval, the backfill,
+and a live run, each separately gated per the ~$30-overspend rule.
+
+### The shared gate — ONE fetch does discovery + refresh's job at once (operator scope, 2026-08-30)
+
+```
+fetch the candidate page ONCE (reuses the per-candidate fetch the staging loop already does)
+  → classify        → program | first_party_hub | third_party_hub | none   (1 no-search call)
+  → if "program" and not stale:
+        metadata     → read the SAME page for name/org/summary/eligibility/…   (refresh's own
+                       M1 prompt + validation, reused verbatim on the text already in hand)
+        staleness gate (deterministic, code)   → drop if the page's LATEST date is stale
+        embed → cosine vs the catalog index     → attach a duplicate HINT if a near match exists
+```
+Only `program`-class pages are enriched — hubs become leads, `none` is flagged, stale drops.
+
+**This collapses the daisy chain where it was REDUNDANT (the discovery path): the combined reader
+does what the new-opportunity scraper AND `refresh_opportunities` both do — read the page, pull the
+fields — so a NEW row lands fully formed for a 5-second review.** Nothing is retired:
+
+- **`refresh_opportunities.py` stays STANDALONE**, the lightweight existing-row updater. The reader
+  only CALLS its public `build_system`/`clean_update_dict` (read-only, no M1 edit); M1 holds because
+  metadata is extracted only when the fetch succeeded — a failed fetch routes to `unreadable` and
+  never reaches the model, so we never answer from memory.
+- **Action items and deadlines stay STANDALONE too** (operator, 2026-08-30) — out of scope here,
+  followed up later. Keeping tasks out also keeps this build clear of the action-item verification
+  machinery. Reviews stay separate as always.
+- Built as `combined_reader.py` (fetch-once orchestrator, every call injected, hermetically tested).
+
+### Axis 1 — the page classifier (M8 prompt, M9 paid; search scraper ONLY for v1)
+
+One no-search Gemini call per candidate, reading the chrome-stripped full page text. Returns
+strict JSON `{"class","confidence","evidence","why"}`. It is a SEPARATE call from phase-2 extract
+(the plan's own rejected-ideas note forbids folding a classifier into that 6000-token call).
+
+The four classes and their routing — **conservative policy**:
+
+| class | what it is | v1 action (nothing auto-drops on model judgment) |
+|---|---|---|
+| `program` | one opportunity's own page | build the row, **labelled** class+confidence+evidence → 5-sec review |
+| `first_party_hub` | an institution listing MANY of its OWN programs | **not a row** → same-domain hub lead (`discovered_leads`, scope=same-domain) |
+| `third_party_hub` | a blog/listicle/directory naming OTHERS' programs | **not a row** → off-domain hub / names lead |
+| `none` | a non-opportunity page, or unreadable | **stays queued, flagged** (NOT dropped in v1 — this is the precision measurement that must precede granting it drop authority) |
+
+- **The apply/deadline CTA is the strongest program signal, and it is in the prompt.** A single
+  clear **Apply / Register / Enroll** action, an application **deadline**, or "applications
+  open/close" language means this is one program's own page. A hub has no apply action of its own
+  — it lists many programs, each with its OWN separate "Apply"/"Learn more" link. This is what
+  the operator wants the classifier to key on to split a program home page from a hub.
+- **first_party vs third_party = WHOSE programs they are** (the site's own vs other orgs'). This
+  is the "kind B" split the plan says is undetectable structurally — a model reading the page
+  content is exactly what decides it.
+- **Unreadable page (403/JS-shell/PDF) → NO verdict**, keep today's behaviour (queue with the
+  existing blocked flag). A blocked fetch is a fact about our HTTP client, never about the page.
+  (A headless-Chromium retry via `page_text.fetch_page_text(..., allow_browser=True)` — the M1
+  fallback — is a deferred option, not v1.)
+- **`evidence` must be a verbatim page substring.** If the model cannot quote the page, the class
+  is `none` — the same "quote or it didn't happen" bar `quote_is_on_page` already enforces.
+
+### The staleness drop (deterministic CODE, operator-authorised, program-class only)
+
+Dates are where models fabricate (the entire deadline-checker history), so this is NOT a prompt
+instruction — it is a regex over the fetched text.
+
+- Extract every year/date from the page, take the **latest**. If it is `<= current_year - 3`
+  (today 2026 → drop when the newest date on the page is **2023 or earlier**), **drop the
+  candidate** and log it to the run snapshot with the latest year found. Never silent (tenet 12).
+- **A page with NO detectable date is KEPT** (operator decision 2026-08-30) — it cannot be proven
+  stale, and many evergreen program pages print no year. The rule fires only when there IS a
+  latest date and it is old.
+- Future/current dates keep the page; a "© 2026" footer biases toward KEEPING — so the rule errs
+  toward not losing a live program, the safe direction for a drop.
+- This is a hard date FACT the operator chose to trust, deliberately distinct from the
+  classifier-confidence `none` drop, which stays deferred until its precision is measured.
+
+### Axis 2 — content-embedding dedupe (M9 paid embeddings; HINT only, never auto-reject)
+
+**The gap it fills:** today dedupe suppresses only on same-URL + similar-name (tenet 10). The
+measured hard case it misses is **the same program at a DIFFERENT URL** (`/alp/` vs
+`/accelerated-learning-program/`, reorganised paths, cross-domain reposts). Name-similarity
+cannot fill it: **96 same-site/diff-URL/name-similar pairs → only 5 are true aliases, 91 are
+genuinely different programs.** So the bar is separating those 5 aliases from those 91 siblings —
+which page CONTENT might do and URL/name cannot.
+
+- **The make-or-break risk is institutional boilerplate** (two different CMU programs share the
+  chrome, the apply block, the footer), which a naive full-page embedding can read as a
+  duplicate. That is exactly the 96-pair population, so it is a direct stress test.
+- **Measure BEFORE building (go/no-go gate).** `dedupe_eval.py` reconstructs the 96-pair labeled
+  set (same-site, diff-URL, name-sim ≥ 0.85; the 5 known aliases —
+  `ec18774, ec18771, ec18856, ec18918, ec18865` — positive, the rest negative) and scores three
+  representations: **(1) stripped page text, (2) structured fields (name+org+summary+eligibility+
+  type), (3) a model canonical descriptor.** Pick the representation + cosine threshold that best
+  separates aliases from siblings. **If none separates cleanly, the dedupe axis stops here** —
+  learned for ~$0.10 instead of after shipping.
+- **HINT, never a reject** (tenet 10 + the conservative choice): a near match populates the
+  EXISTING `dup_candidates` field with `{id, score, reason}`, which the console review queue
+  already renders inline with confidence colouring — turning a duplicate call into one click.
+  Only after the 96-pair precision is measured would a top tier (≈ ≥0.97 AND same registrable
+  domain, i.e. an alias) even be PROPOSED for auto-suppress, and that stays the operator's call.
+- **Storage needs no DDL.** ~1300 rows × a ~768-float vector ≈ 4 MB — load and cosine-compare
+  in-process with numpy, no pgvector, no SQL RPC (which this repo cannot run). MVP = a repo-root
+  sidecar `catalog_embeddings.jsonl` (`id → vector + embedded_at + source`), the same
+  "file now, table later" pattern `discovered_leads.py` uses. Dead-page rows fall back to
+  field-embedding. Provider: Gemini `gemini-embedding-001`.
+
+### Build order (both axes)
+
+| # | step | cost | gate |
+|---|---|---|---|
+| 1 | `classify_page.py` (CTA + staleness) + `embed_common.py` + `dedupe_eval.py` + `combined_reader.py` (classify + refresh-metadata + dedupe, fetch-once) + unit tests | **FREE ✅ BUILT** | pytest green (59 new tests); `grade_scraper_batch.py` 0 regressions |
+| 2 | run `dedupe_eval.py` — pick representation + threshold | ~$0.04 spent ✅ RAN 2026-08-30 | **verdict below** |
+| 3 | `build_catalog_embeddings.py` — backfill the sidecar index (fields rep, incremental, `--commit`) | **built ✅; free preview: 1509 rows, ~$0.027 to embed** | run gated |
+| 4 | wire `combined_reader` into `scrape_opportunities.py`'s candidate loop | paid per run, gated | grade harness 0 regressions |
+| 5 | console: show class/confidence + the embedding dup-hint in the review queue | FREE | — |
+
+### Dedupe eval RESULT (RAN 2026-08-30, $0.038 total, active catalog, 90 same-site name-similar pairs)
+
+**Verdict: GO for a HINT, NO for auto-suppress — which is exactly the conservative design.**
+
+- **No clean separating threshold exists** (both reps overlap: fields clean-gap −0.138, page −0.172).
+  The cause is the make-or-break risk, now CONFIRMED: same-org SIBLINGS overlap true duplicates —
+  YoungArts category competitions (0.83–0.93), Badger *Music* vs *Arts* Clinic, Stanford sibling
+  programs all sit in the true-dup band. So embeddings **cannot auto-reject** (tenet 10 holds); they
+  attach a `dup_candidates` HINT and the reviewer decides.
+- **As a hint they are STRONG.** The printed "precision 0.12" is against an incomplete label set (it
+  marked many real dupes "distinct"); the **sorted cosine list is the truth**, and the fields
+  representation's **≥0.95 band is almost purely genuine duplicates**.
+- **FIELDS beats page text** (name+org+type+summary+eligibility): cleaner top band, and — decisive —
+  **needs no page fetch**, so the catalog index is cheap/robust to build and covers dead-page rows.
+  Page-rep lost 25 of 90 pairs to fetch failures. `combined_reader.default_representation` uses fields;
+  `DEFAULT_DUP_THRESHOLD` set to **0.93** (recall-leaning; a hint is dismissible in a glance).
+- **BONUS: the run surfaced ~17 REAL duplicates sitting ACTIVE in the catalog right now** (fields
+  cosine ≥0.95, none of them the 5 known aliases): SEES ×2, Neubauer Phoenix STEM ×2, Stanford
+  PINGWI ≡ "Inspiring the Next Generation of Women", Science Without Borders ×2, Annenberg Youth
+  Academy ×2, Princeton Ten-Minute Play ×2, Stanford Math Camp ×2, Urban Journalism Workshop ×2,
+  Sport Mgmt & Leadership ×2, Genes in Space ×2, NYC Ladders ≡ Ladders for Leaders, Davidson Fellows
+  ≡ Fellows Scholarship, NYU GSTEM ×2, Automation-Robotics ×2, Coding for Game Design ×2, Applied
+  Research (Sci&Eng) ×2, Badger Music Clinic ≡ Summer Music Clinic. Actionable console cleanup,
+  independent of the scraper — the method demonstrably finds duplicates.
+- **Consequence for build order:** step 3 (`build_catalog_embeddings.py`) embeds ROW FIELDS, not
+  pages — no catalog-wide fetch, ~$0.20, robust. The dedupe axis proceeds as a hint.
+
+### Dedupe CONFIDENCE — the multi-tiered design (raise auto-action, shrink the human tail)
+
+**The problem this answers (operator, 2026-08-30):** a single similarity score will always need a
+human, because content similarity cannot tell a DUPLICATE from a same-institution SIBLING — the eval
+proved it (YoungArts categories, Badger Music vs Arts, Stanford siblings all overlap true dupes). As
+the catalog grows, naive review of every similar pair returns to today's bottleneck.
+
+**The reframe: confidence comes from INDEPENDENT signals AGREEING, not a better score.** A duplicate
+is only "confident" when several orthogonal tests all say "same program". Tiers, strongest first:
+
+1. **Deterministic PROOF (auto-merge, certain, FREE):**
+   - **Redirect equality** — both URLs follow their redirects to the SAME final page → literally one
+     page. (`page_text.fetch_page_text_resolved` already returns the final URL.)
+   - **Canonical-tag equality** — both pages declare the same `<link rel="canonical">` → the site
+     itself says they are one page.
+2. **DISCRIMINATORS — the signals that SEE the sibling difference (FREE, from data we already have):**
+   - **Identity-name tokens** — subtract the shared org/structure words and compare what is left.
+     Siblings differ here exactly: **Music** vs **Arts**, **Mini** vs full, **Design** vs **Visual**.
+     `name_relation` → SAME / SUBSET / CONFLICT / UNKNOWN.
+   - **Hard structured fields** — a real dup does not differ on grade range, season, or type. A
+     mismatch on any is a sibling tell. `field_relation` → AGREE / CONFLICT / UNKNOWN.
+     The embedding sees shared boilerplate; these see the difference it misses.
+3. **Pairwise LLM ADJUDICATOR (PAID, only on the ambiguous band):** one call sees both programs'
+   facts and answers "same program or different?" with a verbatim distinguishing quote; take a
+   majority of 2-3 votes. Cost tracks AMBIGUITY, not catalog size, because it runs only where the
+   cheap signals could not settle it.
+4. **LEARN from every verdict (FREE, compounding):** each resolved duplicate / dismissed hint is a
+   labeled pair (the `build_fixture` shape). Accumulate them, CALIBRATE where the auto line sits, and
+   the auto-tier widens as the human tail teaches it — supervision given reduces supervision needed.
+
+**The tier map** (`dedupe_confidence.classify_pair`):
+```
+redirect / canonical equal ............................... TIER_PROOF      -> auto-merge (certain)
+high cosine + name SAME + no field conflict .............. TIER_CONFIDENT  -> auto-merge (after measured FP=0)
+high cosine + (name CONFLICT or field conflict) .......... TIER_SIBLING    -> NOT a dup (discriminator overrides the embedding)
+high cosine + name SUBSET + no conflict .................. TIER_ADJUDICATE -> LLM judge -> auto or hint
+moderate cosine, no conflict ............................. TIER_HINT       -> human (small, ~constant tail)
+low cosine ............................................... TIER_NONE
+```
+
+**Why this defuses the growth fear:** the duplicate FLOOD as the catalog grows is overwhelmingly the
+SAME program re-discovered (exact/near-exact) — those hit TIER_PROOF/CONFIDENT and auto-consolidate,
+ideally **blocked at insert so they never reach the queue**. The hard cases are same-institution
+siblings, a SMALL, roughly CONSTANT tail — not something that scales with catalog size. The human
+tail stays flat and shrinks as tier 4 learns.
+
+**Two things make auto-acting safe enough to actually do:** a merge here is **reversible + audited**
+(P3 merge preserves the incumbent, writes old values into `quality_flags`, never deletes — very
+different from auto-delete), and **we measure the false-positive rate on accumulated verdicts before
+turning on any auto-tier**. Same discipline as the rest of the pipeline. Honest caveat: the ambiguous
+tail never reaches zero human touch without accepting SOME bounded, reversible, measured auto-merge
+error.
+
+**Build status (2026-08-30):** `dedupe_confidence.py` (identity-token + hard-field discriminators,
+proof helpers, `classify_pair` tier logic — all pure) BUILT + tested. `build_catalog_embeddings.py`
+RAN (`--commit`, $0.0269, 1509 active rows → `catalog_embeddings.jsonl`). `dedupe_eval.py --signals`
+(discriminators, free) and `--tiers` (full pipeline: index cosine + discriminators, free) are the
+measurements.
+
+**MEASURED — full tier pipeline over the 90 active pairs (`--tiers`, FREE):** confident **14**,
+adjudicate 6, sibling 3, hint 17, none 50. **All 14 CONFIDENT pairs are genuine duplicates — 0 false
+positives** (SEES, Neubauer, Science Without Borders, Princeton Ten-Minute Play, Annenberg, Stanford
+Math/PINGWI, Urban Journalism, Coding for Game Design, the 3 aliases, plus Davidson Fellows≡Fellows
+Scholarship and NYC Ladders≡Ladders for Leaders — the org-token subtraction correctly matched those).
+This is the evidence that gates auto-merge: on this set the CONFIDENT tier is safe. Sample is small
+(14) and the label set imperfect, so the standing rule is **re-confirm as operator verdicts
+accumulate** before widening. AUTO-MERGE is still wired OFF in v1 (tiers LABEL the hint and route the
+ambiguous band); flipping the CONFIDENT/PROOF tiers to auto is the next decision, backed by this 0-FP
+measurement + the reversible/audited merge.
+
+**Validated on the REAL review queue + two guards it exposed (`dedupe_queue.py`, read-only, ~$0.004).**
+Ran the logic over the 279 pending rows against the active index and each other: **4 CONFIDENT (all
+verified true duplicates — Fred Hutch SHIP, NYU SPARC, FBINAA Youth Leadership, Stanford CNI-X; two
+arrive on a WORSE url — a Facebook page, an Empowerly listing — and would fold into the real
+institutional row), 4 adjudicate (incl. an intra-queue pair, both pending), 3-4 sibling, ~10 hint,
+258 genuinely new.** The live queue surfaced two weaknesses the curated eval could not, both now
+fixed FREE in `dedupe_confidence.py`:
+- **Abbreviations** — "Google Computer Science Summer Institute (CSSI)" vs "Google CS Summer Institute
+  (CSSI)" read as a name CONFLICT and was wrongly kept distinct. `shared_acronym` (a shared
+  PARENTHETICAL acronym) now softens CONFLICT→SUBSET, recovering it (SIBLING→HINT here; the CS/CS
+  wording keeps cosine below the auto bar).
+- **Generic names across orgs** — "Youth Leadership Program" at two different orgs would auto-merge on
+  name+cosine alone. `same_context` (`org_agrees` OR `same_registrable_domain`) now downgrades a
+  cross-institution CONFIDENT to ADJUDICATE. Org, not just domain, because a real dup often arrives on
+  a third-party/social URL whose domain differs while the org matches — exactly the CNI-X/Youth
+  Leadership cases above. After the guards: CONFIDENT stayed 4/4 correct, 0 new false positives.
+
+### Cost, fitted to the existing measurements
+
+- classify: ~$0.003–0.006 per candidate (no-search, thinking low) → **~$0.60–1.20 per national run**.
+- embedding: ~$0.0005 per candidate; eval ~$0.10 one-time; catalog backfill ~$0.60 one-time.
+
+### Decisions on record (operator, 2026-08-30) — do not re-litigate
+- **Conservative v1:** label + reroute hubs; do NOT drop `none` on model judgment yet.
+- **Search scraper only** for v1 (hub miner and name-harvest are a later pass).
+- **Dedupe representation chosen by measurement**, not picked up front.
+- **Undated pages are KEPT** by the staleness rule.
+- **The staleness drop IS wanted** (a deterministic date rule, ≤ year−3), logged not silent.
+- **Metadata IS folded in** (the reader does refresh's page-extraction for a new row) — but
+  **`refresh_opportunities.py` is KEPT standalone** as the existing-row updater; nothing retired,
+  no M1 code edited (reader calls its public helpers read-only).
+- **Action items + deadlines are DEFERRED to their standalone agents** — out of scope for the
+  combined reader; follow-up later. Reviews stay separate.
 
 ---
 

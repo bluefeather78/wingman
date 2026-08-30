@@ -495,6 +495,8 @@ tr.disabled-seed { opacity: .48; }
       <div id="slot-newopp-allowlist"></div>
       <div class="section-label">Review &amp; admit</div>
       <div id="slot-newopp-review"></div>
+      <div class="section-label">Queue tools <span style="font-weight:400;opacity:.7">classify &rarr; dedupe &rarr; triage</span></div>
+      <div class="agents" id="tools-newopp-queue"></div>
     </div>
 
     <div class="subview" id="rsub-dupes">
@@ -4956,6 +4958,7 @@ let TOOLS = {};
 // now lives on the Run → Duplicates tab.
 const TOOL_SLOTS = {
   'slot-inspect': ['inspect'],
+  'tools-newopp-queue': ['classifyqueue', 'dedupequeue', 'triagequeue', 'embedindex'],
   'tools-newopp-angles': ['proposeangles'],
   'tools-core': ['refreshprog'],
   'tools-upkeep': ['__forcerecheck'],

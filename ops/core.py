@@ -3658,6 +3658,71 @@ MAINTENANCE_TOOLS = {
              "label": "Dry run — still calls the paid API, but writes nothing"},
         ],
     },
+    # --- Queue tools: they operate on the REVIEW QUEUE the scraper fills, in order. Classify
+    # labels each pending page; dedupe finds the same program at a different URL; triage bulk-
+    # rejects the junk classes; refresh-index keeps the dedupe index current. Each is preview-first.
+    "classifyqueue": {
+        "name": "Classify the Review Queue",
+        "description": "Read each pending page and label it program / hub / none / stale, so the "
+                       "queue shows a class pill and classified hubs feed the mining queue. "
+                       "Preview is free; a real run is PAID (~$0.004/row, an unreadable page is "
+                       "free) and stamps every row.",
+        "script": "classify_queue.py",
+        "free": False, "writes": True,
+        "params": [
+            {"key": "mode", "type": "select", "label": "Mode", "options": [
+                ["preview", "Preview — free: row count + cost estimate, no writes"],
+                ["write", "Run — PAID: classify each page and stamp the row"]]},
+            {"key": "limit", "type": "number", "label": "Pilot: classify only the first N rows",
+             "help": "Leave blank to classify the whole queue. A small number is a cheap pilot."},
+        ],
+    },
+    "dedupequeue": {
+        "name": "Dedupe the Review Queue",
+        "description": "Embed each pending row's fields and find the same program at a DIFFERENT "
+                       "URL that the name/URL check misses, tagging a tiered 'possible duplicate "
+                       "of…' back-link. Preview is free; a real run is PAID (~a cent total; the "
+                       "catalog index is prebuilt).",
+        "script": "dedupe_queue.py",
+        "free": False, "writes": True,
+        "params": [
+            {"key": "mode", "type": "select", "label": "Mode", "options": [
+                ["preview", "Preview — free: counts + embed cost estimate"],
+                ["write", "Run — PAID (~cents): embed and stamp back-links"]]},
+            {"key": "classifiedOnly", "type": "check",
+             "label": "Only rows a classify run has already labelled"},
+        ],
+    },
+    "triagequeue": {
+        "name": "Triage the Review Queue",
+        "description": "Once the queue is classified, bulk-REJECT the safe classes in one step — "
+                       "hubs (their programs are mined), non-opportunity pages, and stale "
+                       "programs. Never touches a fresh program or an unreadable row. FREE, "
+                       "reversible, and reuses the console's own moderation.",
+        "script": "triage_queue.py",
+        "free": True, "writes": True,
+        "params": [
+            {"key": "mode", "type": "select", "label": "Mode", "options": [
+                ["preview", "Preview — free: show the plan, reject nothing"],
+                ["reject", "Reject the junk — hubs + none + stale (reversible)"]]},
+        ],
+    },
+    "embedindex": {
+        "name": "Refresh Dedupe Index",
+        "description": "Embed any active catalog rows missing from the dedupe index, so a scrape "
+                       "matches new finds against everything live. Usually unnecessary — "
+                       "activating a row now embeds it automatically. Preview is free; a commit "
+                       "is PAID (~cents).",
+        "script": "build_catalog_embeddings.py",
+        "free": False, "writes": True,
+        "params": [
+            {"key": "mode", "type": "select", "label": "Mode", "options": [
+                ["preview", "Preview — free: how many rows need embedding"],
+                ["commit", "Commit — PAID (~cents): embed and write the index"]]},
+            {"key": "rebuild", "type": "check",
+             "label": "Rebuild — re-embed every row, not just the missing ones"},
+        ],
+    },
 }
 
 
@@ -3728,6 +3793,34 @@ def build_tool_args(tool_key, params):
             args.append("--force")
         if params.get("dryRun"):
             args.append("--dry-run")
+    elif tool_key == "classifyqueue":
+        # classify_queue.py: [--preview | --limit N] [--write]
+        if str(params.get("mode") or "preview") == "write":
+            args.append("--write")
+            n = _int_or_none(params.get("limit"))
+            if n:
+                args += ["--limit", str(n)]
+        else:
+            args.append("--preview")
+    elif tool_key == "dedupequeue":
+        # dedupe_queue.py: [--preview] [--write] [--classified-only]
+        if str(params.get("mode") or "preview") == "write":
+            args.append("--write")
+            if params.get("classifiedOnly"):
+                args.append("--classified-only")
+        else:
+            args.append("--preview")
+    elif tool_key == "triagequeue":
+        # triage_queue.py: [--all-junk] [--dry-run]. Preview = the plan; reject = act.
+        args.append("--all-junk")
+        if str(params.get("mode") or "preview") != "reject":
+            args.append("--dry-run")
+    elif tool_key == "embedindex":
+        # build_catalog_embeddings.py: [--commit] [--rebuild]; no flag = free preview.
+        if str(params.get("mode") or "preview") == "commit":
+            args.append("--commit")
+            if params.get("rebuild"):
+                args.append("--rebuild")
     return args
 
 

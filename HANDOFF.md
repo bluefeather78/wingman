@@ -18,52 +18,104 @@ state. **This worktree has NO `node_modules` (can't run tsc/expo) and NO `.env` 
 live Gemini/Supabase)** — backend pure logic is pytest-verified here; frontend + live calls
 are write-only here and must be verified in a real checkout.
 
-## IMPLEMENTATION STATUS (2026-08-29) — the whole backend spine is built, tested, committed
+## IMPLEMENTATION STATUS (2026-08-29) — PHASES 1/2/3/5/7 BUILT + LIVE + VERIFIED end-to-end
 
-Design is FINALIZED in OPPORTUNITY_MATCHING_PLAN.md; the backend is now implemented backend-
-first per the architecture decision (recall + funnel + curation run SERVER-SIDE because the
+The curated-matching redesign is FUNCTIONALLY LIVE. Recall + curation run SERVER-SIDE (the
 embedding vectors live server-side — shipping ~9MB/load to clients would regress mobile).
+Verified against the live embedded catalog: schema applied, **1,509 rows embedded ($0.026)**,
+eligibility eval **9/9 (0 under-exclusions)**, `POST /api/match` proven over HTTP, and the
+**Fresh Finds UI rendered the curated cards** (VEX Robotics, a local WA makerspace, Lemelson-
+MIT, NASA Rover — each ⭐ Strong Fit with a specific "why you" reason) driven through the real
+RN-web app on Metro.
 
-**Committed this session (on top of d07d978, the earlier subject_tags fix), 76 unit tests, full suite green:**
-- `0916f81` — recall core (`app/services/matching.py`: numpy cosine, LOOSENED grade_min
-  filter w/ rising/age escapes, geo-scope, content hash, `recall()`) + eligibility
-  quote-verification guard (`app/services/eligibility.py`). match_vector_schema.sql tracked
-  (already run in DB). numpy added to requirements.txt.
-- `cbf48bb` — M9 Gemini embedding call (`gemini_common.call_gemini_embed` + EMBED_MODEL/
-  EMBED_DIM/pricing) + activation-gated hook (`app/services/embeddings.py`).
-- `21e04ae` — M8 funnel-question + curation PROMPTS (approved) with their code guards
-  (`app/services/funnel.py` per-rung apply + T1/T2/T3; `app/services/curation.py` finalize).
-- `8803e53` — M9 `POST /api/match` endpoint + `run_match` orchestration
-  (`app/services/match_pipeline.py`); match_vector added to the cache + STRIPPED from the
-  client `/api/opportunities` payload (config.py + opportunities.py route).
-- `c9ccae8` — cost feature signatures (match_curation / match_funnel in `_FEATURE_SIGNATURES`).
-- `d9582f6` — M9 `backfill_match_vectors.py` (embed the vetted catalog — recall scores
-  nothing until this runs).
+**Commits (branch `claude/opportunity-matching-improvement-fb6134`), ~90 unit tests, full
+matching suite green (the only failing suite is the pre-existing email-template tests, which
+need EMAIL_POSTAL_ADDRESS set in .env — unrelated):**
+- `d07d978` — retire the 17-bucket subject_tags vocabulary from both catalog agents (M8/M9).
+- `0916f81` — recall core (`app/services/matching.py`: numpy cosine, LOOSENED grade_min filter
+  w/ rising/age escapes, geo-scope, content hash, `recall()`) + eligibility quote-verification
+  guard (`app/services/eligibility.py`). match_vector_schema.sql; numpy in requirements.txt.
+- `cbf48bb` — M9 Gemini embedding call (`gemini_common.call_gemini_embed`, EMBED_MODEL=
+  gemini-embedding-001 @ 768d) + activation-gated hook (`app/services/embeddings.py`).
+- `21e04ae` — M8 funnel + curation PROMPTS + code guards (`app/services/funnel.py`,
+  `app/services/curation.py`).
+- `8803e53` — M9 `POST /api/match` + `run_match` (`app/services/match_pipeline.py`);
+  match_vector into the cache + STRIPPED from the client `/api/opportunities` payload.
+- `c9ccae8` — cost feature signatures (match_curation / match_funnel).
+- `370f95f` — Phase 7 eligibility eval scorer + 9 seeded labeled cases (`matching_eval.py`).
+- `95c2c82` — degrade the catalog fetch when match_vector isn't migrated (found live).
+- `93b50ee` — **Phase 3 FRONTEND**: `finder.tsx` "Suggest for me" → `/api/match`, student-blob
+  assembly (grade+location from basics slot, themes from filterTags slot, highlight_projects
+  from `extractHighlightProjects`); httpClient.match(); geo state-name↔code normalization.
 
-**What's needed to make it LIVE (needs your creds — do in order):**
-1. Verify `gemini_common.EMBED_MODEL` (`gemini-embedding-001`) resolves — it's UNVERIFIED
-   from this worktree and could 404 like models have before. Swap the pin if so.
-2. `python backfill_match_vectors.py --dry-run` then `--yes-really` — embeds the ~1,300
-   active rows (idempotent, cheap, re-runnable). Until this runs, `/api/match` returns
-   nothing useful (recall has no vectors).
-3. Then `POST /api/match` works end-to-end (route is import-verified only, never run live here).
+**To re-run / operate:** `python backfill_match_vectors.py --dry-run|--yes-really` (idempotent;
+re-run after activating/refreshing rows so new/edited rows get embedded — there is no inline
+activation hook yet). `python matching_eval.py --run` grades eligibility (watch under-exclusions).
+The frontend change shows on Metro (`:8081`), NOT on `:8000` (which serves the prebuilt bundle).
 
-**NOT built yet (deliberate):**
-- FRONTEND (Phase 2/3/4): `finder.tsx` calling `/api/match` + rendering the ≤10 cards; the
-  first-search grade/location ask; client-side student-blob assembly. `extractHighlightProjects`
-  (the one client helper) IS built in `frontend/src/lib/profile.ts`. Deferred — needs a
-  checkout where TS/the app are verifiable.
-- The progressive FUNNEL endpoint (Phase 4) — the per-rung apply logic + prompt are built and
-  tested; the interactive multi-rung endpoint is not wired (sequenced after the Phase-3
-  recall→curation MVP, and it's interactive so needs the frontend anyway).
-- Phase 7 scorer + labeled sample files (the demographic 22/31/33 row-ids from Phase 0 need
-  locating/saving; the geographic sample doesn't exist yet).
-- Inline activation hook wiring into ops-activate / refresh_opportunities.py — the re-runnable
-  backfill covers correctness for now; inline is an immediacy enhancement.
-- Phase 6 cleanup (retire old logic) — gated on each replacement being live.
+**NOT built yet:**
+- **PHASE 4 — the progressive elicitation funnel (laid out below).** The per-rung apply logic
+  + prompt are built/tested (`funnel.py`); the interactive endpoint + UI are not.
+- **PHASE 6 — retire the old logic** (the 7-kind fan-out still runs for the FORM/quiz path;
+  the 17-bucket `inferSubjects`/`filterValues` slot still exist). Each item gated on ITS
+  replacement being live — Phase 3 is now live, so the fan-out on the SUGGEST path is already
+  gone; the FORM-path fan-out + `inferSubjects` retire once the form path is settled.
+- Inline activation-hook wiring (immediacy; backfill covers correctness).
+- Phase 7 real-catalog labeled samples (the 9 crafted cases run today; catalog cases are additive).
 
-**Still deferred (your calls, unchanged):** `cleanup_subject_tags.py` run; embed-cost
-recording (sub-cent, documented gap in c9ccae8).
+**Deferred (your calls):** `cleanup_subject_tags.py` run; embed-cost recording (sub-cent gap,
+documented in c9ccae8).
+
+## PHASE 4 — the progressive elicitation funnel (design, not yet built)
+
+**Goal:** between recall (~100) and curation (≤10), ask the student 1-2 discriminating
+questions to narrow the pool — the "100 → 60 → 30 → curate" experience — instead of curating
+the full recall pool immediately as the Phase-3 MVP does. Each answer also deepens matching
+for THIS search only (session-only per the whitelist; grade/location already persisted in P2).
+
+**What already exists (committed, tested):** `app/services/funnel.py` — `FUNNEL_QUESTION_SYSTEM`
+(one call per rung; whitelist = cost/time_commitment/citizenship/hard_demographic),
+`apply_rung_answer` (deterministic narrowing, T1/T2/T3 enforced, quote-verified cuts revert),
+`count_after`, `POOL_FLOOR`. 9 tests in `test_funnel_apply.py`.
+
+**What's needed:**
+1. **Endpoint(s).** Recommended shape — keep it STATELESS (no server session), client holds
+   only the answers dict:
+   - `POST /api/match` gains a `funnel_answers` object (already in the student blob) and a
+     `mode`: when `mode="funnel"` and the pool is still large / rungs remain, return the NEXT
+     question instead of curating; when answers exhaust the useful axes or hit the rung cap,
+     curate and return the ≤10 (the current behavior).
+   - Response for a rung: `{done:false, axis, question, options:[{label,value,count}], current_count}`.
+     The per-option `count` is the live counter — computed server-side with `count_after` so
+     the client shows "→ 30" beside each option with NO extra round trip.
+   - Each answer round-trips (`POST /api/match` again with the answer appended to
+     `funnel_answers`); the server re-runs recall+apply (all cheap, server-side) and returns
+     the next rung or the final list.
+   - **Decide: embed caching across rungs.** Re-running recall each rung re-embeds the student
+     themes (a paid embed call per rung). Options: cache the theme vectors per (userid, profile
+     hash) in-process for a few minutes, OR have the client send back the pool ids so the
+     server skips recall entirely on rungs 2+ (it only needs the funnel model call + apply).
+     The pool-ids approach is simplest and avoids re-embedding — recall runs once (rung 0),
+     the client carries the surviving ids, each rung narrows them.
+2. **`apply_rung_answer` is Python (server-side)** — so answer application stays on the server
+   (it needs the eligibility guard for citizenship/demographic cuts). The client never applies
+   cuts itself; it only displays the counts the server returns.
+3. **Frontend (finder.tsx):** a funnel stage between the suggest trigger and the results —
+   render the question + options with live counts, a "this leaves N — relax?" affordance when
+   `current_count` nears `POOL_FLOOR` (T3), and a back-up control. On the last rung / stop,
+   transition to the existing results rendering (unchanged). Deprecate the taxonomy quiz
+   (`QUIZ_ROOT`/`QUIZ_SUB`) here (Phase 6 item, gated on this shipping).
+4. **Cost:** each rung is one funnel-question model call (already signature-tagged
+   `match_funnel`); the per-search shape becomes ~4-5 rung calls + 1 curation call. The rung
+   cap (`POOL_FLOOR` + ≤5 rungs) is the latency/cost budget — measure the per-rung round-trip.
+
+**Build order for Phase 4:** endpoint first (backend, unit-testable with stubbed model — the
+apply logic already is), then the finder UI. Gate: funnel never cuts on a preference axis
+(already unit-tested in `test_funnel_apply.py`), never dead-ends (count-guard + relax), ≤5 rungs.
+
+---
+*(Sections below this line are HISTORICAL — the design-phase wrap-up and the older link-health/
+scraper threads. Superseded by the status above; kept for provenance.)*
 
 ## Goal
 Redesign how a student gets matched to opportunities — from a 7-kind fan-out that dumps

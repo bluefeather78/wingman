@@ -27,9 +27,9 @@ from app.services.match_pipeline import (
 from app.services.curation import CURATION_SYSTEM
 from app.services.funnel import (
     FUNNEL_QUESTION_SYSTEM, BEHAVIORAL_QUESTION_SYSTEM, OUTCOME_QUESTION_SYSTEM,
-    CURATE_AT, FUNNEL_MAX_TOKENS,
-    next_vibe_rung, next_outcome_rung, collect_preferences, describe_funnel_choices,
-    build_engagement_rung,
+    PROJECT_GOAL_QUESTION_SYSTEM, CURATE_AT, FUNNEL_MAX_TOKENS,
+    next_vibe_rung, next_outcome_rung, next_project_goal_rung,
+    collect_preferences, describe_funnel_choices, build_engagement_rung,
 )
 from app.services.embeddings import embed_student_themes
 from gemini_common import call_gemini, extract_json
@@ -100,6 +100,7 @@ def handle_match(body: dict = Depends(json_body),
         "location": body.get("location") or {},
         "profile_themes": body.get("profile_themes") or [],
         "highlight_projects": body.get("highlight_projects") or [],
+        "project_focus": bool(body.get("project_focus")),
         "funnel_answers": body.get("funnel_answers") or {},
     }
     funnel_mode = bool(body.get("funnel"))
@@ -169,12 +170,20 @@ def handle_match(body: dict = Depends(json_body),
                 #   dim 2 engagement (filter) -> dim 3 outcome (rerank) -> feasibility filters ->
                 #   vibe. Filters gate on CURATE_AT (stop narrowing when tight); rerank questions
                 #   gate on POOL_FLOOR (reorder a meaningful list, right up to the shortlist).
-                # Dimension 2: pool-derived engagement FILTER, built locally from the pool's `type`.
-                if "engagement" not in answers and len(pool) > CURATE_AT:
-                    rung = build_engagement_rung(pool)
-                # Dimension 3: pool-derived OUTCOME rerank ("what do you want out of it").
-                if rung is None:
-                    rung = next_outcome_rung(pool, answers, _ask, extract_json, rungs_done)
+                # When the student picked a passion/research PROJECT in setup, the first question is
+                # about their GOAL FOR THAT PROJECT (rerank) — it REPLACES the engagement filter and
+                # the generic outcome question. Otherwise: engagement FILTER then OUTCOME rerank.
+                if bool(student.get("project_focus")):
+                    if rung is None:
+                        rung = next_project_goal_rung(
+                            pool, answers, student.get("highlight_projects"), _ask, extract_json, rungs_done)
+                else:
+                    # Dimension 2: pool-derived engagement FILTER, built locally from the pool's `type`.
+                    if "engagement" not in answers and len(pool) > CURATE_AT:
+                        rung = build_engagement_rung(pool)
+                    # Dimension 3: pool-derived OUTCOME rerank ("what do you want out of it").
+                    if rung is None:
+                        rung = next_outcome_rung(pool, answers, _ask, extract_json, rungs_done)
                 # Eligibility filter questions that need the prose + quote guard (citizenship /
                 # hard_demographic) — these still go to the model. (cost + time are asked BEFORE
                 # recall now, alongside interest, so they are not funnel rungs.)

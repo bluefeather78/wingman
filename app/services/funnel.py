@@ -352,8 +352,8 @@ def collect_preferences(funnel_answers: dict | None) -> list[str]:
             phrase = behavioral_pref(axis, v)
             if phrase:
                 prefs.append(phrase)
-        elif axis == "outcome" and v and v != "__skip__":
-            # Dimension 3: the chosen outcome phrase (the model-proposed option's value) reranks.
+        elif axis in ("outcome", "project_goal") and v and v != "__skip__":
+            # The chosen outcome / project-goal phrase (the model-proposed option's value) reranks.
             prefs.append(f"Wants: {v}")
     return prefs
 
@@ -451,41 +451,42 @@ def next_vibe_rung(pool, student, funnel_answers, ask_fn, parse_fn, rungs_done=0
     return build_vibe_rung(parsed, axis, pool)
 
 
-# ==================== OUTCOME (dimension 3) — a pool-derived RERANK question ====================
+# ============== POOL-DERIVED RERANK questions — OUTCOME + PROJECT-GOAL ==============
 #
-# "What do you want out of it?" (Shama 2026-08-30). RERANK-only (never filters), with options
-# DERIVED FROM THE POOL by the model (it must not offer an outcome the pool can't deliver), plus
-# a free-text "Something else". The chosen outcome phrase folds into curation as a preference
-# (collect_preferences -> "Wants: <phrase>"). Supersedes the retired binary `output` vibe axis.
+# Both are RERANK-only (never filter; empty classification -> the client keeps every candidate),
+# with options DERIVED FROM THE POOL by the model (it must not offer something the pool can't
+# deliver), plus a free-text "Something else". The chosen phrase folds into curation as a
+# preference (collect_preferences -> "Wants: <phrase>").
+#   * OUTCOME (dim 3) — "what do you want out of it" — asked when NOT project-focused.
+#   * PROJECT-GOAL — "what do you want to do with your project" — REPLACES the engagement question
+#     when the student picked a passion/research project in setup (Shama 2026-08-30).
 _OUTCOME_FALLBACK = [
     {"value": "explore the field with no pressure", "label": "Just exploring"},
     {"value": "build a finished project or product", "label": "Build something"},
     {"value": "win an award or recognition", "label": "Win something"},
     {"value": "strengthen my college applications", "label": "For my apps"},
 ]
+_PROJECT_GOAL_FALLBACK = [
+    {"value": "take it further and go deeper", "label": "Go deeper"},
+    {"value": "compete or win with it", "label": "Compete with it"},
+    {"value": "publish, present, or show it off", "label": "Show it off"},
+    {"value": "get expert mentorship and feedback on it", "label": "Get mentorship"},
+]
 
 
-def _local_outcome_rung(pool: list[dict]) -> dict:
+def _local_rerank_rung(pool: list[dict], axis: str, question: str, fallback: list[dict]) -> dict:
     return {
-        "axis": "outcome", "kind": "vibe",
-        "question": "What do you most want to get out of this?", "rationale": None,
-        "options": _OUTCOME_FALLBACK, "classification": {},
+        "axis": axis, "kind": "vibe", "question": question, "rationale": None,
+        "options": fallback, "classification": {},
         "pool_ids": [r.get("id") for r in pool], "allow_other": True,
     }
 
 
-def build_outcome_user_content(pool: list[dict]) -> str:
-    types = ", ".join(sorted({str(r.get("type")).strip() for r in pool if r.get("type") and str(r.get("type")).strip()}))
-    samples = "; ".join(str(r.get("name")) for r in pool[:14] if r.get("name"))
-    return (f"Program types still on the list: {types}\nSample programs: {samples}"
-            f"\n\nDesign the single best 'what do you want to get out of it' question.")
-
-
-def build_outcome_rung(parsed: dict | None, pool: list[dict]) -> dict:
-    """Turn the model's outcome-question output into a rerank rung (empty classification -> the
-    client keeps every candidate). Falls back to a generic outcome question on bad output."""
+def _build_rerank_rung(parsed: dict | None, pool: list[dict], axis: str, default_q: str,
+                       fallback: list[dict]) -> dict:
+    """Turn a model's {question, options} output into a rerank rung, or fall back to `fallback`."""
     if not isinstance(parsed, dict) or not isinstance(parsed.get("options"), list):
-        return _local_outcome_rung(pool)
+        return _local_rerank_rung(pool, axis, default_q, fallback)
     opts = []
     for o in parsed["options"]:
         if isinstance(o, dict) and isinstance(o.get("value"), str) and o["value"].strip():
@@ -493,24 +494,34 @@ def build_outcome_rung(parsed: dict | None, pool: list[dict]) -> dict:
             label = label.strip() if isinstance(label, str) and label.strip() else o["value"].strip()
             opts.append({"value": o["value"].strip(), "label": label})
     if len(opts) < 2:
-        return _local_outcome_rung(pool)
+        return _local_rerank_rung(pool, axis, default_q, fallback)
     q = parsed.get("question")
-    q = q.strip() if isinstance(q, str) and q.strip() else "What do you most want to get out of this?"
+    q = q.strip() if isinstance(q, str) and q.strip() else default_q
     return {
-        "axis": "outcome", "kind": "vibe", "question": q, "rationale": None,
+        "axis": axis, "kind": "vibe", "question": q, "rationale": None,
         "options": opts[:4], "classification": {},
         "pool_ids": [r.get("id") for r in pool], "allow_other": True,
     }
 
 
+def _pool_types_and_samples(pool: list[dict]) -> str:
+    types = ", ".join(sorted({str(r.get("type")).strip() for r in pool if r.get("type") and str(r.get("type")).strip()}))
+    samples = "; ".join(str(r.get("name")) for r in pool[:14] if r.get("name"))
+    return f"Program types still on the list: {types}\nSample programs: {samples}"
+
+
+def build_outcome_user_content(pool: list[dict]) -> str:
+    return _pool_types_and_samples(pool) + "\n\nDesign the single best 'what do you want to get out of it' question."
+
+
+def build_outcome_rung(parsed: dict | None, pool: list[dict]) -> dict:
+    return _build_rerank_rung(parsed, pool, "outcome", "What do you most want to get out of this?", _OUTCOME_FALLBACK)
+
+
 def next_outcome_rung(pool, answers, ask_fn, parse_fn, rungs_done=0):
-    """The dimension-3 outcome rerank rung, or None when it's already been asked, the rung cap is
-    reached, or the pool is small enough to curate. Injected: ask_fn(system, user_content) ;
-    parse_fn(raw)->dict|None. Always returns a valid rung (local fallback) when it should ask."""
-    # RERANK questions fire on a meaningful list (> POOL_FLOOR), NOT the filter threshold
-    # (CURATE_AT): reranking matters most exactly when the pool is close to the final shortlist,
-    # so gating it on CURATE_AT (like the filters) meant the filters narrowed past it first and
-    # the outcome question almost never got asked.
+    """The dimension-3 outcome rerank rung, or None when already asked / capped / pool too small.
+    RERANK questions fire on a meaningful list (> POOL_FLOOR), not the filter threshold — so the
+    filters can't narrow past them first (which used to keep outcome from ever being asked)."""
     if rungs_done >= MAX_RUNGS or len(pool) <= POOL_FLOOR or "outcome" in (answers or {}):
         return None
     raw = ask_fn(OUTCOME_QUESTION_SYSTEM, build_outcome_user_content(pool))
@@ -519,6 +530,29 @@ def next_outcome_rung(pool, answers, ask_fn, parse_fn, rungs_done=0):
     except Exception:
         parsed = None
     return build_outcome_rung(parsed, pool)
+
+
+def build_project_goal_user_content(pool: list[dict], projects: list | None) -> str:
+    proj = "; ".join(str(p) for p in (projects or [])[:3] if str(p).strip())
+    head = f"The student's project(s): {proj}\n" if proj else ""
+    return head + _pool_types_and_samples(pool) + "\n\nDesign the single best 'what do you want to do with your project' question."
+
+
+def build_project_goal_rung(parsed: dict | None, pool: list[dict]) -> dict:
+    return _build_rerank_rung(parsed, pool, "project_goal", "What do you most want to do with your project?", _PROJECT_GOAL_FALLBACK)
+
+
+def next_project_goal_rung(pool, answers, projects, ask_fn, parse_fn, rungs_done=0):
+    """The project-goal rerank rung — REPLACES the engagement question when the student picked a
+    passion/research project in setup. Same gating/shape as next_outcome_rung, project-framed."""
+    if rungs_done >= MAX_RUNGS or len(pool) <= POOL_FLOOR or "project_goal" in (answers or {}):
+        return None
+    raw = ask_fn(PROJECT_GOAL_QUESTION_SYSTEM, build_project_goal_user_content(pool, projects))
+    try:
+        parsed = parse_fn(raw) if raw else None
+    except Exception:
+        parsed = None
+    return build_project_goal_rung(parsed, pool)
 
 
 # --------------------------------------------------------------------------- the prompt (M8)
@@ -609,5 +643,27 @@ OUTCOME_QUESTION_SYSTEM = (
     'applications"; BAD: a single vague word like "learning") and a punchy 1-3 word casual `label` '
     '(GOOD: "Build something" / "Win it" / "Just explore" / "For my apps"). This question RE-RANKS '
     'the list — it never removes anything. '
+    'Respond with ONLY raw JSON: {"question":"...","options":[{"value":"...","label":"..."}]}'
+)
+
+
+# The PROJECT-GOAL question prompt (M8), Shama 2026-08-30. Shown INSTEAD of the engagement
+# question when the student picked a passion/research project in setup: ask what they want to DO
+# with that specific project. Pool-derived (only offer goals the programs can serve), and it is
+# given the student's project text so the question is about THEIR project. RERANK-only.
+PROJECT_GOAL_QUESTION_SYSTEM = (
+    'You write ONE friendly question asking a high-schooler what they most want to DO WITH THEIR '
+    'OWN PROJECT (a passion or research project they already have) — used to ORDER a list of '
+    'opportunities for them. You are given the student\'s project and the kinds of programs still '
+    'on their list. Offer 3-4 goal options that these programs can genuinely serve, and never '
+    'offer a goal the list cannot support — e.g. do NOT offer "win a competition with it" when '
+    'there are no competitions, or "publish it" when there are no journals. Speak about THEIR '
+    'project ("your project"), not a new one. '
+    + _BEHAVIORAL_VOICE + ' '
+    + 'Each option is a `value` naming the goal as a short phrase (GOOD: "take it further and go '
+    'deeper", "compete or win with it", "publish or present it", "get expert mentorship on it"; '
+    'BAD: a vague word like "learn") and a punchy 1-3 word casual `label` (GOOD: "Go deeper" / '
+    '"Compete with it" / "Show it off" / "Get mentorship"). This question RE-RANKS the list — it '
+    'never removes anything. '
     'Respond with ONLY raw JSON: {"question":"...","options":[{"value":"...","label":"..."}]}'
 )

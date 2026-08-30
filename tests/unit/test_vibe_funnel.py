@@ -7,6 +7,7 @@ from app.services.funnel import (
     BEHAVIORAL_AXES, CURATE_AT, MAX_RUNGS, POOL_FLOOR, ENGAGEMENT_OTHER,
     behavioral_pref, collect_preferences, describe_funnel_choices, build_vibe_rung, next_vibe_rung,
     build_engagement_rung, build_outcome_rung, next_outcome_rung,
+    build_project_goal_rung, next_project_goal_rung,
 )
 from app.services.curation import build_curation_user_content
 
@@ -149,6 +150,30 @@ def test_outcome_answer_folds_into_preferences():
     assert collect_preferences({"outcome": "build a finished project"}) == ["Wants: build a finished project"]
     assert collect_preferences({"outcome": ENGAGEMENT_OTHER + "start a nonprofit"}) == ["Wants: start a nonprofit"]
     assert collect_preferences({"outcome": "__skip__"}) == []
+
+
+def test_project_goal_rung_is_rerank_and_pool_derived():
+    parsed = {"question": "What do you want to do with your project?",
+              "options": [{"value": "take it further", "label": "Go deeper"},
+                          {"value": "compete with it", "label": "Compete"}]}
+    rung = build_project_goal_rung(parsed, _pool(30))
+    assert rung["axis"] == "project_goal" and rung["kind"] == "vibe" and rung["allow_other"] is True
+    assert rung["classification"] == {}
+    assert [o["value"] for o in rung["options"]] == ["take it further", "compete with it"]
+
+
+def test_project_goal_rung_local_fallback_and_gating():
+    assert build_project_goal_rung(None, _pool(30))["axis"] == "project_goal"   # local fallback
+    ask = lambda s, u: '{"question":"q","options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}'
+    assert next_project_goal_rung(_pool(POOL_FLOOR), {}, [], ask, json.loads, 0) is None            # too small
+    assert next_project_goal_rung(_pool(CURATE_AT + 20), {"project_goal": "x"}, [], ask, json.loads, 0) is None  # asked
+    got = next_project_goal_rung(_pool(CURATE_AT + 20), {}, ["Research Project: X"], ask, json.loads, 0)
+    assert got is not None and got["axis"] == "project_goal"
+
+
+def test_project_goal_answer_folds_into_preferences():
+    assert collect_preferences({"project_goal": "publish it"}) == ["Wants: publish it"]
+    assert collect_preferences({"project_goal": ENGAGEMENT_OTHER + "patent it"}) == ["Wants: patent it"]
 
 
 def test_describe_funnel_choices_summarizes_structured_picks():

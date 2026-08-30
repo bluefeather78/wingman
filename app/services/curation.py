@@ -128,16 +128,35 @@ PART 2 — FIT. Among the eligible candidates, pick the best <=10. Most slots go
 most SPECIFIC fits to this student's stated interests, goals, projects, AND their stated preferences \
 (the "what matters to them right now" list, when present — use it to ORDER and break ties, never to \
 exclude a candidate). \
-Each reason must be CONTEXTUAL to this student's search: connect the pick to a real detail of \
-THEIRS — a profile specific (a subject, skill, project, or goal) and/or one of their choices this \
-search (what they enjoy doing, what they want to get out of it, their budget or timing) — whichever \
-makes the fit most concrete. GOOD: "The hands-on research you want, and free like you asked"; \
-"Builds on your robotics team, and it's the competition you're after". BAD (generic): "Great fit \
-for your interests". Under 15 words, second person ("you"/"your"), never invented. Do NOT state or \
-infer any eligibility, grade, age, or citizenship restriction. \
+Each reason is the WOW moment — it should make this student feel genuinely SEEN, like a mentor \
+who knows BOTH them and this program picked it just for them, and give them enough to think "that \
+is an amazing fit for me." Draw a concrete line connecting TWO specific halves: (1) a SPECIFIC \
+thing about THEM — a project, skill, achievement, goal, or a choice they made this search (what \
+they enjoy doing, what they want out of it, their budget or timing) — and (2) a SPECIFIC thing \
+THIS program actually offers, from the candidate's own text — what they would build, do, compete \
+in, publish, or walk away with. The more precisely those two halves lock together, the better. \
+Write 1-3 sentences (roughly 25-55 words) — long enough to be truly convincing and to earn their \
+trust, but every clause must carry real information, never filler. \
+GOOD (both halves specific, ties their choice): "You built a computer-vision model to auto-referee \
+robotics matches — here you'd take that further on a team designing fully autonomous robots and \
+competing head-to-head, exactly the build-and-win challenge you're after, and it runs free over \
+the summer." \
+GOOD: "Your research on low-resource languages is exactly what this olympiad rewards: you'd crack \
+original computational-linguistics problems against the country's strongest, the kind of \
+recognition you told us you want." \
+BAD (thin, could be anyone): "Great fit for your robotics interest." \
+BAD (vague filler): "A wonderful opportunity to learn and grow your skills." \
+BAD (invented — the candidate's text never said it): naming a mentor, prize, cohort size, or \
+feature that is not in that candidate's own text. \
+Use ONLY real details from the student's profile/choices and the candidate's OWN text — never \
+invent a program feature or a student detail, and never assert something the text does not \
+support. Second person ("you"/"your"). Do NOT state or infer any eligibility, grade, age, or \
+citizenship restriction. \
 Reserve 2-3 slots as deliberate EXPLORATION picks: a real stretch outside the student's usual lane \
-that is still excellent AND still feasible — mark those exploration_pick:true. Assign each a tier: \
-"strong" (excellent, specific) or "look" (solid, worth a look).
+that is still excellent AND still feasible — mark those exploration_pick:true, and in the reason \
+name the leap honestly and why they'd shine anyway ("A new direction from your usual robotics, but \
+your data-modeling skills would stand out here"). Assign each a tier: "strong" (excellent, \
+specific) or "look" (solid, worth a look).
 
 Respond with ONLY raw JSON, no markdown, no preamble, matching:
 {"selected":[{"id":"...","reason":"...","tier":"strong|look","exploration_pick":false,\

@@ -3140,13 +3140,19 @@ def build_agent_args(agent_name, config, preview=False):
 
     elif agent_name == "scraper":
         # scrape_opportunities.py: --mode {national,seattle} (required) [--dry-run]
-        # [--seed-ids S] [--seed-indices S] [--max-searches N]
+        # [--seed-ids S] [--seed-indices S] [--max-searches N] [--gate-observe]
         args += ["--mode", config.get("mode") or "national"]
         if config.get("seedIds"):
             args += ["--seed-ids", str(config["seedIds"])]
         max_searches = _int_or_none(config.get("maxSearches"))
         if max_searches:
             args += ["--max-searches", str(max_searches)]
+        # Discovery-gate mode. The console defaults to OBSERVE (every candidate lands in the
+        # review queue labelled, nothing dropped or diverted) because a console operator is
+        # reviewing, not running headless — the CLI default is the opposite (act). Pass
+        # gateMode:"act" to let the gate drop stale rows and route hubs to mining on its own.
+        if (config.get("gateMode") or "observe") != "act":
+            args.append("--gate-observe")
 
     elif agent_name == "deadline":
         # check_deadlines.py: [--sample N | --all] [--dry-run]

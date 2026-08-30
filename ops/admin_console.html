@@ -4316,6 +4316,14 @@ const SCOPE_FIELDS = {
       <label for="cfgMaxSearches">Max searches per angle</label>
       <input type="number" id="cfgMaxSearches" value="10" min="1" max="50">
       <div class="help">A soft budget folded into the prompt — Gemini's search tool has no server-enforced cap, so the model can still exceed it.</div>
+    </div>
+    <div class="field">
+      <label for="cfgGateMode">Discovery gate</label>
+      <select id="cfgGateMode">
+        <option value="observe" selected>Observe — keep &amp; label everything for review</option>
+        <option value="act">Act — drop stale, route hubs to mining</option>
+      </select>
+      <div class="help"><b>Observe</b> (default here): every candidate is classified, enriched and deduped, then lands in the review queue labelled — nothing dropped or diverted, so you look first. <b>Act</b>: the gate disposes on its own — stale programs are dropped and hubs go straight to the mining queue. Same paid calls either way.</div>
     </div>`,
   deadline: () => `
     <div class="field">
@@ -4514,6 +4522,7 @@ function collectConfig() {
     const ids = sel ? Array.from(sel.selectedOptions).map(o => o.value).filter(Boolean) : [];
     if (ids.length) c.seedIds = ids.join(',');
     c.maxSearches = val('cfgMaxSearches');
+    c.gateMode = val('cfgGateMode') || 'observe';
   } else {
     c.scope = val('cfgScope');
     // Only send the sample size when the scope actually uses it — the previous

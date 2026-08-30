@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { addTrackerItemChecked, flattenItems, loadTrackerData } from '@/api/trackerStore';
-import type { Opportunity } from '@/api/types';
+import type { MatchFunnelOption, MatchResponse, MatchStudentBlob, Opportunity } from '@/api/types';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import { ACTIVE_KINDS, KIND_CONFIG } from '@/lib/kinds';
 import { countProfileWords, extractHighlightProjects } from '@/lib/profile';
@@ -57,7 +57,7 @@ const profileStore: ProfileStore = {
   load: () => httpClient.loadData<ProfileRecord>('student-profile'),
   save: (record) => httpClient.saveData('student-profile', record),
 };
-type Stage = 'home' | 'quiz' | 'form' | 'results';
+type Stage = 'home' | 'quiz' | 'form' | 'funnel' | 'results';
 
 // Quiet retries before the catalog failure is shown to the student. Two is enough to ride
 // out a cold backend or a dropped connection without leaving them staring at a spinner.
@@ -230,6 +230,17 @@ export default function Finder() {
   // re-running the search. Validated against the profile once it loads (see below).
   const [results, setResults] = useState<Result[]>(() => sessionSearch?.results ?? []);
   const [note, setNote] = useState<string | null>(() => sessionSearch?.note ?? null);
+  // ---- Phase 4 progressive funnel ----
+  // The student blob is built once (rung 0) and reused for every rung. answers + the current
+  // surviving pool_ids live in refs (mutated as the student advances); history drives Back.
+  const funnelBlob = useRef<MatchStudentBlob | null>(null);
+  const funnelAnswers = useRef<Record<string, string>>({});
+  const funnelPoolIds = useRef<string[] | null>(null);
+  const [funnelRung, setFunnelRung] = useState<MatchResponse | null>(null);
+  const [funnelLoading, setFunnelLoading] = useState(false);
+  const [funnelHistory, setFunnelHistory] = useState<
+    { answers: Record<string, string>; poolIds: string[] | null; rung: MatchResponse }[]
+  >([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [trackedIds, setTrackedIds] = useState<Set<string>>(new Set());
   // Hover-lift for result cards (.pop-card:hover in the live app) — one shared id rather
@@ -496,60 +507,19 @@ export default function Finder() {
       // grade-level language the student's own profile text happens to contain, if any.
       const gradeNum = parseGradeFromText(grade) ?? profileGrade;
 
-      // ---- The profile-driven path is now ONE server-side curated match ----
-      // (OPPORTUNITY_MATCHING_PLAN.md Phase 3.) The 7-kind fan-out this replaced returned
-      // 40-70 rows the student had to wade through; /api/match runs recall -> curation
-      // server-side and returns the best <=10 overall, each with a "why you" reason. The
-      // student blob is grade + location + the profile's themes (filterTags slot) + the
-      // marquee projects pulled from the profile text in code.
+      // ---- The profile-driven path is the server-side curated match via the FUNNEL ----
+      // (OPPORTUNITY_MATCHING_PLAN.md Phases 3+4.) Rung 0 runs recall server-side and either
+      // asks the first discriminating question (-> the funnel stage) or, if nothing is worth
+      // asking, returns the curated <=10 directly (-> results). Later rungs are driven by
+      // answerFunnel/skipFunnel/funnelBack, not by search(). The 7-kind client fan-out this
+      // replaced returned 40-70 rows to wade through.
       if (!k) {
-        let themes: { theme: string; intent?: string | null; next_steps?: string | null }[] = [];
-        try {
-          const slot = (await getProfileDerived(profileStore, modelCalls, 'filterTags', profileRecord.current)) as FilterTagsSlot;
-          themes = (slot.enrichedTags || [])
-            .filter((t) => t && typeof t.tag === 'string')
-            .map((t) => ({ theme: t.tag, intent: t.intent ?? null, next_steps: (t.nextSteps || []).join('; ') || null }));
-        } catch {
-          /* thin profile -> no themes; recall still returns a filtered set */
-        }
-        // Grade + location: prefer the LLM-extracted basics (the resolved source of truth),
-        // falling back to the regex-parsed filter value / form field.
-        let studentGrade: number | null = gradeNum;
-        let studentState: string | null = homeState.trim() || null;
-        try {
-          const basics = (await getProfileDerived(profileStore, modelCalls, 'basics', profileRecord.current)) as BasicsSlot;
-          const bg = parseGradeLevel(basics.fields?.grade ?? null);
-          if (bg != null) studentGrade = bg;
-          if (basics.fields?.state) studentState = basics.fields.state;
-        } catch {
-          /* best effort */
-        }
-
-        const resp = await httpClient.match({
-          grade: studentGrade,
-          location: { state: studentState },
-          profile_themes: themes,
-          highlight_projects: extractHighlightProjects(profileText),
-        });
-        const byId = new Map(opps.map((o) => [o.id, o]));
-        const merged: Result[] = resp.results
-          .map((r): Result | null => {
-            const opp = byId.get(r.id);
-            if (!opp) return null;
-            return {
-              opp,
-              reason: r.reason || '',
-              tier: (r.tier === 'strong' ? 'strong' : 'look') as 'strong' | 'look',
-              kind: kindForOpp(opp),
-            };
-          })
-          .filter((x): x is Result => x !== null);
-        setResults(merged);
-        setNote(resp.note ?? null);
-        rememberSearch(merged, resp.note ?? null, k);
-        setSelected(new Set());
-        setVisibleCount(10);
-        setStage('results');
+        funnelBlob.current = await buildStudentBlob();
+        funnelAnswers.current = {};
+        funnelPoolIds.current = null;
+        setFunnelHistory([]);
+        setFunnelRung(null);
+        await runFunnelStep({}, null);
         return;
       }
 
@@ -636,6 +606,127 @@ export default function Finder() {
       note: noteText,
       tagScores: tagScoreCache.current,
     };
+  }
+
+  // The Phase-2 student blob, assembled from the profile (used for every funnel rung and the
+  // final curation). Grade + location prefer the LLM basics slot, falling back to the regex
+  // filter value / form field; themes come from the filterTags slot; projects from the text.
+  async function buildStudentBlob(): Promise<MatchStudentBlob> {
+    let themes: { theme: string; intent?: string | null; next_steps?: string | null }[] = [];
+    try {
+      const slot = (await getProfileDerived(profileStore, modelCalls, 'filterTags', profileRecord.current)) as FilterTagsSlot;
+      themes = (slot.enrichedTags || [])
+        .filter((t) => t && typeof t.tag === 'string')
+        .map((t) => ({ theme: t.tag, intent: t.intent ?? null, next_steps: (t.nextSteps || []).join('; ') || null }));
+    } catch {
+      /* thin profile -> no themes */
+    }
+    let studentGrade: number | null = null;
+    let studentState: string | null = homeState.trim() || null;
+    try {
+      const fv = await getProfileFilterValues(profileStore, modelCalls, profileRecord.current);
+      if (fv.grade != null) studentGrade = fv.grade;
+    } catch { /* best effort */ }
+    try {
+      const basics = (await getProfileDerived(profileStore, modelCalls, 'basics', profileRecord.current)) as BasicsSlot;
+      const bg = parseGradeLevel(basics.fields?.grade ?? null);
+      if (bg != null) studentGrade = bg;
+      if (basics.fields?.state) studentState = basics.fields.state;
+    } catch { /* best effort */ }
+    return {
+      grade: studentGrade,
+      location: { state: studentState },
+      profile_themes: themes,
+      highlight_projects: extractHighlightProjects(profileText),
+    };
+  }
+
+  // Map a curated /api/match response onto the loaded catalog rows and land on the results
+  // stage — the shared tail of both the funnel's "done" and the (mock) direct path.
+  function finishFunnelToResults(resp: MatchResponse) {
+    const byId = new Map((opps ?? []).map((o) => [o.id, o]));
+    const merged: Result[] = (resp.results ?? [])
+      .map((r): Result | null => {
+        const opp = byId.get(r.id);
+        if (!opp) return null;
+        return {
+          opp,
+          reason: r.reason || '',
+          tier: (r.tier === 'strong' ? 'strong' : 'look') as 'strong' | 'look',
+          kind: kindForOpp(opp),
+        };
+      })
+      .filter((x): x is Result => x !== null);
+    setResults(merged);
+    setNote(resp.note ?? null);
+    rememberSearch(merged, resp.note ?? null, null);
+    setSelected(new Set());
+    setVisibleCount(10);
+    setStage('results');
+  }
+
+  // One funnel round trip: POST the current answers + narrowed pool; either show the next
+  // question or, when the server says done, the curated list. Recall only runs on rung 0
+  // (no pool_ids); later rungs carry the client-narrowed pool_ids so nothing re-embeds.
+  async function runFunnelStep(answers: Record<string, string>, poolIds: string[] | null) {
+    setFunnelLoading(true);
+    try {
+      const resp = await httpClient.match({
+        ...(funnelBlob.current ?? {}),
+        funnel: true,
+        funnel_answers: answers,
+        pool_ids: poolIds ?? undefined,
+      });
+      if (resp.done !== false) {
+        finishFunnelToResults(resp);
+        return;
+      }
+      funnelAnswers.current = answers;
+      funnelPoolIds.current = resp.pool_ids ?? poolIds ?? null;
+      setFunnelRung(resp);
+      setStage('funnel');
+    } catch (e) {
+      const msg = `Search failed: ${(e as Error).message}`;
+      setNote(msg);
+      setResults([]);
+      rememberSearch([], msg, null);
+      setStage('results');
+    } finally {
+      setFunnelLoading(false);
+    }
+  }
+
+  // Student picked an option: narrow the pool locally (keep every id not "cut" under that
+  // option — the guard already ran server-side), record the answer, advance.
+  function answerFunnel(opt: MatchFunnelOption) {
+    const rung = funnelRung;
+    if (!rung || !rung.axis) return;
+    const cls = rung.classification || {};
+    const currentPool = rung.pool_ids || funnelPoolIds.current || [];
+    const narrowed = currentPool.filter((id) => (cls[id]?.per_option?.[opt.value] ?? 'keep') !== 'cut');
+    setFunnelHistory((h) => [...h, { answers: funnelAnswers.current, poolIds: funnelPoolIds.current, rung }]);
+    void runFunnelStep({ ...funnelAnswers.current, [rung.axis]: opt.value }, narrowed);
+  }
+
+  // Skip: record the axis as answered (so the server doesn't re-ask it) but keep the pool.
+  function skipFunnel() {
+    const rung = funnelRung;
+    if (!rung || !rung.axis) return;
+    setFunnelHistory((h) => [...h, { answers: funnelAnswers.current, poolIds: funnelPoolIds.current, rung }]);
+    void runFunnelStep({ ...funnelAnswers.current, [rung.axis]: '__skip__' }, funnelPoolIds.current);
+  }
+
+  // Back: restore the previous rung without a round trip.
+  function funnelBack() {
+    setFunnelHistory((h) => {
+      if (!h.length) return h;
+      const prev = h[h.length - 1];
+      funnelAnswers.current = prev.answers;
+      funnelPoolIds.current = prev.poolIds;
+      setFunnelRung(prev.rung);
+      setStage('funnel');
+      return h.slice(0, -1);
+    });
   }
 
   async function suggestForMe() {
@@ -1044,6 +1135,68 @@ export default function Finder() {
               textStyle={styles.findBtnText}
             />
           </View>
+        </SoftCard>
+      </Screen>
+    );
+  }
+
+  // ---------- Funnel stage (Phase 4) ----------
+  // One discriminating question at a time, narrowing the pool toward the curated shortlist.
+  // Each option shows how many matches it would LEAVE (the live counter), which doubles as the
+  // T3 "relax" affordance — a student who sees an option leaves too few just picks a broader
+  // one or skips. Answering/skipping advances; Back restores the previous question.
+  if (stage === 'funnel' && funnelRung) {
+    const opts = funnelRung.options ?? [];
+    return (
+      <Screen>
+        <SoftCard style={{ gap: 20, padding: 32 }}>
+          {funnelLoading ? (
+            <LoadingRow title="Narrowing your matches…" sub="One quick question at a time." />
+          ) : (
+            <>
+              <Text style={styles.fieldLabel}>NARROWING YOUR MATCHES</Text>
+              <Txt variant="h2">{funnelRung.question}</Txt>
+              {!!funnelRung.rationale && (
+                <Text style={[styles.heroSub, styles.heroSubItalic]}>{funnelRung.rationale}</Text>
+              )}
+              <View style={{ gap: 12 }}>
+                {opts.map((o, i) => (
+                  <Pressable
+                    key={o.value}
+                    onHoverIn={() => setHoveredQuizOption(i)}
+                    onHoverOut={() => setHoveredQuizOption((cur) => (cur === i ? null : cur))}
+                    onPressIn={() => setPressedQuizOption(i)}
+                    onPressOut={() => setPressedQuizOption((cur) => (cur === i ? null : cur))}
+                    style={[
+                      styles.quizOption,
+                      popShadow(pressedQuizOption === i ? 1 : hoveredQuizOption === i ? 4 : 3),
+                      pressedQuizOption === i
+                        ? styles.quizOptionPressed
+                        : hoveredQuizOption === i && styles.quizOptionHovered,
+                    ]}
+                    onPress={() => answerFunnel(o)}
+                  >
+                    <Text style={styles.quizOptTitle}>{o.label}</Text>
+                    {typeof o.count === 'number' && (
+                      <Text style={styles.quizOptDesc}>
+                        {o.count} match{o.count === 1 ? '' : 'es'} left
+                      </Text>
+                    )}
+                  </Pressable>
+                ))}
+              </View>
+              <View style={styles.heroActions}>
+                <Pressable onPress={skipFunnel}>
+                  <Text style={styles.link}>Skip this question</Text>
+                </Pressable>
+                {funnelHistory.length > 0 && (
+                  <Pressable onPress={funnelBack}>
+                    <Text style={styles.link}>← Back</Text>
+                  </Pressable>
+                )}
+              </View>
+            </>
+          )}
         </SoftCard>
       </Screen>
     );

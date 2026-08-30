@@ -107,13 +107,17 @@ export interface MatchTheme {
   intent?: string | null;
   next_steps?: string | null;
 }
-// The Phase-2 student blob the endpoint consumes.
+// The Phase-2 student blob the endpoint consumes, plus the Phase-4 funnel request controls.
 export interface MatchStudentBlob {
   grade?: number | null;
   location?: { state?: string | null; city?: string | null };
   profile_themes?: MatchTheme[];
   highlight_projects?: string[];
   funnel_answers?: Record<string, unknown>;
+  // Phase 4: set `funnel:true` to run the progressive funnel; `pool_ids` carries the
+  // client-narrowed survivors to the next rung so recall/embedding never re-runs.
+  funnel?: boolean;
+  pool_ids?: string[] | null;
 }
 // One curated card the endpoint returns (display fields + the curation verdict).
 export interface MatchResultCard {
@@ -123,10 +127,37 @@ export interface MatchResultCard {
   exploration_pick?: boolean;
   [key: string]: unknown;
 }
+// One funnel option (Phase 4) with its live survivor count.
+export interface MatchFunnelOption {
+  label: string;
+  value: string;
+  count?: number | null;
+}
+// Per-candidate classification the server returns for a funnel rung, already quote-sanitized
+// (a "cut" is safe to act on — the eligibility guard ran server-side). The client narrows by
+// keeping every id whose disposition under the chosen option is not "cut".
+export interface MatchFunnelClassificationEntry {
+  per_option?: Record<string, string>;
+  quote?: string | null;
+  source_field?: string | null;
+  quote_reverted?: boolean;
+}
+// The /api/match response is a union keyed on `done`:
+//   done === false -> a funnel rung (axis/question/options/classification/pool_ids)
+//   done !== false -> the curated shortlist (results); Phase-3 direct mode omits `done`.
 export interface MatchResponse {
-  results: MatchResultCard[];
+  done?: boolean;
+  // curated-list shape
+  results?: MatchResultCard[];
   pool_size?: number;
   rescued?: string[];
   guard_overrode_count?: number;
   note?: string | null;
+  // funnel-rung shape (present when done === false)
+  axis?: string;
+  question?: string | null;
+  rationale?: string | null;
+  options?: MatchFunnelOption[];
+  classification?: Record<string, MatchFunnelClassificationEntry>;
+  pool_ids?: string[];
 }

@@ -47,6 +47,36 @@ FUNNEL_AXES = {
 # a tight list is the goal, an empty one is a dead end (T3).
 POOL_FLOOR = 5
 
+# Stop asking and hand off to curation once the pool is this small — a tight pool is what
+# curation is for, and more questions past here are the "10 feasible-but-mediocre" trap.
+CURATE_AT = 15
+# A longer funnel is a chore (and a latency/cost budget — each rung is a model call).
+MAX_RUNGS = 5
+
+# Fields the funnel-question model sees per candidate — enough to classify the whitelisted
+# axes (cost/time/citizenship/demographic), no more. Mirrors the curation view but trimmed.
+FUNNEL_CANDIDATE_FIELDS = (
+    "id", "name", "org", "type", "summary", "eligibility",
+    "price", "location", "state", "season",
+)
+
+
+def build_funnel_candidate_view(row: dict) -> dict:
+    return {k: row.get(k) for k in FUNNEL_CANDIDATE_FIELDS}
+
+
+def build_funnel_user_content(student: dict, pool: list[dict]) -> str:
+    """The user-message payload for one funnel-question rung: the student blob + the CURRENT
+    pool (already narrowed by prior answers). Pure string assembly; system is
+    FUNNEL_QUESTION_SYSTEM."""
+    import json
+    views = [build_funnel_candidate_view(r) for r in pool]
+    return (
+        "STUDENT PROFILE (JSON):\n" + json.dumps(student, ensure_ascii=False)
+        + "\n\nCURRENT CANDIDATE POOL (JSON):\n" + json.dumps(views, ensure_ascii=False)
+        + "\n\nDecide the single next question (or {\"axis\": null} to stop) per the schema."
+    )
+
 
 class FunnelAxisError(ValueError):
     """Raised when a rung names an axis outside FUNNEL_AXES — a T1/T2 violation. Fail closed:
@@ -133,6 +163,53 @@ def count_after(pool: list[dict], rung: dict, chosen_value: str) -> int:
     arithmetic over the returned classification, no model call. Same result apply_rung_answer
     would produce, so the counter can never disagree with the actual cut."""
     return apply_rung_answer(pool, rung, chosen_value)["count"]
+
+
+def sanitize_rung(pool: list[dict], rung: dict) -> dict:
+    """Apply the quote guard to a rung's classification ONCE, server-side, before it is sent to
+    the client. For a quote-required axis (citizenship / hard_demographic), any candidate whose
+    "cut" is not backed by a verbatim quote that verifies against its own text has its cuts
+    downgraded to "keep" (unknown != ineligible), and is flagged `quote_reverted`.
+
+    This is what lets the client narrow the pool naively (keep every candidate not marked
+    "cut") and still be safe: the load-bearing guard already ran here. Structured axes
+    (cost / time_commitment) need no quote, so their classification passes through unchanged.
+    Raises FunnelAxisError for a non-whitelisted axis (T1/T2), same as apply_rung_answer."""
+    axis = rung.get("axis")
+    if axis not in FUNNEL_AXES:
+        raise FunnelAxisError(f"axis {axis!r} is not a whitelisted funnel filter axis")
+    if not FUNNEL_AXES[axis]["requires_quote"]:
+        return rung
+    classification = rung.get("classification") or {}
+    by_id = {c.get("id"): c for c in pool}
+    sanitized: dict = {}
+    for cid, entry in classification.items():
+        per_option = (entry or {}).get("per_option") or {}
+        if any(d == "cut" for d in per_option.values()):
+            cand = by_id.get(cid)
+            quote = (entry or {}).get("quote")
+            source_field = (entry or {}).get("source_field")
+            if cand is None or not verify_exclusion_quote(cand, quote, source_field):
+                per_option = {v: ("keep" if d == "cut" else d) for v, d in per_option.items()}
+                sanitized[cid] = {**(entry or {}), "per_option": per_option, "quote_reverted": True}
+                continue
+        sanitized[cid] = entry
+    return {**rung, "classification": sanitized}
+
+
+def option_counts(pool: list[dict], rung: dict) -> dict:
+    """Per-option surviving count for the live counter — {option_value: how many candidates
+    would REMAIN if the student picked that option}. Computed over the (already sanitized)
+    classification so the number the UI shows beside an option is exactly what the client's
+    naive narrowing will produce. No model call."""
+    classification = rung.get("classification") or {}
+    counts: dict = {}
+    for opt in rung.get("options") or []:
+        value = opt.get("value")
+        counts[value] = sum(
+            1 for c in pool if _disposition(classification.get(c.get("id")), value) != "cut"
+        )
+    return counts
 
 
 # --------------------------------------------------------------------------- the prompt (M8)

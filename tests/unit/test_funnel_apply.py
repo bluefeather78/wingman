@@ -117,3 +117,45 @@ def test_count_after_matches_apply():
     rung = {"axis": "cost", "classification": {"a": {"per_option": {"free_only": "cut"}}}}
     assert funnel.count_after(pool, rung, "free_only") == \
         funnel.apply_rung_answer(pool, rung, "free_only")["count"]
+
+
+# --------------------------------------------------------------------------- sanitize + counts
+
+def test_sanitize_structured_axis_passthrough():
+    rung = {"axis": "cost", "classification": {"a": {"per_option": {"free_only": "cut"}}}}
+    assert funnel.sanitize_rung(_pool("a"), rung) is rung  # no quote needed, unchanged object
+
+
+def test_sanitize_downgrades_unverified_quote_cut():
+    pool = [{"id": "x", "eligibility": "Open to all high schoolers.", "summary": ""}]
+    rung = {"axis": "citizenship", "classification": {
+        "x": {"per_option": {"non_citizen": "cut"}, "quote": "citizens only", "source_field": "eligibility"},
+    }}
+    out = funnel.sanitize_rung(pool, rung)
+    assert out["classification"]["x"]["per_option"]["non_citizen"] == "keep"  # downgraded
+    assert out["classification"]["x"]["quote_reverted"] is True
+
+
+def test_sanitize_keeps_verified_quote_cut():
+    pool = [{"id": "x", "eligibility": "Open to US citizens only.", "summary": ""}]
+    rung = {"axis": "citizenship", "classification": {
+        "x": {"per_option": {"non_citizen": "cut"}, "quote": "Open to US citizens only", "source_field": "eligibility"},
+    }}
+    out = funnel.sanitize_rung(pool, rung)
+    assert out["classification"]["x"]["per_option"]["non_citizen"] == "cut"  # stands
+    assert "quote_reverted" not in out["classification"]["x"]
+
+
+def test_option_counts_reflect_survivors():
+    pool = _pool("a", "b", "c")
+    rung = {
+        "axis": "cost",
+        "options": [{"label": "Free only", "value": "free_only"}, {"label": "Any", "value": "any"}],
+        "classification": {
+            "a": {"per_option": {"free_only": "cut", "any": "keep"}},
+            "b": {"per_option": {"free_only": "cut", "any": "keep"}},
+        },
+    }
+    counts = funnel.option_counts(pool, rung)
+    assert counts["free_only"] == 1  # only 'c' survives (a,b cut)
+    assert counts["any"] == 3        # all survive

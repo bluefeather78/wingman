@@ -87,3 +87,50 @@ def test_run_match_guard_rescues_wrongly_excluded():
     out = mp.run_match(rows, student, _embed_themes, curate_fn, json.loads)
     assert out["rescued"] == ["a"]
     assert out["guard_overrode_count"] == 1
+
+
+# --------------------------------------------------------------------------- next_funnel_rung
+
+def _big_pool(n):
+    # n rows, each with an eligibility field so quote-required cuts have something to check
+    return [{"id": f"r{i}", "eligibility": "", "summary": "", "name": f"P{i}"} for i in range(n)]
+
+
+def test_next_rung_stops_when_pool_small():
+    # <= CURATE_AT -> curate (None), model never called
+    called = {"n": 0}
+    def ask(s, u):
+        called["n"] += 1
+        return "{}"
+    assert mp.next_funnel_rung(_big_pool(10), {}, ask, __import__("json").loads) is None
+    assert called["n"] == 0
+
+
+def test_next_rung_stops_at_rung_cap():
+    assert mp.next_funnel_rung(_big_pool(40), {}, lambda s, u: "{}", __import__("json").loads,
+                               rungs_done=5) is None
+
+
+def test_next_rung_stops_on_axis_null():
+    rung = mp.next_funnel_rung(_big_pool(40), {}, lambda s, u: json.dumps({"axis": None}), json.loads)
+    assert rung is None
+
+
+def test_next_rung_stops_on_non_whitelisted_axis():
+    # model picks a preference axis -> fail closed (curate), never cut on it
+    raw = json.dumps({"axis": "subject", "question": "?", "options": [], "classification": {}})
+    assert mp.next_funnel_rung(_big_pool(40), {}, lambda s, u: raw, json.loads) is None
+
+
+def test_next_rung_returns_sanitized_rung_with_counts():
+    pool = _big_pool(40)
+    raw = json.dumps({
+        "axis": "cost", "question": "Budget?",
+        "options": [{"label": "Free only", "value": "free"}, {"label": "Any", "value": "any"}],
+        "classification": {"r0": {"per_option": {"free": "cut", "any": "keep"}}},
+    })
+    rung = mp.next_funnel_rung(pool, {}, lambda s, u: raw, json.loads)
+    assert rung["axis"] == "cost"
+    counts = {o["value"]: o["count"] for o in rung["options"]}
+    assert counts["free"] == 39 and counts["any"] == 40   # r0 cut under 'free'
+    assert len(rung["pool_ids"]) == 40

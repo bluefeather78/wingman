@@ -21,8 +21,11 @@ from app.auth import AuthedUser
 from app.services.opportunities import fetch_opportunities
 from app.services import action_items as action_items_service
 from app.services import deadlines
-from app.services.match_pipeline import run_match
+from app.services.match_pipeline import (
+    run_match, recall_pool, curate_pool, next_funnel_rung,
+)
 from app.services.curation import CURATION_SYSTEM
+from app.services.funnel import FUNNEL_QUESTION_SYSTEM
 from app.services.embeddings import embed_student_themes
 from gemini_common import call_gemini, extract_json
 # Imported, never re-declared: user_costs.model must name the model that was actually
@@ -62,15 +65,22 @@ def handle_opportunities(user: AuthedUser = Depends(optional_subscribed_user)):
 @router.post("/api/match")
 def handle_match(body: dict = Depends(json_body),
                  user: AuthedUser = Depends(require_subscription)):
-    """The curated match (OPPORTUNITY_MATCHING_PLAN.md, Phase 3 spine: recall -> curation;
-    the progressive funnel, Phase 4, is not wired yet). Body is the Phase-2 student blob:
+    """The curated match (OPPORTUNITY_MATCHING_PLAN.md). Body is the Phase-2 student blob:
       {grade, location:{state,...}, profile_themes:[{theme,intent,next_steps}|str],
-       highlight_projects:[str], funnel_answers:{}}
-    Returns {results:[<=10 curated cards], pool_size, rescued, guard_overrode_count, note}.
+       highlight_projects:[str], funnel_answers:{axis:value}}
 
-    Gated by require_subscription: it makes paid model calls (theme embeddings + one curation
-    call). In mock/offline mode (no GEMINI_API_KEY) it degrades to a recall-ordered list
-    without embeddings or curation, so the app stays click-through-able."""
+    Two modes:
+      * default (no `funnel`): recall -> curation, returns {results:[<=10 cards], pool_size,
+        rescued, guard_overrode_count, note} (Phase 3).
+      * `funnel: true` (Phase 4): the progressive funnel. Rung 0 (no `pool_ids`) runs recall,
+        then returns EITHER the next question (`{done:false, axis, question, options:[{label,
+        value,count}], classification, pool_ids}`) or, if nothing is worth asking / the pool is
+        already small, the curated list (`{done:true, results, ...}`). Subsequent rungs send
+        the client-narrowed `pool_ids` + the accumulated `funnel_answers`; recall does NOT
+        re-run (no re-embedding), the server just asks the next question or curates.
+
+    Gated by require_subscription (paid model calls). Mock/offline (no GEMINI_API_KEY) degrades
+    to a recall-ordered list so the app stays click-through-able."""
     userid = user.id
     touch_user_activity(userid, "match")
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
@@ -87,10 +97,12 @@ def handle_match(body: dict = Depends(json_body),
         "highlight_projects": body.get("highlight_projects") or [],
         "funnel_answers": body.get("funnel_answers") or {},
     }
+    funnel_mode = bool(body.get("funnel"))
+    pool_ids = body.get("pool_ids") if isinstance(body.get("pool_ids"), list) else None
 
     if not GEMINI_API_KEY:
         # Mock/offline: no embeddings (recall returns the filtered set unscored) and no
-        # curation model. Honest degraded list rather than a broken screen.
+        # curation model. Honest degraded list rather than a broken screen (funnel too).
         from app.services.matching import recall
         loc = student["location"]
         pool = recall(rows, [], student_grade=student["grade"],
@@ -99,33 +111,58 @@ def handle_match(body: dict = Depends(json_body),
         results = [{**{k: r.get(k) for k in RESULT_DISPLAY_FIELDS},
                     "reason": None, "tier": "look", "exploration_pick": False} for r in pool]
         return json_response(200, {"results": results, "pool_size": len(pool), "rescued": [],
-                                   "guard_overrode_count": 0,
+                                   "guard_overrode_count": 0, "done": True,
                                    "note": "matching runs in mock mode (no model key) — showing catalog matches"})
 
-    # Real path. Capture the curation call's usage so its cost can be banked; the embedding
-    # cost is returned by run_match but recorded with the correct (cheaper) embed pricing in a
-    # follow-up (see the _FEATURE_SIGNATURES cost-wiring task) — recording it here through the
-    # generateContent pricer would overstate it ~4x.
-    curation_usage = {}
+    # Capture each model call's usage so its cost can be banked under the right feature. The
+    # embedding cost is returned separately but recorded with the correct (cheaper) embed
+    # pricing in a follow-up (see c9ccae8) — recording it through the generateContent pricer
+    # would overstate it ~4x.
+    curation_usage: dict = {}
+    funnel_usage: dict = {}
 
     def _embed(texts):
         return embed_student_themes(texts, GEMINI_API_KEY)
 
-    def _curate(system, user_content):
-        text, usage = call_gemini(system, user_content, GEMINI_API_KEY,
-                                  use_web_search=False, max_tokens=2000, model=MESSAGES_MODEL)
-        curation_usage.clear()
-        curation_usage.update(usage)
-        return text
+    def _model_call(usage_sink):
+        def _fn(system, user_content):
+            text, usage = call_gemini(system, user_content, GEMINI_API_KEY,
+                                      use_web_search=False, max_tokens=2000, model=MESSAGES_MODEL)
+            usage_sink.clear()
+            usage_sink.update(usage)
+            return text
+        return _fn
+
+    _curate = _model_call(curation_usage)
+    _ask = _model_call(funnel_usage)
 
     try:
-        out = run_match(rows, student, _embed, _curate, extract_json)
+        if not funnel_mode:
+            out = run_match(rows, student, _embed, _curate, extract_json)
+        else:
+            if pool_ids is not None:
+                by_id = {r.get("id"): r for r in rows}
+                pool = [by_id[i] for i in pool_ids if i in by_id]  # client-narrowed survivors
+                embed_cost = 0.0
+            else:
+                pool, embed_cost = recall_pool(rows, student, _embed)
+            rungs_done = len(student.get("funnel_answers") or {})
+            rung = next_funnel_rung(pool, student, _ask, extract_json, rungs_done)
+            if rung is None:
+                out = curate_pool(pool, student, _curate, extract_json)
+                out["done"] = True
+            else:
+                out = {"done": False, **rung}
+            out["embed_cost_usd"] = embed_cost
     except Exception as e:
         return json_error(502, f"Matching failed: {e}")
 
     if curation_usage:
         record_interactive_cost_async("interactive_gemini", curation_usage, MESSAGES_MODEL,
                                       userid=userid, system=CURATION_SYSTEM)
+    if funnel_usage:
+        record_interactive_cost_async("interactive_gemini", funnel_usage, MESSAGES_MODEL,
+                                      userid=userid, system=FUNNEL_QUESTION_SYSTEM)
     return json_response(200, out)
 
 

@@ -358,6 +358,28 @@ def collect_preferences(funnel_answers: dict | None) -> list[str]:
     return prefs
 
 
+def describe_funnel_choices(funnel_answers: dict | None) -> list[str]:
+    """Plain-language summary of the STRUCTURED funnel choices (engagement type, budget, timing)
+    for the curation "why you" reason — so it can be contextual to the student's whole journey,
+    not just their profile. The soft vibe/outcome/free-text choices are covered by
+    collect_preferences; this adds the ones that are catalog filters. Eligibility axes
+    (citizenship / hard_demographic) are deliberately omitted — a reason must never assert an
+    eligibility restriction."""
+    a = funnel_answers or {}
+    out = []
+    eng = a.get("engagement")
+    if isinstance(eng, str) and eng and not eng.startswith(ENGAGEMENT_OTHER):
+        out.append(f'Wants a "{ENGAGEMENT_LABEL.get(eng, eng)}" kind of experience')
+    if a.get("cost") == "free":
+        out.append("Looking for free programs")
+    t = a.get("time_commitment")
+    if t == "summer":
+        out.append("Available in the summer")
+    elif t == "school_year":
+        out.append("Available during the school year")
+    return out
+
+
 def build_behavioral_user_content(pool: list[dict], remaining_axes: list[str]) -> str:
     """User payload for a vibe-question rung: the remaining axes (with options) + a sample of the
     program names still on the list, so the model picks the axis that best fits them."""

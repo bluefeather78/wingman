@@ -127,8 +127,14 @@ candidate's own text that states the restriction, and name which field it is in 
 PART 2 — FIT. Among the eligible candidates, pick the best <=10. Most slots go to the strongest, \
 most SPECIFIC fits to this student's stated interests, goals, projects, AND their stated preferences \
 (the "what matters to them right now" list, when present — use it to ORDER and break ties, never to \
-exclude a candidate). Name a real detail of THEIRS in each reason \
-(under 15 words, second person: "Great fit for your grapheme-to-phoneme research", never generic). \
+exclude a candidate). \
+Each reason must be CONTEXTUAL to this student's search: connect the pick to a real detail of \
+THEIRS — a profile specific (a subject, skill, project, or goal) and/or one of their choices this \
+search (what they enjoy doing, what they want to get out of it, their budget or timing) — whichever \
+makes the fit most concrete. GOOD: "The hands-on research you want, and free like you asked"; \
+"Builds on your robotics team, and it's the competition you're after". BAD (generic): "Great fit \
+for your interests". Under 15 words, second person ("you"/"your"), never invented. Do NOT state or \
+infer any eligibility, grade, age, or citizenship restriction. \
 Reserve 2-3 slots as deliberate EXPLORATION picks: a real stretch outside the student's usual lane \
 that is still excellent AND still feasible — mark those exploration_pick:true. Assign each a tier: \
 "strong" (excellent, specific) or "look" (solid, worth a look).

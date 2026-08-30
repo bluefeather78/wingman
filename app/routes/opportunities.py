@@ -28,7 +28,8 @@ from app.services.curation import CURATION_SYSTEM
 from app.services.funnel import (
     FUNNEL_QUESTION_SYSTEM, BEHAVIORAL_QUESTION_SYSTEM, OUTCOME_QUESTION_SYSTEM,
     CURATE_AT, FUNNEL_MAX_TOKENS,
-    next_vibe_rung, next_outcome_rung, collect_preferences, build_engagement_rung,
+    next_vibe_rung, next_outcome_rung, collect_preferences, describe_funnel_choices,
+    build_engagement_rung,
 )
 from app.services.embeddings import embed_student_themes
 from gemini_common import call_gemini, extract_json
@@ -183,8 +184,13 @@ def handle_match(body: dict = Depends(json_body),
                 if rung is None:
                     rung = next_vibe_rung(pool, student, answers, _ask, extract_json, rungs_done)
             if rung is None:
-                # Fold the answered vibe axes into curation as soft preference phrases (rerank).
-                student_for_curation = {**student, "preferences": collect_preferences(answers)}
+                # Give curation the WHOLE funnel journey so the "why you" reason is contextual to
+                # the student's choices: soft vibe/outcome/free-text prefs + the structured
+                # engagement/budget/timing picks, in plain language.
+                student_for_curation = {
+                    **student,
+                    "preferences": collect_preferences(answers) + describe_funnel_choices(answers),
+                }
                 out = curate_pool(pool, student_for_curation, _curate, extract_json)
                 out["done"] = True
             else:

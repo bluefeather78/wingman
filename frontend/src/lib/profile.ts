@@ -75,6 +75,30 @@ export function profileHasTruncatedTail(synthesized: string | null | undefined):
   return last.split(/\s+/).length >= PROFILE_MIN_HIGHLIGHT_WORDS;
 }
 
+// The literal paragraph prefixes synthesizeProfile's own prompt enforces (see the system
+// prompt above): one paragraph per distinct project, each prefixed exactly like this.
+export const PASSION_PROJECT_PREFIX = 'Passion Project:';
+export const RESEARCH_PROJECT_PREFIX = 'Research Project:';
+
+// Pull the student's marquee project paragraphs out of the synthesized profile — the
+// "highlight_projects" the matching student-blob carries (Phase 2 of the opportunity-matching
+// plan). These are extracted IN CODE from the structure synthesis already imposes, not via a
+// model call: no cost, no staleness, always in sync with whatever the profile text currently
+// says. The general (unprefixed) paragraphs are deliberately left out — profile_themes already
+// summarize interests at the altitude curation needs, and the projects are the specific,
+// idiosyncratic detail a "why you" reason can hook onto.
+//
+// Returns each project paragraph verbatim, prefix included (so a downstream reader can tell a
+// passion project from a research project without re-parsing). Order preserved.
+export function extractHighlightProjects(synthesized: string | null | undefined): string[] {
+  const text = (synthesized || '').trim();
+  if (!text) return [];
+  return text
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter((p) => p.startsWith(PASSION_PROJECT_PREFIX) || p.startsWith(RESEARCH_PROJECT_PREFIX));
+}
+
 export function countProfileWords(text: string | null | undefined): number {
   if (!text) return 0;
   return text.trim().split(/\s+/).filter((w) => w.length > 0).length;

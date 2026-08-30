@@ -13,6 +13,13 @@ uvicorn[standard]>=0.30
 PyJWT>=2.8
 argon2-cffi>=23.1
 
+# numpy: the recall stage of the curated-matching pipeline (app/services/matching.py,
+# OPPORTUNITY_MATCHING_PLAN.md Phase 5) scores ~1,500 catalog embeddings against a student's
+# per-theme embeddings by cosine similarity on every search. A naive Python triple loop over
+# rows x themes x ~768 dims runs ~1s; numpy/BLAS makes it ~milliseconds. numpy ships manylinux
+# wheels, so Render installs it without a compiler (same as PyJWT/argon2 above).
+numpy>=1.26
+
 # PyPDF2: the resume/LinkedIn import endpoint AND the action-item substrate's capture layer
 # (source_capture.py — decodes the base64 PDF bytes Claude web_fetch returns, so a program's
 # guidelines PDF can be read and verified). Both degrade gracefully if it is missing (resume

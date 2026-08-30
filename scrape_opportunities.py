@@ -65,6 +65,10 @@ import discovered_leads
 import url_dedupe
 import url_repair
 import url_validate
+import classify_page
+import combined_reader
+import embed_common
+import queue_flags
 from agent_common import add_agent_args, apply_timing, clean_email, emit_preview, snapshot_stamp
 from contact_email_common import resolve_contact_email
 from gemini_common import call_gemini, extract_json, estimate_cost
@@ -721,6 +725,44 @@ def build_row(candidate, mint_id, source, url, flags):
     }
 
 
+# --- discovery gate glue (pure; the paid part is combined_reader.read_candidate_live) ----------
+# MARQUEE M9: the discovery gate wires paid per-candidate calls (classify + metadata + embedding)
+# into the scrape loop. The helpers below are pure and free; they only SHAPE what the gate returns
+# into the row/dup_candidates the snapshot already stores. See MARQUEE_DECISIONS.md M9.
+
+def gate_metadata_overlay(row, metadata):
+    """Overlay page-derived metadata (refresh_opportunities.clean_update_dict output) onto a
+    freshly built row — page truth beats the model's phase-2 guess — leaving identity and
+    provenance columns alone. Returns the number of fields changed. Pure.
+    """
+    protected = {"id", "url", "source", "is_active", "seed_id"}
+    changed = 0
+    for k, v in (metadata or {}).items():
+        if k in protected or v is None:
+            continue
+        if row.get(k) != v:
+            row[k] = v
+            changed += 1
+    return changed
+
+
+def gate_dup_candidates(hint_candidates, by_id, existing_dups):
+    """Turn combined_reader's dedupe hints ({id,score,reason}) into the console's dup_candidates
+    shape ({id,name,url,confidence,reason,via}), enriched with the survivor's name/url from the
+    catalog, MERGED with any url_dedupe candidates already on the row (this gate's own prior
+    entries replaced, url_dedupe's kept). Pure. A HINT only — it never rejects.
+    """
+    fresh = []
+    for c in (hint_candidates or []):
+        survivor = by_id.get(c.get("id"), {})
+        fresh.append({
+            "id": c.get("id"), "name": survivor.get("name"), "url": survivor.get("url"),
+            "confidence": "hint", "reason": c.get("reason") or "content similarity",
+            "via": queue_flags.DEDUPE_VIA,
+        })
+    return queue_flags.merge_candidates(existing_dups, fresh)
+
+
 def research_seed(angle, addendum, today, gemini_key, args, system=None):
     """Phase 1 search-with-grounding. Returns (notes, usage, grounding, cost, attempts).
 
@@ -1035,6 +1077,16 @@ def main():
     mint_id = next_id_generator({r["id"] for r in existing})
     print(f"[OK] {len(existing)} existing rows loaded.")
 
+    # MARQUEE M9: the always-on discovery gate. Every candidate's page is read ONCE more to
+    # classify it (drop stale programs, route hubs to the mining queue, flag non-programs),
+    # enrich program rows with page metadata (refresh's own extraction), and add an embedding
+    # dedupe hint. The catalog embedding index powers the dedupe half; a missing index degrades
+    # the gate to classify+metadata (the embed half then costs nothing). See MARQUEE_DECISIONS.md.
+    gate_index = embed_common.load_index()
+    gate_by_id = {r["id"]: r for r in existing if r.get("id")}
+    print(f"[OK] Discovery gate ON (M9): classify + metadata + dedupe per candidate; "
+          f"embedding index holds {len(gate_index)} row(s).")
+
     # Dry runs are logged too: they skip DATABASE writes, not the paid Gemini calls, so a
     # dry scrape costs the same as a real one. The "-dryrun" mode suffix marks them.
     run_mode = args.mode + ("-dryrun" if args.dry_run else "")
@@ -1250,6 +1302,54 @@ def main():
                     invalid_skipped += 1
                     rejected.append({"reason": "row could not be built", "raw": candidate})
                     continue
+
+                # --- Discovery gate (MARQUEE M9) --- classify the page, drop a stale program,
+                # route a hub to the mining queue, enrich a program row with page metadata, and
+                # add an embedding dedupe hint. One extra fetch powers all three. Wrapped whole:
+                # a gate failure degrades to inserting the row ungated, never loses the candidate.
+                gate = None
+                try:
+                    gate = combined_reader.read_candidate_live(
+                        url, gemini_key, name_hint=row["name"], org_hint=row.get("org"),
+                        index=gate_index)
+                except Exception as e:
+                    print(f"      [gate WARN] {url}: {type(e).__name__}: {str(e)[:80]}")
+                gate_flag = None
+                if gate is not None:
+                    seed_cost += gate.cost
+                    total_cost += gate.cost
+                    gclass = gate.classification
+                    gate_flag = gclass.flag() if gclass else None
+                    if gate.route == classify_page.ROUTE_DROP_STALE:
+                        invalid_skipped += 1
+                        rejected.append({"reason": "discovery gate: stale program (latest year "
+                                         f"{getattr(gclass, 'latest_year', None)})",
+                                         "raw": candidate})
+                        continue
+                    if gate.route in (classify_page.ROUTE_SAME_DOMAIN_LEAD,
+                                      classify_page.ROUTE_OFF_DOMAIN_LEAD):
+                        # A hub page: its PROGRAMS belong in the mining queue, not a row of its own.
+                        scope = (discovered_leads.SCOPE_SAME_DOMAIN
+                                 if gate.route == classify_page.ROUTE_SAME_DOMAIN_LEAD
+                                 else discovered_leads.SCOPE_OFF_DOMAIN)
+                        captured_leads.append({
+                            "url": url, "kind": discovered_leads.KIND_HUB, "scope": scope,
+                            "seed_id": seed.get("id"),
+                            "angle": f"scraper discovery gate: {(row.get('name') or '')[:60]}",
+                            "signal": f"page classifier: {gclass.klass}",
+                            "first_seen": today, "status": discovered_leads.STATUS_NEW})
+                        rejected.append({"reason": f"discovery gate: {gclass.klass} -> fed to "
+                                         "hub-mining queue", "raw": candidate})
+                        continue
+                    # program (fresh): enrich with the page's own metadata. none / unreadable keep
+                    # the row (v1 conservative — a non-program stays queued, flagged, for a human).
+                    if gate.route == classify_page.ROUTE_ROW:
+                        gate_metadata_overlay(row, gate.metadata)
+                    # The embedding dedupe hint (populated only for a program row) catches the
+                    # same program at a URL that url_dedupe's name/URL match cannot see. A no-op
+                    # for none/unreadable rows, which carry no hint.
+                    dup_candidates = gate_dup_candidates(gate.dup_candidates, gate_by_id,
+                                                         dup_candidates)
                 # Actively resolve the program's OWN contact email from its page instead of
                 # only keeping one that happened to appear in the search notes. Reuses the
                 # shared regex-first helper (a model call only on a page with several
@@ -1272,9 +1372,14 @@ def main():
                 # angles, which have no stable id — the correct "unknown" value.
                 row["seed_id"] = seed.get("id")
                 # build_row substitutes a placeholder type rather than failing; flagging it
-                # is this loop's job, so the reviewer is told to set a real one.
+                # is this loop's job, so the reviewer is told to set a real one. The gate's page
+                # metadata may have supplied a real type, in which case do not flag it missing.
                 row_flags = list(flags)
-                if candidate.get("type") not in VALID_TYPES:
+                if gate_flag:
+                    row_flags = queue_flags.upsert_flag(
+                        row_flags, queue_flags.CLASSIFY_PREFIX, gate_flag)
+                type_from_gate = bool(gate and "type" in (gate.metadata or {}))
+                if candidate.get("type") not in VALID_TYPES and not type_from_gate:
                     row_flags.append(FLAG_NO_TYPE)
                 if row_flags:
                     flagged_rows += 1

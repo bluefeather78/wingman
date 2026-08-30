@@ -4,8 +4,8 @@ and their answers become soft preference phrases handed to curation."""
 import json
 
 from app.services.funnel import (
-    BEHAVIORAL_AXES, CURATE_AT, MAX_RUNGS,
-    behavioral_pref, collect_preferences, build_vibe_rung, next_vibe_rung,
+    BEHAVIORAL_AXES, CURATE_AT, MAX_RUNGS, ENGAGEMENT_OTHER,
+    behavioral_pref, collect_preferences, build_vibe_rung, next_vibe_rung, build_engagement_rung,
 )
 from app.services.curation import build_curation_user_content
 
@@ -93,6 +93,33 @@ def test_next_vibe_rung_returns_rung_and_skips_already_asked_axis():
     assert rung["axis"] != asked          # not re-asked
     assert rung["axis"] in BEHAVIORAL_AXES
     assert rung["kind"] == "vibe"
+
+
+def test_engagement_rung_is_pool_derived_and_filters_by_type():
+    pool = ([{"id": f"c{i}", "type": "Competition"} for i in range(6)]
+            + [{"id": f"i{i}", "type": "Internship"} for i in range(4)]
+            + [{"id": "r0", "type": "Research"}])
+    rung = build_engagement_rung(pool)
+    assert rung["axis"] == "engagement" and rung["kind"] == "filter" and rung["allow_other"] is True
+    # options are the TYPES present, most common first, with pool-derived counts.
+    by_val = {o["value"]: o for o in rung["options"]}
+    assert set(by_val) == {"Competition", "Internship", "Research"}
+    assert by_val["Competition"]["count"] == 6 and by_val["Internship"]["count"] == 4 and by_val["Research"]["count"] == 1
+    assert by_val["Competition"]["label"] == "Competing head-to-head"   # enjoyment framing
+    # classification cuts every candidate not of the chosen type (a real filter).
+    assert rung["classification"]["c0"]["per_option"] == {"Competition": "keep", "Internship": "cut", "Research": "cut"}
+
+
+def test_engagement_rung_none_when_under_two_types():
+    assert build_engagement_rung([{"id": "a", "type": "Competition"}, {"id": "b", "type": "Competition"}]) is None
+    assert build_engagement_rung([{"id": "a"}]) is None   # no type at all
+
+
+def test_engagement_other_folds_into_preferences_but_a_type_answer_does_not():
+    # "Something else" free text -> a rerank preference; a plain type answer filtered instead.
+    prefs = collect_preferences({"engagement": ENGAGEMENT_OTHER + "building assistive tech"})
+    assert prefs == ["Enjoys: building assistive tech"]
+    assert collect_preferences({"engagement": "Competition"}) == []
 
 
 def test_curation_payload_surfaces_folded_preferences():

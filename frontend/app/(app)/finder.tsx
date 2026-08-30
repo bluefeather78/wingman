@@ -738,11 +738,15 @@ export default function Finder() {
   // Short, friendly labels for the review drawer, keyed on the rung axis the server returned.
   const AXIS_LABEL: Record<string, string> = {
     cost: 'Budget', time_commitment: 'Time', citizenship: 'Citizenship', hard_demographic: 'Eligibility',
-    type: 'Type', season: 'Timing', format: 'Format', subject: 'Subject',
+    type: 'Type', season: 'Timing', format: 'Format', subject: 'Subject', engagement: 'Enjoy',
     // Behavioral vibe axes (rerank-only) — labelled "Vibe" in the review drawer.
     selectivity: 'Vibe', residential: 'Vibe', collaboration: 'Vibe',
     structure: 'Vibe', intensity: 'Vibe', output: 'Vibe',
   };
+  // Matches app/services/funnel.ENGAGEMENT_OTHER — a "Something else" free-text engagement answer.
+  // Its value keeps the whole pool (no classification entry -> default keep) and the server folds
+  // the text into curation preferences.
+  const ENGAGEMENT_OTHER = '__other__:';
   // A rung is a "vibe" question (rerank-only, never filters) when the server says so — Phase D
   // adds these server-side; until then no rung is a vibe rung and this stays false.
   function rungIsVibe(rung: MatchResponse | null): boolean {
@@ -760,6 +764,19 @@ export default function Finder() {
     const rung = funnelRung;
     if (rung?.axis) setFunnelReview((r) => [...r, { label: AXIS_LABEL[rung.axis!] ?? rung.axis!, value: 'Skipped' }]);
     skipFunnel();
+  }
+  // Free-text "Something else" on the engagement filter: keep the whole pool (this is a rerank
+  // preference, not a cut) and record the typed text as the answer, prefixed so the server folds
+  // it into curation preferences.
+  function rungOther(text: string) {
+    const rung = funnelRung;
+    if (!rung || !rung.axis || !text.trim()) return;
+    setFunnelReview((r) => [...r, { label: AXIS_LABEL[rung.axis!] ?? rung.axis!, value: text.trim() }]);
+    setFunnelHistory((h) => [...h, { answers: funnelAnswers.current, poolIds: funnelPoolIds.current, rung }]);
+    void runFunnelStep(
+      { ...funnelAnswers.current, [rung.axis]: ENGAGEMENT_OTHER + text.trim() },
+      funnelPoolIds.current,
+    );
   }
   function rungBack() {
     setFunnelReview((r) => r.slice(0, -1));
@@ -1227,6 +1244,8 @@ export default function Finder() {
         onSkip={rungSkip}
         onBack={rungBack}
         onShowAll={showAllNow}
+        allowOther={!!(funnelRung as { allow_other?: boolean }).allow_other}
+        onOther={rungOther}
       />
     );
   }

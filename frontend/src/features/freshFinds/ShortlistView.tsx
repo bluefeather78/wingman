@@ -4,7 +4,7 @@
 // funnel/curate logic it originally shipped with. These components hold no matching logic — they
 // render what the container (finder.tsx) hands them and call back on every action.
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, ScrollView, TextInput, View } from 'react-native';
 
 import type { Opportunity } from '@/api/types';
 import { Badge, MiniBadge, PopButton, PopCard, REVIEW_STATUS_META, RightDrawer, Screen, Txt } from '@/ui/components';
@@ -144,11 +144,15 @@ export function InterestSelect({ themes, onConfirm }: {
 // matches now" escape (optional — only when the container supports it), Back and Skip.
 export function RungStep({
   question, rationale, options, isVibe, poolCount, canBack, loading, onPick, onSkip, onBack, onShowAll,
+  allowOther, onOther,
 }: {
   question: string; rationale?: string | null; options: RungOption[]; isVibe?: boolean;
   poolCount?: number | null; canBack: boolean; loading?: boolean;
   onPick: (value: string) => void; onSkip: () => void; onBack: () => void; onShowAll?: () => void;
+  allowOther?: boolean; onOther?: (text: string) => void;
 }) {
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [otherText, setOtherText] = useState('');
   if (loading) {
     return (
       <Screen>
@@ -196,6 +200,29 @@ export function RungStep({
             </Pressable>
           ))}
         </View>
+
+        {allowOther && onOther && (
+          otherOpen ? (
+            <View style={{ gap: space.sm }}>
+              <TextInput
+                value={otherText}
+                onChangeText={setOtherText}
+                placeholder="Tell us what you're after…"
+                placeholderTextColor={colors.slate400}
+                onSubmitEditing={() => { if (otherText.trim()) onOther(otherText); }}
+                style={{ borderWidth: 3, borderColor: colors.navy, borderRadius: radius.lg, padding: space.md, fontFamily: fonts.bodyMed, fontSize: 15, color: colors.ink }}
+              />
+              <View style={{ flexDirection: 'row', gap: space.md, alignItems: 'center' }}>
+                <PopButton label="Add" onPress={() => { if (otherText.trim()) onOther(otherText); }} />
+                <Pressable onPress={() => { setOtherOpen(false); setOtherText(''); }}><Txt style={{ ...type_body, color: colors.slate500 }}>Cancel</Txt></Pressable>
+              </View>
+            </View>
+          ) : (
+            <Pressable onPress={() => setOtherOpen(true)}>
+              <Txt style={{ ...type_body, color: colors.navy, textDecorationLine: 'underline' }}>Something else…</Txt>
+            </Pressable>
+          )
+        )}
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.lg }}>
           {canBack && (

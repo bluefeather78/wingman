@@ -27,7 +27,7 @@ from app.services.match_pipeline import (
 from app.services.curation import CURATION_SYSTEM
 from app.services.funnel import (
     FUNNEL_QUESTION_SYSTEM, BEHAVIORAL_QUESTION_SYSTEM, CURATE_AT, FUNNEL_MAX_TOKENS,
-    next_vibe_rung, collect_preferences,
+    next_vibe_rung, collect_preferences, build_engagement_rung,
 )
 from app.services.embeddings import embed_student_themes
 from gemini_common import call_gemini, extract_json
@@ -160,12 +160,19 @@ def handle_match(body: dict = Depends(json_body),
                 pool, embed_cost = recall_pool(rows, student, _embed)
             answers = student.get("funnel_answers") or {}
             rungs_done = len(answers)
-            # curate_now short-circuits the "ask another question?" decision entirely.
-            rung = None if curate_now else next_funnel_rung(pool, student, _ask, extract_json, rungs_done)
-            # Filter axes exhausted but the pool is still large -> ask a rerank-only VIBE question
-            # (backend owns the funnel; vibe never cuts, so it only reorders the final curation).
-            if rung is None and not curate_now and len(pool) > CURATE_AT:
-                rung = next_vibe_rung(pool, student, answers, _ask, extract_json, rungs_done)
+            rung = None
+            if not curate_now:
+                # Dimension 2 first: the pool-derived engagement FILTER ("what do you enjoy
+                # doing"), built locally from the pool's `type` distribution — no model call.
+                if "engagement" not in answers and len(pool) > CURATE_AT:
+                    rung = build_engagement_rung(pool)
+                # Then the LLM-designed feasibility/structured filter questions.
+                if rung is None:
+                    rung = next_funnel_rung(pool, student, _ask, extract_json, rungs_done)
+                # Filter axes exhausted but the pool is still large -> a rerank-only VIBE question
+                # (backend owns the funnel; vibe never cuts, only reorders the final curation).
+                if rung is None and len(pool) > CURATE_AT:
+                    rung = next_vibe_rung(pool, student, answers, _ask, extract_json, rungs_done)
             if rung is None:
                 # Fold the answered vibe axes into curation as soft preference phrases (rerank).
                 student_for_curation = {**student, "preferences": collect_preferences(answers)}

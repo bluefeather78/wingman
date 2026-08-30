@@ -41,6 +41,10 @@ FUNNEL_AXES = {
     "time_commitment":  {"requires_quote": False},
     "citizenship":      {"requires_quote": True},
     "hard_demographic": {"requires_quote": True},
+    # "What do you enjoy doing" — a FILTER on the pool's own `type` distribution (structured,
+    # no quote). Options are pool-derived and classification is computed LOCALLY (see
+    # build_engagement_rung), never by the model — exact counts, no truncation risk.
+    "engagement":       {"requires_quote": False},
 }
 
 # Below this many survivors, the funnel must stop / offer to relax rather than cut further —
@@ -220,6 +224,59 @@ def option_counts(pool: list[dict], rung: dict) -> dict:
     return counts
 
 
+# ==================== ENGAGEMENT (dimension 2) — a pool-derived FILTER on `type` ====================
+#
+# "What do you enjoy doing?" (Shama 2026-08-30). A FILTER whose options are the opportunity
+# TYPES actually present in the current pool, framed in enjoyment language and computed LOCALLY
+# (exact per-type counts, no model call, no truncation). It also carries a free-form "Something
+# else" escape that does NOT cut — its text becomes a curation rerank preference instead
+# (handled in the route via collect_preferences, same as a vibe answer).
+ENGAGEMENT_LABEL = {
+    "Competition": "Competing head-to-head",
+    "Academic Competition": "Competing head-to-head",
+    "Research Competition": "Competing with a research project",
+    "Internship": "Working somewhere real",
+    "Research": "Doing hands-on research",
+    "Summer Program": "An immersive program",
+    "Program": "An immersive program",
+    "Conference": "Events & networking",
+    "Journal": "Publishing your work",
+    "Volunteering": "Helping your community",
+}
+# The free-text escape's value is prefixed with this; the route folds "<sentinel><text>" into
+# curation preferences and the client's naive narrowing keeps every candidate (no classification
+# entry for it -> default keep). Kept distinct from the vibe axes so it reads as engagement.
+ENGAGEMENT_OTHER = "__other__:"
+
+
+def build_engagement_rung(pool: list[dict]) -> dict | None:
+    """A pool-derived engagement FILTER rung, or None when there's nothing to split on (fewer
+    than two distinct types present). Classification is LOCAL: a candidate keeps under the option
+    for its own type and is cut under every other. Counts are attached from that classification."""
+    from collections import Counter
+    counts = Counter(str(r.get("type")).strip() for r in pool if r.get("type") and str(r.get("type")).strip())
+    types = [t for t, _ in counts.most_common() if t and t.lower() != "none"]
+    if len(types) < 2:
+        return None
+    classification = {}
+    for r in pool:
+        rt = str(r.get("type")).strip()
+        classification[r.get("id")] = {"per_option": {t: ("keep" if rt == t else "cut") for t in types}}
+    options = [{"label": ENGAGEMENT_LABEL.get(t, t), "value": t} for t in types]
+    rung = {
+        "axis": "engagement", "kind": "filter",
+        "question": "What kind of experience are you most excited about?",
+        "rationale": None,
+        "options": options,
+        "classification": classification,
+        "pool_ids": [r.get("id") for r in pool],
+        "allow_other": True,   # the UI shows a "Something else…" free-text escape (reranks, no cut)
+    }
+    counts_by_opt = option_counts(pool, rung)
+    rung["options"] = [{**o, "count": counts_by_opt.get(o["value"])} for o in options]
+    return rung
+
+
 # ==================== BEHAVIORAL (vibe) rungs — rerank-only, never filter ====================
 #
 # Ported from the opportunity-matching branch's adaptiveFunnel.ts (Shama-approved M8), moved
@@ -278,14 +335,21 @@ def behavioral_pref(axis: str, value: str) -> str:
 
 
 def collect_preferences(funnel_answers: dict | None) -> list[str]:
-    """The soft preference phrases from every vibe axis the student answered — handed to curation
-    to rerank. Skipped/unknown answers contribute nothing."""
+    """The soft preference phrases handed to curation to rerank: every vibe-axis answer, plus the
+    free-text "Something else" escape on the engagement filter. Skipped/unknown answers add
+    nothing. (Defined here because ENGAGEMENT_OTHER lives above; BEHAVIORAL_AXES is defined
+    below and read at call time, not import time.)"""
     prefs = []
     for axis, val in (funnel_answers or {}).items():
+        v = str(val)
         if axis in BEHAVIORAL_AXES:
-            phrase = behavioral_pref(axis, str(val))
+            phrase = behavioral_pref(axis, v)
             if phrase:
                 prefs.append(phrase)
+        elif axis == "engagement" and v.startswith(ENGAGEMENT_OTHER):
+            text = v[len(ENGAGEMENT_OTHER):].strip()
+            if text:
+                prefs.append(f"Enjoys: {text}")
     return prefs
 
 

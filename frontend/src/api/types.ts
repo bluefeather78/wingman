@@ -160,6 +160,9 @@ export interface MatchResponse {
   axis?: string;
   // "vibe" marks a rerank-only behavioral rung (no counts, no filtering); absent = a filter rung.
   kind?: string;
+  // The rung offers a free-text "Something else" escape (the engagement filter) — its text
+  // becomes a curation rerank preference and does not cut the pool.
+  allow_other?: boolean;
   question?: string | null;
   rationale?: string | null;
   options?: MatchFunnelOption[];

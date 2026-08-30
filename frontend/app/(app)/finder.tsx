@@ -1226,11 +1226,11 @@ export default function Finder() {
   if (stage === 'funnel' && funnelRung) {
     const opts = funnelRung.options ?? [];
     const isVibe = rungIsVibe(funnelRung);
-    // Live pool count for the header: the largest surviving-option count is the size of the
-    // pool the student is choosing within (skipping keeps all of it).
-    const poolCount = isVibe
-      ? null
-      : opts.reduce((m, o) => (typeof o.count === 'number' && o.count > m ? o.count : m), 0) || null;
+    // "opportunities left" = the size of the CURRENT pool (every candidate still in play), which
+    // is pool_ids.length. NOT the max option count: for a mutually-exclusive filter like
+    // engagement the options PARTITION the pool, so the biggest bucket (e.g. 44 of 100) read as
+    // the whole pool and undercounted it. Each option still shows its own "N matches left".
+    const poolCount = isVibe ? null : (funnelRung.pool_ids?.length ?? null);
     return (
       <RungStep
         question={funnelRung.question || 'Which fits you best?'}

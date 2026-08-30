@@ -15,8 +15,13 @@ Plus one-level sub-hub recursion (an anchor like "Pre-College Programs" is itsel
 hard caps, so this can never wander into crawling the open web.
 
 COST: the harvest, both filters, recursion and catalog dedup are ALL FREE (plain HTTP + regex).
-The ONLY paid step is extraction — one no-search model call per surviving page (~$0.003), page
-in / JSON out, because the URL is already real. `--preview` stops before ANY model call and
+Paid extraction is now TWO calls for a page that clears the refusal gate (~$0.003 each, page in /
+JSON out, because the URL is already real): the first decides it IS a single high-school program
+(and gets the one field refresh's schema doesn't cover, `state`); the second reuses
+refresh_opportunities' own `build_system`/`clean_update_dict`, unchanged, on the SAME page text —
+so a hub-mined row ends up filled exactly as richly as a `refresh_opportunities.py` pass would
+fill it, rather than needing that agent to catch it up later (see `extract_opportunity`). A page
+the first call refuses never pays for the second. `--preview` stops before ANY model call and
 prints what WOULD be extracted, at zero cost. A live run spends real money and — like every paid
 agent here — needs fresh explicit approval per run. Rows land is_active=false,
 source='hub-<domain>-<date>', found_via=<hub url>; nothing reaches students without a human yes.
@@ -33,6 +38,7 @@ import os
 import re
 import urllib.parse
 
+import combined_reader
 import page_text
 import url_dedupe
 import url_repair
@@ -284,10 +290,22 @@ _EXTRACT_SYSTEM = (
 
 
 def extract_opportunity(url, key, timeout=40, min_delay=5):
-    """PAID: one no-search model call, page text in -> JSON out. Returns (candidate|None, cost).
+    """PAID: up to two no-search model calls on the SAME fetched page text. Returns
+    (candidate|None, cost).
 
-    No grounding is needed — the URL is real by construction, so unlike the search scraper this
-    is a single call. Kept parallel to scrape_opportunities.extract_candidates."""
+    Call 1 (this module's own `_EXTRACT_SYSTEM`) owns the REFUSAL decision — "not a single
+    high-school program" -> {"name": null} — and `state`, the one field refresh's schema does
+    not ask for. No grounding is needed for either call; the URL is real by construction.
+
+    Call 2 only runs once call 1 has already produced a candidate, and reuses
+    `refresh_opportunities.build_system`/`clean_update_dict` UNCHANGED (via
+    `combined_reader.extract_metadata`, no second fetch) — the same prompt, model and field
+    validation a `refresh_opportunities.py` pass would use on this page. That is deliberate:
+    a row discovered here should arrive as richly filled as one `refresh_opportunities.py`
+    would produce, rather than depending on that agent to catch it up later. `cost` (refresh's
+    key) is merged in as `cost_detail` (this module's key for the same catalog column) since
+    refresh's schema has no separate free/paid enum to collide with.
+    """
     from gemini_common import call_gemini, extract_json, estimate_cost, set_min_delay
     set_min_delay(min_delay)
     text, _reason = page_text.fetch_page_text(url, timeout)
@@ -300,6 +318,17 @@ def extract_opportunity(url, key, timeout=40, min_delay=5):
     cand = extract_json(out)
     if not isinstance(cand, dict) or not (cand.get("name") or "").strip():
         return None, cost
+
+    metadata_call = lambda system, u: call_gemini(
+        system, u, key, use_web_search=False, timeout=timeout,
+        max_tokens=combined_reader._METADATA_MAX_TOKENS, model=combined_reader._METADATA_MODEL)
+    metadata, mcost = combined_reader.extract_metadata(
+        url, text, metadata_call, name_hint=cand.get("name", ""), org_hint=cand.get("org", ""))
+    cost += mcost
+    for k, v in metadata.items():
+        if v is None:
+            continue
+        cand["cost_detail" if k == "cost" else k] = v
     return cand, cost
 
 

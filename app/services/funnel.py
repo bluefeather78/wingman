@@ -277,6 +277,85 @@ def build_engagement_rung(pool: list[dict]) -> dict | None:
     return rung
 
 
+# ==================== COST + TIME — structured FILTERs, computed LOCALLY ====================
+#
+# cost (`price`) and time_commitment (`season`) are STRUCTURED fields, so their rungs are built
+# LOCALLY — exact counts, and a "more open" option can never come back SMALLER than a stricter
+# one. They used to be classified by the funnel-question MODEL, which inverted them (observed:
+# "open to paid" cut the free programs, so it read 9 when "free only" read 20). A structured
+# comparison never needs a model. Eligibility axes (citizenship / hard_demographic) still go to
+# the model — those need to read the eligibility PROSE, with the quote guard.
+
+def _price_bucket(row: dict) -> str:
+    p = row.get("price")
+    s = str(p).strip().lower() if p is not None else ""
+    if s in ("", "none", "null"):
+        return "unknown"
+    if s in ("free", "$0", "0", "0.0", "no cost"):
+        return "free"
+    return "paid"
+
+
+def build_cost_rung(pool: list[dict]) -> dict | None:
+    """Free-only vs open-to-paid, from the pool's `price`. 'Free only' cuts only CLEARLY-paid rows
+    (unknown price is kept, never cut); 'Open to paid' keeps everyone. None when there's nothing to
+    split on (no free, or no paid)."""
+    buckets = [_price_bucket(r) for r in pool]
+    if not any(b == "free" for b in buckets) or not any(b == "paid" for b in buckets):
+        return None
+    classification = {
+        r.get("id"): {"per_option": {"free": ("cut" if _price_bucket(r) == "paid" else "keep"), "any": "keep"}}
+        for r in pool
+    }
+    options = [{"label": "Free only", "value": "free"}, {"label": "Open to paid too", "value": "any"}]
+    rung = {"axis": "cost", "kind": "filter", "question": "What's your budget?", "rationale": None,
+            "options": options, "classification": classification, "pool_ids": [r.get("id") for r in pool]}
+    c = option_counts(pool, rung)
+    rung["options"] = [{**o, "count": c.get(o["value"])} for o in options]
+    return rung
+
+
+def _season_bucket(row: dict) -> str:
+    s = str(row.get("season") or "").strip().lower()
+    if not s or s in ("none", "null"):
+        return "unknown"
+    if "year" in s:            # Year-Long / Year-Round
+        return "both"
+    if "summer" in s:
+        return "summer"
+    return "school_year"       # Spring / Fall / Winter
+
+
+def build_time_rung(pool: list[dict]) -> dict | None:
+    """When the student is free, from the pool's `season`. 'Any time' keeps everyone; 'Summer'
+    keeps summer + year-round (+ unknown); 'School year' keeps school-year + year-round (+ unknown).
+    None when only one season kind is present (nothing to split on)."""
+    buckets = [_season_bucket(r) for r in pool]
+    has_summer = any(b == "summer" for b in buckets)
+    has_school = any(b == "school_year" for b in buckets)
+    if not (has_summer and has_school):
+        return None
+    def disp(bucket, opt):
+        if opt == "any":
+            return "keep"
+        if bucket in ("both", "unknown"):
+            return "keep"          # never cut on year-round or unknown
+        return "keep" if bucket == opt else "cut"
+    classification = {
+        r.get("id"): {"per_option": {o: disp(_season_bucket(r), o) for o in ("summer", "school_year", "any")}}
+        for r in pool
+    }
+    options = [{"label": "Summer", "value": "summer"},
+               {"label": "During the school year", "value": "school_year"},
+               {"label": "Any time works", "value": "any"}]
+    rung = {"axis": "time_commitment", "kind": "filter", "question": "When are you free to do this?",
+            "rationale": None, "options": options, "classification": classification,
+            "pool_ids": [r.get("id") for r in pool]}
+    c = option_counts(pool, rung)
+    rung["options"] = [{**o, "count": c.get(o["value"])} for o in options]
+    return rung
+
+
 # ==================== BEHAVIORAL (vibe) rungs — rerank-only, never filter ====================
 #
 # Ported from the opportunity-matching branch's adaptiveFunnel.ts (Shama-approved M8), moved

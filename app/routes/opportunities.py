@@ -28,7 +28,8 @@ from app.services.curation import CURATION_SYSTEM
 from app.services.funnel import (
     FUNNEL_QUESTION_SYSTEM, BEHAVIORAL_QUESTION_SYSTEM, OUTCOME_QUESTION_SYSTEM,
     CURATE_AT, FUNNEL_MAX_TOKENS,
-    next_vibe_rung, next_outcome_rung, collect_preferences, build_engagement_rung,
+    next_vibe_rung, next_outcome_rung, collect_preferences,
+    build_engagement_rung, build_cost_rung, build_time_rung,
 )
 from app.services.embeddings import embed_student_themes
 from gemini_common import call_gemini, extract_json
@@ -174,7 +175,14 @@ def handle_match(body: dict = Depends(json_body),
                 # Dimension 3: pool-derived OUTCOME rerank ("what do you want out of it").
                 if rung is None:
                     rung = next_outcome_rung(pool, answers, _ask, extract_json, rungs_done)
-                # Feasibility / structured LLM filter questions (cost/citizenship/timing/demographic).
+                # Structured feasibility filters, built LOCALLY (exact counts, never inverted):
+                # budget (`price`) then availability (`season`).
+                if rung is None and "cost" not in answers and len(pool) > CURATE_AT:
+                    rung = build_cost_rung(pool)
+                if rung is None and "time_commitment" not in answers and len(pool) > CURATE_AT:
+                    rung = build_time_rung(pool)
+                # Eligibility filter questions that need the prose + quote guard (citizenship /
+                # hard_demographic) — these still go to the model.
                 if rung is None:
                     rung = next_funnel_rung(pool, student, _ask, extract_json, rungs_done)
                 # Remaining rerank-only VIBE questions (never cut, only reorder curation).

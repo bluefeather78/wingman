@@ -9,7 +9,235 @@ it's kept current. This folder **is** a git repo (`origin` =
 
 ---
 
-# CURRENT THREAD: Catalog link health + transferring the scraper's lessons (2026-08-23)
+# CURRENT THREAD: Opportunity matching redesign — BACKEND SPINE BUILT (2026-08-29)
+
+**This thread runs in a separate worktree**: `opportunity-matching-improvement-fb6134`
+(branch `claude/opportunity-matching-improvement-fb6134`), not the worktree the threads below
+this one were done in. Check which worktree a fresh session opens in before assuming file
+state. **This worktree has NO `node_modules` (can't run tsc/expo) and NO `.env` (can't hit
+live Gemini/Supabase)** — backend pure logic is pytest-verified here; frontend + live calls
+are write-only here and must be verified in a real checkout.
+
+## IMPLEMENTATION STATUS (2026-08-29) — the whole backend spine is built, tested, committed
+
+Design is FINALIZED in OPPORTUNITY_MATCHING_PLAN.md; the backend is now implemented backend-
+first per the architecture decision (recall + funnel + curation run SERVER-SIDE because the
+embedding vectors live server-side — shipping ~9MB/load to clients would regress mobile).
+
+**Committed this session (on top of d07d978, the earlier subject_tags fix), 76 unit tests, full suite green:**
+- `0916f81` — recall core (`app/services/matching.py`: numpy cosine, LOOSENED grade_min
+  filter w/ rising/age escapes, geo-scope, content hash, `recall()`) + eligibility
+  quote-verification guard (`app/services/eligibility.py`). match_vector_schema.sql tracked
+  (already run in DB). numpy added to requirements.txt.
+- `cbf48bb` — M9 Gemini embedding call (`gemini_common.call_gemini_embed` + EMBED_MODEL/
+  EMBED_DIM/pricing) + activation-gated hook (`app/services/embeddings.py`).
+- `21e04ae` — M8 funnel-question + curation PROMPTS (approved) with their code guards
+  (`app/services/funnel.py` per-rung apply + T1/T2/T3; `app/services/curation.py` finalize).
+- `8803e53` — M9 `POST /api/match` endpoint + `run_match` orchestration
+  (`app/services/match_pipeline.py`); match_vector added to the cache + STRIPPED from the
+  client `/api/opportunities` payload (config.py + opportunities.py route).
+- `c9ccae8` — cost feature signatures (match_curation / match_funnel in `_FEATURE_SIGNATURES`).
+- `d9582f6` — M9 `backfill_match_vectors.py` (embed the vetted catalog — recall scores
+  nothing until this runs).
+
+**What's needed to make it LIVE (needs your creds — do in order):**
+1. Verify `gemini_common.EMBED_MODEL` (`gemini-embedding-001`) resolves — it's UNVERIFIED
+   from this worktree and could 404 like models have before. Swap the pin if so.
+2. `python backfill_match_vectors.py --dry-run` then `--yes-really` — embeds the ~1,300
+   active rows (idempotent, cheap, re-runnable). Until this runs, `/api/match` returns
+   nothing useful (recall has no vectors).
+3. Then `POST /api/match` works end-to-end (route is import-verified only, never run live here).
+
+**NOT built yet (deliberate):**
+- FRONTEND (Phase 2/3/4): `finder.tsx` calling `/api/match` + rendering the ≤10 cards; the
+  first-search grade/location ask; client-side student-blob assembly. `extractHighlightProjects`
+  (the one client helper) IS built in `frontend/src/lib/profile.ts`. Deferred — needs a
+  checkout where TS/the app are verifiable.
+- The progressive FUNNEL endpoint (Phase 4) — the per-rung apply logic + prompt are built and
+  tested; the interactive multi-rung endpoint is not wired (sequenced after the Phase-3
+  recall→curation MVP, and it's interactive so needs the frontend anyway).
+- Phase 7 scorer + labeled sample files (the demographic 22/31/33 row-ids from Phase 0 need
+  locating/saving; the geographic sample doesn't exist yet).
+- Inline activation hook wiring into ops-activate / refresh_opportunities.py — the re-runnable
+  backfill covers correctness for now; inline is an immediacy enhancement.
+- Phase 6 cleanup (retire old logic) — gated on each replacement being live.
+
+**Still deferred (your calls, unchanged):** `cleanup_subject_tags.py` run; embed-cost
+recording (sub-cent, documented gap in c9ccae8).
+
+## Goal
+Redesign how a student gets matched to opportunities — from a 7-kind fan-out that dumps
+40-70 results (a search experience) to a curated ≤10 list (a curation experience), with
+eligibility read live from raw text instead of a batch-enrichment agent, and semantic
+recall replacing a fixed 17-subject vocabulary. Two living documents carry the design:
+- **[OPPORTUNITY_MATCHING_PLAN.md](OPPORTUNITY_MATCHING_PLAN.md)** — the source of truth.
+- **[Wingman Match Funnel](https://claude.ai/code/artifact/5e03d570-cf56-42bd-9e26-382bbaee644e)**
+  — the same design as a visual primer/artifact, kept in sync with the plan doc.
+
+**Status: design is extensive and mostly captured in both documents, BUT the last few turns
+of this conversation agreed real changes in chat that are NOT YET written into either
+document. Read "Decisions agreed in chat but not yet in the docs" below FIRST — reconciling
+those is the actual next step, before writing any implementation code.**
+
+## What's committed
+One commit, `d07d978`, on branch `claude/opportunity-matching-improvement-fb6134`:
+"Retire the 17-bucket subject_tags vocabulary from both catalog-writing agents" —
+`refresh_opportunities.py` and `scrape_opportunities.py` only. This was flagged as an
+**active, ongoing bug independent of the rest of the redesign**:
+`refresh_opportunities.py`'s `clean_update_dict()` was silently discarding any `subject_tags`
+value outside a hardcoded 17-item list on every routine refresh of the ALREADY-LIVE catalog
+— stripping specific tags back toward broad categories every time a row was touched (why
+"STEM" alone tagged ~45% of the catalog). Both agents' prompts now ask for free-form,
+specific tags; the discarding filter is gone, replaced with plain shape validation.
+
+## What's written but NOT committed / NOT run
+- **`match_vector_schema.sql`** (new, repo root) — the one-time manual DDL for Phase 5's
+  catalog-side embedding columns (`match_vector`, `match_vector_hash`,
+  `match_vector_computed_at`), matching this repo's `*_schema.sql` convention exactly.
+  **RUN — user confirmed this at the end of the session.** (Run from outside this worktree,
+  since there is no `.env` here — gitignored, doesn't carry over into a new worktree — so
+  nothing in this worktree could have reached Supabase to run it.) Not yet verified in this
+  conversation which columns actually landed or whether the index created cleanly — worth a
+  quick confirmation read (`select column_name from information_schema.columns where
+  table_name='opportunities' and column_name like 'match_vector%'`) before Phase 5 code
+  starts relying on it.
+- **`cleanup_subject_tags.py`** (new, repo root) — one-time scrub of the retired 17-bucket
+  words out of existing `subject_tags` data (case-insensitive, active+inactive rows, `[]` for
+  rows that were bucket-words-only rather than skipping them). `--dry-run` / `--yes-really`,
+  same convention as `clear_deadline_cache.py`. **User explicitly said "I will not run the
+  script just yet"** — held pending, not blocked on anything specific, just not run yet.
+  Delete this script once it has been run (its docstring says so — it carries its own 6th
+  copy of the retired word list).
+- Both plan-doc edits (the whole design conversation) and the artifact are saved/published,
+  but see the reconciliation gap below.
+
+## Decisions agreed in chat but NOT YET written into the docs — DO THIS FIRST
+
+1. **Quote-verification widened to any candidate field, not just `eligibility`.** Agreed:
+   a restriction can be stated in `summary` too (a program whose description says "designed
+   exclusively for NYC high schoolers" with nothing in the dedicated eligibility column).
+   The curation prompt's schema needs a new field, `exclusion_source_field` (naming which of
+   `name`/`org`/`summary`/`eligibility` the quote came from), and the verification code
+   should check the quote against that named field FIRST, falling back to checking every
+   other text field on the row before discarding — so a benign field-mislabel doesn't wrongly
+   throw away a real, verifiable quote. **Not yet reflected** in Phase 1's "Zero-hallucination
+   guard" section or the candidate-blob JSON example in the plan doc, nor in the artifact.
+2. **The funnel-question prompt stays whitelist-only — user aligned with keeping it as
+   designed**, after pushback that relaxing it to "anything that makes sense" reopens exactly
+   the failure T2 was built to prevent (a statistically sharp but decision-irrelevant split,
+   e.g. "45 university-run, 15 nonprofit-run"). **No doc change needed here** — this confirms
+   the existing text is correct, it was a real question worth asking, not left in limbo.
+3. **Grade-source duplication is RESOLVED** (consolidate onto `basics.grade`, the
+   LLM-extracted field, over the regex-based `filterValues.grade`) — **this one IS already
+   written** into the Open Questions section of the plan doc, marked `[x]` resolved, with the
+   reasoning (the regex misses "I'm a 10th grader" — "grader" doesn't match `\bgrade\b` — and
+   raw age statements like "I'm 15" entirely; explicit class-year words like "freshman" ARE
+   already handled by the regex, so that specific example the user first raised wasn't
+   actually a gap, but the underlying instinct was right for other real phrasings).
+4. **A new "Phase 7 — Validation & eval framework" was requested and sketched in
+   conversation, but NEVER WRITTEN to either document.** This is the biggest gap — capturing
+   the sketch here so it isn't lost:
+   - **Labeled datasets as durable files, not scratchpad notes.** The demographic
+     hard/hard-scope/soft sample (22/31/33 split) exists from the earlier Phase 0
+     investigation but needs saving as a real file if it isn't already one. The geographic/
+     residency sample (residency-gate vs. soft-framing vs. "just says where it runs")
+     doesn't exist yet — per the resolved Q2 above, the plan is to write Phase 1's prompt
+     FIRST and validate against this sample once it's pulled, not block on pulling it first.
+   - **A scoring/runner script**, modeled on this repo's own `grade_mailing_lists.py`
+     (`--score` computing precision/recall against a labeled set, repeatable any time the
+     prompt changes — not a one-off measurement).
+   - **Automated unit tests** (added to the existing pytest suite, not new infra) for: the
+     quote-verification logic (deterministic, fixture-based, no live model call needed per
+     test run), the funnel's T1/T2/T3 code-enforced invariants (a preference axis literally
+     cannot appear in a cut path; every question comes from the whitelist; the funnel never
+     dead-ends without offering a relax), and the embedding refresh hook's row-state logic
+     (fires iff `is_active` is/becomes true).
+   - **A lightweight qualitative review workflow for Phase 3's curation quality** — a
+     worksheet-style process (same shape as `grade_mailing_lists.py --worksheet`), not full
+     automation, given the small current user base (~15 users): a fixed N profiles, a human
+     scores each slot's genuine fit, repeatable structure rather than ad hoc.
+   - **Cost tracking wired into EXISTING infra**, not a new system: add feature signatures
+     for Phase 1's and Phase 5's new calls to `_FEATURE_SIGNATURES` so real measured cost
+     surfaces automatically in the existing Cost-per-user dashboard.
+   - **Sequencing note:** this needs to run concurrently with / slightly ahead of Phase 1,
+     not strictly after Phase 6 — Phase 1's own gate already says "needs a labeled sample
+     pulled... before this phase can be graded," so Phase 7's tooling is what that gate
+     actually depends on, not a phase that waits for 1-6 to finish first.
+   **Next step: write this up as an actual Phase 7 section in the plan doc (right analog to
+   Phases 1-6's format: depends-on/delivers/gate/cost) and add it to the artifact's phase
+   spine, THEN revisit whether it changes the sequencing note on Phases 1/5's own gates.**
+
+## Explicitly deferred, unresolved when the session ended
+Two questions the user said "let's talk about next" and then the conversation moved to other
+things before circling back — **still open, pick these up first in the new session**:
+- **Q3 — where to start building.** Phase 2 (student blob assembly) has zero dependencies
+  and is pure free code — the only phase buildable today with nothing blocking it. Phase 1
+  can be built in parallel but can't be graded until Phase 7's labeled samples exist. Never
+  got an explicit confirmation of the starting point.
+- **Q4 — explicit M8/M9 sign-off for Phase 1's actual prompts.** The `refresh_opportunities`/
+  `scrape_opportunities` fix (committed, `d07d978`) DID get explicit sign-off ("commit now")
+  — that one's done. Phase 1's bigger new prompts (the curation call, the funnel-question
+  call) have been reviewed and refined in chat (items 1 and 2 above) but **have not been
+  explicitly approved for implementation** as their own dedicated commit yet. Per the
+  marquee rule, general "ready to build" enthusiasm earlier in the conversation doesn't
+  count as that sign-off — ask explicitly before writing and shipping these two prompts.
+
+## Full prompt before/after review (already shown to the user in chat, not yet saved as a doc appendix)
+Every prompt that changes across Phases 1-5, with real current text pulled from the code
+(not paraphrased) — offer to save this as an appendix in the plan doc if useful going
+forward, since it was assembled once already and shouldn't need re-deriving:
+1. **Curation prompt** replaces `rankCandidates`'s system prompt (`ranking.ts:141`, quoted
+   verbatim in the conversation) — collapses 7 per-kind calls into 1 cross-kind call, adds
+   `eligibility` to the payload, adds the quote-verification requirement (now widened per
+   item 1 above).
+2. **Funnel-question prompt** — genuinely new, no predecessor; corrected mid-conversation
+   from "one call producing 1-2 questions" to "one call per rung, one question per call,"
+   since the funnel is adaptive/sequential by design (Phase 4).
+3. **`inferSubjects`'s prompt** (`ranking.ts:112`, quoted verbatim) — deleted outright, no
+   replacement prompt (an embedding call takes raw text, not an instruction).
+4. **`refresh_opportunities.py`'s `subject_tags` field description** — before/after shown,
+   **already implemented and committed** (`d07d978`).
+5. **`scrape_opportunities.py`'s `subject_tags` field description** — before/after shown,
+   **already implemented and committed** (`d07d978`).
+
+## Everything else — the full design, already correctly captured in the docs
+The plan doc and artifact already correctly reflect (verified in a dedicated consistency
+pass this session, which also fixed several stale cross-references left over from an earlier
+edit — see the doc's own history if curious): the curated-≤10 output model; the three-stage
+recall→funnel→curation spine; live eligibility reasoning replacing batch enrichment (Phase 1);
+the student-blob assembly incl. the `filterTags` critical-path promotion (Phase 2); the
+cross-kind curation pass retiring the 7-kind fan-out (Phase 3); the adaptive per-rung funnel
+with T1/T2/T3 code-enforced traps (Phase 4); embedding-based semantic recall with the
+activation-gated refresh hook, the corrected recall filter set (grade has ZERO influence at
+recall, type only filters in the separate form/quiz path, only `status`/`is_active` ever
+exclude a row), and the full 17-bucket-list retirement scope, including the profile/catalog
+storage asymmetry (delete the `filterValues` slot outright; do NOT delete the
+`subject_tags` column, it's still load-bearing for the embedding) (Phase 5); the gated
+old-logic retirement checklist (Phase 6); the two-bucket persistence model (only grade +
+location ever stored; citizenship/hard-demographic/cost/time-commitment are session-only,
+asked live, never persisted — a real correction from an earlier draft that also
+had a third "preferences" store, which got removed).
+
+## Next steps, in order
+1. Reconcile the "agreed but not written" gaps above into both documents — especially
+   writing the actual Phase 7 section, and updating Phase 1's guard mechanism for the
+   any-field quote verification.
+2. Resolve Q3 (starting phase) and Q4 (explicit prompt sign-off) with the user.
+3. Once Phase 7 exists on paper, decide whether to pull the geographic labeled sample before
+   or alongside writing Phase 1's actual prompt code (the user's Q2 answer was "prompt first,
+   validate once the sample exists" — Phase 7's tooling is what that validation runs on).
+4. `match_vector_schema.sql` is already RUN (confirmed by the user at session end) — worth a
+   quick confirmation read of the new columns before Phase 5 code starts relying on them.
+   `cleanup_subject_tags.py` is still NOT run (user said "not just yet") — run whenever the
+   user is ready; needs an environment with real Supabase credentials, which this worktree
+   does not have.
+5. Do not touch anything under "Marquee decisions" (M8/M9) without the explicit sign-off
+   pattern already used for the one committed fix — review, then an explicit go-ahead, then
+   its own dedicated commit.
+
+---
+
+# PRIOR THREAD: Catalog link health + transferring the scraper's lessons (2026-08-23)
 
 ## Goal
 Two things the user asked for:

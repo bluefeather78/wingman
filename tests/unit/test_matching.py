@@ -103,6 +103,14 @@ def test_geo_unknown_either_side_passes():
     assert m.geo_scope_ok({"location": "In-Person", "state": "MA"}, None) is True
 
 
+def test_geo_normalizes_full_state_name_against_code():
+    # catalog stores "WA"; student says "Washington" — must still match (not be dropped)
+    assert m.geo_scope_ok({"location": "In-Person", "state": "WA"}, "Washington") is True
+    assert m.geo_scope_ok({"location": "In-Person", "state": "WA"}, "washington") is True
+    # and a genuine mismatch by full name still drops
+    assert m.geo_scope_ok({"location": "In-Person", "state": "MA"}, "Washington") is False
+
+
 # --------------------------------------------------------------------------- cosine
 
 def test_best_theme_scores_picks_max_over_themes():

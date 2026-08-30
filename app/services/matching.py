@@ -126,6 +126,35 @@ def recall_grade_ok(row: dict, student_grade: int | None) -> bool:
 # scope, the same tier as the status filter.
 _REMOTE_LOCATIONS = {"remote", "in-person and remote", "in-person & remote", "online", "virtual"}
 
+# The catalog stores 2-letter state codes (`WA`); a student's location is often spelled out
+# (`Washington`). Normalize both to the 2-letter code before comparing, or an in-state
+# in-person row is wrongly dropped for a "Washington" student. Full name <-> abbrev both ways.
+_STATE_ABBREV = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA",
+    "colorado": "CO", "connecticut": "CT", "delaware": "DE", "florida": "FL", "georgia": "GA",
+    "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA",
+    "kansas": "KS", "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+    "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+    "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+    "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT",
+    "virginia": "VA", "washington": "WA", "west virginia": "WV", "wisconsin": "WI",
+    "wyoming": "WY", "district of columbia": "DC", "washington dc": "DC", "washington d.c.": "DC",
+}
+
+
+def _normalize_state(s):
+    """A US state as its 2-letter code, upper-cased. Accepts a code or a full name; returns the
+    stripped upper input unchanged if it is neither (so an unknown value still self-compares)."""
+    if not s:
+        return None
+    t = str(s).strip()
+    if not t:
+        return None
+    return _STATE_ABBREV.get(t.lower(), t.upper())
+
 
 def geo_scope_ok(row: dict, student_state: str | None) -> bool:
     """Keep unless the row is an in-person, state-specific opportunity in a state other than
@@ -133,10 +162,11 @@ def geo_scope_ok(row: dict, student_state: str | None) -> bool:
     location = (row.get("location") or "").strip().lower()
     if location in _REMOTE_LOCATIONS:
         return True  # remote/hybrid — location-neutral
-    row_state = row.get("state")
-    if not row_state or not student_state:
+    row_state = _normalize_state(row.get("state"))
+    student = _normalize_state(student_state)
+    if not row_state or not student:
         return True  # unknown either side -> never drop on geo
-    return str(row_state).strip().upper() == str(student_state).strip().upper()
+    return row_state == student
 
 
 # --------------------------------------------------------------------------- cosine recall

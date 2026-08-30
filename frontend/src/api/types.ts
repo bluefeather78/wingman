@@ -99,3 +99,34 @@ export interface Opportunity {
   eligibility?: string | null;
   [key: string]: unknown;
 }
+
+// --- Curated match (POST /api/match; OPPORTUNITY_MATCHING_PLAN.md Phase 3) ---
+// One profile theme as the matcher embeds it (from the filterTags slot's enriched tags).
+export interface MatchTheme {
+  theme: string;
+  intent?: string | null;
+  next_steps?: string | null;
+}
+// The Phase-2 student blob the endpoint consumes.
+export interface MatchStudentBlob {
+  grade?: number | null;
+  location?: { state?: string | null; city?: string | null };
+  profile_themes?: MatchTheme[];
+  highlight_projects?: string[];
+  funnel_answers?: Record<string, unknown>;
+}
+// One curated card the endpoint returns (display fields + the curation verdict).
+export interface MatchResultCard {
+  id: string;
+  reason?: string | null;
+  tier?: 'strong' | 'look' | null;
+  exploration_pick?: boolean;
+  [key: string]: unknown;
+}
+export interface MatchResponse {
+  results: MatchResultCard[];
+  pool_size?: number;
+  rescued?: string[];
+  guard_overrode_count?: number;
+  note?: string | null;
+}

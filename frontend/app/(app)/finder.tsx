@@ -8,19 +8,20 @@ import { addTrackerItemChecked, flattenItems, loadTrackerData } from '@/api/trac
 import type { Opportunity } from '@/api/types';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import { ACTIVE_KINDS, KIND_CONFIG } from '@/lib/kinds';
-import { countProfileWords } from '@/lib/profile';
+import { countProfileWords, extractHighlightProjects } from '@/lib/profile';
 import { type EnrichedTag } from '@/lib/profileTags';
 import {
   cachedProfileFilterTags,
   getProfileDerived,
   getProfileFilterValues,
   refreshProfileDerived,
+  type BasicsSlot,
   type FilterTagsSlot,
   type ModelCalls,
   type ProfileRecord,
   type ProfileStore,
 } from '@/lib/profileDerived';
-import { parseGradeFromText } from '@/lib/grade';
+import { parseGradeFromText, parseGradeLevel } from '@/lib/grade';
 import { extractJSON } from '@/lib/extractJSON';
 import { inferSubjects, preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
 import { markNewlyAdded } from '@/lib/newlyAdded';
@@ -495,50 +496,57 @@ export default function Finder() {
       // grade-level language the student's own profile text happens to contain, if any.
       const gradeNum = parseGradeFromText(grade) ?? profileGrade;
 
-      // ---- The profile-driven path fans out across EVERY kind, one ranking call each ----
-      // Restored from the retired SPA. Collapsing this to a single untyped search was the
-      // real cause of Fresh Finds returning far fewer results: one 100-row pool and one
-      // ranking call, instead of six type-scoped pools and six rankings. Each kind is
-      // independent, so they run concurrently (wall time is the slowest call, not the sum)
-      // and a failure is isolated — one flaky response used to blank out every other kind's
-      // already-successful results.
+      // ---- The profile-driven path is now ONE server-side curated match ----
+      // (OPPORTUNITY_MATCHING_PLAN.md Phase 3.) The 7-kind fan-out this replaced returned
+      // 40-70 rows the student had to wade through; /api/match runs recall -> curation
+      // server-side and returns the best <=10 overall, each with a "why you" reason. The
+      // student blob is grade + location + the profile's themes (filterTags slot) + the
+      // marquee projects pulled from the profile text in code.
       if (!k) {
-        const perKind = await Promise.all(
-          ACTIVE_KINDS.map(async (kind) => {
-            const kcfg = KIND_CONFIG[kind];
-            if (!kcfg) return [];
-            try {
-              const { pool: kpool } = preFilter(
-                opps, desc, subjectHints, kcfg.dbTypes ?? null, !!kcfg.strictType, gradeNum,
-              );
-              if (!kpool.length) return [];
-              const ranked = await rankCandidates(callGemini, desc, kpool, prefs || null, !!kcfg.strictType);
-              const byId = new Map(kpool.map((o) => [o.id, o]));
-              return ranked
-                .filter((r) => byId.has(r.id))
-                .map((r) => ({
-                  opp: byId.get(r.id) as Opportunity,
-                  reason: r.reason || '',
-                  tier: (['strong', 'look'].includes(r.tier) ? r.tier : 'look') as 'strong' | 'look',
-                  kind,
-                }));
-            } catch (err) {
-              console.error(`Ranking failed for kind "${kind}":`, (err as Error).message);
-              return [];
-            }
-          }),
-        );
-        // One opportunity can be ranked by more than one kind (its Type only belongs to one,
-        // but the type filter widens when a kind is sparse). Keep the first, best-tiered hit
-        // so the same card can't appear twice in the list.
-        const seen = new Set<string>();
-        const merged = perKind
-          .flat()
-          .sort((a, b) => (a.tier === b.tier ? 0 : a.tier === 'strong' ? -1 : 1))
-          .filter((r) => (seen.has(r.opp.id) ? false : (seen.add(r.opp.id), true)));
+        let themes: { theme: string; intent?: string | null; next_steps?: string | null }[] = [];
+        try {
+          const slot = (await getProfileDerived(profileStore, modelCalls, 'filterTags', profileRecord.current)) as FilterTagsSlot;
+          themes = (slot.enrichedTags || [])
+            .filter((t) => t && typeof t.tag === 'string')
+            .map((t) => ({ theme: t.tag, intent: t.intent ?? null, next_steps: (t.nextSteps || []).join('; ') || null }));
+        } catch {
+          /* thin profile -> no themes; recall still returns a filtered set */
+        }
+        // Grade + location: prefer the LLM-extracted basics (the resolved source of truth),
+        // falling back to the regex-parsed filter value / form field.
+        let studentGrade: number | null = gradeNum;
+        let studentState: string | null = homeState.trim() || null;
+        try {
+          const basics = (await getProfileDerived(profileStore, modelCalls, 'basics', profileRecord.current)) as BasicsSlot;
+          const bg = parseGradeLevel(basics.fields?.grade ?? null);
+          if (bg != null) studentGrade = bg;
+          if (basics.fields?.state) studentState = basics.fields.state;
+        } catch {
+          /* best effort */
+        }
+
+        const resp = await httpClient.match({
+          grade: studentGrade,
+          location: { state: studentState },
+          profile_themes: themes,
+          highlight_projects: extractHighlightProjects(profileText),
+        });
+        const byId = new Map(opps.map((o) => [o.id, o]));
+        const merged: Result[] = resp.results
+          .map((r): Result | null => {
+            const opp = byId.get(r.id);
+            if (!opp) return null;
+            return {
+              opp,
+              reason: r.reason || '',
+              tier: (r.tier === 'strong' ? 'strong' : 'look') as 'strong' | 'look',
+              kind: kindForOpp(opp),
+            };
+          })
+          .filter((x): x is Result => x !== null);
         setResults(merged);
-        setNote(null);
-        rememberSearch(merged, null, k);
+        setNote(resp.note ?? null);
+        rememberSearch(merged, resp.note ?? null, k);
         setSelected(new Set());
         setVisibleCount(10);
         setStage('results');

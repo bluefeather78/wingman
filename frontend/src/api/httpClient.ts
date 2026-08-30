@@ -8,6 +8,8 @@ import type {
   GoogleFinishInput,
   GoogleSessionResult,
   LoginResponse,
+  MatchResponse,
+  MatchStudentBlob,
   Opportunity,
   RegisterInput,
   SessionUser,
@@ -536,6 +538,15 @@ export const httpClient: ApiClient = {
       '/api/opportunities',
     );
     return Array.isArray(data) ? data : (data.opportunities ?? []);
+  },
+
+  // The curated match (Phase 3): recall -> curation, server-side. Routed through request()
+  // so it gets the 401-refresh + 402-paywall handling every gated call has.
+  async match(body: MatchStudentBlob): Promise<MatchResponse> {
+    return request<MatchResponse>('/api/match', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   },
 
   async getDeadlineCheck(oppId, force) {

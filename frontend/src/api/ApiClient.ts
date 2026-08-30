@@ -3,6 +3,8 @@ import type {
   AiResult,
   GoogleFinishInput,
   GoogleSessionResult,
+  MatchResponse,
+  MatchStudentBlob,
   Opportunity,
   RegisterInput,
   SessionUser,
@@ -64,6 +66,11 @@ export interface DeadlineCheckResult {
 export interface ApiClient {
   // --- Stable since Phase 1 (work today, incl. backend mock mode) ---
   getOpportunities(): Promise<Opportunity[]>;
+  // The curated match (OPPORTUNITY_MATCHING_PLAN.md Phase 3): server-side recall -> curation
+  // over the whole catalog, returning <=10 curated cards for the student blob. Replaces the
+  // client-side 7-kind fan-out on the "Suggest for me" path. Rejects on failure (the caller
+  // surfaces it), unlike the never-throw catalog reads.
+  match(body: MatchStudentBlob): Promise<MatchResponse>;
   // On-demand, cross-user-cached deadline check. Never rejects (returns null on failure)
   // so a hiccup can't block loading the tracker. Pass force=true to bypass the 7-day cache
   // and run a fresh paid check now — that is what the Quest Log's "Check for updates" button

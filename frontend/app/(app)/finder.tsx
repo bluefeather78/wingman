@@ -34,7 +34,7 @@ import {
 } from '@/lib/tracker';
 import { MiniBadge, PopButton, ReviewBadge, Screen, SoftCard, Txt, usePopInteraction } from '@/ui/components';
 import {
-  NotInterestedModal, ReviewDrawer, RungStep, ShortlistView,
+  FullListView, FunnelLoading, NotInterestedModal, ReviewDrawer, RungStep, ShortlistView,
   type ShortlistItem, type Tier,
 } from '@/features/freshFinds/ShortlistView';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
@@ -63,7 +63,7 @@ const profileStore: ProfileStore = {
   load: () => httpClient.loadData<ProfileRecord>('student-profile'),
   save: (record) => httpClient.saveData('student-profile', record),
 };
-type Stage = 'home' | 'form' | 'funnel' | 'results';
+type Stage = 'home' | 'form' | 'funnel' | 'results' | 'fulllist';
 
 // Quiet retries before the catalog failure is shown to the student. Two is enough to ride
 // out a cold backend or a dropped connection without leaving them staring at a spinner.
@@ -240,6 +240,9 @@ export default function Finder() {
   const [dismissTargetId, setDismissTargetId] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [funnelReview, setFunnelReview] = useState<{ label: string; value: string }[]>([]);
+  // The "Show my matches now" full-list escape: the FULL remaining pool at the current funnel
+  // stage (client-side, from pool_ids x catalog, best-fit-first), paginated 10/page.
+  const [fullPool, setFullPool] = useState<Opportunity[]>([]);
   // Hover-lift for result cards (.pop-card:hover in the live app) — one shared id rather
   // than a hook per card, since the card list is rendered via .map(), not its own component.
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
@@ -749,11 +752,29 @@ export default function Finder() {
     setFunnelReview((r) => r.slice(0, -1));
     funnelBack();
   }
-  // "Show my matches now": curate the pool narrowed so far, skipping the remaining questions.
+  // "Show my matches now": show the FULL remaining pool at this funnel stage — every candidate
+  // still in play, best-fit-first, paginated (NOT the curated <=10). The client already has the
+  // catalog and the narrowed pool_ids, so this is instant and makes no model call.
   function showAllNow() {
     const rung = funnelRung;
-    const poolIds = rung?.pool_ids || funnelPoolIds.current || null;
-    void runFunnelStep(funnelAnswers.current, poolIds, true);
+    const poolIds = rung?.pool_ids || funnelPoolIds.current || [];
+    const byId = new Map((opps ?? []).map((o) => [o.id, o]));
+    const pool = poolIds.map((id) => byId.get(id)).filter((o): o is Opportunity => !!o);
+    setFullPool(pool);
+    setSelected(new Set());
+    setStage('fulllist');
+  }
+  // A free "why it fits" for the full-list cards (no model call): the student's own profile words
+  // that overlap this opportunity's subject tags. Grounded, never invented.
+  const profileWordSet = useMemo(() => {
+    const stop = new Set(['the', 'and', 'for', 'with', 'your', 'you', 'this', 'that', 'have', 'from', 'their', 'about', 'into', 'they']);
+    return new Set((profileText.toLowerCase().match(/[a-z]{4,}/g) || []).filter((w) => !stop.has(w)));
+  }, [profileText]);
+  function localReason(o: Opportunity): string {
+    const tags = (o.subject_tags || []).map(String).filter(Boolean);
+    const matched = tags.filter((t) => t.toLowerCase().split(/[^a-z]+/).some((w) => w.length >= 4 && profileWordSet.has(w)));
+    if (matched.length) return `Matches your interest in ${matched.slice(0, 2).join(' and ')}.`;
+    return 'In your feasible range — worth a look.';
   }
   function buildReviewSections(): { title: string; items: { label: string; value: string }[] }[] {
     const secs: { title: string; items: { label: string; value: string }[] }[] = [];
@@ -1169,6 +1190,54 @@ export default function Finder() {
         onBack={rungBack}
         onShowAll={showAllNow}
       />
+    );
+  }
+
+  // A restart/recall on the suggest path (Start fresh / Adjust my answers) runs rung-0 recall,
+  // which takes a few seconds. Show the loading screen instead of leaving the stale shortlist /
+  // full list on screen — otherwise the tap reads as "nothing happened".
+  if (searching && (suggestMode || stage === 'fulllist')) {
+    return <FunnelLoading />;
+  }
+
+  // ---------- Full list ("Show my matches now") ----------
+  // Every candidate still in play at this funnel stage, best-fit-first, paginated 10/page.
+  if (stage === 'fulllist') {
+    const dismissName = dismissTargetId
+      ? (fullPool.find((o) => o.id === dismissTargetId)?.name ?? 'this')
+      : 'this';
+    return (
+      <>
+        <FullListView
+          pool={fullPool}
+          reasonFor={localReason}
+          pendingIds={selected}
+          savedIds={trackedIds}
+          dismissedIds={dismissedIds}
+          onToggle={toggleSelect}
+          onNotInterested={(id) => setDismissTargetId(id)}
+          onSubmit={addSelectedToTracker}
+          onNarrow={restartFunnel}
+          onReview={() => setReviewOpen(true)}
+        />
+        {dismissTargetId && (
+          <NotInterestedModal
+            name={dismissName}
+            onPick={() => {
+              setDismissedIds((d) => new Set(d).add(dismissTargetId));
+              setSelected((p) => { const n = new Set(p); n.delete(dismissTargetId); return n; });
+              setDismissTargetId(null);
+            }}
+            onClose={() => setDismissTargetId(null)}
+          />
+        )}
+        <ReviewDrawer
+          open={reviewOpen}
+          onClose={() => setReviewOpen(false)}
+          sections={buildReviewSections()}
+          onAdjust={() => { setReviewOpen(false); restartFunnel(); }}
+        />
+      </>
     );
   }
 

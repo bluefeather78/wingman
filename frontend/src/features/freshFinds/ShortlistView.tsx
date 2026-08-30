@@ -299,6 +299,82 @@ function ShortlistCard({ opp, tier, reason, flags, pending, saved, onToggle, onN
   );
 }
 
+// ---------- full list (the "Show my matches now" escape) ----------
+// The FULL remaining pool at the current funnel stage — best-fit first, paginated 10/page, NOT
+// curated. Same cards as the shortlist minus the tier badge; reasons are a free local line
+// (subject overlap), so this view makes no model call and is instant.
+const PAGE_SIZE = 10;
+export function FullListView({
+  pool, reasonFor, pendingIds, savedIds, dismissedIds, onToggle, onNotInterested, onSubmit, onNarrow, onReview,
+}: {
+  pool: Opportunity[]; reasonFor: (o: Opportunity) => string;
+  pendingIds: Set<string>; savedIds: Set<string>; dismissedIds: Set<string>;
+  onToggle: (id: string) => void; onNotInterested: (id: string) => void; onSubmit: () => Promise<void>;
+  onNarrow: () => void; onReview: () => void;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+  const [page, setPage] = useState(0);
+  const scrollRef = useRef<ScrollView>(null);
+  const visible = pool.filter((o) => !dismissedIds.has(o.id));
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const clamped = Math.min(page, totalPages - 1);
+  const start = clamped * PAGE_SIZE;
+  const pageItems = visible.slice(start, start + PAGE_SIZE);
+  const go = (p: number) => { setPage(p); scrollRef.current?.scrollTo({ y: 0, animated: false }); };
+
+  return (
+    <View style={{ flex: 1 }}>
+      <ScrollView ref={scrollRef} contentContainerStyle={{ padding: space.lg, paddingBottom: 120, maxWidth: 896, alignSelf: 'center', width: '100%' }}>
+        <Txt style={type_h1}>All your matches</Txt>
+        <Txt style={{ ...type_body, marginTop: space.xs }}>
+          {visible.length === 0 ? 'Nothing left in this list.'
+            : `${visible.length} you can do, best-fit first${totalPages > 1 ? ` · showing ${start + 1}–${Math.min(start + PAGE_SIZE, visible.length)}` : ''}.`}
+        </Txt>
+        <View style={{ flexDirection: 'row', gap: space.lg, marginTop: space.sm, flexWrap: 'wrap' }}>
+          <Pressable onPress={onReview}><Txt style={{ ...type_body, textDecorationLine: 'underline', color: colors.navy }}>Review your answers</Txt></Pressable>
+          <Pressable onPress={onNarrow}><Txt style={{ ...type_body, textDecorationLine: 'underline', color: colors.navy }}>Narrow it down instead</Txt></Pressable>
+        </View>
+
+        {visible.length === 0 && (
+          <PopCard style={{ marginTop: space.lg }}>
+            <Txt style={type_h2}>Nothing here — yet</Txt>
+            <Txt style={{ ...type_body, marginTop: space.sm }}>Try loosening a filter or check back soon. Nothing you dismissed is gone — start fresh to see it again.</Txt>
+            <View style={{ marginTop: space.lg }}><PopButton label="Start fresh" onPress={onNarrow} /></View>
+          </PopCard>
+        )}
+
+        <View style={{ gap: space.lg, marginTop: space.lg }}>
+          {pageItems.map((o) => (
+            <ShortlistCard key={o.id} opp={o} reason={reasonFor(o)} flags={[]}
+              pending={pendingIds.has(o.id)} saved={savedIds.has(o.id) && !pendingIds.has(o.id)}
+              onToggle={() => onToggle(o.id)} onNotInterested={() => onNotInterested(o.id)} />
+          ))}
+        </View>
+
+        {totalPages > 1 && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space.xl, marginTop: space.xl }}>
+            <Pressable disabled={clamped === 0} onPress={() => go(clamped - 1)}>
+              <Txt style={{ fontFamily: fonts.bodyBold, color: clamped === 0 ? colors.slate400 : colors.navy }}>← Prev</Txt>
+            </Pressable>
+            <Txt style={{ ...type_body, color: colors.slate500 }}>Page {clamped + 1} of {totalPages}</Txt>
+            <Pressable disabled={clamped >= totalPages - 1} onPress={() => go(clamped + 1)}>
+              <Txt style={{ fontFamily: fonts.bodyBold, color: clamped >= totalPages - 1 ? colors.slate400 : colors.navy }}>Next →</Txt>
+            </Pressable>
+          </View>
+        )}
+      </ScrollView>
+
+      {pendingIds.size > 0 && (
+        <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: space.lg, backgroundColor: colors.card, borderTopWidth: 3, borderTopColor: colors.navy, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Txt style={{ fontFamily: fonts.bodyBold, color: colors.ink }}>{pendingIds.size} selected</Txt>
+          <PopButton label={submitting ? 'Adding…' : `Add ${pendingIds.size} to my Quest Log`}
+            onPress={async () => { setSubmitting(true); try { await onSubmit(); } finally { setSubmitting(false); } }} />
+        </View>
+      )}
+    </View>
+  );
+}
+
 // ---------- not-interested modal ----------
 export function NotInterestedModal({ name, onPick, onClose }: { name: string; onPick: (reason: string | null) => void; onClose: () => void }) {
   return (

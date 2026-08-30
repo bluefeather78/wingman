@@ -184,3 +184,24 @@ def test_classify_rows_proof_via_final_url():
     b = {"name": "Y", "org": "O"}
     v = dc.classify_rows(a, b, cosine=0.1, final_a="https://x.edu/p", final_b="https://x.edu/p/")
     assert v.tier == dc.TIER_PROOF
+
+
+def test_shared_portal_same_stored_url_different_name_is_not_proof():
+    # spicestanford.smapply.io hosts six distinct Stanford programs. A bare match on the rows'
+    # STORED url (no final_a/final_b/canon evidence — i.e. nobody actually fetched and resolved
+    # a redirect) must NOT be treated as certain-duplicate proof just because the names differ;
+    # that was a live bug (2026-08-30) that classified all five as TIER_PROOF against each other.
+    a = {"name": "Stanford E-Japan Program", "org": "Stanford SPICE",
+         "url": "https://spicestanford.smapply.io/"}
+    b = {"name": "Stanford e-China", "org": "Stanford SPICE",
+         "url": "https://spicestanford.smapply.io/"}
+    v = dc.classify_rows(a, b, cosine=None)
+    assert v.tier != dc.TIER_PROOF
+
+
+def test_same_stored_url_same_name_is_still_proof():
+    # The case the guard must NOT break: an actual duplicate row pair with identical URL and
+    # name is still certain.
+    a = {"name": "Marine Biology Camp", "org": "Ocean Institute", "url": "https://ocean.org/camp"}
+    b = {"name": "Marine Biology Camp", "org": "Ocean Institute", "url": "https://ocean.org/camp"}
+    assert dc.classify_rows(a, b, cosine=None).tier == dc.TIER_PROOF

@@ -13,9 +13,13 @@ prebuilt index (`catalog_embeddings.jsonl`, built by build_catalog_embeddings.py
 "Refresh Dedupe Index", and kept current automatically: every activation embeds its own row):
 
   1. Exact match_key collision — two active rows whose URL normalizes identically. Free, and
-     found even for a row missing from the index: dedupe_confidence.classify_rows treats this as
-     its own PROOF check (same_final_url falls back to the stored `url` when no resolved/
-     canonical URL is supplied).
+     found even for a row missing from the index. Judged HERE, not delegated to
+     dedupe_confidence.classify_rows: a bare URL match is PROOF only when the names also
+     agree — a shared multi-program application portal (spicestanford.smapply.io hosts six
+     distinct Stanford programs) shares one stored URL across genuinely different rows. A
+     differing name still surfaces, as a HINT asking a human to confirm it isn't a shared
+     portal, rather than being silently dropped or (the 2026-08-30 bug this fixed) wrongly
+     reported as certain-duplicate PROOF regardless of name.
   2. Embedding nearest-neighbor — for every row the index holds a vector for, its closest OTHER
      active row by cosine, tiered PROOF / CONFIDENT / ADJUDICATE / SIBLING / HINT / NONE by
      dedupe_confidence.classify_rows. Only PROOF/CONFIDENT/ADJUDICATE/HINT are reported — SIBLING
@@ -93,20 +97,21 @@ def find_duplicate_pairs(rows, index=None, top_k=1):
     seen = set()
     pairs = []
 
-    def surface(a, b, cosine):
+    def surface(a, b, tier, reasons, cosine):
         if a["id"] == b["id"]:
             return
         key = tuple(sorted([a["id"], b["id"]]))
-        if key in seen:
-            return
-        v = dc.classify_rows(a, b, cosine=cosine)
-        if v.tier not in _SURFACE_TIERS:
+        if key in seen or tier not in _SURFACE_TIERS:
             return
         seen.add(key)
-        pairs.append({"rows": (a, b), "tier": v.tier, "reasons": v.reasons, "cosine": cosine})
+        pairs.append({"rows": (a, b), "tier": tier, "reasons": reasons, "cosine": cosine})
 
     # Pass 1: exact URL collisions. Free, and catches a pair even when one or both rows are
-    # missing from the embedding index.
+    # missing from the embedding index. Judged directly here, NOT via dc.classify_rows: a bare
+    # URL match is proof only when the names also agree (dc.classify_rows enforces that same
+    # guard now), but a differing name is still worth a human's look — it is exactly the
+    # spicestanford.smapply.io shape, one portal URL hosting six distinct programs — so it is
+    # surfaced as a HINT with an explicit warning rather than silently dropped.
     by_key = {}
     for r in rows:
         k = _match_key(r.get("url"))
@@ -115,7 +120,14 @@ def find_duplicate_pairs(rows, index=None, top_k=1):
     for members in by_key.values():
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
-                surface(members[i], members[j], cosine=None)
+                a, b = members[i], members[j]
+                nr = dc.name_relation(a.get("name"), a.get("org"), b.get("name"), b.get("org"))
+                if nr == dc.NAME_SAME:
+                    surface(a, b, dc.TIER_PROOF, ["identical URL, same name"], cosine=None)
+                else:
+                    surface(a, b, dc.TIER_HINT,
+                           ["identical URL, different name — confirm it is not a shared "
+                            "application portal"], cosine=None)
 
     # Pass 2: embedding nearest-neighbor, restricted to rows the index actually holds a vector
     # for. `search` excludes anything not in `rows` (e.g. a row deactivated since the index was
@@ -125,7 +137,9 @@ def find_duplicate_pairs(rows, index=None, top_k=1):
         hits = embed_common.nearest(v0, search, top_k=top_k, min_score=dc.HINT_FLOOR,
                                     exclude_ids={rid})
         for mid, cos, _entry in hits:
-            surface(by_id[rid], by_id[mid], cosine=cos)
+            a, b = by_id[rid], by_id[mid]
+            v = dc.classify_rows(a, b, cosine=cos)
+            surface(a, b, v.tier, v.reasons, cosine=cos)
 
     return pairs, unembedded
 

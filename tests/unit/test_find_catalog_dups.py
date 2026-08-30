@@ -32,6 +32,24 @@ def test_exact_url_match_is_proof_even_with_no_index():
     assert set(unembedded) == {"1", "2"}
 
 
+def test_shared_portal_same_url_different_name_is_hint_not_proof():
+    # spicestanford.smapply.io really hosts six distinct Stanford programs. A bare exact-URL
+    # match must not be reported as certain-duplicate PROOF just because the names differ — that
+    # was a live production bug (2026-08-30). It should still surface, but only as a HINT asking
+    # a human to confirm it isn't a shared portal.
+    rows = [
+        _row("1", "Stanford E-Japan Program", "https://spicestanford.smapply.io/",
+             org="Stanford SPICE"),
+        _row("2", "Stanford e-China", "https://spicestanford.smapply.io/", org="Stanford SPICE"),
+    ]
+    pairs, _unembedded = fcd.find_duplicate_pairs(rows, index=[])
+    assert frozenset(("1", "2")) in _pair_ids(pairs)
+    p = next(p for p in pairs if frozenset((p["rows"][0]["id"], p["rows"][1]["id"]))
+             == frozenset(("1", "2")))
+    assert p["tier"] == "hint"
+    assert "shared" in p["reasons"][0]
+
+
 def test_high_cosine_same_name_is_confident():
     # Same org on both sides so the same-institution context guard passes (a CONFIDENT auto-merge
     # needs positive evidence of the same institution, not just a name match) — see

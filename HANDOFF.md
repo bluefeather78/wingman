@@ -58,7 +58,15 @@ filter-vs-rerank map + config knobs).
   `setupChoiceRef`) + YOUR ANSWERS (in-funnel picks).
 - **"Why you" is contextual to the whole journey** — curation gets `collect_preferences` +
   `describe_funnel_choices` and the prompt (M8) requires the reason to cite a profile specific
-  and/or the student's choices (enjoy/want/budget/timing).
+  and/or the student's choices (enjoy/want/budget/timing). The reason is the WOW moment: 1-3
+  sentences (~25-55 words), two specific halves (a THEM detail ↔ a THIS-program detail from the
+  candidate's own text), shown in FULL on the card (not clamped). Grounded, never invented.
+- **GOAL-FORMAT ALIGNMENT (M8, curation ranking):** a stated goal/outcome about FORMAT is a STRONG
+  ranking signal, not a tie-breaker — journal/conference outrank a competition for "publish", a
+  competition wins for "compete", research/lab for "mentorship", build/hackathon for "build". Fixed
+  the report where project-goal "publish & present" for a research paper returned mostly
+  competitions (NACLO on top) even though the pool held 20 journal/conference venues — it was a
+  ranking bug, not recall/catalog.
 - Retired: the binary `output` vibe axis; cost/time as post-recall funnel rungs (moved pre-recall).
 
 **Port/UX + funnel commits (newest last), on top of the backend-spine commits below:**
@@ -68,7 +76,8 @@ filter-vs-rerank map + config knobs).
   **M8** outcome rerank + sequencing fix · `13d36cd` pool-size header fix · `3d955cb` local
   cost/time filters · `a10bee2` **M8** cost/time pre-recall · `acddde4` projects feed recall
   (boosted) · `61fa750` **M8** contextual "why you" · `2848abc` **M8** project-goal question ·
-  `1f1af43` review drawer shows setup choices + project-focus wiring.
+  `1f1af43` review drawer shows setup choices + project-focus wiring · `37e0cd8` **M8** WOW "why
+  it fits" (loosened length) + `e184a4a` show it in full · `063c4a2` **M8** goal-format ranking.
 
 **Remaining:** full-list ("Show my matches now") cards use free local reasons, not the
 journey-aware curation reason (deliberate — no model call on that path); eligibility caveats on

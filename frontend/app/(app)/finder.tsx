@@ -13,7 +13,6 @@ import { type EnrichedTag } from '@/lib/profileTags';
 import {
   cachedProfileFilterTags,
   getProfileDerived,
-  getProfileFilterValues,
   refreshProfileDerived,
   type BasicsSlot,
   type FilterTagsSlot,
@@ -23,7 +22,7 @@ import {
 } from '@/lib/profileDerived';
 import { parseGradeFromText, parseGradeLevel } from '@/lib/grade';
 import { extractJSON } from '@/lib/extractJSON';
-import { inferSubjects, preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
+import { preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
 import { markNewlyAdded } from '@/lib/newlyAdded';
 import { awaitProfileWrites } from '@/lib/profileWrites';
 import {
@@ -57,7 +56,7 @@ const profileStore: ProfileStore = {
   load: () => httpClient.loadData<ProfileRecord>('student-profile'),
   save: (record) => httpClient.saveData('student-profile', record),
 };
-type Stage = 'home' | 'quiz' | 'form' | 'funnel' | 'results';
+type Stage = 'home' | 'form' | 'funnel' | 'results';
 
 // Quiet retries before the catalog failure is shown to the student. Two is enough to ride
 // out a cold backend or a dropped connection without leaving them staring at a spinner.
@@ -77,24 +76,9 @@ function kindForOpp(opp: Opportunity): string {
   return map[(opp.type as string) ?? ''] ?? 'summer';
 }
 
-// Quiz: root → sub-branch → kind (from script.js QUIZ_BRANCHES + the live quiz screen).
-const QUIZ_ROOT = [
-  { label: 'I already have a research paper or project', desc: 'In progress or already completed', branch: 'project' },
-  { label: "I'm looking for something to do when school is out", desc: 'Camps, programs, or work experience', branch: 'timeoff' },
-  { label: 'I enjoy competing directly with my peers', desc: 'Tests, exams, head-to-head challenges', kind: 'pure-competition' },
-] as const;
-const QUIZ_SUB: Record<string, { label: string; desc: string; kind: string }[]> = {
-  project: [
-    { label: 'Enter it in a competition', desc: 'Science fairs, app challenges, project contests', kind: 'research-competition' },
-    { label: 'Present it at a conference', desc: 'Submit a paper to a workshop or conference', kind: 'conference' },
-    { label: 'Get it published', desc: 'Submit to an academic or student journal', kind: 'journal' },
-  ],
-  timeoff: [
-    { label: 'Hands-on work experience', desc: 'Work with a lab, company, or organization', kind: 'internship' },
-    { label: 'A summer program', desc: 'Camps, pre-college programs, academies', kind: 'summer' },
-    { label: 'Volunteering or service', desc: 'Give time to a cause or community organization', kind: 'volunteer' },
-  ],
-};
+// The taxonomy quiz (QUIZ_ROOT/QUIZ_SUB, Direction E) was RETIRED in Phase 6 — the
+// progressive funnel replaced its "help me figure out what fits" job. Students who know the
+// kind they want still use the browse grid; everyone else uses "Suggest for me" (the funnel).
 
 const FILTER_FIELDS = [
   { key: 'type', label: 'Type' },
@@ -215,7 +199,6 @@ export default function Finder() {
   // screen is built.
   const [stage, setStage] = useState<Stage>(() => (sessionSearch?.results.length ? 'results' : 'home'));
   const [browseOpen, setBrowseOpen] = useState(false);
-  const [quizBranch, setQuizBranch] = useState<string | null>(null);
   const [kind, setKind] = useState<string>(() => sessionSearch?.kind ?? ACTIVE_KINDS[0]);
   const [suggestMode, setSuggestMode] = useState(() => sessionSearch?.suggestMode ?? false);
 
@@ -490,21 +473,17 @@ export default function Finder() {
     const cfg = k ? KIND_CONFIG[k] : null;
     const strict = !!cfg?.strictType;
     try {
-      // Subjects + grade come from the profile's stored filter values, recomputed only when
-      // the profile itself meaningfully changes — this was an unconditional Gemini call on
-      // every search, which both cost money per search and let the same profile produce
-      // different subjects (and so different results) each time.
-      let subjectHints: string[] = [];
+      // Grade for the FORM path: the dropdown wins when set; otherwise fall back to the
+      // profile's LLM-extracted basics grade (the resolved source of truth since Phase 6 —
+      // the old regex `filterValues` slot + the 17-bucket subject nudge are both retired, so
+      // the form path is now keyword + type + grade, and the LLM ranker does the fit work).
       let profileGrade: number | null = null;
       try {
-        const fv = await getProfileFilterValues(profileStore, modelCalls, profileRecord.current);
-        subjectHints = fv.subjects;
-        profileGrade = fv.grade;
+        const basics = (await getProfileDerived(profileStore, modelCalls, 'basics', profileRecord.current)) as BasicsSlot;
+        profileGrade = parseGradeLevel(basics.fields?.grade ?? null);
       } catch {
-        /* best effort — no hints just means keyword-only scoring */
+        /* best effort — no profile grade just means the dropdown (or none) decides */
       }
-      // The form's dropdown wins when set; otherwise the grade comes from whatever
-      // grade-level language the student's own profile text happens to contain, if any.
       const gradeNum = parseGradeFromText(grade) ?? profileGrade;
 
       // ---- The profile-driven path is the server-side curated match via the FUNNEL ----
@@ -524,7 +503,7 @@ export default function Finder() {
       }
 
       const { pool, typeMatches, widened, strictEmpty } = preFilter(
-        opps, desc, subjectHints, cfg?.dbTypes ?? null, strict, gradeNum,
+        opps, desc, cfg?.dbTypes ?? null, strict, gradeNum,
       );
       // A strict kind with nothing of its type in the catalog. Say so and stop BEFORE the
       // paid ranking call — there is nothing here to rank, and widening would have handed
@@ -623,10 +602,6 @@ export default function Finder() {
     }
     let studentGrade: number | null = null;
     let studentState: string | null = homeState.trim() || null;
-    try {
-      const fv = await getProfileFilterValues(profileStore, modelCalls, profileRecord.current);
-      if (fv.grade != null) studentGrade = fv.grade;
-    } catch { /* best effort */ }
     try {
       const basics = (await getProfileDerived(profileStore, modelCalls, 'basics', profileRecord.current)) as BasicsSlot;
       const bg = parseGradeLevel(basics.fields?.grade ?? null);
@@ -1033,52 +1008,8 @@ export default function Finder() {
                 </Pressable>
               ))}
             </View>
-            <Pressable style={styles.quizCta} onPress={() => { setQuizBranch(null); setStage('quiz'); }}>
-              <Text style={styles.quizCtaText}>Not sure? Take a quick quiz →</Text>
-            </Pressable>
           </SoftCard>
         )}
-      </Screen>
-    );
-  }
-
-  // ---------- Quiz stage ----------
-  if (stage === 'quiz') {
-    const options = quizBranch ? QUIZ_SUB[quizBranch] : null;
-    return (
-      <Screen>
-        <BackLink label="Back to opportunity type" onPress={() => (quizBranch ? setQuizBranch(null) : setStage('home'))} />
-        <SoftCard style={{ gap: 24, padding: 32 }}>
-          <Txt variant="h2">Let's figure out what fits</Txt>
-          <Text style={styles.quizQuestion}>{quizBranch ? 'And with that, what do you want to do?' : 'Which of these sounds most like you right now?'}</Text>
-          <View style={{ gap: 12 }}>
-            {(options ?? QUIZ_ROOT).map((o, i) => (
-              <Pressable
-                key={i}
-                onHoverIn={() => setHoveredQuizOption(i)}
-                onHoverOut={() => setHoveredQuizOption((cur) => (cur === i ? null : cur))}
-                onPressIn={() => setPressedQuizOption(i)}
-                onPressOut={() => setPressedQuizOption((cur) => (cur === i ? null : cur))}
-                style={[
-                  styles.quizOption,
-                  i === 0 && { backgroundColor: '#EDF7FC' },
-                  popShadow(pressedQuizOption === i ? 1 : hoveredQuizOption === i ? 4 : 3),
-                  pressedQuizOption === i
-                    ? styles.quizOptionPressed
-                    : hoveredQuizOption === i && styles.quizOptionHovered,
-                ]}
-                onPress={() => {
-                  const opt = o as { kind?: string; branch?: string };
-                  if (opt.kind) openForm(opt.kind);
-                  else if (opt.branch) setQuizBranch(opt.branch);
-                }}
-              >
-                <Text style={styles.quizOptTitle}>{o.label}</Text>
-                <Text style={styles.quizOptDesc}>{o.desc}</Text>
-              </Pressable>
-            ))}
-          </View>
-        </SoftCard>
       </Screen>
     );
   }

@@ -1,6 +1,5 @@
 import type { Opportunity } from '@/api/types';
 import { callGeminiJSON, type GeminiCall } from './aiJson';
-import { VALID_SUBJECTS } from './constants';
 import { isGradeEligible } from './grade';
 
 // The candidate-ranking chain, ported from script.js. All model access is injected as
@@ -56,13 +55,11 @@ export const TYPE_FILTER_MIN_POOL = 15;
 export function preFilter(
   opportunities: Opportunity[],
   description: string,
-  subjectHints: string[] | null,
   typeFilter: string[] | null,
   strict: boolean,
   studentGrade: number | null,
 ): PreFilterResult {
   const tokens = [...new Set(tokenize(description).filter((t) => !STOPWORDS.has(t) && t.length >= 3))];
-  const subjSet = new Set((subjectHints || []).map((s) => s.toLowerCase()));
   const typeSet = typeFilter && typeFilter.length ? new Set(typeFilter) : null;
 
   let base = opportunities;
@@ -91,11 +88,7 @@ export function preFilter(
     base = base.filter((o) => isGradeEligible(o, studentGrade));
   }
 
-  const scored = base.map((opp) => {
-    let score = keywordScore(tokens, opp);
-    if ((opp.subject_tags || []).some((t) => subjSet.has((t || '').toLowerCase()))) score += 3;
-    return { opp, score };
-  });
+  const scored = base.map((opp) => ({ opp, score: keywordScore(tokens, opp) }));
   scored.sort((a, b) => b.score - a.score);
   const withScore = scored.filter((s) => s.score > 0);
   // Capped at 100: rankCandidates keeps only the best 10-12, and a smaller payload
@@ -105,16 +98,9 @@ export function preFilter(
 }
 
 // ---------- Model-backed steps ----------
-export async function inferSubjects(
-  callGemini: GeminiCall,
-  description: string,
-): Promise<string[]> {
-  const system = `You infer which subject categories from a fixed list best match a student's passion-project description. Valid categories (use these exact strings): ${VALID_SUBJECTS.join(', ')}. Respond with ONLY a raw JSON array of 2-5 of the most relevant category strings, no markdown, no preamble. Example: ["Computer Science","STEM","Mathematics"]`;
-  const arr = await callGeminiJSON<unknown>(callGemini, system, description, false);
-  return Array.isArray(arr)
-    ? (arr.filter((s): s is string => typeof s === 'string' && (VALID_SUBJECTS as readonly string[]).includes(s)))
-    : [];
-}
+// inferSubjects (the fixed 17-subject classifier) was RETIRED in Phase 6 — semantic recall
+// (per-theme embeddings, server-side) replaced the subject-bucket nudge everywhere. See
+// OPPORTUNITY_MATCHING_PLAN.md Phase 5/6.
 
 export interface RankedPick {
   id: string;

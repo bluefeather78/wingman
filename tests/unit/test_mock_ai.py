@@ -119,27 +119,8 @@ def test_mock_rank_fallback_to_bare_extract_ids(seeded_random):
     assert out[0]["tier"] == "strong"
 
 
-# --------------------------------------------------------------------------- #
-# mock_infer_subjects
-# --------------------------------------------------------------------------- #
-def test_infer_subjects_few_matches_defaults():
-    # Only "Biology" present (1 match < 2) -> default pair.
-    assert json.loads(ai.mock_infer_subjects("I love biology")) == ["STEM", "Mixed"]
-
-
-def test_infer_subjects_zero_matches_defaults():
-    assert json.loads(ai.mock_infer_subjects("nothing")) == ["STEM", "Mixed"]
-
-
-def test_infer_subjects_caps_at_5():
-    text = "biology physics chemistry mathematics astronomy medicine law"
-    out = json.loads(ai.mock_infer_subjects(text))
-    assert len(out) == 5
-
-
-def test_infer_subjects_two_matches_kept():
-    out = json.loads(ai.mock_infer_subjects("biology and physics"))
-    assert set(out) == {"Biology", "Physics"}
+# mock_infer_subjects was RETIRED in Phase 6 with inferSubjects (the 17-subject classifier);
+# its tests were removed with it. See OPPORTUNITY_MATCHING_PLAN.md Phase 5/6.
 
 
 # --------------------------------------------------------------------------- #
@@ -376,11 +357,6 @@ def test_chat_starter_pool_capped_at_available(seeded_random):
 # --------------------------------------------------------------------------- #
 # generate_mock_text — THE DISPATCHER (ordered substring match on `system`)
 # --------------------------------------------------------------------------- #
-def test_dispatch_infer_subjects():
-    out = ai.generate_mock_text("infer which subject categories", "biology physics")
-    assert json.loads(out) == ["Biology", "Physics"]
-
-
 def test_dispatch_rank_candidates(seeded_random):
     out = ai.generate_mock_text("Rank the best 10-12 matches", _rank_prompt(3))
     assert len(json.loads(out)) == 3

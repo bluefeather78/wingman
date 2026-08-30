@@ -10,9 +10,8 @@ import random
 import re
 
 
-VALID_SUBJECTS = ['Mixed','STEM','Medicine','Humanities','Art','Business','Engineering',
-                   'Computer Science','Mathematics','Biology','Physics','Astronomy',
-                   'Chemistry','Leadership','Law','Logic','Education']
+# VALID_SUBJECTS + mock_infer_subjects were RETIRED in Phase 6 with inferSubjects (the fixed
+# 17-subject classifier); the client no longer sends that prompt. See OPPORTUNITY_MATCHING_PLAN.md.
 ACTIVE_KINDS = ['summer', 'internship', 'research-competition', 'pure-competition']
 MOCK_REASONS = [
     "Strong overlap with the subject and skill focus you described.",
@@ -150,14 +149,6 @@ def mock_score_opportunities_for_tag(user_content):
         {"id": cid, "rank": i + 1, "reasoning": f"This lines up with your interest in {tag.lower()}."}
         for i, cid in enumerate(keep)
     ])
-
-
-def mock_infer_subjects(user_content):
-    lower = user_content.lower()
-    matches = [s for s in VALID_SUBJECTS if s.lower() in lower]
-    if len(matches) < 2:
-        matches = ['STEM', 'Mixed']
-    return json.dumps(matches[:5])
 
 
 def mock_synthesize_profile(user_content):
@@ -313,8 +304,6 @@ def mock_tracker_extract(user_content, with_section):
 
 
 def generate_mock_text(system, user_content):
-    if "infer which subject categories" in system:
-        return mock_infer_subjects(user_content)
     if "Rank the best 10-12 matches" in system:
         return mock_rank_candidates(user_content)
     # The ranking prompt swaps in a DIFFERENT closing rule for strict-type kinds

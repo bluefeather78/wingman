@@ -7,7 +7,7 @@
 // of the RN UI.
 import { createHash } from 'node:crypto';
 import type { Opportunity } from '../src/api/types';
-import { inferSubjects, preFilter, rankCandidates } from '../src/lib/ranking';
+import { preFilter, rankCandidates } from '../src/lib/ranking';
 import { assessProfileReadiness, synthesizeProfile } from '../src/lib/profile';
 
 const BASE = 'http://127.0.0.1:8000';
@@ -44,12 +44,8 @@ async function main() {
   const description =
     "I love robotics and want hands-on experience building autonomous robots. I've done Arduino and Python and I'm into machine learning for computer vision.";
 
-  console.log('2. inferSubjects');
-  const subjects = await inferSubjects(callGemini, description);
-  console.log('   ->', subjects);
-
-  console.log('3. preFilter (Summer Program / Program type)');
-  const pool = preFilter(opps, description, subjects, ['Program'], false, null);
+  console.log('2. preFilter (Summer Program / Program type)');
+  const pool = preFilter(opps, description, ['Program'], false, null);
   console.log(`   -> pool of ${pool.length}; top: ${pool.slice(0, 3).map((o) => o.name).join(' | ')}`);
 
   console.log('4. rankCandidates');

@@ -17,9 +17,5 @@ export const ALL_BUCKETS = [
 
 export type Bucket = (typeof ALL_BUCKETS)[number];
 
-// Subject vocabulary used by inferSubjects / ranking (ported from VALID_SUBJECTS).
-export const VALID_SUBJECTS = [
-  'Mixed', 'STEM', 'Medicine', 'Humanities', 'Art', 'Business', 'Engineering',
-  'Computer Science', 'Mathematics', 'Biology', 'Physics', 'Astronomy', 'Chemistry',
-  'Leadership', 'Law', 'Logic', 'Education',
-] as const;
+// VALID_SUBJECTS (the fixed 17-subject vocabulary) was RETIRED in Phase 6 — semantic recall
+// via per-theme embeddings replaced it. See OPPORTUNITY_MATCHING_PLAN.md Phase 5/6.

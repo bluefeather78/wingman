@@ -1,7 +1,5 @@
 import type { GeminiCall } from './aiJson';
 import { countProfileWords } from './profile';
-import { parseGradeFromText } from './grade';
-import { inferSubjects } from './ranking';
 import { extractTagsAndBasics, type EnrichedTag, type ProfileExtract } from './profileTags';
 import { starterQuestionPoolFromAI, type ClaudeCall } from './profileChat';
 
@@ -37,10 +35,8 @@ export interface SlotRecord {
   [key: string]: unknown;
 }
 
-export interface FilterValuesSlot extends SlotRecord {
-  subjects: string[];
-  grade: number | null;
-}
+// filterValues (the inferSubjects 17-bucket cache) was RETIRED in Phase 6; subject signal is
+// now the profile's THEMES (filterTags) compared by embedding, and grade comes from `basics`.
 export interface FilterTagsSlot extends SlotRecord {
   enrichedTags: EnrichedTag[];
 }
@@ -51,15 +47,15 @@ export interface StarterPoolSlot extends SlotRecord {
   questions: string[];
 }
 
-export type SlotName = 'filterValues' | 'filterTags' | 'basics' | 'starterPool';
+export type SlotName = 'filterTags' | 'basics' | 'starterPool';
 
 // The stored `student-profile` record. Slots live alongside the profile itself; anything
-// writing this record must carry the other keys through untouched.
+// writing this record must carry the other keys through untouched. (A legacy `filterValues`
+// key may still exist on old records — it is inert and carried through, never read.)
 export interface ProfileRecord {
   synthesized?: string;
   updatedAt?: string | null;
   chatRounds?: number;
-  filterValues?: FilterValuesSlot;
   filterTags?: FilterTagsSlot;
   basics?: BasicsSlot;
   starterPool?: StarterPoolSlot;
@@ -107,17 +103,6 @@ function tagsAndBasics(calls: ModelCalls, text: string): Promise<ProfileExtract>
 }
 
 const SLOTS: Record<SlotName, SlotConfig> = {
-  // Deliberately its own call, and the only Gemini slot that is. This is the one derived
-  // value on the search critical path — preFilter cannot narrow the catalog without it —
-  // whereas the merged pass above is the slowest answer of the set because it carries every
-  // tag. Folding this in would make a cold-cache search block on tag enrichment it never
-  // reads, to save one call on a path the student is waiting on.
-  filterValues: {
-    isFilled: (r) => Array.isArray((r as FilterValuesSlot).subjects),
-    async compute(calls, text) {
-      return { subjects: await inferSubjects(calls.gemini, text), grade: parseGradeFromText(text) };
-    },
-  },
   filterTags: {
     isFilled: (r) => Array.isArray((r as FilterTagsSlot).enrichedTags),
     async compute(calls, text) {
@@ -231,15 +216,8 @@ export async function getProfileDerived(
   return promise;
 }
 
-// The one way search flows should read subjects + grade.
-export async function getProfileFilterValues(
-  store: ProfileStore,
-  calls: ModelCalls,
-  record?: ProfileRecord | null,
-): Promise<{ subjects: string[]; grade: number | null }> {
-  const rec = (await getProfileDerived(store, calls, 'filterValues', record)) as FilterValuesSlot;
-  return { subjects: rec.subjects || [], grade: rec.grade ?? null };
-}
+// getProfileFilterValues (subjects + grade) was RETIRED in Phase 6 with the filterValues slot.
+// Grade now comes from the `basics` slot; subject signal from `filterTags` (embedded themes).
 
 // Synchronous read of a stored slot, for callers that must not block (the results filter bar
 // paints from this before deciding whether anything is missing). Returns null — distinct

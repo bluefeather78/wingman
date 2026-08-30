@@ -738,7 +738,7 @@ export default function Finder() {
   // Short, friendly labels for the review drawer, keyed on the rung axis the server returned.
   const AXIS_LABEL: Record<string, string> = {
     cost: 'Budget', time_commitment: 'Time', citizenship: 'Citizenship', hard_demographic: 'Eligibility',
-    type: 'Type', season: 'Timing', format: 'Format', subject: 'Subject', engagement: 'Enjoy',
+    type: 'Type', season: 'Timing', format: 'Format', subject: 'Subject', engagement: 'Enjoy', outcome: 'Goal',
     // Behavioral vibe axes (rerank-only) — labelled "Vibe" in the review drawer.
     selectivity: 'Vibe', residential: 'Vibe', collaboration: 'Vibe',
     structure: 'Vibe', intensity: 'Vibe', output: 'Vibe',

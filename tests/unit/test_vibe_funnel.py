@@ -4,8 +4,9 @@ and their answers become soft preference phrases handed to curation."""
 import json
 
 from app.services.funnel import (
-    BEHAVIORAL_AXES, CURATE_AT, MAX_RUNGS, ENGAGEMENT_OTHER,
+    BEHAVIORAL_AXES, CURATE_AT, MAX_RUNGS, POOL_FLOOR, ENGAGEMENT_OTHER,
     behavioral_pref, collect_preferences, build_vibe_rung, next_vibe_rung, build_engagement_rung,
+    build_outcome_rung, next_outcome_rung,
 )
 from app.services.curation import build_curation_user_content
 
@@ -27,12 +28,12 @@ def test_collect_preferences_only_vibe_axes_and_real_answers():
     answers = {
         "cost": "0",                 # filter axis -> ignored
         "collaboration": "team",     # vibe -> phrase
-        "intensity": "__skip__",     # vibe but skipped -> no phrase
-        "output": "output",          # vibe -> phrase
+        "structure": "__skip__",     # vibe but skipped -> no phrase
+        "intensity": "immersive",    # vibe -> phrase
     }
     prefs = collect_preferences(answers)
     assert "Prefers team / cohort settings" in prefs
-    assert "Wants to produce something tangible (paper, project, award)" in prefs
+    assert "Prefers full-time, immersive commitments" in prefs
     assert len(prefs) == 2
     assert collect_preferences({}) == []
     assert collect_preferences(None) == []
@@ -59,20 +60,20 @@ def test_build_vibe_rung_falls_back_to_local_on_bad_output():
 
 
 def test_build_vibe_rung_fills_missing_option_label_from_example():
-    parsed = {"axis": "output", "question": "Build a thing, or just explore?",
-              "options": [{"value": "output", "label": "Ship it"}]}  # 'explore' label missing
-    rung = build_vibe_rung(parsed, "output", _pool(1))
+    parsed = {"axis": "intensity", "question": "All in, or take it easy?",
+              "options": [{"value": "immersive", "label": "All in"}]}  # 'light' label missing
+    rung = build_vibe_rung(parsed, "intensity", _pool(1))
     by_value = {o["value"]: o["label"] for o in rung["options"]}
-    assert by_value["output"] == "Ship it"
-    assert by_value["explore"] == "Just explore"   # fell back to the example
+    assert by_value["immersive"] == "All in"
+    assert by_value["light"] == "Keep it light"    # fell back to the example
 
 
 def test_next_vibe_rung_stops_when_pool_small_or_capped():
     ask = lambda system, uc: json.dumps({"axis": "collaboration", "question": "q",
                                           "options": [{"value": "team", "label": "T"}, {"value": "solo", "label": "S"}]})
     parse = json.loads
-    # Pool already small enough to curate -> no vibe question.
-    assert next_vibe_rung(_pool(CURATE_AT), {}, {}, ask, parse, rungs_done=0) is None
+    # Pool at/below the rerank floor -> no vibe question.
+    assert next_vibe_rung(_pool(POOL_FLOOR), {}, {}, ask, parse, rungs_done=0) is None
     # Rung cap reached.
     assert next_vibe_rung(_pool(CURATE_AT + 20), {}, {}, ask, parse, rungs_done=MAX_RUNGS) is None
 
@@ -120,6 +121,34 @@ def test_engagement_other_folds_into_preferences_but_a_type_answer_does_not():
     prefs = collect_preferences({"engagement": ENGAGEMENT_OTHER + "building assistive tech"})
     assert prefs == ["Enjoys: building assistive tech"]
     assert collect_preferences({"engagement": "Competition"}) == []
+
+
+def test_outcome_rung_is_rerank_only_and_pool_derived():
+    parsed = {"question": "What do you want to walk away with?",
+              "options": [{"value": "build a finished project", "label": "Build it"},
+                          {"value": "win an award", "label": "Win it"}]}
+    rung = build_outcome_rung(parsed, _pool(30))
+    assert rung["axis"] == "outcome" and rung["kind"] == "vibe" and rung["allow_other"] is True
+    assert rung["classification"] == {}                 # never filters
+    assert [o["value"] for o in rung["options"]] == ["build a finished project", "win an award"]
+
+
+def test_outcome_rung_falls_back_locally_on_bad_output():
+    rung = build_outcome_rung(None, _pool(30))
+    assert rung["axis"] == "outcome" and len(rung["options"]) >= 2 and rung["classification"] == {}
+
+
+def test_next_outcome_rung_stops_when_small_capped_or_already_asked():
+    ask = lambda s, u: '{"question":"q","options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]}'
+    assert next_outcome_rung(_pool(POOL_FLOOR), {}, ask, json.loads, 0) is None          # pool at floor
+    assert next_outcome_rung(_pool(CURATE_AT + 20), {}, ask, json.loads, MAX_RUNGS) is None   # capped
+    assert next_outcome_rung(_pool(CURATE_AT + 20), {"outcome": "x"}, ask, json.loads, 0) is None  # asked
+
+
+def test_outcome_answer_folds_into_preferences():
+    assert collect_preferences({"outcome": "build a finished project"}) == ["Wants: build a finished project"]
+    assert collect_preferences({"outcome": ENGAGEMENT_OTHER + "start a nonprofit"}) == ["Wants: start a nonprofit"]
+    assert collect_preferences({"outcome": "__skip__"}) == []
 
 
 def test_curation_payload_surfaces_folded_preferences():

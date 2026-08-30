@@ -26,8 +26,9 @@ from app.services.match_pipeline import (
 )
 from app.services.curation import CURATION_SYSTEM
 from app.services.funnel import (
-    FUNNEL_QUESTION_SYSTEM, BEHAVIORAL_QUESTION_SYSTEM, CURATE_AT, FUNNEL_MAX_TOKENS,
-    next_vibe_rung, collect_preferences, build_engagement_rung,
+    FUNNEL_QUESTION_SYSTEM, BEHAVIORAL_QUESTION_SYSTEM, OUTCOME_QUESTION_SYSTEM,
+    CURATE_AT, FUNNEL_MAX_TOKENS,
+    next_vibe_rung, next_outcome_rung, collect_preferences, build_engagement_rung,
 )
 from app.services.embeddings import embed_student_themes
 from gemini_common import call_gemini, extract_json
@@ -162,16 +163,22 @@ def handle_match(body: dict = Depends(json_body),
             rungs_done = len(answers)
             rung = None
             if not curate_now:
-                # Dimension 2 first: the pool-derived engagement FILTER ("what do you enjoy
-                # doing"), built locally from the pool's `type` distribution — no model call.
+                # The funnel order puts the student's "what am I here for" dimensions FIRST so they
+                # are reliably asked, THEN the practical feasibility filters, THEN the softer vibe:
+                #   dim 2 engagement (filter) -> dim 3 outcome (rerank) -> feasibility filters ->
+                #   vibe. Filters gate on CURATE_AT (stop narrowing when tight); rerank questions
+                #   gate on POOL_FLOOR (reorder a meaningful list, right up to the shortlist).
+                # Dimension 2: pool-derived engagement FILTER, built locally from the pool's `type`.
                 if "engagement" not in answers and len(pool) > CURATE_AT:
                     rung = build_engagement_rung(pool)
-                # Then the LLM-designed feasibility/structured filter questions.
+                # Dimension 3: pool-derived OUTCOME rerank ("what do you want out of it").
+                if rung is None:
+                    rung = next_outcome_rung(pool, answers, _ask, extract_json, rungs_done)
+                # Feasibility / structured LLM filter questions (cost/citizenship/timing/demographic).
                 if rung is None:
                     rung = next_funnel_rung(pool, student, _ask, extract_json, rungs_done)
-                # Filter axes exhausted but the pool is still large -> a rerank-only VIBE question
-                # (backend owns the funnel; vibe never cuts, only reorders the final curation).
-                if rung is None and len(pool) > CURATE_AT:
+                # Remaining rerank-only VIBE questions (never cut, only reorder curation).
+                if rung is None:
                     rung = next_vibe_rung(pool, student, answers, _ask, extract_json, rungs_done)
             if rung is None:
                 # Fold the answered vibe axes into curation as soft preference phrases (rerank).

@@ -368,7 +368,9 @@ function ShortlistCard({ opp, tier, reason, flags, pending, saved, onToggle, onN
           <View style={{ width: 4, borderRadius: 2, backgroundColor: colors.yellow300 }} />
           <View style={{ flex: 1 }}>
             <Txt style={type.label}>WHY IT FITS</Txt>
-            <Txt numberOfLines={hovered ? undefined : 2} style={{ fontFamily: fonts.bodyBold, color: colors.ink, fontSize: 15 }}>{whyText}</Txt>
+            {/* The "why it fits" is the hero content (the WOW) — never clamp it; show it in full
+                so the student gets the whole, trust-building reason at a glance. */}
+            <Txt style={{ fontFamily: fonts.bodyBold, color: colors.ink, fontSize: 15, lineHeight: 22 }}>{whyText}</Txt>
           </View>
         </View>
       ) : null}

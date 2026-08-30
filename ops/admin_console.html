@@ -910,6 +910,15 @@ tr.disabled-seed { opacity: .48; }
         </div>
         <div class="spacer"></div>
         <select id="pendingSource"><option value="">All sources</option></select>
+        <select id="pendingClass" title="Filter by page-classifier verdict (run classify_queue.py --write to populate)">
+          <option value="">All classes</option>
+          <option value="program">program</option>
+          <option value="first_party_hub">first_party_hub</option>
+          <option value="third_party_hub">third_party_hub</option>
+          <option value="none">none</option>
+          <option value="unreadable">unreadable</option>
+          <option value="(unclassified)">(unclassified)</option>
+        </select>
         <button class="btn btn-sm" id="pendingSelectAll">Select all</button>
         <button class="btn btn-sm" id="pendingClear">Clear</button>
         <button class="btn btn-danger" id="rejectBtn" disabled>Reject selected</button>
@@ -1534,7 +1543,7 @@ const S = {
   userCosts: null, userCostSort: 'cost_usd', expandedUsers: new Set(), view: 'metrics',
   metrics: null, metricPanel: 'funnel', metricSort: 'stage', expandedStage: null,
   lastRefresh: null, seedYield: null, userPanel: 'provider',
-  snapshots: [], pending: [], pendingSource: '', selectedPending: new Set(),
+  snapshots: [], pending: [], pendingSource: '', pendingClass: '', selectedPending: new Set(),
   signups: [], signupStatus: 'pending_review', selectedSignups: new Set(),
   signupCounts: {}, mailingListReady: true,
   emails: null, emailKind: 'welcome',
@@ -1865,7 +1874,13 @@ function pendingInStatus(status) {
 // are is_active=true and live under Run → Duplicates, not here.
 function visiblePendingRows() {
   const inStatus = pendingInStatus(S.pendingStatus);
-  return S.pendingSource ? inStatus.filter(o => o.source === S.pendingSource) : inStatus;
+  let rows = S.pendingSource ? inStatus.filter(o => o.source === S.pendingSource) : inStatus;
+  if (S.pendingClass) {
+    rows = S.pendingClass === '(unclassified)'
+      ? rows.filter(o => !rowClass(o))
+      : rows.filter(o => rowClass(o) === S.pendingClass);
+  }
+  return rows;
 }
 
 // One row of the moderation table, shared by the Review queue (Queue/Rejected) and the
@@ -1879,7 +1894,8 @@ function pendingRowHtml(o, selected, toggleFn, opts) {
   const dupes = Array.isArray(o.dup_candidates) ? o.dup_candidates : [];
   const tags = [
     o.submitted_by ? `<span class="pill info">from ${esc(o.submitted_by)}</span>` : '',
-    ...flags.map(f => `<span class="pill warn" title="${esc(String(f))}">${esc(String(f).slice(0, 90))}</span>`),
+    ...flags.map(f => String(f).startsWith('classify:') ? classifyPill(f)
+      : `<span class="pill warn" title="${esc(String(f))}">${esc(String(f).slice(0, 90))}</span>`),
     isAdjudicated(o) ? `<span class="pill danger">${esc(o.moderation_status)}${o.reviewed_at ? ' ' + ago(o.reviewed_at) : ''}</span>` : '',
     o.moderation_status === 'suspected_duplicate' ? `<span class="pill warn">suspected duplicate</span>` : '',
     o.duplicate_of ? `<span class="pill info">of ${esc((S.duplicateTargets[o.duplicate_of] || {}).name || o.duplicate_of)}</span>` : '',
@@ -2376,6 +2392,36 @@ const OPP_FIELDS = {
 // and WHY it matched. "Mark duplicate" opens the existing modal, which pre-selects from the
 // same list. Confidence drives the colour because strong/weak mean very different things
 // here — a strong match is usually a real duplicate, a weak one usually is not.
+// The page-classifier verdict, stamped by `classify_queue.py --write` as a `classify: ...` entry
+// in quality_flags. Rendered as a class-coloured pill so a reviewer reads the verdict at a glance:
+// program is a good row (ok/green), a hub belongs in mining not the queue (info), none/unreadable/
+// unparsed and any STALE program are the ones to look at (warn/danger).
+const CLASSIFY_PILL_CLASS = {
+  program: 'ok', first_party_hub: 'info', third_party_hub: 'info',
+  none: 'warn', unreadable: 'danger', 'no verdict': 'danger',
+};
+function classifyKlass(f) {  // 'classify: program (high); STALE...' -> 'program'
+  return String(f).slice('classify:'.length).split('(')[0].trim();
+}
+function classifyPill(f) {
+  const rest = String(f).slice('classify:'.length).trim();
+  const klass = classifyKlass(f);
+  const cls = /\bSTALE\b/.test(rest) ? 'danger' : (CLASSIFY_PILL_CLASS[klass] || 'warn');
+  return `<span class="pill ${cls}" title="${esc(String(f))}">${esc(rest.slice(0, 90))}</span>`;
+}
+// The classifier verdict for a row, or '' if none has been stamped yet. Drives the class filter.
+function rowClass(o) {
+  const flags = Array.isArray(o.quality_flags) ? o.quality_flags : [];
+  const f = flags.find(x => String(x).startsWith('classify:'));
+  return f ? classifyKlass(f) : '';
+}
+
+// dup_candidates confidence -> pill colour. Covers both vocabularies that land in the column:
+// url_dedupe's submission-time strong/weak, and dedupe_queue --write's embedding TIERS.
+const DUPE_PILL_CLASS = {
+  strong: 'danger', proof: 'danger', confident: 'danger',
+  adjudicate: 'warn', weak: 'warn', hint: 'warn', match: 'warn',
+};
 function dupeBackLinks(dupes) {
   if (!dupes.length) return '';
   return `<div class="dupe-back">
@@ -2385,8 +2431,9 @@ function dupeBackLinks(dupes) {
       const link = c.url
         ? `<a href="${esc(c.url)}" target="_blank" rel="noopener" title="${esc(c.url)}">${label} &#8599;</a>`
         : label;
+      const conf = String(c.confidence || 'match').toLowerCase();
       return `<div class="dupe-back-row">
-        <span class="pill ${c.confidence === 'strong' ? 'danger' : 'warn'}">${esc(c.confidence || 'match')}</span>
+        <span class="pill ${DUPE_PILL_CLASS[conf] || 'info'}">${esc(c.confidence || 'match')}</span>
         ${link}
         <span class="mono dupe-back-id">${esc(c.id || '')}</span>
         <span class="dupe-back-why">${esc(c.reason || '')}</span>
@@ -4639,6 +4686,7 @@ $('restoreBtn').onclick = () => moderateSelected('pending_review');
 $('rejectSave').onclick = () => confirmReject();
 $('rejectClose').onclick = () => { $('rejectModal').classList.remove('open'); S.rejectIds = null; };
 $('pendingSource').onchange = e => { S.pendingSource = e.target.value; renderPending(); };
+$('pendingClass').onchange = e => { S.pendingClass = e.target.value; renderPending(); };
 [...document.querySelectorAll('#pendingStatusTabs .tab')].forEach(t => {
   // Switching slices clears the selection: an id selected in the queue means something
   // different once the buttons on screen are Restore rather than Activate/Reject.

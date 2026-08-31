@@ -2244,6 +2244,33 @@ def _index_activated_rows(ids):
         return 0
 
 
+# Sources whose rows arrive prefilled with refresh_opportunities' own extraction and therefore
+# never need to be queued for it: the scraper (M9 discovery gate, scrape_opportunities.py) and
+# the hub miner (combined_reader.extract_metadata, mine_hub_pages.py) both now run that same
+# extraction on the page they already fetched, before insert (2026-08-30). Everything else --
+# user-submitted, scraper_seeds-derived, tombstone backfills, name-harvest finds -- still might
+# be thin, so it still queues. Matched by prefix against the `source` column's own literal
+# values (`scraper-national-<date>`, `scraper-seattle-<date>`, `hub-<domain>-<date>`).
+PREFILLED_SOURCE_PREFIXES = ("scraper-", "hub-")
+
+
+def _prefilled_ids(ids):
+    """Which of `ids` came from a source that already ran refresh_opportunities' own extraction
+    (see PREFILLED_SOURCE_PREFIXES). Best-effort: a lookup failure returns an empty set, which
+    is the safe direction — activate_opportunities then queues everyone, same as before this
+    existed, rather than silently skipping a row that might actually need refreshing."""
+    ids = [str(i).strip() for i in (ids or []) if str(i).strip()]
+    if not ids:
+        return set()
+    try:
+        rows = _supabase_request("opportunities", params={
+            "select": "id,source", "id": f"in.({','.join(ids)})"}) or []
+    except Exception:
+        return set()
+    return {r["id"] for r in rows
+           if str(r.get("source") or "").startswith(PREFILLED_SOURCE_PREFIXES)}
+
+
 def activate_opportunities(ids, active=True):
     """Flip is_active for an explicit list of ids. Never called with anything but an
     operator's explicit selection — there is no "activate all matching" path on purpose."""
@@ -2252,6 +2279,7 @@ def activate_opportunities(ids, active=True):
         return {"ok": False, "error": "No opportunity ids given."}
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
+    prefilled = _prefilled_ids(ids) if active else set()
     done, errors, details = 0, 0, []
     activated_ids = []
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -2259,26 +2287,34 @@ def activate_opportunities(ids, active=True):
     # a NULL moderation_status and comes back round the queue on the next pass. Dropped
     # from the payload (not the whole write) if the migration has not been run.
     #
-    # Enqueue for a metadata refresh: an activated row goes live with whatever metadata it
-    # had (often a scraper's thin extraction), so mark it "awaiting refresh_opportunities"
-    # here; the agent clears the mark when it reads the page. Deactivating CLEARS the mark
-    # (a hidden row is not awaiting anything). See activation_refresh_schema.sql. This is a
-    # SEPARATE column from the moderation one, so it degrades on its OWN ladder rung — a
-    # missing queue column must never cost the moderation stamp (which would send the row
-    # back round the queue). Rungs, most→least complete: full → moderation-only → plain.
+    # Enqueue for a metadata refresh: a row NOT from a prefilled source (see PREFILLED_SOURCE_
+    # PREFIXES above) goes live with whatever metadata it had, so mark it "awaiting
+    # refresh_opportunities" here; the agent clears the mark when it reads the page. A prefilled
+    # row skips the marker entirely — nothing to await. Deactivating CLEARS the mark
+    # unconditionally, regardless of source (a hidden row is not awaiting anything). See
+    # activation_refresh_schema.sql. This is a SEPARATE column from the moderation one, so it
+    # degrades on its OWN ladder rung — a missing queue column must never cost the moderation
+    # stamp (which would send the row back round the queue). Rungs, most→least complete:
+    # full → moderation-only → plain.
     stamped = {"is_active": bool(active), "updated_at": now}
     if active:
         stamped.update({"moderation_status": "approved", "reviewed_by": "admin-console",
                         "reviewed_at": now})
-    # full = stamped + the queue marker (now when activating, cleared when deactivating).
-    full = dict(stamped, **{ACTIVATION_REFRESH_COLUMN: (now if active else None)})
     plain = {"is_active": bool(active), "updated_at": now}
     # Ladder rungs by index: 0 full, 1 moderation-only (queue column missing), 2 plain
     # (moderation columns also missing). `rung` latches at the first level that works, so
     # the rest of the batch does not re-probe a column we already know is absent.
-    ladder = [full, stamped, plain]
     rung = 0
     for opp_id in ids:
+        # full = stamped + the queue marker, EXCEPT a prefilled row being activated (no marker
+        # at all — the column is simply not touched, so it stays unqueued).
+        if not active:
+            full = dict(stamped, **{ACTIVATION_REFRESH_COLUMN: None})
+        elif opp_id in prefilled:
+            full = stamped
+        else:
+            full = dict(stamped, **{ACTIVATION_REFRESH_COLUMN: now})
+        ladder = [full, stamped, plain]
         try:
             while True:
                 try:

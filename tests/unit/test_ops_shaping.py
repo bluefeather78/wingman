@@ -576,6 +576,35 @@ def test_status_groupings_are_consistent():
     assert set(core.QUEUE_STATUSES) == {"pending_review", "approved"}
 
 
+def test_prefilled_ids_matches_scraper_and_hub_sources(monkeypatch):
+    # Scraper and hub-miner rows now arrive prefilled with refresh_opportunities' own
+    # extraction (2026-08-30) and must not be queued for it; everything else still might be
+    # thin and should still queue.
+    rows = [
+        {"id": "1", "source": "scraper-national-20260830"},
+        {"id": "2", "source": "hub-cmu.edu-20260827"},
+        {"id": "3", "source": "user-submitted"},
+        {"id": "4", "source": "wingman-seed"},
+        {"id": "5", "source": None},
+    ]
+    monkeypatch.setattr(core, "_supabase_request", lambda *a, **k: rows)
+    assert core._prefilled_ids(["1", "2", "3", "4", "5"]) == {"1", "2"}
+
+
+def test_prefilled_ids_empty_on_lookup_failure(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(core, "_supabase_request", boom)
+    # Safe direction: a failed lookup queues everyone (empty prefilled set), never silently
+    # skips a row that might actually need refreshing.
+    assert core._prefilled_ids(["1", "2"]) == set()
+
+
+def test_prefilled_ids_empty_for_no_ids():
+    assert core._prefilled_ids([]) == set()
+    assert core._prefilled_ids(None) == set()
+
+
 # --------------------------------------------------------------------------- #
 # Maintenance tools — the runnable standalone scripts in the Run view. Pure over
 # the registry + argv builder; no subprocess is launched here.

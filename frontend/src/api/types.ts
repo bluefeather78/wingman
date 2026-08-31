@@ -117,6 +117,9 @@ export interface MatchStudentBlob {
   // asks a project-goal question instead of the engagement question.
   project_focus?: boolean;
   funnel_answers?: Record<string, unknown>;
+  // Experience-type picked in setup (raw catalog `type` strings, expanded from the friendly
+  // labels client-side). A PRE-recall filter: recall keeps only these types before top-100.
+  type_prefs?: string[];
   // Phase 4: set `funnel:true` to run the progressive funnel; `pool_ids` carries the
   // client-narrowed survivors to the next rung so recall/embedding never re-runs.
   funnel?: boolean;

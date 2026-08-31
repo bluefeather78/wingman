@@ -35,9 +35,45 @@ import {
 import { MiniBadge, PopButton, ReviewBadge, Screen, SoftCard, Txt, usePopInteraction } from '@/ui/components';
 import {
   FullListView, FunnelLoading, SearchSetup, NotInterestedModal, ReviewDrawer, RungStep, ShortlistView,
-  type SearchSetupChoice, type ShortlistItem, type Tier,
+  type SearchSetupChoice, type SearchSetupExperience, type ShortlistItem, type Tier,
 } from '@/features/freshFinds/ShortlistView';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
+
+// Mirror of app/services/funnel.py ENGAGEMENT_LABEL — the friendly "what kind of experience?"
+// label for each catalog `type`. The experience SETUP card is built from this (the type filter
+// moved from a post-recall funnel rung to a pre-recall setup choice, Shama 2026-08-30). Kept in
+// sync by hand; it is small and rarely changes.
+const EXPERIENCE_LABEL: Record<string, string> = {
+  'Competition': 'Competing head-to-head',
+  'Academic Competition': 'Competing head-to-head',
+  'Research Competition': 'Competing with a research project',
+  'Internship': 'Working somewhere real',
+  'Research': 'Doing hands-on research',
+  'Summer Program': 'An immersive program',
+  'Program': 'An immersive program',
+  'Conference': 'Events & networking',
+  'Journal': 'Publishing your work',
+  'Volunteering': 'Helping your community',
+};
+
+// Group the active catalog's `type`s into the experience chips shown in setup: one chip per
+// distinct friendly label, mapping back to every catalog type it covers, ordered by how many
+// opportunities carry it (most common first — the order build_engagement_rung used server-side).
+function buildExperienceOptions(opps: Opportunity[] | null): SearchSetupExperience[] {
+  if (!opps) return [];
+  const typeCounts = new Map<string, number>();
+  for (const o of opps) {
+    const t = String(o.type || '').trim();
+    if (t && t.toLowerCase() !== 'none') typeCounts.set(t, (typeCounts.get(t) || 0) + 1);
+  }
+  const byLabel = new Map<string, { label: string; types: string[]; count: number }>();
+  for (const [t, c] of typeCounts) {
+    const label = EXPERIENCE_LABEL[t] || t;
+    const g = byLabel.get(label) || { label, types: [], count: 0 };
+    g.types.push(t); g.count += c; byLabel.set(label, g);
+  }
+  return [...byLabel.values()].sort((a, b) => b.count - a.count).map(({ label, types }) => ({ label, types }));
+}
 
 interface Result {
   opp: Opportunity;
@@ -259,7 +295,7 @@ export default function Finder() {
   const [interestProjects, setInterestProjects] = useState<{ label: string; value: string }[]>([]);
   // The pre-recall SearchSetup choice (interests picked, budget, timing), captured so the review
   // drawer can show it. A ref because it's read during render, not a render trigger itself.
-  const setupChoiceRef = useRef<{ interests: string[]; cost: string; time: string } | null>(null);
+  const setupChoiceRef = useRef<{ interests: string[]; experiences: string[]; cost: string; time: string } | null>(null);
   // Hover-lift for result cards (.pop-card:hover in the live app) — one shared id rather
   // than a hook per card, since the card list is rendered via .map(), not its own component.
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
@@ -833,6 +869,7 @@ export default function Finder() {
       secs.push({
         title: 'Your search', items: [
           { label: 'Pursuing', value: setup.interests.length ? setup.interests.join(', ') : 'All my interests' },
+          { label: 'Experience', value: setup.experiences.length ? setup.experiences.join(', ') : 'Any kind' },
           { label: 'Budget', value: setup.cost === 'free' ? 'Free only' : 'Open to paid' },
           { label: 'Timing', value: setup.time === 'summer' ? 'Summer' : setup.time === 'school_year' ? 'School year' : 'Any time' },
         ],
@@ -858,8 +895,10 @@ export default function Finder() {
   function beginFunnel(choice: SearchSetupChoice) {
     const projectFocus = choice.projects.length > 0;
     // project_focus (explicit project pick) makes the funnel ask a project-goal question instead
-    // of engagement. Set it regardless of the focus branch below.
-    funnelBlob.current = { ...(funnelBlob.current ?? {}), project_focus: projectFocus };
+    // of the outcome one. type_prefs is the experience-type FILTER applied in recall (empty = all),
+    // so the top-100 pool is already of the chosen type(s). Both survive the theme/project
+    // reassignment below because it spreads ...blob.
+    funnelBlob.current = { ...(funnelBlob.current ?? {}), project_focus: projectFocus, type_prefs: choice.experiences };
     const blob = funnelBlob.current;
     // Any pick (theme OR project) means "focus on exactly these"; picking nothing = use all.
     if (blob && (choice.themes.length || choice.projects.length)) {
@@ -871,10 +910,12 @@ export default function Finder() {
     }
     const answers: Record<string, string> = { cost: choice.cost, time_commitment: choice.time };
     funnelAnswers.current = answers;
-    // Capture the setup for the review drawer (interests picked + budget + timing). In-funnel
-    // answers (engagement/outcome/vibe) accumulate separately in funnelReview.
+    // Capture the setup for the review drawer (interests + experience + budget + timing). In-funnel
+    // answers (outcome/vibe) accumulate separately in funnelReview. Experience types are mapped
+    // back to their friendly labels (deduped) for display.
     setupChoiceRef.current = {
       interests: [...choice.themes, ...choice.projects.map(projectLabel)],
+      experiences: [...new Set(choice.experiences.map((t) => EXPERIENCE_LABEL[t] || t))],
       cost: choice.cost,
       time: choice.time,
     };
@@ -1254,7 +1295,8 @@ export default function Finder() {
   // (funnelLoading), show the loading screen.
   if (stage === 'interests') {
     if (funnelLoading) return <FunnelLoading />;
-    return <SearchSetup themes={interestThemes} projects={interestProjects} onConfirm={beginFunnel} />;
+    return <SearchSetup themes={interestThemes} projects={interestProjects}
+      experiences={buildExperienceOptions(opps)} onConfirm={beginFunnel} />;
   }
 
   // ---------- Funnel stage (Phase 4) ----------

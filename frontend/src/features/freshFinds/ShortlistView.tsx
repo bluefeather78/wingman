@@ -7,7 +7,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Easing, Linking, PanResponder, Pressable, ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
 
 import type { Opportunity } from '@/api/types';
-import { Badge, MiniBadge, PopButton, PopCard, REVIEW_STATUS_META, RightDrawer, Screen, Txt } from '@/ui/components';
+import { MiniBadge, PopButton, PopCard, REVIEW_STATUS_META, RightDrawer, Screen, Txt } from '@/ui/components';
 import { colors, fonts, popShadow, radius, space, type } from '@/ui/theme';
 
 export type Tier = 'strong' | 'look' | 'stretch';
@@ -32,6 +32,13 @@ export interface RungOption {
 const type_h1 = { fontFamily: fonts.display, fontSize: 24, lineHeight: 32, color: colors.navy };
 const type_h2 = { fontFamily: fonts.display, fontSize: 20, lineHeight: 28, color: colors.navy };
 const type_body = { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: colors.inkSoft };
+
+// Shared card-stack surface + accent tints, used by BOTH the setup cards and the funnel rungs
+// so the two phases read as one continuous flow (navy pop-shadow card, teal for choices).
+const CARD_MAX_W = 600;
+const CARD_SURFACE = { backgroundColor: colors.card, borderRadius: radius.xl, borderWidth: 3, borderColor: colors.navy, ...popShadow(5, colors.navy) };
+const TEAL_TINT = 'rgba(0,178,202,0.14)';
+const MINT_TINT = 'rgba(125,207,182,0.20)';
 
 const NOT_INTERESTED_REASONS = ['Wrong subject', 'Too advanced', 'Not my thing', 'Doesn’t fit my location'];
 
@@ -102,41 +109,54 @@ function ActivitySpinner() {
 // on-interest, affordable, and available. Interest focuses recall on the theme(s) picked (none =
 // all); budget and timing filter the catalog by price/season inside recall.
 export interface SearchSetupProject { label: string; value: string; }
+// One "experience" chip: a friendly label mapping to the catalog `type` strings it covers
+// (e.g. "An immersive program" -> ["Summer Program", "Program"]). Built client-side from the
+// loaded catalog so only experiences that actually exist are offered.
+export interface SearchSetupExperience { label: string; types: string[]; }
 export interface SearchSetupChoice {
   themes: string[]; projects: string[]; cost: 'free' | 'any'; time: 'summer' | 'school_year' | 'any';
+  // Chosen experience types (expanded catalog `type` strings). A PRE-recall filter — empty = all.
+  experiences: string[];
 }
-// A swipeable card stack — one question per card (Pursuing → Budget → Timing), the student
-// swipes/tap-throughs to advance, and the last card carries the real "Find my matches" CTA.
+// A swipeable card stack — one question per card (Pursuing → Experience → Budget → Timing), the
+// student swipes/tap-throughs to advance, and the last card carries the real "Find my matches" CTA.
 // The output contract (onConfirm) is unchanged, so finder.tsx's beginFunnel(choice) is too.
 // Gesture is RN's built-in Animated + PanResponder rather than reanimated/gesture-handler
 // (neither is a dependency here); PanResponder drives translateX + rotate on the front card and
 // works with mouse-drag on RN-web, so desktop needs no separate click path.
-export function SearchSetup({ themes, projects, onConfirm }: {
-  themes: string[]; projects: SearchSetupProject[]; onConfirm: (choice: SearchSetupChoice) => void;
+export function SearchSetup({ themes, projects, experiences, onConfirm }: {
+  themes: string[]; projects: SearchSetupProject[]; experiences: SearchSetupExperience[];
+  onConfirm: (choice: SearchSetupChoice) => void;
 }) {
   const { width: winW } = useWindowDimensions();
-  const CARD_W = Math.min(600, winW - 32);
+  const CARD_W = Math.min(CARD_MAX_W, winW - 32);
   const CARD_MIN_H = 340;
 
-  // Pursuing only appears when the profile yielded themes/projects to pick from; budget and
-  // timing are always asked. Card count adapts, so the dots and "n / N" stay honest.
-  const questions: ('pursuing' | 'budget' | 'timing')[] = [];
+  // Pursuing appears when the profile yielded themes/projects; experience when the catalog offers
+  // 2+ distinct types to choose between; budget and timing are always asked. Card count adapts, so
+  // the dots and "n / N" stay honest.
+  const questions: ('pursuing' | 'experience' | 'budget' | 'timing')[] = [];
   if (themes.length > 0 || projects.length > 0) questions.push('pursuing');
+  if (experiences.length > 1) questions.push('experience');
   questions.push('budget', 'timing');
   const N = questions.length;
 
   const [cardIndex, setCardIndex] = useState(0);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [selProj, setSelProj] = useState<Set<string>>(new Set());
+  const [selExp, setSelExp] = useState<Set<string>>(new Set());
   const [cost, setCost] = useState<'free' | 'any'>('any');
   const [time, setTime] = useState<'summer' | 'school_year' | 'any'>('any');
   // Selecting a chip never advances the card — only a swipe/tap-through does — so a student can
   // multi-select before moving on.
   const toggle = (t: string) => setSel((s) => { const n = new Set(s); n.has(t) ? n.delete(t) : n.add(t); return n; });
   const toggleProj = (v: string) => setSelProj((s) => { const n = new Set(s); n.has(v) ? n.delete(v) : n.add(v); return n; });
+  const toggleExp = (l: string) => setSelExp((s) => { const n = new Set(s); n.has(l) ? n.delete(l) : n.add(l); return n; });
   const anyFocus = sel.size + selProj.size;
   const isLast = cardIndex >= N - 1;
-  const confirm = () => onConfirm({ themes: [...sel], projects: [...selProj], cost, time });
+  // Expand the picked experience labels back to their catalog `type` strings for recall.
+  const chosenTypes = experiences.filter((e) => selExp.has(e.label)).flatMap((e) => e.types);
+  const confirm = () => onConfirm({ themes: [...sel], projects: [...selProj], cost, time, experiences: chosenTypes });
 
   // Front-card drag (translateX + rotate) and a spring entrance on each advance; plus a slow
   // opacity pulse on the "swipe to continue" hint to teach the gesture without an icon.
@@ -177,7 +197,7 @@ export function SearchSetup({ themes, projects, onConfirm }: {
   });
 
   const rotate = pan.interpolate({ inputRange: [-CARD_W, 0, CARD_W], outputRange: ['-8deg', '0deg', '8deg'], extrapolate: 'clamp' });
-  const cardSurface = { backgroundColor: colors.card, borderRadius: radius.xl, borderWidth: 3, borderColor: colors.navy, ...popShadow(5, colors.navy) };
+  const cardSurface = CARD_SURFACE;
 
   // Selected fill and the CTA/hint use teal rather than the orange primary — a calmer accent for
   // a screen that's about choosing, reserving orange for the one true "go" action elsewhere.
@@ -193,6 +213,8 @@ export function SearchSetup({ themes, projects, onConfirm }: {
   const q = questions[cardIndex];
   const meta = q === 'pursuing'
     ? { badge: 'PURSUING', title: 'Which of these are you pursuing?', sub: 'Pick any that apply — or leave blank for all of them.' }
+    : q === 'experience'
+    ? { badge: 'EXPERIENCE', title: 'What kind of experience are you most excited about?', sub: 'Pick any that appeal — or leave blank for all of them.' }
     : q === 'budget'
     ? { badge: 'BUDGET', title: "What's your budget?", sub: 'We’ll only surface things you can actually do.' }
     : { badge: 'TIMING', title: 'When are you free?', sub: 'Shapes which season we pull from — pick what fits.' };
@@ -230,7 +252,7 @@ export function SearchSetup({ themes, projects, onConfirm }: {
               ] },
             ]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <MiniBadge label={meta.badge} bg="rgba(0,178,202,0.14)" fg={colors.teal} borderColor={null} />
+              <MiniBadge label={meta.badge} bg={TEAL_TINT} fg={colors.teal} borderColor={null} />
               <Txt style={{ fontFamily: fonts.bodyBold, fontSize: 13, color: colors.slate400 }}>{cardIndex + 1} / {N}</Txt>
             </View>
 
@@ -241,6 +263,9 @@ export function SearchSetup({ themes, projects, onConfirm }: {
               {q === 'pursuing' && (<>
                 {themes.map((t) => chip(t, sel.has(t), () => toggle(t)))}
                 {projects.map((p) => chip(p.label, selProj.has(p.value), () => toggleProj(p.value)))}
+              </>)}
+              {q === 'experience' && (<>
+                {experiences.map((e) => chip(e.label, selExp.has(e.label), () => toggleExp(e.label)))}
               </>)}
               {q === 'budget' && (<>
                 {chip('Free only', cost === 'free', () => setCost('free'))}
@@ -301,8 +326,19 @@ export function RungStep({
   onPick: (value: string) => void; onSkip: () => void; onBack: () => void; onShowAll?: () => void;
   allowOther?: boolean; onOther?: (text: string) => void;
 }) {
+  const { width: winW } = useWindowDimensions();
+  const CARD_W = Math.min(CARD_MAX_W, winW - 32);
   const [otherOpen, setOtherOpen] = useState(false);
   const [otherText, setOtherText] = useState('');
+
+  // Spring the card in on every new question — the same per-advance entrance the setup cards use,
+  // so answering a rung reads as the next card coming forward.
+  const enter = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    enter.setValue(0);
+    Animated.spring(enter, { toValue: 1, useNativeDriver: false, speed: 12, bounciness: 8 }).start();
+  }, [question, enter]);
+
   if (loading) {
     return (
       <Screen>
@@ -313,74 +349,103 @@ export function RungStep({
       </Screen>
     );
   }
+
+  // Single-select rows that advance on tap — bigger than the setup pills because each carries its
+  // own survivor count; teal press state matches the setup's selected-chip fill.
+  const optionCard = {
+    borderWidth: 2.5, borderColor: colors.navy, borderRadius: radius.lg,
+    paddingVertical: 14, paddingHorizontal: 18, backgroundColor: colors.card,
+  };
+
   return (
     <Screen>
-      <View style={{ marginTop: space.lg, gap: space.lg }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: space.sm }}>
-          {isVibe
-            ? <Txt style={{ ...type_body, color: colors.slate500 }}>Quick vibe check</Txt>
-            : <Txt style={{ ...type_body, color: colors.slate500 }}>
-                {poolCount != null && <Txt style={{ fontFamily: fonts.display, color: colors.orange, fontSize: 18 }}>~{poolCount} </Txt>}
-                opportunities left
-              </Txt>}
-          {onShowAll && (
-            <Pressable onPress={onShowAll}><Txt style={{ fontFamily: fonts.bodyBold, color: colors.navy, textDecorationLine: 'underline' }}>Show my matches now →</Txt></Pressable>
-          )}
-        </View>
-        {isVibe
-          ? <Badge label="JUST FOR VIBES · SHAPES YOUR ORDER, NOT A FILTER" bg={colors.mint} fg={colors.emerald900} outline />
-          : <Badge label="NARROWS THE LIST" bg={colors.peach} fg={colors.orangeDeep} outline />}
-
-        <Txt style={type_h1}>{question}</Txt>
-        {rationale ? <Txt style={type_body}>{rationale}</Txt> : null}
-
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
-          {options.map((o) => (
-            <Pressable
-              key={o.value}
-              onPress={() => onPick(o.value)}
-              style={{
-                flex: 1, minWidth: 150, borderWidth: 3, borderColor: colors.navy, borderRadius: radius.lg,
-                paddingVertical: space.lg, paddingHorizontal: space.lg, backgroundColor: colors.card,
-              }}>
-              <Txt style={{ fontFamily: fonts.bodyBold, fontSize: 15, color: colors.ink }}>{o.label}</Txt>
-              {!isVibe && o.count != null && (
-                <Txt style={{ ...type_body, fontSize: 12, color: colors.slate500, marginTop: 2 }}>{o.count} match{o.count === 1 ? '' : 'es'} left</Txt>
-              )}
-            </Pressable>
-          ))}
+      <View style={{ paddingVertical: space.xl, gap: space.lg }}>
+        {/* Eyebrow + live context, centered like the setup header. */}
+        <View style={{ alignItems: 'center', gap: space.xs }}>
+          <MiniBadge
+            label={isVibe ? 'JUST FOR VIBES' : 'NARROWING YOUR LIST'}
+            bg={isVibe ? MINT_TINT : TEAL_TINT}
+            fg={isVibe ? colors.emerald900 : colors.teal}
+            borderColor={null} />
+          {isVibe ? (
+            <Txt style={{ ...type_body, textAlign: 'center' }}>Shapes your order, not a filter.</Txt>
+          ) : poolCount != null ? (
+            <Txt style={{ ...type_body, textAlign: 'center' }}>
+              <Txt style={{ fontFamily: fonts.display, color: colors.teal, fontSize: 18 }}>~{poolCount} </Txt>
+              opportunities left
+            </Txt>
+          ) : null}
         </View>
 
-        {allowOther && onOther && (
-          otherOpen ? (
-            <View style={{ gap: space.sm }}>
-              <TextInput
-                value={otherText}
-                onChangeText={setOtherText}
-                placeholder="Tell us what you're after…"
-                placeholderTextColor={colors.slate400}
-                onSubmitEditing={() => { if (otherText.trim()) onOther(otherText); }}
-                style={{ borderWidth: 3, borderColor: colors.navy, borderRadius: radius.lg, padding: space.md, fontFamily: fonts.bodyMed, fontSize: 15, color: colors.ink }}
-              />
-              <View style={{ flexDirection: 'row', gap: space.md, alignItems: 'center' }}>
-                <PopButton label="Add" onPress={() => { if (otherText.trim()) onOther(otherText); }} />
-                <Pressable onPress={() => { setOtherOpen(false); setOtherText(''); }}><Txt style={{ ...type_body, color: colors.slate500 }}>Cancel</Txt></Pressable>
-              </View>
+        <View style={{ width: CARD_W, alignSelf: 'center', marginBottom: onShowAll && !isVibe ? space.lg : 0 }}>
+          {/* One peeking back card — the stack motif, telling the student more is coming. */}
+          <View pointerEvents="none" style={[CARD_SURFACE, { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0.5, transform: [{ translateY: 13 }, { scale: 0.95 }] }]} />
+
+          <Animated.View style={[
+            CARD_SURFACE,
+            { padding: 26, minHeight: 300, opacity: enter, transform: [
+              { translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) },
+              { scale: enter.interpolate({ inputRange: [0, 1], outputRange: [0.97, 1] }) },
+            ] },
+          ]}>
+            <Txt style={type_h1}>{question}</Txt>
+            {rationale ? <Txt style={{ ...type_body, marginTop: space.xs }}>{rationale}</Txt> : null}
+
+            <View style={{ gap: space.md, marginTop: space.lg }}>
+              {options.map((o) => (
+                <Pressable
+                  key={o.value}
+                  onPress={() => onPick(o.value)}
+                  style={({ pressed }) => [optionCard, pressed ? { borderColor: colors.teal, backgroundColor: TEAL_TINT } : null]}>
+                  <Txt style={{ fontFamily: fonts.bodyBold, fontSize: 15, color: colors.ink }}>{o.label}</Txt>
+                  {!isVibe && o.count != null && (
+                    <Txt style={{ fontFamily: fonts.bodyMed, fontSize: 12, color: colors.teal, marginTop: 2 }}>{o.count} match{o.count === 1 ? '' : 'es'} left</Txt>
+                  )}
+                </Pressable>
+              ))}
             </View>
-          ) : (
-            <Pressable onPress={() => setOtherOpen(true)}>
-              <Txt style={{ ...type_body, color: colors.navy, textDecorationLine: 'underline' }}>Something else…</Txt>
-            </Pressable>
-          )
-        )}
 
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.lg }}>
-          {canBack && (
-            <Pressable onPress={onBack}><Txt style={{ ...type_body, color: colors.navy }}>← Back</Txt></Pressable>
-          )}
-          <View style={{ flex: 1 }} />
-          <Pressable onPress={onSkip}><Txt style={{ ...type_body, color: colors.slate500 }}>{isVibe ? 'No preference' : 'Skip this question'}</Txt></Pressable>
+            {allowOther && onOther && (
+              otherOpen ? (
+                <View style={{ gap: space.sm, marginTop: space.md }}>
+                  <TextInput
+                    value={otherText}
+                    onChangeText={setOtherText}
+                    placeholder="Tell us what you're after…"
+                    placeholderTextColor={colors.slate400}
+                    onSubmitEditing={() => { if (otherText.trim()) onOther(otherText); }}
+                    style={{ borderWidth: 2.5, borderColor: colors.navy, borderRadius: radius.lg, padding: space.md, fontFamily: fonts.bodyMed, fontSize: 15, color: colors.ink }}
+                  />
+                  <View style={{ flexDirection: 'row', gap: space.md, alignItems: 'center' }}>
+                    <PopButton label="Add" small onPress={() => { if (otherText.trim()) onOther(otherText); }}
+                      style={{ backgroundColor: colors.teal }} textStyle={{ color: colors.white }} />
+                    <Pressable onPress={() => { setOtherOpen(false); setOtherText(''); }}><Txt style={{ ...type_body, color: colors.slate500 }}>Cancel</Txt></Pressable>
+                  </View>
+                </View>
+              ) : (
+                <Pressable onPress={() => setOtherOpen(true)} style={{ marginTop: space.md }}>
+                  <Txt style={{ ...type_body, color: colors.teal, fontFamily: fonts.bodyBold }}>Something else…</Txt>
+                </Pressable>
+              )
+            )}
+
+            <View style={{ flex: 1, minHeight: space.lg }} />
+            <View style={{ height: 2, backgroundColor: colors.hairline, marginBottom: space.md }} />
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {canBack && (
+                <Pressable onPress={onBack}><Txt style={{ ...type_body, color: colors.navy, fontFamily: fonts.bodyBold }}>← Back</Txt></Pressable>
+              )}
+              <View style={{ flex: 1 }} />
+              <Pressable onPress={onSkip}><Txt style={{ ...type_body, color: colors.slate500 }}>{isVibe ? 'No preference' : 'Skip this question'}</Txt></Pressable>
+            </View>
+          </Animated.View>
         </View>
+
+        {onShowAll && !isVibe && (
+          <Pressable onPress={onShowAll} style={{ alignSelf: 'center' }}>
+            <Txt style={{ fontFamily: fonts.bodyBold, fontSize: 15, color: colors.teal }}>Show my matches now →</Txt>
+          </Pressable>
+        )}
       </View>
     </Screen>
   );

@@ -7,7 +7,7 @@ from app.services.funnel import (
     BEHAVIORAL_AXES, CURATE_AT, MAX_RUNGS, POOL_FLOOR, ENGAGEMENT_OTHER,
     behavioral_pref, collect_preferences, describe_funnel_choices, build_vibe_rung, next_vibe_rung,
     build_engagement_rung, build_outcome_rung, next_outcome_rung,
-    build_project_goal_rung, next_project_goal_rung,
+    build_project_goal_rung, next_project_goal_rung, describe_type_prefs,
 )
 from app.services.curation import build_curation_user_content
 
@@ -185,6 +185,16 @@ def test_describe_funnel_choices_summarizes_structured_picks():
     assert describe_funnel_choices({"engagement": ENGAGEMENT_OTHER + "x", "cost": "any", "time_commitment": "any"}) == []
     # eligibility axes are deliberately omitted (a reason must never assert a restriction).
     assert describe_funnel_choices({"citizenship": "us", "hard_demographic": "no"}) == []
+
+
+def test_describe_type_prefs_dedupes_by_label_for_curation():
+    # Experience-type moved to a pre-recall filter (type_prefs), so its "why you" line comes off
+    # the type list, not funnel_answers. Several catalog types share one friendly label.
+    out = describe_type_prefs(["Summer Program", "Program", "Internship"])
+    assert out == ['Wants a "An immersive program" kind of experience',
+                   'Wants a "Working somewhere real" kind of experience']
+    assert describe_type_prefs([]) == []
+    assert describe_type_prefs(None) == []
 
 
 def test_curation_payload_surfaces_folded_preferences():

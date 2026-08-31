@@ -206,6 +206,21 @@ def test_recall_cost_pref_free_cuts_paid_keeps_free_and_unknown():
     assert {r["id"] for r in m.recall(rows, themes)} == {"free", "paid", "unknown"}
 
 
+def test_recall_type_prefs_keeps_only_chosen_types_and_cuts_untyped():
+    # The "what kind of experience?" filter, moved to pre-recall: with type_prefs set, only rows
+    # of those types survive, and an untyped row is CUT (it can't satisfy an explicit choice).
+    themes = [[1.0, 0.0]]
+    rows = [_row("intern", [1.0, 0.0], type="Internship"),
+            _row("research", [1.0, 0.0], type="Research"),
+            _row("untyped", [1.0, 0.0])]                      # no type -> cut under an active filter
+    assert {r["id"] for r in m.recall(rows, themes, type_prefs=["Internship"])} == {"intern"}
+    # A multi-type pick (labels expand to several catalog types) keeps all of them.
+    assert {r["id"] for r in m.recall(rows, themes, type_prefs=["Internship", "Research"])} == {"intern", "research"}
+    # Empty / None keeps everyone, untyped included.
+    assert {r["id"] for r in m.recall(rows, themes, type_prefs=[])} == {"intern", "research", "untyped"}
+    assert {r["id"] for r in m.recall(rows, themes)} == {"intern", "research", "untyped"}
+
+
 def test_recall_project_match_boosted_over_theme_match():
     # A row matching a PROJECT vector out-ranks a row matching a THEME vector at the same cosine.
     themes = [[1.0, 0.0]]

@@ -388,7 +388,7 @@ _FEATURE_SIGNATURES = [
     ("distill a casual chat conversation into new facts",         "chat_findings"),
     ("classify and extract structured tracking data",             "tracker_extract"),
     ("extract structured tracking data",                          "tracker_extract"),
-    ("extract ONLY information that would be relevant",           "resume_import"),
+    ("pull out everything that would help understand this student", "resume_import"),
     ("pull out a small set of specific profile facts",            "profile_basics"),
     # The ranking prompt only contains "Rank the best 10-12 matches" on one of its two
     # selectionRule branches, so it also gets matched on its stable opening line.

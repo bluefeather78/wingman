@@ -34,7 +34,7 @@ SIGNATURE_CASES = [
     ("distill a casual chat conversation into new facts",         "chat_findings"),
     ("classify and extract structured tracking data",             "tracker_extract"),
     ("extract structured tracking data",                          "tracker_extract"),
-    ("extract ONLY information that would be relevant",           "resume_import"),
+    ("pull out everything that would help understand this student", "resume_import"),
     ("pull out a small set of specific profile facts",            "profile_basics"),
     ("helping a student find the best-fit extracurricular",       "ranking"),
     ("interests/goals to the best opportunities",                 "tag_intent"),

@@ -91,13 +91,23 @@ def extract_profile_from_text(text, source, userid=None):
     if not ANTHROPIC_API_KEY:
         return mock_extract_profile(source, text)
 
-    system_prompt = f"""You are helping a high school student build their profile for finding extracurricular opportunities.
-Given the following {"resume" if source == "resume" else "LinkedIn profile"} text, extract ONLY information that would be relevant for building a profile of the student's academic interests, extracurricular activities, skills, projects, work experience, and leadership roles.
+    system_prompt = f"""You are a friendly assistant helping a high school student build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). Given the following {"resume" if source == "resume" else "LinkedIn profile"} text, pull out everything that would help understand this student for extracurricular and college-application matching.
 
-Ignore: personal contact information, employment dates, salary information, company-specific jargon, or any other non-relevant details.
+Capture broadly — not just conventional achievements. Include, whenever the text states them:
+- grade or year in school (e.g. "junior", "11th grade") and GPA if given (e.g. "3.4 GPA")
+- where they live or their school's setting if mentioned (e.g. "large suburban high school")
+- favorite and strongest subjects, AND subjects they find hard or dislike (e.g. "I have a harder time with math and tend to procrastinate")
+- extracurriculars, clubs, sports/athletics, theater, arts, music
+- projects, research, papers, or anything larger they personally drive
+- part-time jobs, volunteering, family or community involvement, leadership roles
+- skills, and how they describe their own personality (e.g. "outgoing and talkative, get bored when I'm not doing something")
+- goals or what they're considering after high school, including uncertainty (e.g. "considering communications, journalism, or entertainment, still figuring it out")
 
-Output the extracted information as concise, first-person-compatible statements (e.g., "I've worked on...", "I'm skilled in...", "I led..." — not third person or bullet points).
-Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or preamble."""
+Do NOT drop a detail just because it isn't an impressive accomplishment — a weakness, an uncertainty, a personality trait, or an ordinary job all matter for matching. Never invent or infer anything the text doesn't state: don't guess a GPA, a grade, a location, or a gender that isn't there.
+
+Only ignore genuinely non-relevant material: contact information (phone, email, mailing address), salary figures, and company-specific jargon.
+
+Output the extracted information as concise, first-person statements (e.g. "I'm a junior…", "I've worked on…", "I'm skilled in…", "I led…" — not third person or bullet points). Do NOT include markdown, quotes, or preamble."""
 
     user_content = f"""Extract relevant profile information from this {"resume" if source == "resume" else "LinkedIn profile"}:
 
@@ -109,7 +119,10 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
             user_content=user_content,
             api_key=ANTHROPIC_API_KEY,
             use_web_search=False,
-            max_tokens=500,
+            # Matches the chat flow's profile-building budget (PROFILE_SYNTH_MAX_TOKENS = 4000).
+            # The old 500 forced heavy compression that dropped grade/GPA/personality along
+            # with the narrow allow-list; unused budget is free (billed on tokens produced).
+            max_tokens=4000,
             timeout=30
         )
 

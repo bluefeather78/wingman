@@ -3663,18 +3663,23 @@ MAINTENANCE_TOOLS = {
     },
     "dedupequeue": {
         "name": "Dedupe the Review Queue",
-        "description": "Embed each pending row's fields and find the same program at a DIFFERENT "
-                       "URL that the name/URL check misses, tagging a tiered 'possible duplicate "
-                       "of…' back-link. Preview is free; a real run is PAID (~a cent total; the "
-                       "catalog index is prebuilt).",
+        "description": "Embed rows and find the same program at a DIFFERENT URL that the name/URL "
+                       "check misses, tagging a tiered 'possible duplicate of…' back-link. Choose "
+                       "the source: the pending review queue, or rows the catalog scan already "
+                       "flagged suspected_duplicate (adds real tier/cosine evidence to what the "
+                       "scan proposed — never changes moderation_status or is_active). Preview is "
+                       "free; a real run is PAID (~a cent total; the catalog index is prebuilt).",
         "script": "dedupe_queue.py",
         "free": False, "writes": True,
         "params": [
+            {"key": "source", "type": "select", "label": "Source", "options": [
+                ["queue", "Review queue — pending rows"],
+                ["flagged", "Duplicate queue — rows already flagged suspected_duplicate"]]},
             {"key": "mode", "type": "select", "label": "Mode", "options": [
                 ["preview", "Preview — free: counts + embed cost estimate"],
                 ["write", "Run — PAID (~cents): embed and stamp back-links"]]},
             {"key": "classifiedOnly", "type": "check",
-             "label": "Only rows a classify run has already labelled"},
+             "label": "Only rows a classify run has already labelled (Review queue source only)"},
         ],
     },
     "triagequeue": {
@@ -3787,10 +3792,13 @@ def build_tool_args(tool_key, params):
         else:
             args.append("--preview")
     elif tool_key == "dedupequeue":
-        # dedupe_queue.py: [--preview] [--write] [--classified-only]
+        # dedupe_queue.py: [--source queue|flagged] [--preview] [--write] [--classified-only]
+        source = str(params.get("source") or "queue")
+        if source == "flagged":
+            args += ["--source", "flagged"]
         if str(params.get("mode") or "preview") == "write":
             args.append("--write")
-            if params.get("classifiedOnly"):
+            if source != "flagged" and params.get("classifiedOnly"):
                 args.append("--classified-only")
         else:
             args.append("--preview")

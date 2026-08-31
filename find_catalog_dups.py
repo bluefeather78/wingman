@@ -1,32 +1,34 @@
 """Report duplicate rows already inside the opportunities table. Free, READ-ONLY.
 
-Retired 2026-08-30: this used to run three hand-tuned heuristic cuts (exact URL, a name-
-similarity ratio, and an acronym/token-overlap pass). All three were reasoning toward the same
-thing embeddings already do better — url_dedupe's own measurements found the name-similarity
-cut wrong often enough to be "eyeballed only", and the token/acronym cut existed purely to catch
-what a plain ratio missed. Both are now one embedding nearest-neighbor pass through the SAME
-`dedupe_confidence` tier engine dedupe_queue.py uses for the review queue, so a catalog pair and
-a queue pair are judged identically instead of by two different rulebooks.
+2026-08-30: this was briefly rewritten to a pure embedding nearest-neighbor sweep (search every
+active row against every other), then reverted the same day once that sweep was measured live —
+1686 active rows, 3072-dim vectors (gemini-embedding-001) — at ~0.66s per row's search, i.e.
+~18.6 minutes for the full catalog. embed_common.py's own "1300 dot products is microseconds"
+claim assumed a ~768-dim model; a full O(n^2) sweep at today's dimensionality is not a "free, run
+whenever" operation.
 
-Two passes, both free — no embedding calls happen here, only vector comparisons against the
-prebuilt index (`catalog_embeddings.jsonl`, built by build_catalog_embeddings.py / the console's
-"Refresh Dedupe Embeddings", and kept current automatically: every activation embeds its own row):
+Back to the ORIGINAL three heuristic cuts (exact URL, same-domain name-similarity ratio,
+acronym/token overlap) for what they were always good at: cheap, near-linear CANDIDATE
+generation over the whole catalog (domain bucketing and an inverted token index, not O(n^2)).
+What changed is the VERDICT: each candidate pair is now tiered by the SAME dedupe_confidence
+engine (PROOF / CONFIDENT / ADJUDICATE / SIBLING / HINT / NONE) dedupe_queue.py uses for the
+review queue, using a cosine looked up directly from the prebuilt embedding index
+(`catalog_embeddings.jsonl`) when both rows are embedded — one dot product per CANDIDATE, not a
+search over the whole index. A catalog with a few hundred candidate pairs costs a few hundred
+dot products, regardless of how large the catalog itself is.
 
-  1. Exact match_key collision — two active rows whose URL normalizes identically. Free, and
-     found even for a row missing from the index. Judged HERE, not delegated to
-     dedupe_confidence.classify_rows: a bare URL match is PROOF only when the names also
-     agree — a shared multi-program application portal (spicestanford.smapply.io hosts six
-     distinct Stanford programs) shares one stored URL across genuinely different rows. A
-     differing name still surfaces, as a HINT asking a human to confirm it isn't a shared
-     portal, rather than being silently dropped or (the 2026-08-30 bug this fixed) wrongly
-     reported as certain-duplicate PROOF regardless of name.
-  2. Embedding nearest-neighbor — for every row the index holds a vector for, its closest OTHER
-     active row by cosine, tiered PROOF / CONFIDENT / ADJUDICATE / SIBLING / HINT / NONE by
-     dedupe_confidence.classify_rows. Only PROOF/CONFIDENT/ADJUDICATE/HINT are reported — SIBLING
-     is a discriminator-confirmed DIFFERENT program, NONE isn't similar enough to matter.
+Cut 1 (exact URL) is judged directly here rather than delegated to classify_rows: a bare match on
+the rows' STORED url is proof only when the names also agree — a shared multi-program application
+portal (spicestanford.smapply.io hosts six distinct Stanford programs) shares one stored URL
+across genuinely different rows. A differing name still surfaces, as a HINT asking a human to
+confirm it isn't a shared portal, rather than being silently dropped or (a live bug, fixed
+2026-08-30) wrongly reported as certain-duplicate PROOF regardless of name. Cuts 2 and 3 route
+through dedupe_confidence.classify_rows with whatever cosine is available (None is fine — the
+free discriminators alone still separate a SIBLING from a real duplicate).
 
-Rows the index has no vector for are reported as `unembedded`, never silently skipped — run
-"Refresh Dedupe Embeddings" first if that list is nonzero and matters for this pass.
+Rows the index has no vector for are reported as `unembedded`, never silently skipped — a
+candidate involving one is still tiered (from the free discriminators alone, cosine=None), just
+without the embedding signal's help. Run "Refresh Dedupe Embeddings" to close that gap.
 
 Nothing here writes. Catalog changes remain a human decision (prefer the console's
 duplicate/reject actions over SQL DELETE — see scraper_tombstones.json for why).
@@ -39,6 +41,7 @@ import argparse
 import json
 import os
 import sys
+from collections import defaultdict
 
 from supabase_common import load_dotenv, supabase_get
 import url_dedupe
@@ -77,7 +80,144 @@ def _match_key(url):
         return ""
 
 
-def find_duplicate_pairs(rows, index=None, top_k=1):
+# ---------- candidate generation: cheap, near-linear, no embeddings ----------
+
+def key_collision_groups(rows):
+    """CANDIDATES only (cut 1): groups of rows sharing one match_key (identical normalized URL).
+    O(n) — one dict grouping pass."""
+    by_key = defaultdict(list)
+    for r in rows:
+        k = _match_key(r.get("url"))
+        if k:
+            by_key[k].append(r)
+    return [members for members in by_key.values() if len(members) >= 2]
+
+
+def name_hint_candidates(rows):
+    """CANDIDATES only (cut 2): same-domain pairs with name similarity >= 0.90, excluding pairs
+    cut 1 already owns. O(n) grouping by domain, then pairwise only WITHIN each (typically small)
+    domain group — not O(n^2) over the whole catalog."""
+    by_domain = defaultdict(list)
+    for r in rows:
+        _, host, _, _ = url_dedupe.split_url(r.get("url") or "")
+        d = url_dedupe.registrable_domain(host)
+        if d:
+            by_domain[d].append(r)
+    out = []
+    for members in by_domain.values():
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                a, b = members[i], members[j]
+                ka, kb = _match_key(a.get("url")), _match_key(b.get("url"))
+                if ka and ka == kb:
+                    continue  # cut 1 already owns this pair
+                if url_dedupe.name_similarity(a.get("name"), b.get("name")) >= 0.90:
+                    out.append((a, b))
+    return out
+
+
+# Cut 3 tuning. Candidate generation only — the tier comes from dedupe_confidence below, so the
+# bar here is "worth tiering", not "certainly a duplicate".
+_COMMON_TOKEN_DF = 30    # a token on more rows than this is a category word ('summer'), not an
+                         # identity — skipped for candidate generation (keeps this near-linear)
+_JACCARD_MIN = 0.6
+_MIN_SHARED = 2
+_ACRONYM_MIN, _ACRONYM_MAX = 3, 8
+_MAX_EXTRA_CANDIDATES = 400
+
+
+def _row_tokens(r):
+    """Distinctive name tokens: connectors, 'program' and institution words dropped, len>=2.
+    Reuses url_dedupe's own splitters so this and the reject path agree on identity words."""
+    return [t for t in url_dedupe._distinctive_tokens(r.get("name"))
+            if t not in url_dedupe._INSTITUTION_WORDS and len(t) >= 2]
+
+
+def _host_of(r):
+    _, host, _, _ = url_dedupe.split_url(r.get("url") or "")
+    return host
+
+
+def extra_name_candidates(rows):
+    """CANDIDATES only (cut 3): the pairs cuts 1/2 miss — ACRONYM<->expansion and token-set
+    overlap, both allowed to cross domains. An inverted token index keeps this near-linear
+    instead of O(n^2): only rows sharing a discriminative token even get compared."""
+    info = []
+    for r in rows:
+        nm = url_dedupe.normalize_name(r.get("name"))
+        if not nm or nm in url_dedupe.GENERIC_NAMES or len(nm) < 4:
+            info.append(None)
+            continue
+        toks = _row_tokens(r)
+        info.append({
+            "row": r, "toks": toks, "set": set(toks), "host": _host_of(r),
+            "acr": "".join(t[0] for t in toks) if len(toks) >= 3 else "",
+        })
+
+    postings = defaultdict(list)
+    for idx, it in enumerate(info):
+        if it:
+            for t in it["set"]:
+                postings[t].append(idx)
+    discriminative = {t: idxs for t, idxs in postings.items() if len(idxs) <= _COMMON_TOKEN_DF}
+
+    seen, out = set(), []
+
+    def emit(i, j):
+        key = (i, j) if i < j else (j, i)
+        if key in seen:
+            return
+        seen.add(key)
+        a, b = info[i], info[j]
+        if (url_dedupe._is_bare_institution(a["row"].get("name"), a["host"])
+                and url_dedupe._is_bare_institution(b["row"].get("name"), b["host"])):
+            return
+        out.append((a["row"], b["row"]))
+
+    for i, it in enumerate(info):
+        if not it:
+            continue
+        cand = defaultdict(int)
+        for t in it["set"]:
+            for j in discriminative.get(t, ()):
+                if j > i:
+                    cand[j] += 1
+        for j, shared in cand.items():
+            if shared < _MIN_SHARED:
+                continue
+            sj = info[j]["set"]
+            inter = it["set"] & sj
+            union = it["set"] | sj
+            if len(inter) < _MIN_SHARED or not union:
+                continue
+            if len(inter) / len(union) < _JACCARD_MIN:
+                continue
+            emit(i, j)
+        if len(out) >= _MAX_EXTRA_CANDIDATES:
+            return out[:_MAX_EXTRA_CANDIDATES]
+
+    by_acr = defaultdict(list)
+    for idx, it in enumerate(info):
+        if it and it["acr"]:
+            by_acr[it["acr"]].append(idx)
+    for idx, it in enumerate(info):
+        if not it or len(it["toks"]) != 1:
+            continue
+        cand = it["toks"][0]
+        if not (_ACRONYM_MIN <= len(cand) <= _ACRONYM_MAX):
+            continue
+        for j in by_acr.get(cand, []):
+            if j != idx:
+                emit(idx, j)
+        if len(out) >= _MAX_EXTRA_CANDIDATES:
+            break
+
+    return out[:_MAX_EXTRA_CANDIDATES]
+
+
+# ---------- the scan: candidates in, dedupe_confidence-tiered verdicts out ----------
+
+def find_duplicate_pairs(rows, index=None):
     """The whole scan. Returns (pairs, unembedded_ids).
 
     Each pair is {"rows": (a, b), "tier": <TIER_*>, "reasons": [...], "cosine": float|None},
@@ -86,13 +226,20 @@ def find_duplicate_pairs(rows, index=None, top_k=1):
     disk or network access, matching the "every model call is injected" rule the rest of the
     dedupe stack follows.
 
-    Pure other than the index default load; no network calls, no writes.
+    Pure other than the index default load; no network calls, no writes, and — the whole point —
+    no O(n^2) embedding search: a cosine is looked up as a single dot product between two known
+    vectors for each CANDIDATE the heuristic passes propose, never a nearest-neighbor search over
+    the whole index.
     """
     if index is None:
         index = embed_common.load_index()
     by_id = {r["id"]: r for r in rows if r.get("id")}
     vec = {e["id"]: e["vector"] for e in index if e.get("id") in by_id and e.get("vector")}
     unembedded = [rid for rid in by_id if rid not in vec]
+
+    def cosine_for(a, b):
+        va, vb = vec.get(a["id"]), vec.get(b["id"])
+        return embed_common.cosine(va, vb) if va and vb else None
 
     seen = set()
     pairs = []
@@ -106,18 +253,10 @@ def find_duplicate_pairs(rows, index=None, top_k=1):
         seen.add(key)
         pairs.append({"rows": (a, b), "tier": tier, "reasons": reasons, "cosine": cosine})
 
-    # Pass 1: exact URL collisions. Free, and catches a pair even when one or both rows are
-    # missing from the embedding index. Judged directly here, NOT via dc.classify_rows: a bare
-    # URL match is proof only when the names also agree (dc.classify_rows enforces that same
-    # guard now), but a differing name is still worth a human's look — it is exactly the
-    # spicestanford.smapply.io shape, one portal URL hosting six distinct programs — so it is
-    # surfaced as a HINT with an explicit warning rather than silently dropped.
-    by_key = {}
-    for r in rows:
-        k = _match_key(r.get("url"))
-        if k:
-            by_key.setdefault(k, []).append(r)
-    for members in by_key.values():
+    # Cut 1: exact URL collision. Judged directly, not via classify_rows: a bare stored-URL
+    # match is PROOF only when the names also agree; a differing name is still worth a human's
+    # look (a shared application portal), so it surfaces as a HINT rather than vanishing.
+    for members in key_collision_groups(rows):
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
                 a, b = members[i], members[j]
@@ -129,17 +268,18 @@ def find_duplicate_pairs(rows, index=None, top_k=1):
                            ["identical URL, different name — confirm it is not a shared "
                             "application portal"], cosine=None)
 
-    # Pass 2: embedding nearest-neighbor, restricted to rows the index actually holds a vector
-    # for. `search` excludes anything not in `rows` (e.g. a row deactivated since the index was
-    # last built) so a stale index entry can never surface a pair for a row we didn't fetch.
-    search = [e for e in index if e.get("id") in by_id and e.get("vector")]
-    for rid, v0 in vec.items():
-        hits = embed_common.nearest(v0, search, top_k=top_k, min_score=dc.HINT_FLOOR,
-                                    exclude_ids={rid})
-        for mid, cos, _entry in hits:
-            a, b = by_id[rid], by_id[mid]
-            v = dc.classify_rows(a, b, cosine=cos)
-            surface(a, b, v.tier, v.reasons, cosine=cos)
+    # Cut 2: same-domain, name >= 0.90 similar. Tiered by dedupe_confidence with a real cosine
+    # when both rows are embedded.
+    for a, b in name_hint_candidates(rows):
+        cos = cosine_for(a, b)
+        v = dc.classify_rows(a, b, cosine=cos)
+        surface(a, b, v.tier, v.reasons, cos)
+
+    # Cut 3: acronym / token-overlap, cross-host. Same tiering.
+    for a, b in extra_name_candidates(rows):
+        cos = cosine_for(a, b)
+        v = dc.classify_rows(a, b, cosine=cos)
+        surface(a, b, v.tier, v.reasons, cos)
 
     return pairs, unembedded
 

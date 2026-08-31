@@ -243,6 +243,24 @@ export default function Finder() {
   // The last-loaded student-profile record, so the slot readers don't re-fetch it per call.
   const profileRecord = useRef<ProfileRecord | null>(null);
   const [profileText, setProfileText] = useState('');
+  // Durable "about you" facts (grade + US state), stored in the account's data jsonb under
+  // `student-basics` so they survive across sessions and are asked at most once. A key being
+  // PRESENT (even as "" = declined) means "answered" — that is what stops the setup re-asking.
+  const durableBasics = useRef<{ grade?: string; state?: string }>(
+    httpClient.peekData<{ grade?: string; state?: string }>('student-basics') ?? {});
+  const durableBasicsLoaded = useRef(false);
+  const [needGrade, setNeedGrade] = useState(false);
+  const [needLocation, setNeedLocation] = useState(false);
+  // Load the durable grade/state exactly once, and AWAIT it before deciding whether to ask —
+  // the auto-run search would otherwise race the load and re-ask a question already answered.
+  async function ensureDurableBasics() {
+    if (durableBasicsLoaded.current) return;
+    try {
+      const b = await httpClient.loadData<{ grade?: string; state?: string }>('student-basics');
+      if (b) durableBasics.current = b;
+    } catch { /* best effort — a failure just risks asking again, which is harmless */ }
+    durableBasicsLoaded.current = true;
+  }
   // "Your profile is empty" is also what an unloaded profile looks like, so the hero flashed
   // that on every visit before the fetch landed. Gate it on the load actually resolving.
   const [profileLoaded, setProfileLoaded] = useState(false);
@@ -379,6 +397,9 @@ export default function Finder() {
   useEffect(() => {
     aliveRef.current = true;
     void loadOpportunities();
+    // Warm the durable grade/state so the setup knows whether to ask (buildStudentBlob awaits
+    // this too, so the auto-run search can't race it).
+    void ensureDurableBasics();
     // Wait for any profile rewrite still running on My Vibe BEFORE reading the profile.
     // Without this the finder read whatever was stored at that instant — still the previous
     // profile — matched its session cache against that stale text and showed the old list,
@@ -575,6 +596,11 @@ export default function Finder() {
         setInterestThemes(themeNames.length >= 2 ? themeNames : []);
         // The passion/research projects become selectable, boosted recall query vectors.
         setInterestProjects((blob.highlight_projects || []).map((p) => ({ label: projectLabel(p), value: p })));
+        // Ask grade/location ONCE, only when we still don't know them: neither answered before
+        // (durable key present, "" included) nor resolvable from the profile (blob.grade/state,
+        // which buildStudentBlob already sourced from the durable store + profile basics).
+        setNeedGrade(durableBasics.current.grade === undefined && blob.grade == null);
+        setNeedLocation(durableBasics.current.state === undefined && !blob.location?.state);
         setStage('interests');
         return;
       }
@@ -677,13 +703,16 @@ export default function Finder() {
     } catch {
       /* thin profile -> no themes */
     }
-    let studentGrade: number | null = null;
-    let studentState: string | null = homeState.trim() || null;
+    // Durable answers (set once in setup) win over both the profile-derived basics and the form
+    // field — they are the student's explicit, persisted statement of grade/state. Await the load
+    // so a fresh session doesn't read an empty store and re-ask.
+    await ensureDurableBasics();
+    let studentGrade: number | null = parseGradeFromText(durableBasics.current.grade ?? null);
+    let studentState: string | null = (durableBasics.current.state || '').trim() || homeState.trim() || null;
     try {
       const basics = (await getProfileDerived(profileStore, modelCalls, 'basics', profileRecord.current)) as BasicsSlot;
-      const bg = parseGradeLevel(basics.fields?.grade ?? null);
-      if (bg != null) studentGrade = bg;
-      if (basics.fields?.state) studentState = basics.fields.state;
+      if (studentGrade == null) { const bg = parseGradeLevel(basics.fields?.grade ?? null); if (bg != null) studentGrade = bg; }
+      if (!studentState && basics.fields?.state) studentState = basics.fields.state;
     } catch { /* best effort */ }
     return {
       grade: studentGrade,
@@ -860,7 +889,7 @@ export default function Finder() {
     const secs: { title: string; items: { label: string; value: string }[] }[] = [];
     const blob = funnelBlob.current;
     const about: { label: string; value: string }[] = [];
-    if (blob?.grade != null) about.push({ label: 'Grade', value: `${blob.grade}th grade` });
+    if (blob?.grade != null) about.push({ label: 'Grade', value: blob.grade <= 8 ? 'Middle School' : `${blob.grade}th grade` });
     if (blob?.location?.state) about.push({ label: 'Location', value: String(blob.location.state) });
     if (about.length) secs.push({ title: 'About you', items: about });
     // The pre-recall setup: what they're pursuing + budget + timing (always shown, defaults too).
@@ -893,12 +922,27 @@ export default function Finder() {
   // carry the budget + timing choices in funnel_answers so recall filters the catalog by them
   // (cost/time are applied in recall now, not as post-recall funnel rungs). Then run rung 0.
   function beginFunnel(choice: SearchSetupChoice) {
+    // If the setup asked grade/location (only when we didn't already know them), persist the
+    // answers durably so we never ask again, and apply them to THIS run's blob + review. "" is a
+    // real answer (declined) and is stored so the card stays gone.
+    if (choice.grade !== undefined || choice.state !== undefined) {
+      const next = { ...durableBasics.current };
+      if (choice.grade !== undefined) next.grade = choice.grade;
+      if (choice.state !== undefined) next.state = choice.state;
+      durableBasics.current = next;
+      void httpClient.saveData('student-basics', next).catch(() => {});
+    }
     const projectFocus = choice.projects.length > 0;
     // project_focus (explicit project pick) makes the funnel ask a project-goal question instead
     // of the outcome one. type_prefs is the experience-type FILTER applied in recall (empty = all),
-    // so the top-100 pool is already of the chosen type(s). Both survive the theme/project
+    // so the top-100 pool is already of the chosen type(s). All survive the theme/project
     // reassignment below because it spreads ...blob.
-    funnelBlob.current = { ...(funnelBlob.current ?? {}), project_focus: projectFocus, type_prefs: choice.experiences };
+    const answeredGrade = choice.grade !== undefined ? parseGradeFromText(choice.grade) : undefined;
+    funnelBlob.current = {
+      ...(funnelBlob.current ?? {}), project_focus: projectFocus, type_prefs: choice.experiences,
+      ...(answeredGrade != null ? { grade: answeredGrade } : {}),
+      ...(choice.state ? { location: { ...(funnelBlob.current?.location ?? {}), state: choice.state } } : {}),
+    };
     const blob = funnelBlob.current;
     // Any pick (theme OR project) means "focus on exactly these"; picking nothing = use all.
     if (blob && (choice.themes.length || choice.projects.length)) {
@@ -1296,7 +1340,8 @@ export default function Finder() {
   if (stage === 'interests') {
     if (funnelLoading) return <FunnelLoading />;
     return <SearchSetup themes={interestThemes} projects={interestProjects}
-      experiences={buildExperienceOptions(opps)} onConfirm={beginFunnel} />;
+      experiences={buildExperienceOptions(opps)} askGrade={needGrade} askLocation={needLocation}
+      onConfirm={beginFunnel} />;
   }
 
   // ---------- Funnel stage (Phase 4) ----------

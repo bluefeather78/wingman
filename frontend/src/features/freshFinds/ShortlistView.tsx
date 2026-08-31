@@ -117,28 +117,41 @@ export interface SearchSetupChoice {
   themes: string[]; projects: string[]; cost: 'free' | 'any'; time: 'summer' | 'school_year' | 'any';
   // Chosen experience types (expanded catalog `type` strings). A PRE-recall filter — empty = all.
   experiences: string[];
+  // Durable "about you" facts, present ONLY when the setup asked them (unknown on the first run).
+  // The caller persists them to the profile and never asks again. `grade` is a dropdown label
+  // ("11th grade" / "Middle School" / "" = declined); `state` is a US state string.
+  grade?: string; state?: string;
 }
-// A swipeable card stack — one question per card (Pursuing → Experience → Budget → Timing), the
-// student swipes/tap-throughs to advance, and the last card carries the real "Find my matches" CTA.
-// The output contract (onConfirm) is unchanged, so finder.tsx's beginFunnel(choice) is too.
+// A swipeable card stack — one question per card (Pursuing → Experience → Budget → Timing, plus a
+// one-time Grade / Location ask when the profile doesn't have them yet). The student
+// swipes/tap-throughs to advance, and the last card carries the real "Find my matches" CTA.
 // Gesture is RN's built-in Animated + PanResponder rather than reanimated/gesture-handler
 // (neither is a dependency here); PanResponder drives translateX + rotate on the front card and
 // works with mouse-drag on RN-web, so desktop needs no separate click path.
-export function SearchSetup({ themes, projects, experiences, onConfirm }: {
+export function SearchSetup({ themes, projects, experiences, askGrade, askLocation, onConfirm }: {
   themes: string[]; projects: SearchSetupProject[]; experiences: SearchSetupExperience[];
+  askGrade?: boolean; askLocation?: boolean;
   onConfirm: (choice: SearchSetupChoice) => void;
 }) {
-  const { width: winW } = useWindowDimensions();
-  const CARD_W = Math.min(CARD_MAX_W, winW - 32);
-  const CARD_MIN_H = 340;
+  const { width: winW, height: winH } = useWindowDimensions();
+  // Clamp positive: a 0-width viewport (e.g. an offscreen/hidden render) would make this negative
+  // and blow up the rotate interpolation's inputRange ([-CARD_W, 0, CARD_W] must be increasing).
+  const CARD_W = Math.max(280, Math.min(CARD_MAX_W, winW - 32));
+  // FIXED height for every card so the stack never resizes question-to-question (that reads as
+  // jumpy). Content that doesn't fit scrolls inside the card; long items truncate to one line.
+  const CARD_H = Math.min(480, Math.max(360, winH - 300));
 
   // Pursuing appears when the profile yielded themes/projects; experience when the catalog offers
   // 2+ distinct types to choose between; budget and timing are always asked. Card count adapts, so
   // the dots and "n / N" stay honest.
-  const questions: ('pursuing' | 'experience' | 'budget' | 'timing')[] = [];
+  const questions: ('pursuing' | 'experience' | 'budget' | 'timing' | 'grade' | 'location')[] = [];
   if (themes.length > 0 || projects.length > 0) questions.push('pursuing');
   if (experiences.length > 1) questions.push('experience');
   questions.push('budget', 'timing');
+  // The one-time "about you" asks come LAST, only when the profile doesn't already have them.
+  // Location is after grade so the text-input card is the one carrying the CTA (swipe disabled).
+  if (askGrade) questions.push('grade');
+  if (askLocation) questions.push('location');
   const N = questions.length;
 
   const [cardIndex, setCardIndex] = useState(0);
@@ -147,6 +160,9 @@ export function SearchSetup({ themes, projects, experiences, onConfirm }: {
   const [selExp, setSelExp] = useState<Set<string>>(new Set());
   const [cost, setCost] = useState<'free' | 'any'>('any');
   const [time, setTime] = useState<'summer' | 'school_year' | 'any'>('any');
+  const [selGrade, setSelGrade] = useState('');   // '' = nothing chosen; a label otherwise
+  const [stateText, setStateText] = useState('');
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);  // the story row showing full text
   // Selecting a chip never advances the card — only a swipe/tap-through does — so a student can
   // multi-select before moving on.
   const toggle = (t: string) => setSel((s) => { const n = new Set(s); n.has(t) ? n.delete(t) : n.add(t); return n; });
@@ -156,7 +172,13 @@ export function SearchSetup({ themes, projects, experiences, onConfirm }: {
   const isLast = cardIndex >= N - 1;
   // Expand the picked experience labels back to their catalog `type` strings for recall.
   const chosenTypes = experiences.filter((e) => selExp.has(e.label)).flatMap((e) => e.types);
-  const confirm = () => onConfirm({ themes: [...sel], projects: [...selProj], cost, time, experiences: chosenTypes });
+  const confirm = () => onConfirm({
+    themes: [...sel], projects: [...selProj], cost, time, experiences: chosenTypes,
+    // Only report the durable facts the setup actually asked. "Prefer not to say" -> "" (declined
+    // but answered — the caller stores it so it isn't asked again).
+    ...(askGrade ? { grade: selGrade === 'Prefer not to say' ? '' : selGrade } : {}),
+    ...(askLocation ? { state: stateText.trim() } : {}),
+  });
 
   // Front-card drag (translateX + rotate) and a spring entrance on each advance; plus a slow
   // opacity pulse on the "swipe to continue" hint to teach the gesture without an icon.
@@ -210,14 +232,39 @@ export function SearchSetup({ themes, projects, experiences, onConfirm }: {
     </Pressable>
   );
 
+  // Passion/research items are free text pulled from the profile and can run 100+ words — as a
+  // wrapping pill they blow out the card. So they render as full-width rows under "From your
+  // story", clipped to ONE line; hovering a row "opens up" its full text (numberOfLines cleared).
+  // Selection is unchanged — truncation is display-only; toggleProj still stores the full value.
+  const storyRow = (p: SearchSetupProject) => {
+    const on = selProj.has(p.value);
+    const open = hoveredKey === p.value;
+    return (
+      <Pressable
+        key={p.value}
+        onPress={() => toggleProj(p.value)}
+        onHoverIn={() => setHoveredKey(p.value)}
+        onHoverOut={() => setHoveredKey((k) => (k === p.value ? null : k))}
+        style={{
+          borderWidth: 2.5, borderColor: on ? colors.teal : colors.navy, borderRadius: radius.lg,
+          paddingVertical: 12, paddingHorizontal: 16, backgroundColor: on ? colors.teal : colors.card,
+        }}>
+        <Txt numberOfLines={open ? undefined : 1}
+          style={{ fontFamily: fonts.bodyBold, fontSize: 14, color: on ? colors.white : colors.ink }}>{p.label}</Txt>
+      </Pressable>
+    );
+  };
+
   const q = questions[cardIndex];
-  const meta = q === 'pursuing'
-    ? { badge: 'PURSUING', title: 'Which of these are you pursuing?', sub: 'Pick any that apply — or leave blank for all of them.' }
-    : q === 'experience'
-    ? { badge: 'EXPERIENCE', title: 'What kind of experience are you most excited about?', sub: 'Pick any that appeal — or leave blank for all of them.' }
-    : q === 'budget'
-    ? { badge: 'BUDGET', title: "What's your budget?", sub: 'We’ll only surface things you can actually do.' }
-    : { badge: 'TIMING', title: 'When are you free?', sub: 'Shapes which season we pull from — pick what fits.' };
+  const META: Record<string, { badge: string; title: string; sub: string }> = {
+    pursuing: { badge: 'PURSUING', title: 'Which of these are you pursuing?', sub: 'Pick any that apply — or leave blank for all of them.' },
+    experience: { badge: 'EXPERIENCE', title: 'What kind of experience are you most excited about?', sub: 'Pick any that appeal — or leave blank for all of them.' },
+    budget: { badge: 'BUDGET', title: "What's your budget?", sub: 'We’ll only surface things you can actually do.' },
+    timing: { badge: 'TIMING', title: 'When are you free?', sub: 'Shapes which season we pull from — pick what fits.' },
+    grade: { badge: 'ABOUT YOU', title: 'What grade are you in?', sub: 'Keeps your matches age-appropriate. We’ll ask once and remember it.' },
+    location: { badge: 'ABOUT YOU', title: 'Where are you based?', sub: 'Your US state, so we can surface things near you. We’ll ask once and remember it.' },
+  };
+  const meta = META[q];
   const remaining = N - 1 - cardIndex;
 
   return (
@@ -244,7 +291,7 @@ export function SearchSetup({ themes, projects, experiences, onConfirm }: {
             {...responder.panHandlers}
             style={[
               cardSurface,
-              { minHeight: CARD_MIN_H, padding: 26, transform: [
+              { height: CARD_H, padding: 26, transform: [
                 { translateX: pan },
                 { translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) },
                 { rotate },
@@ -259,26 +306,60 @@ export function SearchSetup({ themes, projects, experiences, onConfirm }: {
             <Txt style={{ ...type_h1, marginTop: space.lg }}>{meta.title}</Txt>
             <Txt style={{ ...type_body, marginTop: space.xs }}>{meta.sub}</Txt>
 
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md, marginTop: space.lg }}>
-              {q === 'pursuing' && (<>
-                {themes.map((t) => chip(t, sel.has(t), () => toggle(t)))}
-                {projects.map((p) => chip(p.label, selProj.has(p.value), () => toggleProj(p.value)))}
-              </>)}
-              {q === 'experience' && (<>
-                {experiences.map((e) => chip(e.label, selExp.has(e.label), () => toggleExp(e.label)))}
-              </>)}
-              {q === 'budget' && (<>
-                {chip('Free only', cost === 'free', () => setCost('free'))}
-                {chip('Open to paid', cost === 'any', () => setCost('any'))}
-              </>)}
-              {q === 'timing' && (<>
-                {chip('Summer', time === 'summer', () => setTime('summer'))}
-                {chip('School year', time === 'school_year', () => setTime('school_year'))}
-                {chip('Any time', time === 'any', () => setTime('any'))}
-              </>)}
-            </View>
-
-            <View style={{ flex: 1, minHeight: space.xl }} />
+            {/* The content area fills the fixed card and scrolls if it overflows, so every card is
+                the same height regardless of how much a student picked. */}
+            <ScrollView style={{ flex: 1, marginTop: space.lg }} contentContainerStyle={{ paddingBottom: space.xs }}
+              showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              {q === 'pursuing' && (
+                <View style={{ gap: space.md }}>
+                  {themes.length > 0 && (
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
+                      {themes.map((t) => chip(t, sel.has(t), () => toggle(t)))}
+                    </View>
+                  )}
+                  {projects.length > 0 && (<>
+                    {themes.length > 0 && <View style={{ height: 1, backgroundColor: colors.hairline, marginTop: space.xs }} />}
+                    <Txt style={{ ...type.label, color: colors.slate500 }}>FROM YOUR STORY</Txt>
+                    <View style={{ gap: space.sm }}>{projects.map((p) => storyRow(p))}</View>
+                  </>)}
+                </View>
+              )}
+              {q === 'experience' && (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
+                  {experiences.map((e) => chip(e.label, selExp.has(e.label), () => toggleExp(e.label)))}
+                </View>
+              )}
+              {q === 'budget' && (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
+                  {chip('Free only', cost === 'free', () => setCost('free'))}
+                  {chip('Open to paid', cost === 'any', () => setCost('any'))}
+                </View>
+              )}
+              {q === 'timing' && (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
+                  {chip('Summer', time === 'summer', () => setTime('summer'))}
+                  {chip('School year', time === 'school_year', () => setTime('school_year'))}
+                  {chip('Any time', time === 'any', () => setTime('any'))}
+                </View>
+              )}
+              {q === 'grade' && (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
+                  {['Middle School', '9th grade', '10th grade', '11th grade', '12th grade', 'Prefer not to say']
+                    .map((g) => chip(g, selGrade === g, () => setSelGrade(g)))}
+                </View>
+              )}
+              {q === 'location' && (
+                <TextInput
+                  value={stateText}
+                  onChangeText={setStateText}
+                  placeholder="e.g. Washington"
+                  placeholderTextColor={colors.slate400}
+                  onSubmitEditing={confirm}
+                  style={{ width: '100%', borderWidth: 2.5, borderColor: colors.navy, borderRadius: radius.lg,
+                    padding: space.md, fontFamily: fonts.bodyMed, fontSize: 15, color: colors.ink }}
+                />
+              )}
+            </ScrollView>
             <View style={{ height: 2, backgroundColor: colors.hairline, marginBottom: space.md }} />
 
             {isLast ? (

@@ -4,11 +4,11 @@
 // funnel/curate logic it originally shipped with. These components hold no matching logic — they
 // render what the container (finder.tsx) hands them and call back on every action.
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, ScrollView, TextInput, View } from 'react-native';
+import { ActivityIndicator, Animated, Easing, Linking, PanResponder, Pressable, ScrollView, TextInput, useWindowDimensions, View } from 'react-native';
 
 import type { Opportunity } from '@/api/types';
 import { Badge, MiniBadge, PopButton, PopCard, REVIEW_STATUS_META, RightDrawer, Screen, Txt } from '@/ui/components';
-import { colors, fonts, radius, space, type } from '@/ui/theme';
+import { colors, fonts, popShadow, radius, space, type } from '@/ui/theme';
 
 export type Tier = 'strong' | 'look' | 'stretch';
 // One curated card: the catalog row plus the server's verdict (why-it-fits + tier) and any
@@ -105,76 +105,186 @@ export interface SearchSetupProject { label: string; value: string; }
 export interface SearchSetupChoice {
   themes: string[]; projects: string[]; cost: 'free' | 'any'; time: 'summer' | 'school_year' | 'any';
 }
+// A swipeable card stack — one question per card (Pursuing → Budget → Timing), the student
+// swipes/tap-throughs to advance, and the last card carries the real "Find my matches" CTA.
+// The output contract (onConfirm) is unchanged, so finder.tsx's beginFunnel(choice) is too.
+// Gesture is RN's built-in Animated + PanResponder rather than reanimated/gesture-handler
+// (neither is a dependency here); PanResponder drives translateX + rotate on the front card and
+// works with mouse-drag on RN-web, so desktop needs no separate click path.
 export function SearchSetup({ themes, projects, onConfirm }: {
   themes: string[]; projects: SearchSetupProject[]; onConfirm: (choice: SearchSetupChoice) => void;
 }) {
+  const { width: winW } = useWindowDimensions();
+  const CARD_W = Math.min(600, winW - 32);
+  const CARD_MIN_H = 340;
+
+  // Pursuing only appears when the profile yielded themes/projects to pick from; budget and
+  // timing are always asked. Card count adapts, so the dots and "n / N" stay honest.
+  const questions: ('pursuing' | 'budget' | 'timing')[] = [];
+  if (themes.length > 0 || projects.length > 0) questions.push('pursuing');
+  questions.push('budget', 'timing');
+  const N = questions.length;
+
+  const [cardIndex, setCardIndex] = useState(0);
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [selProj, setSelProj] = useState<Set<string>>(new Set());
   const [cost, setCost] = useState<'free' | 'any'>('any');
   const [time, setTime] = useState<'summer' | 'school_year' | 'any'>('any');
+  // Selecting a chip never advances the card — only a swipe/tap-through does — so a student can
+  // multi-select before moving on.
   const toggle = (t: string) => setSel((s) => { const n = new Set(s); n.has(t) ? n.delete(t) : n.add(t); return n; });
   const toggleProj = (v: string) => setSelProj((s) => { const n = new Set(s); n.has(v) ? n.delete(v) : n.add(v); return n; });
   const anyFocus = sel.size + selProj.size;
+  const isLast = cardIndex >= N - 1;
+  const confirm = () => onConfirm({ themes: [...sel], projects: [...selProj], cost, time });
 
+  // Front-card drag (translateX + rotate) and a spring entrance on each advance; plus a slow
+  // opacity pulse on the "swipe to continue" hint to teach the gesture without an icon.
+  const pan = useRef(new Animated.Value(0)).current;
+  const enter = useRef(new Animated.Value(1)).current;
+  const hintPulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    enter.setValue(0);
+    Animated.spring(enter, { toValue: 1, useNativeDriver: false, speed: 12, bounciness: 8 }).start();
+  }, [cardIndex, enter]);
+
+  useEffect(() => {
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(hintPulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
+      Animated.timing(hintPulse, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: false }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [hintPulse]);
+
+  const flingAway = (dir: number) => {
+    Animated.timing(pan, { toValue: dir * (CARD_W + 80), duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: false })
+      .start(() => { setCardIndex((i) => Math.min(i + 1, N - 1)); pan.setValue(0); });
+  };
+
+  // Recreated each render so it always closes over the current isLast — cheap for a one-card
+  // screen. A drag only captures when clearly horizontal, so chip taps and vertical scroll pass
+  // straight through; on the last card swiping is disabled (the CTA replaces the hint).
+  const responder = PanResponder.create({
+    onMoveShouldSetPanResponder: (_, g) => !isLast && Math.abs(g.dx) > 8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.4,
+    onPanResponderMove: (_, g) => pan.setValue(g.dx),
+    onPanResponderRelease: (_, g) => {
+      if (!isLast && (Math.abs(g.dx) > 110 || Math.abs(g.vx) > 0.5)) flingAway(g.dx < 0 ? -1 : 1);
+      else Animated.spring(pan, { toValue: 0, useNativeDriver: false, bounciness: 8 }).start();
+    },
+    onPanResponderTerminationRequest: () => true,
+  });
+
+  const rotate = pan.interpolate({ inputRange: [-CARD_W, 0, CARD_W], outputRange: ['-8deg', '0deg', '8deg'], extrapolate: 'clamp' });
+  const cardSurface = { backgroundColor: colors.card, borderRadius: radius.xl, borderWidth: 3, borderColor: colors.navy, ...popShadow(5, colors.navy) };
+
+  // Selected fill and the CTA/hint use teal rather than the orange primary — a calmer accent for
+  // a screen that's about choosing, reserving orange for the one true "go" action elsewhere.
   const chip = (label: string, on: boolean, onPress: () => void) => (
     <Pressable key={label} onPress={onPress} style={{
-      borderWidth: 3, borderColor: colors.navy, borderRadius: radius.lg,
-      paddingVertical: space.md, paddingHorizontal: space.lg, backgroundColor: on ? colors.orange : colors.card,
+      borderWidth: 2.5, borderColor: on ? colors.teal : colors.navy, borderRadius: radius.pill,
+      paddingVertical: 10, paddingHorizontal: 18, backgroundColor: on ? colors.teal : colors.card,
     }}>
-      <Txt style={{ fontFamily: fonts.bodyBold, fontSize: 15, color: on ? colors.white : colors.ink }}>{on ? '✓ ' : ''}{label}</Txt>
+      <Txt style={{ fontFamily: fonts.bodyBold, fontSize: 15, color: on ? colors.white : colors.ink }}>{label}</Txt>
     </Pressable>
   );
 
+  const q = questions[cardIndex];
+  const meta = q === 'pursuing'
+    ? { badge: 'PURSUING', title: 'Which of these are you pursuing?', sub: 'Pick any that apply — or leave blank for all of them.' }
+    : q === 'budget'
+    ? { badge: 'BUDGET', title: "What's your budget?", sub: 'We’ll only surface things you can actually do.' }
+    : { badge: 'TIMING', title: 'When are you free?', sub: 'Shapes which season we pull from — pick what fits.' };
+  const remaining = N - 1 - cardIndex;
+
   return (
     <Screen>
-      <ScrollView contentContainerStyle={{ padding: space.lg, maxWidth: 760, alignSelf: 'center', width: '100%' }}>
-        <View style={{ gap: space.xl }}>
-          <View style={{ gap: space.sm }}>
-            <Badge label="LET’S SET UP YOUR SEARCH" bg={colors.peach} fg={colors.orangeDeep} outline />
-            <Txt style={type_h1}>A couple of quick things first</Txt>
-            <Txt style={type_body}>We’ll use these to pull your best ~100 matches, then help you narrow from there.</Txt>
-          </View>
-
-          {(themes.length > 0 || projects.length > 0) && (
-            <View style={{ gap: space.sm }}>
-              <Txt style={type.label}>WHICH OF THESE ARE YOU PURSUING?</Txt>
-              <Txt style={{ ...type_body, marginTop: -4 }}>Pick any that apply — or leave blank for all of them.</Txt>
-              {themes.length > 0 && (
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md, marginTop: space.xs }}>
-                  {themes.map((t) => chip(t, sel.has(t), () => toggle(t)))}
-                </View>
-              )}
-              {projects.length > 0 && (
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md, marginTop: themes.length ? space.xs : space.xs }}>
-                  {projects.map((p) => chip(p.label, selProj.has(p.value), () => toggleProj(p.value)))}
-                </View>
-              )}
-            </View>
-          )}
-
-          <View style={{ gap: space.sm }}>
-            <Txt style={type.label}>BUDGET</Txt>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
-              {chip('Free only', cost === 'free', () => setCost('free'))}
-              {chip('Open to paid', cost === 'any', () => setCost('any'))}
-            </View>
-          </View>
-
-          <View style={{ gap: space.sm }}>
-            <Txt style={type.label}>WHEN ARE YOU FREE?</Txt>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
-              {chip('Summer', time === 'summer', () => setTime('summer'))}
-              {chip('School year', time === 'school_year', () => setTime('school_year'))}
-              {chip('Any time', time === 'any', () => setTime('any'))}
-            </View>
-          </View>
-
-          <View style={{ marginTop: space.sm }}>
-            <PopButton label={anyFocus ? `Find my matches (${anyFocus} focus)` : 'Find my matches'}
-              onPress={() => onConfirm({ themes: [...sel], projects: [...selProj], cost, time })} />
-          </View>
+      <View style={{ paddingVertical: space.xl, gap: space.xl }}>
+        <View style={{ alignItems: 'center', gap: space.xs }}>
+          <Txt style={{ ...type_h1, textAlign: 'center' }}>A couple of quick things first</Txt>
+          <Txt style={{ ...type_body, textAlign: 'center' }}>Swipe through — we’ll use these to pull your best ~100 matches.</Txt>
         </View>
-      </ScrollView>
+
+        <View style={{ width: CARD_W, alignSelf: 'center', marginBottom: 44 }}>
+          {/* Peeking back surfaces (blank cards) — a static function of how many cards remain, so
+              the stack visually "advances" one position as the front one leaves. */}
+          {[2, 1].filter((d) => d <= remaining).map((d) => (
+            <View key={d} pointerEvents="none" style={[
+              cardSurface,
+              { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                opacity: d === 1 ? 0.6 : 0.32, transform: [{ translateY: 13 * d }, { scale: 1 - 0.05 * d }] },
+            ]} />
+          ))}
+
+          <Animated.View
+            key={cardIndex}
+            {...responder.panHandlers}
+            style={[
+              cardSurface,
+              { minHeight: CARD_MIN_H, padding: 26, transform: [
+                { translateX: pan },
+                { translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) },
+                { rotate },
+                { scale: enter.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) },
+              ] },
+            ]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <MiniBadge label={meta.badge} bg="rgba(0,178,202,0.14)" fg={colors.teal} borderColor={null} />
+              <Txt style={{ fontFamily: fonts.bodyBold, fontSize: 13, color: colors.slate400 }}>{cardIndex + 1} / {N}</Txt>
+            </View>
+
+            <Txt style={{ ...type_h1, marginTop: space.lg }}>{meta.title}</Txt>
+            <Txt style={{ ...type_body, marginTop: space.xs }}>{meta.sub}</Txt>
+
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md, marginTop: space.lg }}>
+              {q === 'pursuing' && (<>
+                {themes.map((t) => chip(t, sel.has(t), () => toggle(t)))}
+                {projects.map((p) => chip(p.label, selProj.has(p.value), () => toggleProj(p.value)))}
+              </>)}
+              {q === 'budget' && (<>
+                {chip('Free only', cost === 'free', () => setCost('free'))}
+                {chip('Open to paid', cost === 'any', () => setCost('any'))}
+              </>)}
+              {q === 'timing' && (<>
+                {chip('Summer', time === 'summer', () => setTime('summer'))}
+                {chip('School year', time === 'school_year', () => setTime('school_year'))}
+                {chip('Any time', time === 'any', () => setTime('any'))}
+              </>)}
+            </View>
+
+            <View style={{ flex: 1, minHeight: space.xl }} />
+            <View style={{ height: 2, backgroundColor: colors.hairline, marginBottom: space.md }} />
+
+            {isLast ? (
+              <PopButton label="Find my matches" onPress={confirm} full
+                style={{ backgroundColor: colors.teal }} textStyle={{ color: colors.white }} />
+            ) : (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <View style={{ flexDirection: 'row', gap: 6 }}>
+                  {questions.map((_, i) => (
+                    <View key={i} style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: i === cardIndex ? colors.navy : colors.slate200 }} />
+                  ))}
+                </View>
+                <Pressable onPress={() => flingAway(-1)}>
+                  <Animated.Text style={{
+                    fontFamily: fonts.bodyMed, fontStyle: 'italic', fontSize: 14, color: colors.teal,
+                    opacity: hintPulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }),
+                  }}>Swipe to continue →</Animated.Text>
+                </Pressable>
+              </View>
+            )}
+          </Animated.View>
+        </View>
+
+        {!isLast && (
+          <Pressable onPress={confirm} style={{ alignSelf: 'center' }}>
+            <Txt style={{ fontFamily: fonts.bodyBold, fontSize: 15, color: colors.teal }}>
+              {anyFocus ? `Find my matches (${anyFocus} focus)` : 'Find my matches'}
+            </Txt>
+          </Pressable>
+        )}
+      </View>
     </Screen>
   );
 }

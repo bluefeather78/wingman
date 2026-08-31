@@ -18,6 +18,11 @@ WOULD judge.
 onto each pending row whose nearest match reaches a surfaced tier (proof/confident/adjudicate/hint),
 so the review console shows a 'possible duplicate of' back-link with the tier. It replaces only its
 own prior entries -- url_dedupe's submission-time candidates are left untouched.
+
+The LIVE catalog (active-vs-active) is a separate job — see find_catalog_dups.py, which the
+Run -> Duplicates -> "Scan for duplicates" button calls; it shares this module's
+`dedupe_confidence` tier engine but reads vectors straight from the prebuilt index instead of
+re-embedding, so it costs nothing per run.
 """
 import argparse
 import os

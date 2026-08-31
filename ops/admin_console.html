@@ -402,6 +402,39 @@ tr.disabled-seed { opacity: .48; }
 .section-label .count { font-family: var(--font-mono); font-weight: 400; text-transform: none;
   letter-spacing: 0; color: var(--text-2); }
 
+/* ---- Catalog Control Room (guide tab) ---- */
+.guide-legend { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-5); margin: 0 0 var(--sp-4);
+  font-size: 12.5px; color: var(--text-2); }
+.guide-legend .pill { margin-right: 4px; }
+.flow-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: var(--sp-3) 0 var(--sp-4); }
+.flow-chip { border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 10px 14px;
+  font-family: var(--font-head); font-weight: 600; font-size: 13px; background: var(--surface-2); }
+.flow-chip.hub { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.flow-arrow { color: var(--text-3); font-size: 16px; }
+.gsteps { display: flex; flex-direction: column; }
+.gstep { display: grid; grid-template-columns: 28px 1fr; gap: 14px; padding: var(--sp-4) 0; border-top: 1px solid var(--border); }
+.gstep:first-child { border-top: 0; padding-top: 0; }
+.gstep .dot { width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid var(--accent); color: var(--accent);
+  display: flex; align-items: center; justify-content: center; font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+.gstep h3 { font-size: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gstep p { margin: 6px 0 0; color: var(--text-2); font-size: 13px; max-width: 74ch; }
+.gstep .breadcrumb { display: inline-block; font-size: 11.5px; color: var(--accent); background: var(--accent-soft);
+  padding: 3px 8px; border-radius: var(--radius-sm); margin-top: 8px; font-family: var(--font-mono); }
+.gjobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap: var(--sp-3); }
+.gjob { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--sp-3) var(--sp-4); background: var(--surface-2); }
+.gjob .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.gjob h3 { font-size: 13.5px; }
+.gjob .script { font-family: var(--font-mono); font-size: 11px; color: var(--text-3); margin: 3px 0 8px; }
+.gjob p { font-size: 12.5px; color: var(--text-2); margin: 0 0 8px; }
+.gjob .cadence { font-size: 11.5px; color: var(--text-3); border-top: 1px dashed var(--border); padding-top: 8px; }
+.gjob .cadence b { color: var(--text); font-weight: 600; }
+.grules { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); gap: var(--sp-3); }
+.grule { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
+.grule .mark { font-size: 18px; }
+.grule h3 { font-size: 13px; margin: 0 0 3px; }
+.grule p { margin: 0; font-size: 12.5px; color: var(--text-2); }
+
 /* Collapsible cards. The whole head toggles; a ::after chevron marks the state. No per-card
    markup — one delegated listener (initCollapse) and these rules cover every card at once. */
 .card > .card-head { cursor: pointer; }
@@ -448,6 +481,7 @@ tr.disabled-seed { opacity: .48; }
   </div>
 
   <div class="viewtabs" id="viewTabs">
+    <button class="vtab" data-view="guide">Catalog Control Room</button>
     <button class="vtab active" data-view="metrics">Dashboard<span class="count" id="metricsTabCount"></span></button>
     <button class="vtab" data-view="run">Run</button>
     <button class="vtab" data-view="money">Money<span class="count" id="userTabCount"></span></button>
@@ -455,6 +489,215 @@ tr.disabled-seed { opacity: .48; }
   </div>
 
   <div id="globalNotice" class="notice err hidden" style="margin-bottom:24px"></div>
+
+  <!-- ==========================================================================
+       Catalog Control Room — a static field guide, ported from the "Catalog Control Room"
+       artifact. No data, no API calls: pure orientation for whoever is running this console.
+       Keep its breadcrumbs in sync with the real Run subtabs when those move.
+  =========================================================================== -->
+  <div class="view hidden" id="view-guide">
+    <div class="view-lead">
+      A field guide for the person running this console: how to bring in new opportunities and
+      how to keep the ones already live accurate &mdash; without spending money you didn&rsquo;t
+      mean to.
+    </div>
+
+    <div class="guide-legend">
+      <span><span class="pill warn">Paid</span> costs API money &mdash; check the preview first</span>
+      <span><span class="pill ok">Free</span> no API cost, run it whenever</span>
+      <span><span class="pill info">Auto</span> runs by itself, nothing to click</span>
+      <span><span class="pill">Manual</span> a click only you can make</span>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>How the pieces fit together</h2>
+        <div class="spacer"></div>
+        <div class="hint">Two jobs keep the catalog useful</div>
+      </div>
+      <div class="card-body">
+        <p style="margin:0;color:var(--text-2);font-size:13px;max-width:74ch">
+          Finding opportunities that aren&rsquo;t in the catalog yet, and making sure the ones
+          already in it are still true. Both funnel through the same review queue and the same
+          live table.
+        </p>
+        <div class="flow-row">
+          <div class="flow-chip">Scraper / Hub Miner</div><span class="flow-arrow">&rarr;</span>
+          <div class="flow-chip">Review Queue</div><span class="flow-arrow">&rarr;</span>
+          <div class="flow-chip hub">Live Catalog</div><span class="flow-arrow">&rarr;</span>
+          <div class="flow-chip">Students (the app)</div>
+        </div>
+        <p style="margin:0;color:var(--text-2);font-size:13px;max-width:74ch">
+          A candidate only ever reaches students by passing through the review queue, and only a
+          person clicking <strong>Activate</strong> makes that happen. Once live, six independent
+          jobs keep circling back to read the live catalog and write fresh facts into it.
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Adding new opportunities</h2>
+        <div class="spacer"></div>
+        <div class="hint">Two discovery paths, one queue</div>
+      </div>
+      <div class="card-body">
+        <p style="margin:0 0 4px;color:var(--text-2);font-size:13px;max-width:74ch">
+          There are two ways to discover candidates. They end up in the same place, but one
+          arrives pre-checked and the other needs a short catch-up before it&rsquo;s ready to
+          review.
+        </p>
+        <div class="gsteps">
+          <div class="gstep"><div class="dot">1</div><div>
+            <h3>Run the Scraper <span class="pill warn">Paid</span></h3>
+            <p>Pick search angles (a general national sweep, a Seattle-area sweep, or one
+              specific angle), and set the gate mode to <strong>Observe</strong> &mdash; it keeps
+              every result in the queue, labelled, instead of quietly dropping or diverting
+              anything. Cost scales with how much the model has to search; a 5-angle run has cost
+              roughly $0.005&ndash;$0.05 per candidate found.</p>
+            <span class="breadcrumb">Run &rarr; New Opportunities &rarr; New Opportunity Scout &rarr; Scraper</span>
+          </div></div>
+          <div class="gstep"><div class="dot">2</div><div>
+            <h3>&hellip;or run Mine Hub Pages <span class="pill warn">Paid</span></h3>
+            <p>Leave the URL blank and set &ldquo;take N from the discovery queue&rdquo; to work
+              through institution hub pages already found. These rows arrive URL-deduped and
+              filled in, but they bypass the classify/dedupe checks the Scraper runs
+              automatically &mdash; treat this as the start of a slightly longer path, not a
+              shortcut.</p>
+            <span class="breadcrumb">Run &rarr; New Opportunities &rarr; Mine Hub Pages</span>
+          </div></div>
+          <div class="gstep"><div class="dot">3</div><div>
+            <h3>Catch up hub-mined rows: Classify, then Dedupe <span class="pill warn">Paid, cheap</span></h3>
+            <p>Only needed after mining, never after a Scraper run. Classify tags each row as
+              program / hub / none / stale; Dedupe checks it against the embedding index for
+              near-duplicates. Tick &ldquo;only rows already classified&rdquo; on the Dedupe step
+              so it doesn&rsquo;t re-pay to re-check rows the Scraper already handled.</p>
+            <span class="breadcrumb">Run &rarr; New Opportunities &rarr; New Opportunity Scout &rarr; Queue tools &rarr; Classify / Dedupe</span>
+          </div></div>
+          <div class="gstep"><div class="dot">4</div><div>
+            <h3>Triage the queue <span class="pill ok">Free</span></h3>
+            <p>Auto-rejects anything the classifier already called a hub page,
+              not-an-opportunity, or stale &mdash; reversibly, and for no cost. Run it right
+              before you sit down to review, so you aren&rsquo;t reading rows a machine can
+              already rule out.</p>
+            <span class="breadcrumb">Run &rarr; New Opportunities &rarr; New Opportunity Scout &rarr; Queue tools &rarr; Triage</span>
+          </div></div>
+          <div class="gstep"><div class="dot">5</div><div>
+            <h3>Review and Activate <span class="pill">Manual</span></h3>
+            <p>Open the review queue. Read the classify pill, the dedupe back-links, and the
+              quality flags on what&rsquo;s left, then <strong>Activate</strong> the ones worth
+              keeping. This is the only step in the whole flow that makes a row visible to a
+              student &mdash; nothing upstream of it ever does that on its own.</p>
+            <span class="breadcrumb">Run &rarr; New Opportunities &rarr; New Opportunity Scout &rarr; Review &amp; admit</span>
+          </div></div>
+        </div>
+        <div class="notice info" style="margin-top:16px">
+          <strong>What a real run cost, measured:</strong> a 5-angle Scraper run in Observe mode
+          turned 94 candidates into 21 queued rows for $0.4552. Classifying a 279-row queue cost
+          $0.4631 (about $0.0017/row); deduping that same queue cost $0.0036. Triage and Activate
+          cost nothing.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Keeping the catalog fresh</h2>
+        <div class="spacer"></div>
+        <div class="hint">Six jobs, six schedules, one table</div>
+      </div>
+      <div class="card-body">
+        <p style="margin:0 0 12px;color:var(--text-2);font-size:13px;max-width:74ch">
+          They don&rsquo;t run in sequence &mdash; each reads the same table and corrects a
+          different slice of it, on its own schedule.
+        </p>
+        <div class="gjobs">
+          <div class="gjob"><div class="top"><h3>Metadata Refresh</h3><span class="pill warn">Paid</span></div>
+            <div class="script">refresh_opportunities.py</div>
+            <p>Re-checks name, org, summary, eligibility and pricing. Never touches the URL
+              &mdash; that&rsquo;s Link Health&rsquo;s job.</p>
+            <div class="cadence"><b>Cadence:</b> after activating a batch, or periodically</div></div>
+          <div class="gjob"><div class="top"><h3>Org Reviews</h3><span class="pill warn">Paid</span></div>
+            <div class="script">check_reviews.py</div>
+            <p>Checks a program&rsquo;s legitimacy against independent sources and stores the
+              verdict students see. Self-limiting &mdash; only re-checks rows unreviewed or 30+
+              days stale.</p>
+            <div class="cadence"><b>Cadence:</b> any time &mdash; idempotent within 30 days</div></div>
+          <div class="gjob"><div class="top"><h3>Action Items</h3><span class="pill warn">Paid</span></div>
+            <div class="script">generate_action_items.py</div>
+            <p>Builds each row&rsquo;s application checklist, verified line-by-line against the
+              program&rsquo;s own page. An unreadable page gets an honest generic checklist for
+              free.</p>
+            <div class="cadence"><b>Cadence:</b> after new rows activate</div></div>
+          <div class="gjob"><div class="top"><h3>Link Health</h3><span class="pill ok">Free</span></div>
+            <div class="script">check_links.py</div>
+            <p>Verifies every URL. Deactivates only what&rsquo;s provably gone (404 / 410 /
+              unresolvable), flags the rest, and tries a proven repair before giving up.</p>
+            <div class="cadence"><b>Cadence:</b> run often &mdash; weekly is fine, no cost to weigh</div></div>
+          <div class="gjob"><div class="top"><h3>Mailing Lists</h3><span class="pill ok">Free*</span></div>
+            <div class="script">find_mailing_lists.py</div>
+            <p>Looks for a program&rsquo;s signup form and proposes a recipe. Nothing goes out to
+              a student until you promote a recipe to verified yourself.</p>
+            <div class="cadence"><b>Cadence:</b> after a batch of activations, then verify what it found</div></div>
+          <div class="gjob"><div class="top"><h3>Deadlines</h3><span class="pill info">Auto</span></div>
+            <div class="script">check_deadlines.py</div>
+            <p>Fires automatically the first time a student opens a row, cached for 7 days. Only
+              touch this to force a re-check or fix a known gap in a handful of rows.</p>
+            <div class="cadence"><b>Cadence:</b> leave it alone; targeted re-checks only</div></div>
+        </div>
+
+        <div class="notice" style="margin:16px 0">
+          <strong>Why there&rsquo;s no &ldquo;run everything nightly&rdquo; button:</strong> a
+          full-catalog pass isn&rsquo;t always cheap. Measured full passes: Org Reviews ~$1.42,
+          Action Items ~$5, Deadlines ~$84. That&rsquo;s why Deadlines stays on-demand and
+          Reviews relies on its own 30-day staleness filter instead of a blanket re-check.
+        </div>
+
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Job</th><th>Cost</th><th>Recommended cadence</th><th>Console</th></tr></thead>
+            <tbody>
+              <tr><td>Metadata Refresh</td><td>Paid</td><td>After a batch of activations, or quarterly</td><td class="mono">Run &rarr; Core Details</td></tr>
+              <tr><td>Org Reviews</td><td>Paid, self-limiting</td><td>Any time &mdash; idempotent within 30 days</td><td class="mono">Run &rarr; Keep Details Current</td></tr>
+              <tr><td>Action Items</td><td>Paid, cheap</td><td>After new rows activate</td><td class="mono">Run &rarr; Keep Details Current</td></tr>
+              <tr><td>Link Health</td><td>Free</td><td>Weekly</td><td class="mono">Run &rarr; Utilities</td></tr>
+              <tr><td>Mailing Lists</td><td>Mostly free</td><td>After a batch of activations</td><td class="mono">Run &rarr; Mailing Lists</td></tr>
+              <tr><td>Deadlines</td><td>Auto / on-demand</td><td>Don&rsquo;t schedule it &mdash; let it fire itself</td><td class="mono">Run &rarr; Keep Details Current</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Rules to remember</h2>
+        <div class="spacer"></div>
+        <div class="hint">The console is built so a mistake here costs seconds, not students</div>
+      </div>
+      <div class="card-body">
+        <div class="grules">
+          <div class="grule"><span class="mark">&#128064;</span><div>
+            <h3>Preview before you pay</h3>
+            <p>Every paid job has a free preview that estimates the cost before anything runs.
+              Check it, especially the first time you try a new angle or a bigger batch.</p></div></div>
+          <div class="grule"><span class="mark">&#128274;</span><div>
+            <h3>Nothing activates itself</h3>
+            <p>A scraped or mined row always lands inactive. The only way a student ever sees it
+              is you clicking Activate in the review queue &mdash; every time, no exceptions.</p></div></div>
+          <div class="grule"><span class="mark">&#128421;&#65039;</span><div>
+            <h3>The console only runs on your machine</h3>
+            <p>Start it with <span class="mono">restart_server.ps1</span>, then open
+              <span class="mono">http://localhost:8000/admin</span>. It won&rsquo;t answer from
+              anywhere else.</p></div></div>
+          <div class="grule"><span class="mark">&#128181;</span><div>
+            <h3>Only one job is free by design</h3>
+            <p>Link Health is the sole no-cost maintenance agent. The others spend real API money
+              per run &mdash; that&rsquo;s the whole reason the preview step exists.</p></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- ==========================================================================
        Run / Money / Comms are the redesign's grouped views. They are built as empty
@@ -465,9 +708,9 @@ tr.disabled-seed { opacity: .48; }
   <div class="view hidden" id="view-run">
     <div class="subtabs" id="runSubtabs">
       <button class="stab active" data-sub="inspect">Inspect</button>
+      <button class="stab" data-sub="searchangles">Search Angles</button>
       <button class="stab" data-sub="newopp">New Opportunities<span class="count" id="reviewTabCount"></span></button>
       <button class="stab" data-sub="dupes">Duplicates<span class="count" id="dupeTabCount"></span></button>
-      <button class="stab" data-sub="core">Core Details</button>
       <button class="stab" data-sub="upkeep">Keep Details Current</button>
       <button class="stab" data-sub="lists">Mailing Lists<span class="count" id="signupTabCount"></span></button>
       <button class="stab" data-sub="utils">Utilities</button>
@@ -482,21 +725,42 @@ tr.disabled-seed { opacity: .48; }
       <div class="agents" id="slot-inspect"></div>
     </div>
 
+    <div class="subview" id="rsub-searchangles">
+      <div class="flowhead"><h2>Search Angles</h2><span class="step">what the scout is told to look for</span>
+        <p>Propose new angles where the catalog is thin, see every angle the scraper can run, and
+        check what each one actually searched.</p></div>
+      <div class="section-label">Propose new angles</div>
+      <div class="agents" id="tools-proposeangles"></div>
+      <div class="section-label">Scraper angles</div>
+      <div id="slot-scraperangles"></div>
+      <div class="section-label">Angle queries</div>
+      <div id="slot-anglequeries"></div>
+    </div>
+
     <div class="subview" id="rsub-newopp">
       <div class="flowhead"><h2>New Opportunities</h2><span class="step">discover &rarr; review &rarr; admit</span>
         <p>Find programs missing from the catalog, decide what the scout may search and trust,
-        and admit the good finds. Everything for this pipeline is here.</p></div>
-      <div class="section-label">Run the scout</div>
-      <div class="agents" id="wf-newopp"></div>
-      <div class="section-label">What it searches</div>
-      <div class="agents" id="tools-newopp-angles"></div>
-      <div id="slot-newopp-angles"></div>
-      <div class="section-label">Trusted sources <span class="count hidden" id="sourcesTabCount"></span></div>
-      <div id="slot-newopp-allowlist"></div>
-      <div class="section-label">Review &amp; admit</div>
-      <div id="slot-newopp-review"></div>
-      <div class="section-label">Queue tools <span style="font-weight:400;opacity:.7">classify &rarr; dedupe &rarr; triage</span></div>
-      <div class="agents" id="tools-newopp-queue"></div>
+        and admit the good finds.</p></div>
+      <div class="tabs" id="newoppTabs">
+        <button class="tab active" data-newopp="scout">New Opportunity Scout</button>
+        <button class="tab" data-newopp="hubs">Mine Hub Pages</button>
+      </div>
+
+      <div id="newopp-scout">
+        <div class="section-label">New opportunity scout</div>
+        <div class="agents" id="wf-newopp"></div>
+        <div class="section-label">Queue tools <span style="font-weight:400;opacity:.7">classify &rarr; dedupe &rarr; triage &rarr; refresh embeddings</span></div>
+        <div class="agents" id="tools-newopp-queue"></div>
+        <div class="section-label">Review &amp; admit</div>
+        <div id="slot-newopp-review"></div>
+      </div>
+
+      <div id="newopp-hubs" class="hidden">
+        <div class="section-label">Mine hub pages</div>
+        <div class="agents" id="tools-newopp-minehub"></div>
+        <div class="section-label">Discovery leads</div>
+        <div id="slot-newopp-angles"></div>
+      </div>
     </div>
 
     <div class="subview" id="rsub-dupes">
@@ -534,10 +798,21 @@ tr.disabled-seed { opacity: .48; }
       </div>
     </div>
 
-    <div class="subview" id="rsub-core">
-      <div class="flowhead"><h2>Core Details</h2><span class="step">name &middot; org &middot; eligibility &middot; pricing</span>
-        <p>The agent that refreshes each program&rsquo;s core catalog fields, and its progress report.</p></div>
-      <div class="section-label">Agent</div>
+    <div class="subview" id="rsub-upkeep">
+      <div class="flowhead"><h2>Keep Details Current</h2><span class="step">facts &middot; deadlines &middot; steps &middot; reputation</span>
+        <p>Per-program enrichment: the core catalog facts, when the deadlines are, what the
+        application steps are, and whether the org is legitimate.</p></div>
+      <div class="section-label">Agents</div>
+      <div class="agents" id="wf-upkeep"></div>
+      <div class="section-label">Tools</div>
+      <div class="agents" id="tools-upkeep"></div>
+
+      <div class="section-label">Metadata refresh <span style="font-weight:400;opacity:.7">name &middot; org &middot; eligibility &middot; pricing</span></div>
+      <div class="hint" style="margin:0 0 14px;line-height:1.55;max-width:78ch">
+        New rows from the New Opportunity Scout already arrive pre-filled with this same
+        extraction (the M9 discovery gate). This agent&rsquo;s job now is re-checking rows
+        already in the catalog, not newly-discovered ones.
+      </div>
       <div class="agents" id="wf-core"></div>
       <div class="section-label">Reports</div>
       <div class="agents" id="tools-core"></div>
@@ -555,16 +830,15 @@ tr.disabled-seed { opacity: .48; }
           <div id="mrqBody" class="hint" style="padding:10px 14px">Loading&hellip;</div>
         </div>
       </div>
-    </div>
 
-    <div class="subview" id="rsub-upkeep">
-      <div class="flowhead"><h2>Keep Details Current</h2><span class="step">deadlines &middot; steps &middot; reputation</span>
-        <p>Time-sensitive, per-program enrichment: when the deadlines are, what the application
-        steps are, and whether the org is legitimate.</p></div>
-      <div class="section-label">Agents</div>
-      <div class="agents" id="wf-upkeep"></div>
-      <div class="section-label">Tools</div>
-      <div class="agents" id="tools-upkeep"></div>
+      <div class="section-label">Trusted sources <span class="count hidden" id="sourcesTabCount"></span></div>
+      <div class="hint" style="margin:0 0 14px;line-height:1.55;max-width:78ch">
+        Defaults to pending until marked Trust or Block. Read-only for two agents above:
+        <strong>Deadline Checker</strong>&rsquo;s last-resort off-site search (dates from a
+        Trusted site are always flagged estimated), and <strong>Task Generator</strong>&rsquo;s
+        eligibility-claim check (kept only from the program&rsquo;s own Official page).
+      </div>
+      <div id="slot-newopp-allowlist"></div>
     </div>
 
     <div class="subview" id="rsub-lists">
@@ -2544,10 +2818,16 @@ async function openDupScan() {
     S.dupScan.pairs = r.pairs || [];
     // Pre-select the near-certain (strong) pairs; leave the weak ones for a deliberate tick.
     S.dupScan.pairs.forEach((p, i) => { if (p.confidence === 'strong') S.dupScan.sel.add(i); });
-    $('dupScanStatus').textContent = S.dupScan.pairs.length
+    // unembedded rows were never compared by the embedding pass — surfaced, not silently
+    // skipped, so a quiet scan can't be misread as "nothing to find" (see find_catalog_dups.py).
+    const unembeddedNote = r.unembedded
+      ? ` ${num(r.unembedded)} row(s) aren't in the dedupe index yet and were skipped — run `
+        + `Refresh Dedupe Embeddings to cover them.`
+      : '';
+    $('dupScanStatus').textContent = (S.dupScan.pairs.length
       ? `${S.dupScan.pairs.length} live pair(s) found across ${num(r.scanned)} rows. Strong `
         + `matches are pre-selected.`
-      : `No live duplicate pairs found across ${num(r.scanned)} rows.`;
+      : `No live duplicate pairs found across ${num(r.scanned)} rows.`) + unembeddedNote;
     renderDupScan();
   } catch (e) {
     $('dupScanStatus').textContent = '';
@@ -2748,6 +3028,7 @@ function planPill(status) {
 }
 
 const VIEW_SUBTITLE = {
+  guide:   'A field guide to the discovery and maintenance pipeline',
   metrics: 'Who signs up, how far they get, and whether they convert',
   run:     'Run the agents and tools that build and maintain the opportunity catalog',
   money:   'What everything costs — the agents you run and the app usage students trigger',
@@ -2785,7 +3066,6 @@ const WORKFLOW_AGENTS = {
 // Tool cards that share a grid with the agent above them, so they sit side by side rather
 // than dropping to their own row. Appended after the agent cards in the same container.
 const WORKFLOW_INLINE_TOOLS = {
-  'wf-newopp': ['minehub'],
   'wf-lists': ['mlgrader'],
   'wf-utils': ['refind'],
 };
@@ -2804,8 +3084,8 @@ function relocateConsole() {
   // drains it. A card left out of this function is not merely misplaced -- it stays in a hidden
   // legacy container and is never visible at all, which is what happened to this one.
   move(cardOf('leadsBody'), 'slot-newopp-angles');
-  move(cardOf('seedBody'), 'slot-newopp-angles');
-  move(cardOf('queryBody'), 'slot-newopp-angles');
+  move(cardOf('seedBody'), 'slot-scraperangles');
+  move(cardOf('queryBody'), 'slot-anglequeries');
   move(cardOf('timingBody'), 'slot-log-timing');
   move(cardOf('pendingBody'), 'slot-newopp-review');
   move(cardOf('signupBody'), 'slot-lists-recipes');
@@ -2829,9 +3109,9 @@ function initSubtabs() {
         const sub = btn.dataset.sub;
         document.querySelectorAll('#view-run .subview').forEach(
           v => v.classList.toggle('active', v.id === 'rsub-' + sub));
-        if (sub === 'newopp') { loadAggregators(); loadLeads(); }
+        if (sub === 'newopp') loadLeads();
+        if (sub === 'upkeep') { loadAggregators(); loadMetadataRefreshQueue(); }
         if (sub === 'dupes') renderDupes();
-        if (sub === 'core') loadMetadataRefreshQueue();
         if (sub === 'lists') loadSignups();
       };
     });
@@ -4932,6 +5212,13 @@ document.querySelectorAll('#seedTabs .tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('#seedTabs .tab').forEach(x => x.classList.remove('active'));
   t.classList.add('active'); S.seedMode = t.dataset.mode; renderSeeds();
 });
+document.querySelectorAll('#newoppTabs .tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('#newoppTabs .tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  const name = t.dataset.newopp;
+  $('newopp-scout').classList.toggle('hidden', name !== 'scout');
+  $('newopp-hubs').classList.toggle('hidden', name !== 'hubs');
+});
 document.querySelectorAll('th.sortable').forEach(th => {
   th.style.cursor = 'pointer';
   th.onclick = () => { S.seedSort = th.dataset.sort; renderSeeds(); };
@@ -4959,9 +5246,10 @@ let TOOLS = {};
 const TOOL_SLOTS = {
   'slot-inspect': ['inspect'],
   'tools-newopp-queue': ['classifyqueue', 'dedupequeue', 'triagequeue', 'embedindex'],
-  'tools-newopp-angles': ['proposeangles'],
+  'tools-newopp-minehub': ['minehub'],
+  'tools-proposeangles': ['proposeangles'],
   'tools-core': ['refreshprog'],
-  'tools-upkeep': ['__forcerecheck'],
+  'tools-upkeep': ['__forcerecheck', 'embedindex'],
   'tools-utils-backfill': ['contactemail'],
   'tools-utils-files': ['export', 'legal'],
 };

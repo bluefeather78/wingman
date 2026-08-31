@@ -1,240 +1,156 @@
 """Report duplicate rows already inside the opportunities table. Free, READ-ONLY.
 
-The 2026-08-23/24 review pass proved the live catalog still holds self-duplicates from
-before url_dedupe existed: Conrad Challenge sat in the table twice as www/trailing-slash
-variants of one URL, Girls Who Code twice under one URL with two names, The Concord
-Review three times. Those were found by accident — a scraped twin's dup-candidates
-happened to point at them — and consolidated by hand with SQL DELETEs. This script finds
-the rest deliberately, as a report for the console/operator. It writes NOTHING: catalog
-changes remain a human decision (prefer the console's duplicate/reject actions over
-DELETE — see scraper_tombstones.json for why).
+Retired 2026-08-30: this used to run three hand-tuned heuristic cuts (exact URL, a name-
+similarity ratio, and an acronym/token-overlap pass). All three were reasoning toward the same
+thing embeddings already do better — url_dedupe's own measurements found the name-similarity
+cut wrong often enough to be "eyeballed only", and the token/acronym cut existed purely to catch
+what a plain ratio missed. Both are now one embedding nearest-neighbor pass through the SAME
+`dedupe_confidence` tier engine dedupe_queue.py uses for the review queue, so a catalog pair and
+a queue pair are judged identically instead of by two different rulebooks.
 
-Three cuts, in decreasing confidence:
+Two passes, both free — no embedding calls happen here, only vector comparisons against the
+prebuilt index (`catalog_embeddings.jsonl`, built by build_catalog_embeddings.py / the console's
+"Refresh Dedupe Embeddings", and kept current automatically: every activation embeds its own row):
 
-  1. match_key collisions — two rows whose URLs normalize identically. These are the
-     same page. Same-name pairs are near-certain duplicates; different-name pairs may be
-     a shared application portal (spicestanford.smapply.io hosts six real programs), so
-     even these are REPORTED, never auto-actioned.
-  2. same registrable domain + name similarity >= 0.90 (active rows only) — hints.
-     url_dedupe's own measurements say name similarity is wrong often ('1-Week' vs
-     '3-Week Medical Academy' scores 0.95), so this cut exists to be eyeballed, and its
-     threshold is deliberately above the 0.82/0.88 hint thresholds used live.
-  3. acronym<->expansion and token-set (Jaccard) overlap, CROSS-HOST allowed (active rows)
-     — the misses cuts 1 and 2 cannot see: an acronym vs its spelled-out name ('NACLO' vs
-     'North American Computational Linguistics ...'), a reworded name, or the same program
-     at a second URL on a different domain. Deliberately fed to the SCAN/report only, never
-     to url_dedupe.name_similarity, so the submission-time reject path cannot gain a false
-     rejection from it. Weakest cut, purely a review aid.
+  1. Exact match_key collision — two active rows whose URL normalizes identically. Free, and
+     found even for a row missing from the index. Judged HERE, not delegated to
+     dedupe_confidence.classify_rows: a bare URL match is PROOF only when the names also
+     agree — a shared multi-program application portal (spicestanford.smapply.io hosts six
+     distinct Stanford programs) shares one stored URL across genuinely different rows. A
+     differing name still surfaces, as a HINT asking a human to confirm it isn't a shared
+     portal, rather than being silently dropped or (the 2026-08-30 bug this fixed) wrongly
+     reported as certain-duplicate PROOF regardless of name.
+  2. Embedding nearest-neighbor — for every row the index holds a vector for, its closest OTHER
+     active row by cosine, tiered PROOF / CONFIDENT / ADJUDICATE / SIBLING / HINT / NONE by
+     dedupe_confidence.classify_rows. Only PROOF/CONFIDENT/ADJUDICATE/HINT are reported — SIBLING
+     is a discriminator-confirmed DIFFERENT program, NONE isn't similar enough to matter.
 
-All three are hints for a human. Nothing here writes.
+Rows the index has no vector for are reported as `unembedded`, never silently skipped — run
+"Refresh Dedupe Embeddings" first if that list is nonzero and matters for this pass.
+
+Nothing here writes. Catalog changes remain a human decision (prefer the console's
+duplicate/reject actions over SQL DELETE — see scraper_tombstones.json for why).
 
 Usage:
-    python find_catalog_dups.py [--json out.json] [--all-rows]
-
---all-rows extends cut 2 to inactive rows too (noisier: the review queue legitimately
-holds near-copies of active rows awaiting a verdict).
+    python find_catalog_dups.py [--json out.json]
 """
 
 import argparse
 import json
 import os
 import sys
-from collections import defaultdict
 
 from supabase_common import load_dotenv, supabase_get
 import url_dedupe
+import embed_common
+import dedupe_confidence as dc
+
+# The columns dedupe_confidence's discriminators read (name/org for identity, the hard fields for
+# the conflict check) plus moderation_status so a caller can rank keep/flag candidates.
+_SELECT = ("id,name,org,url,type,season,grade_min,grade_max,price,"
+           "is_active,moderation_status")
+
+# SIBLING is a discriminator-confirmed DIFFERENT program; NONE isn't similar enough to matter.
+# Same set dedupe_queue.py surfaces for the review queue, so the two pipelines agree on what
+# counts as "worth a human's time".
+_SURFACE_TIERS = (dc.TIER_PROOF, dc.TIER_CONFIDENT, dc.TIER_ADJUDICATE, dc.TIER_HINT)
+
+_TIER_ORDER = {dc.TIER_PROOF: 0, dc.TIER_CONFIDENT: 1, dc.TIER_ADJUDICATE: 2, dc.TIER_HINT: 3}
+
 
 def fetch_all_rows(supabase_url, key):
-    """Every row, active and inactive. supabase_get paginates internally via Range
-    headers, so this must NOT add its own limit/offset loop on top (double pagination
-    416s once the window passes the end of the table)."""
+    """Active rows only — this scan is live-catalog-vs-live-catalog. The review queue's
+    equivalent (pending-vs-catalog) is dedupe_queue.py; the two never overlap in scope.
+    supabase_get paginates internally via Range headers, so this must NOT add its own
+    limit/offset loop on top (double pagination 416s once the window passes the table's end)."""
     return supabase_get(supabase_url, "opportunities", {
-        "select": "id,name,org,url,is_active,moderation_status",
-        "order": "id.asc",
+        "select": _SELECT, "is_active": "eq.true", "order": "id.asc",
     }, key)
 
 
-def key_collisions(rows):
-    """Cut 1: groups of rows sharing one match_key."""
-    by_key = defaultdict(list)
+def _match_key(url):
+    """url_dedupe.match_key, degrading to '' on a malformed URL instead of raising — a
+    catalog row's URL is user/model-entered and not guaranteed parseable."""
+    try:
+        return url_dedupe.match_key(url or "")
+    except ValueError:
+        return ""
+
+
+def find_duplicate_pairs(rows, index=None, top_k=1):
+    """The whole scan. Returns (pairs, unembedded_ids).
+
+    Each pair is {"rows": (a, b), "tier": <TIER_*>, "reasons": [...], "cosine": float|None},
+    tier restricted to `_SURFACE_TIERS`. `index` defaults to the prebuilt on-disk index
+    (embed_common.load_index()) but takes an explicit list so this stays unit-testable with no
+    disk or network access, matching the "every model call is injected" rule the rest of the
+    dedupe stack follows.
+
+    Pure other than the index default load; no network calls, no writes.
+    """
+    if index is None:
+        index = embed_common.load_index()
+    by_id = {r["id"]: r for r in rows if r.get("id")}
+    vec = {e["id"]: e["vector"] for e in index if e.get("id") in by_id and e.get("vector")}
+    unembedded = [rid for rid in by_id if rid not in vec]
+
+    seen = set()
+    pairs = []
+
+    def surface(a, b, tier, reasons, cosine):
+        if a["id"] == b["id"]:
+            return
+        key = tuple(sorted([a["id"], b["id"]]))
+        if key in seen or tier not in _SURFACE_TIERS:
+            return
+        seen.add(key)
+        pairs.append({"rows": (a, b), "tier": tier, "reasons": reasons, "cosine": cosine})
+
+    # Pass 1: exact URL collisions. Free, and catches a pair even when one or both rows are
+    # missing from the embedding index. Judged directly here, NOT via dc.classify_rows: a bare
+    # URL match is proof only when the names also agree (dc.classify_rows enforces that same
+    # guard now), but a differing name is still worth a human's look — it is exactly the
+    # spicestanford.smapply.io shape, one portal URL hosting six distinct programs — so it is
+    # surfaced as a HINT with an explicit warning rather than silently dropped.
+    by_key = {}
     for r in rows:
-        k = url_dedupe.match_key(r.get("url") or "")
+        k = _match_key(r.get("url"))
         if k:
-            by_key[k].append(r)
-    groups = []
-    for k, members in by_key.items():
-        if len(members) < 2:
-            continue
-        names = {url_dedupe.normalize_name(m.get("name")) for m in members}
-        groups.append({
-            "match_key": k,
-            "same_name": len(names) == 1,
-            "active_count": sum(1 for m in members if m.get("is_active")),
-            "rows": members,
-        })
-    # Most actionable first: same-page same-name with 2+ active rows is student-visible
-    # duplication; shared portals (different names) sort after.
-    groups.sort(key=lambda g: (-g["active_count"], not g["same_name"]))
-    return groups
-
-
-def name_hints(rows, include_inactive=False):
-    """Cut 2: same-domain, high-name-similarity pairs not already in cut 1."""
-    pool = rows if include_inactive else [r for r in rows if r.get("is_active")]
-    by_domain = defaultdict(list)
-    for r in pool:
-        _, host, _, _ = url_dedupe.split_url(r.get("url") or "")
-        d = url_dedupe.registrable_domain(host)
-        if d:
-            by_domain[d].append(r)
-    hints = []
-    for domain, members in by_domain.items():
+            by_key.setdefault(k, []).append(r)
+    for members in by_key.values():
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
                 a, b = members[i], members[j]
-                ka = url_dedupe.match_key(a.get("url") or "")
-                kb = url_dedupe.match_key(b.get("url") or "")
-                if ka and ka == kb:
-                    continue  # cut 1 already owns this pair
-                ratio = url_dedupe.name_similarity(a.get("name"), b.get("name"))
-                if ratio >= 0.90:
-                    hints.append({"domain": domain, "ratio": round(ratio, 3),
-                                  "rows": [a, b]})
-    hints.sort(key=lambda h: -h["ratio"])
-    return hints
+                nr = dc.name_relation(a.get("name"), a.get("org"), b.get("name"), b.get("org"))
+                if nr == dc.NAME_SAME:
+                    surface(a, b, dc.TIER_PROOF, ["identical URL, same name"], cosine=None)
+                else:
+                    surface(a, b, dc.TIER_HINT,
+                           ["identical URL, different name — confirm it is not a shared "
+                            "application portal"], cosine=None)
 
+    # Pass 2: embedding nearest-neighbor, restricted to rows the index actually holds a vector
+    # for. `search` excludes anything not in `rows` (e.g. a row deactivated since the index was
+    # last built) so a stale index entry can never surface a pair for a row we didn't fetch.
+    search = [e for e in index if e.get("id") in by_id and e.get("vector")]
+    for rid, v0 in vec.items():
+        hits = embed_common.nearest(v0, search, top_k=top_k, min_score=dc.HINT_FLOOR,
+                                    exclude_ids={rid})
+        for mid, cos, _entry in hits:
+            a, b = by_id[rid], by_id[mid]
+            v = dc.classify_rows(a, b, cosine=cos)
+            surface(a, b, v.tier, v.reasons, cosine=cos)
 
-# Cut 3 tuning. All HINTS — cut 3 pairs are never auto-actioned, they are flagged for a human,
-# so the bar is "worth a look", not "certainly a duplicate".
-_COMMON_TOKEN_DF = 30    # a token on more rows than this is a category word ('summer'), not an
-                         # identity — skipped for CANDIDATE generation (still counts in Jaccard)
-_JACCARD_MIN = 0.6       # token-set overlap needed to call two names near-matches
-_MIN_SHARED = 2          # ...and they must share at least this many distinctive tokens
-_ACRONYM_MIN, _ACRONYM_MAX = 3, 8
-_MAX_EXTRA_PAIRS = 400
-
-
-def _row_tokens(r):
-    """Distinctive name tokens: connectors, 'program' and institution words dropped, len>=2.
-    Reuses url_dedupe's own splitters so 'the finder' and 'the reject path' agree on what a
-    name's identity words are."""
-    return [t for t in url_dedupe._distinctive_tokens(r.get("name"))
-            if t not in url_dedupe._INSTITUTION_WORDS and len(t) >= 2]
-
-
-def _host_of(r):
-    _, host, _, _ = url_dedupe.split_url(r.get("url") or "")
-    return host
-
-
-def extra_name_pairs(rows):
-    """Cut 3: the pairs the strict cuts miss — ACRONYM↔expansion and token-set overlap, both
-    allowed to cross domains. HINTS ONLY, fed to the scan for a human to keep or confirm; this
-    never touches url_dedupe.name_similarity, so the submission-time REJECT path is unaffected
-    and cannot gain a false rejection from it.
-
-    Only active rows (a student-visible duplicate is the thing worth surfacing), and two names
-    that are BOTH just a bare institution are suppressed — that is the exact noise the
-    bare-institution guard exists for.
-    """
-    info = []
-    for r in rows:
-        if not r.get("is_active"):
-            info.append(None)
-            continue
-        nm = url_dedupe.normalize_name(r.get("name"))
-        if not nm or nm in url_dedupe.GENERIC_NAMES or len(nm) < 4:
-            info.append(None)
-            continue
-        toks = _row_tokens(r)
-        info.append({
-            "row": r, "nm": nm, "toks": toks, "set": set(toks), "host": _host_of(r),
-            "acr": "".join(t[0] for t in toks) if len(toks) >= 3 else "",
-        })
-
-    # Inverted index for candidate generation, minus category words that would pair everything.
-    postings = defaultdict(list)
-    for idx, it in enumerate(info):
-        if it:
-            for t in it["set"]:
-                postings[t].append(idx)
-    discriminative = {t: idxs for t, idxs in postings.items() if len(idxs) <= _COMMON_TOKEN_DF}
-
-    seen, out = set(), []
-
-    def emit(i, j, reason, conf):
-        key = (i, j) if i < j else (j, i)
-        if key in seen:
-            return
-        seen.add(key)
-        a, b = info[i], info[j]
-        if (url_dedupe._is_bare_institution(a["row"].get("name"), a["host"])
-                and url_dedupe._is_bare_institution(b["row"].get("name"), b["host"])):
-            return
-        out.append({"rows": [a["row"], b["row"]], "reason": reason, "confidence": conf,
-                    "ratio": conf == "strong" and 0.95 or 0.6})
-
-    # Token-set (Jaccard) overlap. Candidates share >=2 discriminative tokens; only those pay
-    # for the set math, which keeps this near-linear instead of O(n^2).
-    for i, it in enumerate(info):
-        if not it:
-            continue
-        cand = defaultdict(int)
-        for t in it["set"]:
-            for j in discriminative.get(t, ()):
-                if j > i:
-                    cand[j] += 1
-        for j, shared in cand.items():
-            if shared < _MIN_SHARED:
-                continue
-            sj = info[j]["set"]
-            union = it["set"] | sj
-            inter = it["set"] & sj
-            if len(inter) < _MIN_SHARED or not union:
-                continue
-            jac = len(inter) / len(union)
-            if jac < _JACCARD_MIN:
-                continue
-            same_dom = (it["host"] and info[j]["host"]
-                        and url_dedupe.registrable_domain(it["host"])
-                        == url_dedupe.registrable_domain(info[j]["host"]))
-            reason = f"name tokens {int(jac * 100)}% overlap" + ("" if same_dom else " (different site)")
-            emit(i, j, reason, "strong" if same_dom and jac >= 0.75 else "weak")
-        if len(out) >= _MAX_EXTRA_PAIRS:
-            return out[:_MAX_EXTRA_PAIRS]
-
-    # Acronym: one row's whole name is a short token that spells the initials of another's
-    # distinctive words. Cross-host by nature — an acronym and its expansion rarely co-locate.
-    by_acr = defaultdict(list)
-    for idx, it in enumerate(info):
-        if it and it["acr"]:
-            by_acr[it["acr"]].append(idx)
-    for idx, it in enumerate(info):
-        if not it or len(it["toks"]) != 1:
-            continue
-        cand = it["toks"][0]
-        if not (_ACRONYM_MIN <= len(cand) <= _ACRONYM_MAX):
-            continue
-        for j in by_acr.get(cand, []):
-            if j != idx:
-                emit(idx, j, f"acronym match: '{cand.upper()}' = initials of "
-                             f"'{info[j]['row'].get('name')}'", "weak")
-        if len(out) >= _MAX_EXTRA_PAIRS:
-            break
-
-    return out[:_MAX_EXTRA_PAIRS]
+    return pairs, unembedded
 
 
 def _fmt_row(r):
-    state = "ACTIVE" if r.get("is_active") else (r.get("moderation_status") or "inactive")
-    return f"{r['id']} [{state}] {r.get('name')}  |  {r.get('url')}"
+    return f"{r['id']} {r.get('name')}  |  {r.get('url')}"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--json", default=None, help="Also write the report here.")
-    parser.add_argument("--all-rows", action="store_true",
-                        help="Include inactive rows in the name-similarity cut.")
     args = parser.parse_args()
 
     load_dotenv()
@@ -245,39 +161,24 @@ def main():
         sys.exit(1)
 
     rows = fetch_all_rows(supabase_url, key)
-    print(f"[OK] {len(rows)} rows loaded "
-          f"({sum(1 for r in rows if r.get('is_active'))} active).")
+    print(f"[OK] {len(rows)} active row(s) loaded.")
 
-    groups = key_collisions(rows)
-    print(f"\n=== Cut 1: identical normalized URL — {len(groups)} group(s) ===")
-    for g in groups:
-        kind = "SAME NAME (near-certain duplicate)" if g["same_name"] else \
-               "different names (may be a shared portal — check before acting)"
-        print(f"\n  {g['match_key']}  ({g['active_count']} active)  {kind}")
-        for r in g["rows"]:
-            print(f"    {_fmt_row(r)}")
-
-    hints = name_hints(rows, include_inactive=args.all_rows)
-    scope = "all rows" if args.all_rows else "active rows only"
-    print(f"\n=== Cut 2: same domain, name >=90% similar ({scope}) — "
-          f"{len(hints)} pair(s), hints ONLY ===")
-    for h in hints:
-        print(f"\n  {h['domain']}  (ratio {h['ratio']})")
-        for r in h["rows"]:
-            print(f"    {_fmt_row(r)}")
-
-    extra = extra_name_pairs(rows)
-    print(f"\n=== Cut 3: acronym / token-overlap, cross-host (active rows) — "
-          f"{len(extra)} pair(s), hints ONLY ===")
-    for p in extra:
-        print(f"\n  [{p['confidence']}] {p['reason']}")
-        for r in p["rows"]:
-            print(f"    {_fmt_row(r)}")
+    pairs, unembedded = find_duplicate_pairs(rows)
+    pairs.sort(key=lambda p: (_TIER_ORDER[p["tier"]], -(p["cosine"] or 1.0)))
+    print(f"\n=== {len(pairs)} duplicate pair(s) === "
+          f"({len(unembedded)} row(s) not yet in the dedupe index"
+          + (' — run "Refresh Dedupe Embeddings" to cover them)' if unembedded else ')'))
+    for p in pairs:
+        a, b = p["rows"]
+        print(f"\n  [{p['tier'].upper()}] {', '.join(p['reasons'])}")
+        print(f"    {_fmt_row(a)}")
+        print(f"    {_fmt_row(b)}")
 
     if args.json:
         with open(args.json, "w", encoding="utf-8") as f:
-            json.dump({"key_collisions": groups, "name_hints": hints,
-                       "extra_name_pairs": extra}, f, indent=1, ensure_ascii=False)
+            json.dump([{"tier": p["tier"], "reasons": p["reasons"], "cosine": p["cosine"],
+                       "rows": list(p["rows"])} for p in pairs],
+                      f, indent=1, ensure_ascii=False)
         print(f"\n[OK] wrote {args.json}")
     print("\n[NOTE] Report only — nothing was written. Consolidate via the console's "
           "duplicate/reject actions, not SQL DELETE (deletes need tombstones).")

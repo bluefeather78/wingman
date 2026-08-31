@@ -301,11 +301,21 @@ def classify_rows(a_row, b_row, cosine=None, *, final_a=None, final_b=None,
                   canon_a=None, canon_b=None):
     """Convenience: run every free signal over two catalog rows and return the tier. Pure.
 
-    Proofs use the optional resolved/canonical inputs when supplied (the caller fetched them);
-    absent, only similarity + discriminators decide.
+    Proofs use the optional resolved/canonical inputs when supplied (the caller fetched them) —
+    that evidence is unconditional proof, matching the original contract. Absent it, a bare
+    match on the rows' STORED urls is proof only when the names also agree: two rows can share
+    one stored URL because it is a shared multi-program application portal
+    (spicestanford.smapply.io hosts six distinct Stanford programs — SPICE, E-Japan, e-China,
+    China Scholars, Reischauer, ...), not because they are the same page. Measured live
+    2026-08-30: without this guard, all five of those programs classified TIER_PROOF against
+    each other. Resolved/canonical evidence has no such ambiguity (a redirect target IS the
+    page, whatever the names say), so it keeps overriding names unconditionally.
     """
+    has_resolved_evidence = bool(final_a or final_b or canon_a or canon_b)
     proof = (same_final_url(final_a or a_row.get("url"), final_b or b_row.get("url"))
              or same_canonical(canon_a or "", canon_b or ""))
     nr = name_relation(a_row.get("name"), a_row.get("org"), b_row.get("name"), b_row.get("org"))
+    if proof and not has_resolved_evidence and nr != NAME_SAME:
+        proof = False
     fr, _fields = field_relation(a_row, b_row)
     return classify_pair(cosine, nr, fr, proof=proof, context_ok=same_context(a_row, b_row))

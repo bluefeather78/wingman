@@ -27,9 +27,9 @@ from app.services.match_pipeline import (
 from app.services.curation import CURATION_SYSTEM
 from app.services.funnel import (
     FUNNEL_QUESTION_SYSTEM, BEHAVIORAL_QUESTION_SYSTEM, OUTCOME_QUESTION_SYSTEM,
-    PROJECT_GOAL_QUESTION_SYSTEM, CURATE_AT, FUNNEL_MAX_TOKENS,
+    PROJECT_GOAL_QUESTION_SYSTEM, FUNNEL_MAX_TOKENS,
     next_vibe_rung, next_outcome_rung, next_project_goal_rung,
-    collect_preferences, describe_funnel_choices, build_engagement_rung,
+    collect_preferences, describe_funnel_choices, describe_type_prefs,
 )
 from app.services.embeddings import embed_student_themes
 from gemini_common import call_gemini, extract_json
@@ -102,6 +102,9 @@ def handle_match(body: dict = Depends(json_body),
         "highlight_projects": body.get("highlight_projects") or [],
         "project_focus": bool(body.get("project_focus")),
         "funnel_answers": body.get("funnel_answers") or {},
+        # Experience-type is a PRE-recall setup filter now (raw catalog `type` strings, expanded
+        # from the friendly labels client-side); recall keeps only these types before top-`limit`.
+        "type_prefs": body.get("type_prefs") or [],
     }
     funnel_mode = bool(body.get("funnel"))
     pool_ids = body.get("pool_ids") if isinstance(body.get("pool_ids"), list) else None
@@ -116,7 +119,8 @@ def handle_match(body: dict = Depends(json_body),
         from app.services.matching import recall
         loc = student["location"]
         pool = recall(rows, [], student_grade=student["grade"],
-                      student_state=(loc.get("state") if isinstance(loc, dict) else None), limit=10)
+                      student_state=(loc.get("state") if isinstance(loc, dict) else None), limit=10,
+                      type_prefs=student["type_prefs"])
         from app.services.match_pipeline import RESULT_DISPLAY_FIELDS
         results = [{**{k: r.get(k) for k in RESULT_DISPLAY_FIELDS},
                     "reason": None, "tier": "look", "exploration_pick": False} for r in pool]
@@ -165,22 +169,21 @@ def handle_match(body: dict = Depends(json_body),
             rungs_done = len(answers)
             rung = None
             if not curate_now:
-                # The funnel order puts the student's "what am I here for" dimensions FIRST so they
-                # are reliably asked, THEN the practical feasibility filters, THEN the softer vibe:
-                #   dim 2 engagement (filter) -> dim 3 outcome (rerank) -> feasibility filters ->
-                #   vibe. Filters gate on CURATE_AT (stop narrowing when tight); rerank questions
-                #   gate on POOL_FLOOR (reorder a meaningful list, right up to the shortlist).
+                # The funnel order puts the student's "what am I here for" dimension FIRST so it is
+                # reliably asked, THEN the practical feasibility filters, THEN the softer vibe:
+                #   dim 3 outcome (rerank) -> feasibility filters -> vibe. Filters gate on CURATE_AT
+                #   (stop narrowing when tight); rerank questions gate on POOL_FLOOR (reorder a
+                #   meaningful list, right up to the shortlist).
+                # The old dim 2 "engagement" (experience-type) FILTER moved to the pre-recall setup
+                # (Shama 2026-08-30) — it is now `type_prefs`, applied in recall, so the pool is
+                # already of the chosen type(s) and the funnel never re-asks it.
                 # When the student picked a passion/research PROJECT in setup, the first question is
-                # about their GOAL FOR THAT PROJECT (rerank) — it REPLACES the engagement filter and
-                # the generic outcome question. Otherwise: engagement FILTER then OUTCOME rerank.
+                # about their GOAL FOR THAT PROJECT (rerank). Otherwise: OUTCOME rerank first.
                 if bool(student.get("project_focus")):
                     if rung is None:
                         rung = next_project_goal_rung(
                             pool, answers, student.get("highlight_projects"), _ask, extract_json, rungs_done)
                 else:
-                    # Dimension 2: pool-derived engagement FILTER, built locally from the pool's `type`.
-                    if "engagement" not in answers and len(pool) > CURATE_AT:
-                        rung = build_engagement_rung(pool)
                     # Dimension 3: pool-derived OUTCOME rerank ("what do you want out of it").
                     if rung is None:
                         rung = next_outcome_rung(pool, answers, _ask, extract_json, rungs_done)
@@ -198,7 +201,8 @@ def handle_match(body: dict = Depends(json_body),
                 # engagement/budget/timing picks, in plain language.
                 student_for_curation = {
                     **student,
-                    "preferences": collect_preferences(answers) + describe_funnel_choices(answers),
+                    "preferences": (collect_preferences(answers) + describe_funnel_choices(answers)
+                                    + describe_type_prefs(student.get("type_prefs"))),
                 }
                 out = curate_pool(pool, student_for_curation, _curate, extract_json)
                 out["done"] = True

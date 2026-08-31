@@ -380,6 +380,21 @@ def describe_funnel_choices(funnel_answers: dict | None) -> list[str]:
     return out
 
 
+def describe_type_prefs(type_prefs) -> list[str]:
+    """Plain-language summary of the experience TYPE(s) the student chose in setup, for the
+    curation "why you" reason. Engagement moved from a funnel rung to a pre-recall filter
+    (Shama 2026-08-30), so it no longer flows through funnel_answers / describe_funnel_choices;
+    this mirrors that line off the top-level type_prefs list instead. Deduped by friendly label
+    (several catalog types share one, e.g. Summer Program + Program -> "An immersive program")."""
+    labels, seen = [], set()
+    for t in (type_prefs or []):
+        lbl = ENGAGEMENT_LABEL.get(str(t).strip(), str(t).strip())
+        if lbl and lbl not in seen:
+            seen.add(lbl)
+            labels.append(lbl)
+    return [f'Wants a "{lbl}" kind of experience' for lbl in labels]
+
+
 def build_behavioral_user_content(pool: list[dict], remaining_axes: list[str]) -> str:
     """User payload for a vibe-question rung: the remaining axes (with options) + a sample of the
     program names still on the list, so the model picks the axis that best fits them."""

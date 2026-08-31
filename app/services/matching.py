@@ -212,6 +212,20 @@ def recall_time_ok(row: dict, time_pref: str | None) -> bool:
     return bucket == time_pref
 
 
+def recall_type_ok(row: dict, type_prefs) -> bool:
+    """The "what kind of experience?" filter, moved from a post-recall funnel rung to a PRE-recall
+    setup choice (Shama 2026-08-30): when the student picked experience type(s) in setup, the
+    top-`limit` pool must already be of those types. Empty/None keeps everything.
+
+    A row with NO type is CUT under an active filter — unlike cost/season, where 'unknown' is
+    common and kept, an unclassifiable row cannot satisfy an explicit "I want an internship"
+    choice. `type_prefs` are raw catalog `type` strings (the client expands the friendly labels,
+    e.g. "An immersive program" -> {"Summer Program", "Program"}, before sending)."""
+    if not type_prefs:
+        return True
+    return str(row.get("type") or "").strip() in set(type_prefs)
+
+
 # --------------------------------------------------------------------------- cosine recall
 
 def _to_matrix(vectors: list) -> np.ndarray:
@@ -268,6 +282,7 @@ def recall(
     time_pref: str | None = None,
     limit: int = RECALL_POOL_SIZE,
     project_vectors: list | None = None,
+    type_prefs: list | None = None,
 ) -> list[dict]:
     """Narrow the active catalog to the top-`limit` semantic matches for a student.
 
@@ -289,6 +304,7 @@ def recall(
         and geo_scope_ok(r, student_state)
         and recall_cost_ok(r, cost_pref)
         and recall_time_ok(r, time_pref)
+        and recall_type_ok(r, type_prefs)
     ]
 
     tmat = _to_matrix([v for v in (theme_vectors or []) if v])

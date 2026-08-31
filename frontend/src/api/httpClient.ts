@@ -549,6 +549,26 @@ export const httpClient: ApiClient = {
     });
   },
 
+  // Fire-and-forget pre-embed: warms the server-side theme embedding while the student is still
+  // on the SearchSetup card, so rung-0 recall is a cache hit and the embedding round trip is off
+  // the critical path. Only the theme/project text matters (the embedding is independent of
+  // interest/budget/timing/type picks), so we send just those. Never throws — a failed prewarm
+  // simply means recall embeds normally.
+  async prewarmMatch(body: MatchStudentBlob): Promise<void> {
+    try {
+      await request('/api/match', {
+        method: 'POST',
+        body: JSON.stringify({
+          profile_themes: body.profile_themes ?? [],
+          highlight_projects: body.highlight_projects ?? [],
+          prewarm: true,
+        }),
+      });
+    } catch {
+      /* prewarm is best-effort */
+    }
+  },
+
   async getDeadlineCheck(oppId, force) {
     return (await this.getDeadlineCheckResult(oppId, force)).info;
   },

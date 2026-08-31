@@ -65,13 +65,21 @@ def project_embed_text(project) -> str:
     return s
 
 
+def student_embed_texts(student):
+    """The ordered (theme_texts, project_texts) a student's blob embeds — the SINGLE definition
+    of what goes into the recall embedding, so the prewarm path (/api/match {prewarm:true}) and
+    recall build the byte-identical text list and therefore hit the same embed cache."""
+    theme_texts = [t for t in (theme_embed_text(x) for x in (student.get("profile_themes") or [])) if t]
+    project_texts = [t for t in (project_embed_text(x) for x in (student.get("highlight_projects") or [])) if t]
+    return theme_texts, project_texts
+
+
 def recall_pool(rows, student, embed_themes_fn, recall_limit=RECALL_POOL_SIZE):
     """The recall half: embed the student's themes AND highlight projects, run recall. Returns
     (pool, embed_cost). A thin/empty profile (no themes, no projects) still gets a filtered,
     unscored pool — recall's contract. Themes + projects are embedded in ONE call, then split, so
     it stays a single embed round-trip; project matches carry PROJECT_MATCH_BOOST in recall."""
-    theme_texts = [t for t in (theme_embed_text(x) for x in (student.get("profile_themes") or [])) if t]
-    project_texts = [t for t in (project_embed_text(x) for x in (student.get("highlight_projects") or [])) if t]
+    theme_texts, project_texts = student_embed_texts(student)
     theme_vecs, project_vecs, embed_cost = ([], [], 0.0)
     if theme_texts or project_texts:
         vecs, embed_cost = embed_themes_fn(theme_texts + project_texts)

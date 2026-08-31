@@ -584,6 +584,11 @@ export default function Finder() {
       if (!k) {
         const blob = await buildStudentBlob();
         funnelBlob.current = blob;
+        // Pre-embed the themes/projects NOW, in parallel with the student answering the setup
+        // card, so rung-0 recall hits the warm server-side cache instead of paying the embedding
+        // round trip on "continue". Fire-and-forget; the embedding is independent of the
+        // interest/budget/timing/type picks they're about to make.
+        void httpClient.prewarmMatch(blob);
         funnelAnswers.current = {};
         funnelPoolIds.current = null;
         setFunnelHistory([]);

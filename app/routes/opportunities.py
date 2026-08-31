@@ -22,7 +22,7 @@ from app.services.opportunities import fetch_opportunities
 from app.services import action_items as action_items_service
 from app.services import deadlines
 from app.services.match_pipeline import (
-    run_match, recall_pool, curate_pool, next_funnel_rung,
+    run_match, recall_pool, curate_pool, next_funnel_rung, student_embed_texts,
 )
 from app.services.curation import CURATION_SYSTEM
 from app.services.funnel import (
@@ -88,6 +88,26 @@ def handle_match(body: dict = Depends(json_body),
     to a recall-ordered list so the app stays click-through-able."""
     userid = user.id
     touch_user_activity(userid, "match")
+
+    # PREWARM: the SearchSetup card fires this the instant it mounts, while the student is still
+    # picking interest/budget/timing/type — so the profile-theme embedding is computed and cached
+    # server-side by the time they hit "continue" and rung-0 recall runs (which then hits the
+    # cache, no round trip). The embedding depends ONLY on the theme/project text, not on any of
+    # those answers, so this needs no catalog and no funnel_answers and returns before any recall
+    # work. Same number of PAID embed calls as before — it just moves the one call earlier.
+    if body.get("prewarm"):
+        if GEMINI_API_KEY:
+            tt, pt = student_embed_texts({
+                "profile_themes": body.get("profile_themes") or [],
+                "highlight_projects": body.get("highlight_projects") or [],
+            })
+            if tt or pt:
+                try:
+                    embed_student_themes(tt + pt, GEMINI_API_KEY)  # populates the server-side cache
+                except Exception:
+                    pass  # a failed prewarm is silent — rung-0 recall just embeds normally
+        return json_response(200, {"ok": True, "prewarmed": True})
+
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
         return json_error(500, "SUPABASE_URL/SUPABASE_ANON_KEY not configured.")
     try:

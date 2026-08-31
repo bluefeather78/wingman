@@ -71,6 +71,10 @@ export interface ApiClient {
   // client-side 7-kind fan-out on the "Suggest for me" path. Rejects on failure (the caller
   // surfaces it), unlike the never-throw catalog reads.
   match(body: MatchStudentBlob): Promise<MatchResponse>;
+  // Fire-and-forget pre-embed warm-up: computes+caches the profile-theme embedding server-side
+  // while the student is on the SearchSetup card, so rung-0 recall skips the embedding round
+  // trip. Never rejects — a failed prewarm just means recall embeds normally.
+  prewarmMatch(body: MatchStudentBlob): Promise<void>;
   // On-demand, cross-user-cached deadline check. Never rejects (returns null on failure)
   // so a hiccup can't block loading the tracker. Pass force=true to bypass the 7-day cache
   // and run a fresh paid check now — that is what the Quest Log's "Check for updates" button

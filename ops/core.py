@@ -26,6 +26,7 @@ import urllib.request
 
 import agent_common
 import aggregators_common
+import db_health_check
 import dryrun_common
 import mailing_list_common
 import query_telemetry
@@ -2195,6 +2196,31 @@ def metadata_refresh_queue(limit=200):
     return {"ok": True, "queue_ready": True, "count": len(rows), "rows": rows,
             "truncated": len(rows) >= max(1, min(int(limit or 200), 2000)),
             "queue_sql": ACTIVATION_REFRESH_SQL}
+
+
+def get_db_health():
+    """One-shot, read-only health snapshot of the catalog for the console's Health tab.
+
+    Thin wrapper over db_health_check.collect_health() — the same function the CLI runs — so the
+    tab and `python db_health_check.py` can never report different numbers. FREE: read-only
+    Supabase GETs plus two local-file reads (the leads queue and the dedupe embedding index),
+    no model call, no writes. collect_health never raises; a subsystem it cannot read is marked
+    unavailable inside the payload. Wrapped in a belt-and-braces try anyway so a health card can
+    never take the console down.
+
+    Passes the console's own service creds explicitly rather than relying on collect_health's env
+    fallback: the ops process reads them from app.config, and the offline script's load_dotenv()
+    is not what populated this process's environment.
+    """
+    try:
+        return db_health_check.collect_health(
+            supabase_url=SUPABASE_URL,
+            key=SUPABASE_SERVICE_KEY or SUPABASE_ANON_KEY)
+    except Exception as e:                                      # noqa: BLE001
+        print(f"[WARN] db health check failed: {e}")
+        return {"ok": False, "generated_at": None, "errors": [f"Health check failed: {e}"],
+                "queues": [], "checks": [], "alerts": [], "catalog": {}, "embeddings": {},
+                "coverage": {}}
 
 
 # MARQUEE M9: this makes a PAID embedding call (Gemini) per newly-activated row. It keeps the

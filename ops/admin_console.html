@@ -486,6 +486,7 @@ tr.disabled-seed { opacity: .48; }
     <button class="vtab" data-view="run">Run</button>
     <button class="vtab" data-view="money">Money<span class="count" id="userTabCount"></span></button>
     <button class="vtab" data-view="comms">Comms<span class="count" id="emailTabCount"></span></button>
+    <button class="vtab" data-view="health">Health<span class="count" id="healthTabCount"></span></button>
   </div>
 
   <div id="globalNotice" class="notice err hidden" style="margin-bottom:24px"></div>
@@ -894,6 +895,23 @@ tr.disabled-seed { opacity: .48; }
 
   <div class="view hidden" id="view-comms">
     <div id="slot-comms"></div>
+  </div>
+
+  <!-- ==========================================================================
+       Health — a one-stop, read-only snapshot of the database's condition. Every
+       card here is filled by loadHealth() from GET /api/agents/health, which runs
+       db_health_check.collect_health() in-process. FREE: no model call, no writes.
+  =========================================================================== -->
+  <div class="view hidden" id="view-health">
+    <div class="view-lead">
+      One read-only pass over the whole catalog &mdash; queue depths, coverage gaps, when each
+      maintenance pass last ran, and the handful of numbers that are out of band. Nothing here
+      spends money or changes anything; it is the same data <span class="mono">python
+      db_health_check.py</span> prints.
+    </div>
+    <div style="margin:8px 0 20px"><button class="btn" id="healthRefresh">Refresh</button>
+      <span id="healthStamp" style="margin-left:12px;color:var(--text-3);font-size:12px"></span></div>
+    <div id="healthBody"><div class="empty">Loading&hellip;</div></div>
   </div>
 
   <div class="view" id="view-metrics">
@@ -3033,6 +3051,7 @@ const VIEW_SUBTITLE = {
   run:     'Run the agents and tools that build and maintain the opportunity catalog',
   money:   'What everything costs — the agents you run and the app usage students trigger',
   comms:   'The three lifecycle emails — what they say, who is due one, and what went out',
+  health:  'One read-only pass over the database — queues, coverage, freshness, and alerts',
 };
 
 function showView(view) {
@@ -3041,6 +3060,7 @@ function showView(view) {
   // when an agent runs or a person clicks, so polling it every 20s is pure traffic. The
   // per-workflow loads (aggregators, signups) fire from the Run sub-tab handlers instead.
   if (view === 'comms') loadEmails();
+  if (view === 'health') loadHealth();
   document.querySelectorAll('#viewTabs .vtab').forEach(
     t => t.classList.toggle('active', t.dataset.view === view));
   document.querySelectorAll('.view').forEach(
@@ -5188,6 +5208,160 @@ $('emailPreviewBtn').onclick = () => loadEmailPreview();
 $('emailTestBtn').onclick = () => sendEmailTest();
 $('emailSweepPreview').onclick = () => runEmailSweep(true);
 $('emailSweepRun').onclick = () => runEmailSweep(false);
+
+/* ===========================================================================
+   Health tab — a read-only, one-shot snapshot from GET /api/agents/health.
+   FREE: no model call, no writes. Rendered from db_health_check.collect_health(),
+   so it can never disagree with `python db_health_check.py`.
+=========================================================================== */
+// Map the backend's severity string to a pill class. 'alert' is the danger pill.
+const HEALTH_PILL = { alert: 'danger', warn: 'warn', ok: 'ok' };
+function healthPill(sev, text) {
+  return `<span class="pill ${HEALTH_PILL[sev] || 'ok'}">${esc(text)}</span>`;
+}
+
+async function loadHealth() {
+  const body = $('healthBody');
+  body.innerHTML = '<div class="empty">Running the health check&hellip;</div>';
+  try {
+    const h = await api('/api/agents/health');
+    renderHealth(h);
+  } catch (e) {
+    body.innerHTML = `<div class="notice err">Could not run the health check: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderHealth(h) {
+  const body = $('healthBody');
+  if (!h) { body.innerHTML = '<div class="empty">No data.</div>'; return; }
+  $('healthStamp').textContent = h.generated_at ? 'as of ' + new Date(h.generated_at).toLocaleString() : '';
+
+  const c = h.catalog || {}, e = h.embeddings || {}, cov = h.coverage || {};
+  const alerts = h.alerts || [];
+  // Tab badge: number of alerts, so the count is visible without opening the tab.
+  const badge = $('healthTabCount');
+  if (badge) badge.textContent = alerts.length ? String(alerts.length) : '';
+
+  // --- KPI tiles ---
+  const covPct = (e.coverage_pct === null || e.coverage_pct === undefined) ? '—' : e.coverage_pct + '%';
+  const kpis = [
+    ['Total rows', num(c.total)],
+    ['Active', num(c.active)],
+    ['Inactive', num(c.inactive)],
+    ['Embedding coverage', covPct],
+    ['Alerts', String(alerts.length)],
+  ];
+  let html = `<div class="kpis" style="margin-bottom:20px">` + kpis.map(([l, v]) =>
+    `<div class="kpi"><div class="label">${l}</div><div class="value">${esc(v)}</div></div>`).join('') + `</div>`;
+
+  // --- Alerts ---
+  html += `<div class="card"><div class="card-head"><h2>Alerts</h2>
+    <span class="hint">Numbers outside their healthy band — look here first</span></div>
+    <div class="card-body">`;
+  if (!alerts.length) {
+    html += `<div class="empty">Nothing out of band — every queue and coverage figure is healthy.</div>`;
+  } else {
+    html += alerts.map(a => `<div style="margin:6px 0">${healthPill(a.level, a.level.toUpperCase())}
+      <span style="margin-left:8px">${esc(a.message)}</span></div>`).join('');
+  }
+  html += `</div></div>`;
+
+  // --- Work queues ---
+  html += `<div class="card"><div class="card-head"><h2>Work queues</h2>
+    <span class="hint">How much is waiting for a human or a paid agent</span></div>
+    <div class="tbl-wrap"><table><thead><tr>
+      <th>Queue</th><th style="text-align:right">Count</th><th>Status</th><th>What it is</th>
+    </tr></thead><tbody>`;
+  (h.queues || []).forEach(q => {
+    const sevText = q.severity === 'alert' ? 'high' : q.severity === 'warn' ? 'watch' : 'ok';
+    html += `<tr><td><strong>${esc(q.label)}</strong></td>
+      <td style="text-align:right" class="mono">${num(q.count)}</td>
+      <td>${healthPill(q.severity, sevText)}</td>
+      <td style="color:var(--text-2);font-size:12px">${esc(q.note || '')}</td></tr>`;
+  });
+  html += `</tbody></table></div></div>`;
+
+  // --- Embeddings + coverage gaps ---
+  html += `<div class="card"><div class="card-head"><h2>Coverage</h2>
+    <span class="hint">How much of the active catalog each subsystem has processed</span></div>
+    <div class="card-body">`;
+  html += `<div style="margin-bottom:14px">${healthPill(e.severity, e.severity === 'ok' ? 'ok' : 'gap')}
+    <span style="margin-left:8px"><strong>Dedupe embeddings</strong> —
+    ${num(e.indexed)} indexed, ${num(e.missing)} of ${num(e.active_rows)} active rows missing
+    (${esc(covPct)} covered)${e.newest_embedded_at ? `, index last built ${esc(e.newest_embedded_at)}` : ''}.</span></div>`;
+  if (cov.columns_available) {
+    const rows = [['reviews', 'Reviews'], ['links', 'Link health'],
+                  ['deadlines', 'Deadlines'], ['tasks', 'Action items']];
+    html += `<div class="tbl-wrap"><table><thead><tr>
+      <th>Pass</th><th style="text-align:right">Never run</th>
+      <th style="text-align:right">Stale (&gt;30d)</th>
+      <th style="text-align:right">Active rows</th><th>Most recent</th>
+    </tr></thead><tbody>`;
+    rows.forEach(([k, label]) => {
+      const g = cov[k]; if (!g) return;
+      html += `<tr><td>${label}</td>
+        <td style="text-align:right" class="mono">${num(g.never)}</td>
+        <td style="text-align:right" class="mono">${num(g.stale)}</td>
+        <td style="text-align:right" class="mono">${num(g.total)}</td>
+        <td class="mono" style="font-size:12px">${g.newest ? esc(String(g.newest).slice(0, 10)) : '—'}</td></tr>`;
+    });
+    html += `</tbody></table></div>`;
+    if (cov.dead_links_active) {
+      html += `<div style="margin-top:10px">${healthPill('warn', 'anomaly')}
+        <span style="margin-left:8px">${num(cov.dead_links_active)} active rows carry a dead link
+        (the link checker normally deactivates these).</span></div>`;
+    }
+  } else {
+    html += `<div class="notice info">Coverage gaps are unavailable — the review / link / task
+      timestamp columns are not migrated in yet
+      (<span class="mono">link_health_schema.sql</span>,
+      <span class="mono">action_items_schema.sql</span>).</div>`;
+  }
+  html += `</div></div>`;
+
+  // --- Last run of each maintenance pass ---
+  html += `<div class="card"><div class="card-head"><h2>Last run of each maintenance pass</h2>
+    <span class="hint">Read from agent_runs — counts runs from cron and the CLI too</span></div>
+    <div class="tbl-wrap"><table><thead><tr>
+      <th>Pass</th><th>Status</th><th>When</th>
+      <th style="text-align:right">Processed</th><th style="text-align:right">Updated</th>
+      <th style="text-align:right">Added</th><th style="text-align:right">Errors</th>
+      <th style="text-align:right">Cost</th>
+    </tr></thead><tbody>`;
+  (h.checks || []).forEach(chk => {
+    const r = chk.last_run;
+    if (!r) {
+      html += `<tr><td><strong>${esc(chk.label)}</strong></td>
+        <td>${healthPill('warn', 'never')}</td>
+        <td colspan="6" style="color:var(--text-3);font-size:12px">no agent_runs row yet</td></tr>`;
+      return;
+    }
+    const stPill = r.status === 'success' ? 'ok' : (r.status === 'running' ? 'info' : 'warn');
+    const when = r.finished_at || r.started_at;
+    html += `<tr><td><strong>${esc(chk.label)}</strong></td>
+      <td><span class="pill ${stPill}">${esc(r.status)}</span></td>
+      <td style="font-size:12px" title="${esc(when || '')}">${esc(ago(when))}</td>
+      <td style="text-align:right" class="mono">${num(r.items_processed)}</td>
+      <td style="text-align:right" class="mono">${num(r.items_updated)}</td>
+      <td style="text-align:right" class="mono">${num(r.items_added)}</td>
+      <td style="text-align:right" class="mono">${r.errors ? `<span style="color:var(--danger)">${num(r.errors)}</span>` : '0'}</td>
+      <td style="text-align:right" class="mono">${money(r.cost_usd)}</td></tr>`;
+  });
+  html += `</tbody></table></div></div>`;
+
+  // --- Read errors (a degraded source, surfaced rather than hidden) ---
+  if (h.errors && h.errors.length) {
+    html += `<div class="card"><div class="card-head"><h2>Read notes</h2>
+      <span class="hint">Sources that could not be read — the sections above degrade, not fail</span></div>
+      <div class="card-body">` +
+      h.errors.map(x => `<div style="margin:4px 0;font-size:12.5px;color:var(--text-2)">• ${esc(x)}</div>`).join('') +
+      `</div></div>`;
+  }
+
+  body.innerHTML = html;
+}
+
+$('healthRefresh').onclick = () => loadHealth();
 
 document.querySelectorAll('#viewTabs .vtab').forEach(t => t.onclick = () => showView(t.dataset.view));
 document.querySelectorAll('#metricTabs .tab').forEach(t => t.onclick = () => showMetricPanel(t.dataset.panel));

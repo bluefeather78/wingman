@@ -199,6 +199,14 @@ def handle_metadata_refresh_queue(request: Request):
     return json_response(200 if result.get("ok") else 400, result, default=str)
 
 
+@router.get("/api/agents/health")
+def handle_db_health():
+    """Read-only, one-shot database health snapshot for the console's Health tab. FREE — reads
+    Supabase and two local files, makes no model call and writes nothing. Localhost-gated like
+    the rest of /api/agents/* (the payload carries queue depths and run history)."""
+    return json_response(200, core.get_db_health(), default=str)
+
+
 @router.get("/api/agents/duplicate-report")
 def handle_duplicate_report(request: Request):
     """Read-only scan for flag-eligible duplicate pairs (both rows live). Writes nothing —

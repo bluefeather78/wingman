@@ -81,6 +81,43 @@ export interface GoogleFinishInput {
   acceptedTerms: boolean;
 }
 
+// --- POST /api/match (semantic recall + eligibility) -----------------------
+// The trimmed recall endpoint the Fresh Finds "suggest" path posts to. It embeds the
+// student's selected profile themes (+ any highlight projects), recalls the top rows by
+// cosine, drops verified-ineligible ones, and returns the whole scored pool for the client
+// grid to filter. Contract mirrors app/routes/matching.py.
+export interface MatchThemeInput {
+  theme: string;
+  intent?: string | null;
+  next_steps?: string | null;
+}
+
+export interface MatchRequest {
+  grade?: number | null;
+  location?: { state?: string };
+  // Either bare theme strings or the richer {theme,intent,next_steps} shape — the server
+  // accepts both. Fresh Finds sends the rich shape built from the student's filterTags.
+  profile_themes: (string | MatchThemeInput)[];
+  highlight_projects: string[];
+}
+
+// Each result IS a flattened Opportunity row plus its cosine `score` and a `strong` badge
+// flag (score >= the server's fixed cut). Extends Opportunity so it drops straight into the
+// finder's grid as `opp`.
+export interface MatchResultRow extends Opportunity {
+  score: number | null;
+  strong: boolean;
+}
+
+export interface MatchResponse {
+  results: MatchResultRow[];
+  pool_size: number;
+  excluded_ineligible: string[];
+  embed_cost_usd: number;
+  checked: number;
+  note?: string | null;
+}
+
 // The opportunity catalog row shape (subset used by the client). Source of truth is
 // the Supabase `opportunities` table, proxied by GET /api/opportunities.
 export interface Opportunity {

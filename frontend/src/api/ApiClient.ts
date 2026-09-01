@@ -3,6 +3,8 @@ import type {
   AiResult,
   GoogleFinishInput,
   GoogleSessionResult,
+  MatchRequest,
+  MatchResponse,
   Opportunity,
   RegisterInput,
   SessionUser,
@@ -86,6 +88,10 @@ export interface ApiClient {
   // fired on app-open/login and screen focus. Returns {} on failure (never rejects): a sync
   // that cannot run must leave the snapshot exactly as it was, to retry later.
   syncTracker(ids: string[]): Promise<Record<string, Partial<TrackerInfo>>>;
+  // Semantic recall + eligibility for the Fresh Finds "suggest" path (POST /api/match).
+  // Goes through the authed request() path (bearer + refresh + the 402 gate), NOT the
+  // callGemini proxy — it is a first-class gated route, not a model passthrough.
+  match(blob: MatchRequest): Promise<MatchResponse>;
   callGemini(system: string, userContent: string, useWebSearch?: boolean, maxTokens?: number): Promise<string>;
   callClaude(
     system: string,

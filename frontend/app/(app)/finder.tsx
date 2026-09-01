@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { addTrackerItemChecked, flattenItems, loadTrackerData } from '@/api/trackerStore';
-import type { Opportunity } from '@/api/types';
+import type { MatchRequest, Opportunity } from '@/api/types';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import { ACTIVE_KINDS, KIND_CONFIG } from '@/lib/kinds';
 import { countProfileWords } from '@/lib/profile';
@@ -43,6 +43,11 @@ interface Result {
   // single-kind form search. Preferred over deriving a kind from opp.type, which only ever
   // guessed at what the search actually did.
   kind?: string;
+  // Carried through from POST /api/match (suggest path only): the raw cosine score and the
+  // server's "strong match" flag. `tier` already encodes strong for the badge, but these
+  // ride along so the card can show the score if it ever wants to.
+  score?: number | null;
+  strong?: boolean;
 }
 const callGemini = httpClient.callGemini.bind(httpClient);
 // The profile-derived slots need both providers and a place to persist to. Defined once at
@@ -278,12 +283,34 @@ export default function Finder() {
     setOpenFacet(key);
   };
   const [profileTags, setProfileTags] = useState<EnrichedTag[]>([]);
+  // Which themes drive the recall query (PR4). This is now the profile facet: a MULTI-select
+  // of themes that, on change, re-POSTs /api/match for a fresh recall (see rerunThemeMatch),
+  // rather than the old single-tag client re-score. Initialized to all-selected once the
+  // tags load (below). An empty set is treated as "all themes" so deselecting everything can
+  // never send an empty query.
+  const [selectedThemes, setSelectedThemes] = useState<Set<string>>(new Set());
+  // Mirror of selectedThemes for the debounced re-run to read the latest picks at fire time.
+  const selectedThemesRef = useRef(selectedThemes);
+  useEffect(() => { selectedThemesRef.current = selectedThemes; }, [selectedThemes]);
+  // Debounce rapid facet toggles into one recall call.
+  const themeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A recall (POST /api/match) is in flight from the theme facet — the grid shows a loading
+  // state and holds the old cards back until the fresh pool lands.
+  const [themeMatching, setThemeMatching] = useState(false);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [tagScores, setTagScores] = useState<Record<string, TagScore> | null>(null);
   const [tagScoring, setTagScoring] = useState(false);
   const tagScoreCache = useRef(sessionSearch?.tagScores ?? new Map<string, Record<string, TagScore>>());
   // True while the tag slot is being generated for a profile that has none yet.
   const [tagsBuilding, setTagsBuilding] = useState(false);
+
+  // Default the query to all themes once they load. Respects an existing subset (so a
+  // background tag refresh does not wipe the student's picks); a genuine deselect-all leaves
+  // the set empty, which the blob builder reads as "all themes".
+  useEffect(() => {
+    if (!profileTags.length) return;
+    setSelectedThemes((prev) => (prev.size ? prev : new Set(profileTags.map((t) => t.tag))));
+  }, [profileTags]);
 
   // Load the catalog, retrying transient failures quietly before admitting defeat. Every
   // entry point on this screen is dead without it, so a failure has to become something the
@@ -363,6 +390,7 @@ export default function Finder() {
       .catch(() => {});
     return () => {
       aliveRef.current = false;
+      if (themeTimerRef.current) clearTimeout(themeTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -418,18 +446,19 @@ export default function Finder() {
 
   const profileReady = countProfileWords(profileText) >= PROFILE_SUFFICIENT_LENGTH;
 
-  // Auto-run the profile-based suggestion once when entering with a ready profile.
+  // PR4: the profile-based suggestion no longer fires automatically. A ready profile now
+  // lands on the theme picker (the home hero's ready branch) so the student chooses which
+  // themes to start with before we recall — the "soft start" the merge plan calls for. This
+  // effect only settles the boot state so the hero stops showing the loading row.
   const autoRan = useRef(false);
-  // Whether the auto-run decision has been MADE yet — distinct from whether it ran. Until
-  // both the catalog and the profile have landed we cannot know if a search is about to
-  // start, and rendering the idle hero in that gap makes it blink to the spinner a frame
-  // later. A ref can't drive this: the hero has to re-render when it settles.
+  // Whether the boot decision has been MADE yet. Until both the catalog and the profile have
+  // landed we cannot know which hero to draw, and rendering one in that gap makes it blink a
+  // frame later. A ref can't drive this: the hero has to re-render when it settles.
   const [autoRunSettled, setAutoRunSettled] = useState(!!sessionSearch?.results.length);
   useEffect(() => {
     if (autoRan.current) return;
     if (!opps || !profileLoaded) return; // still deciding — keep showing the loading state
     autoRan.current = true;
-    if (profileReady && stage === 'home' && !results.length) void suggestForMe();
     setAutoRunSettled(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opps, profileLoaded, profileReady]);
@@ -471,6 +500,97 @@ export default function Finder() {
     return parts.join(', ');
   }
 
+  // The themes to send as the recall query. A non-empty selection sends only those; an empty
+  // selection (nothing loaded yet, or the student deselected all) falls back to every theme,
+  // so the query is never empty.
+  function themeTagsFor(sel: Set<string>): EnrichedTag[] {
+    if (!profileTags.length) return [];
+    if (!sel.size) return profileTags;
+    const picked = profileTags.filter((t) => sel.has(t.tag));
+    return picked.length ? picked : profileTags;
+  }
+
+  // Grade the same way the form path resolves it: the form dropdown wins, else the grade the
+  // profile's stored filter values inferred. getProfileFilterValues is cached per profile
+  // text, so this is not a per-search paid call.
+  async function resolveGradeNum(): Promise<number | null> {
+    let profileGrade: number | null = null;
+    try {
+      const fv = await getProfileFilterValues(profileStore, modelCalls, profileRecord.current);
+      profileGrade = fv.grade;
+    } catch {
+      /* best effort — no grade just means no grade filter */
+    }
+    return parseGradeFromText(grade) ?? profileGrade;
+  }
+
+  function buildMatchBlob(themeTags: EnrichedTag[], gradeNum: number | null): MatchRequest {
+    const state = homeState.trim();
+    return {
+      grade: gradeNum,
+      ...(state ? { location: { state } } : {}),
+      profile_themes: themeTags.map((t) => ({
+        theme: t.tag,
+        intent: t.intent ?? null,
+        next_steps: (t.nextSteps || []).join('; ') || null,
+      })),
+      // Not available on this branch — the recall runs on themes alone here.
+      highlight_projects: [],
+    };
+  }
+
+  // POST /api/match and map its flattened rows into the finder's Result grid. Each result IS
+  // an Opportunity row plus score/strong; tier is derived from strong so the existing "Strong
+  // Fit" badge renders with no card changes.
+  async function callMatchMapped(
+    themeTags: EnrichedTag[],
+    gradeNum: number | null,
+  ): Promise<{ mapped: Result[]; note: string | null }> {
+    const resp = await httpClient.match(buildMatchBlob(themeTags, gradeNum));
+    const mapped: Result[] = (resp.results || []).map((row) => ({
+      opp: row,
+      reason: '',
+      tier: row.strong ? 'strong' : 'look',
+      score: row.score ?? null,
+      strong: !!row.strong,
+    }));
+    return { mapped, note: resp.note ?? null };
+  }
+
+  // The theme facet's fresh recall. Runs the debounced re-POST against the current picks,
+  // shows a grid loading state, and replaces the pool. A failure keeps the existing list and
+  // surfaces the reason rather than blanking the grid.
+  async function rerunThemeMatch() {
+    if (!profileReady) return;
+    setThemeMatching(true);
+    try {
+      const gradeNum = await resolveGradeNum();
+      const { mapped, note: matchNote } = await callMatchMapped(themeTagsFor(selectedThemesRef.current), gradeNum);
+      if (!aliveRef.current) return;
+      setResults(mapped);
+      setNote(matchNote);
+      rememberSearch(mapped, matchNote, null);
+      setSelected(new Set());
+      setVisibleCount(10);
+    } catch (e) {
+      if (aliveRef.current) setNote(`Couldn't refresh matches: ${(e as Error).message}`);
+    } finally {
+      if (aliveRef.current) setThemeMatching(false);
+    }
+  }
+
+  // Toggle one theme in the query and schedule a single debounced recall.
+  function toggleTheme(tag: string) {
+    setSelectedThemes((prev) => {
+      const n = new Set(prev);
+      if (n.has(tag)) n.delete(tag);
+      else n.add(tag);
+      return n;
+    });
+    if (themeTimerRef.current) clearTimeout(themeTimerRef.current);
+    themeTimerRef.current = setTimeout(() => { void rerunThemeMatch(); }, 500);
+  }
+
   async function search(desc: string, k: string | null, prefs: string) {
     if (!opps || !desc.trim() || searching) return;
     setSearching(true);
@@ -495,50 +615,18 @@ export default function Finder() {
       // grade-level language the student's own profile text happens to contain, if any.
       const gradeNum = parseGradeFromText(grade) ?? profileGrade;
 
-      // ---- The profile-driven path fans out across EVERY kind, one ranking call each ----
-      // Restored from the retired SPA. Collapsing this to a single untyped search was the
-      // real cause of Fresh Finds returning far fewer results: one 100-row pool and one
-      // ranking call, instead of six type-scoped pools and six rankings. Each kind is
-      // independent, so they run concurrently (wall time is the slowest call, not the sum)
-      // and a failure is isolated — one flaky response used to blank out every other kind's
-      // already-successful results.
+      // ---- The profile-driven path is now semantic recall (PR4) ----
+      // Instead of the per-kind preFilter + rankCandidates fan-out, the suggest path posts the
+      // student's selected themes to /api/match: the server embeds them, recalls the top rows
+      // by cosine, drops verified-ineligible ones, and returns the whole scored pool. The grid,
+      // pool facets and add-to-tracker are unchanged — only how the pool is produced. The
+      // non-suggest (form/quiz) path below keeps preFilter/rankCandidates. subjectHints is now
+      // unused here (embeddings supersede it) but still feeds the form path.
       if (!k) {
-        const perKind = await Promise.all(
-          ACTIVE_KINDS.map(async (kind) => {
-            const kcfg = KIND_CONFIG[kind];
-            if (!kcfg) return [];
-            try {
-              const { pool: kpool } = preFilter(
-                opps, desc, subjectHints, kcfg.dbTypes ?? null, !!kcfg.strictType, gradeNum,
-              );
-              if (!kpool.length) return [];
-              const ranked = await rankCandidates(callGemini, desc, kpool, prefs || null, !!kcfg.strictType);
-              const byId = new Map(kpool.map((o) => [o.id, o]));
-              return ranked
-                .filter((r) => byId.has(r.id))
-                .map((r) => ({
-                  opp: byId.get(r.id) as Opportunity,
-                  reason: r.reason || '',
-                  tier: (['strong', 'look'].includes(r.tier) ? r.tier : 'look') as 'strong' | 'look',
-                  kind,
-                }));
-            } catch (err) {
-              console.error(`Ranking failed for kind "${kind}":`, (err as Error).message);
-              return [];
-            }
-          }),
-        );
-        // One opportunity can be ranked by more than one kind (its Type only belongs to one,
-        // but the type filter widens when a kind is sparse). Keep the first, best-tiered hit
-        // so the same card can't appear twice in the list.
-        const seen = new Set<string>();
-        const merged = perKind
-          .flat()
-          .sort((a, b) => (a.tier === b.tier ? 0 : a.tier === 'strong' ? -1 : 1))
-          .filter((r) => (seen.has(r.opp.id) ? false : (seen.add(r.opp.id), true)));
-        setResults(merged);
-        setNote(null);
-        rememberSearch(merged, null, k);
+        const { mapped, note: matchNote } = await callMatchMapped(themeTagsFor(selectedThemes), gradeNum);
+        setResults(mapped);
+        setNote(matchNote);
+        rememberSearch(mapped, matchNote, k);
         setSelected(new Set());
         setVisibleCount(10);
         setStage('results');
@@ -905,7 +993,46 @@ export default function Finder() {
               </View>
             </>
           ) : (
-            loadingHero
+            /* PR4 theme picker: a soft, reversible start. Themes default to all-selected;
+               the student can narrow before we recall, or just press through. No wall — a
+               student with no themes yet still gets the button, which recalls on all/none. */
+            <>
+              <Text style={styles.heroTitle}>What would you like to start with?</Text>
+              <Text style={[styles.heroSub, styles.heroSubItalic]}>
+                You can always change this later in the filters.
+              </Text>
+              {tagsBuilding && !profileTags.length ? (
+                <LoadingRow title="Building your themes…" inline />
+              ) : profileTags.length ? (
+                <View style={styles.themeChips}>
+                  {profileTags.map((t) => {
+                    const on = !selectedThemes.size || selectedThemes.has(t.tag);
+                    return (
+                      <Pressable
+                        key={t.tag}
+                        style={[styles.themeChip, on && styles.themeChipOn]}
+                        onPress={() =>
+                          setSelectedThemes((prev) => {
+                            // First touch initializes from "all", so a single deselect means
+                            // "everything except this" rather than "only this".
+                            const base = prev.size ? prev : new Set(profileTags.map((x) => x.tag));
+                            const n = new Set(base);
+                            if (n.has(t.tag)) n.delete(t.tag);
+                            else n.add(t.tag);
+                            return n;
+                          })
+                        }
+                      >
+                        <Text style={[styles.themeChipText, on && styles.themeChipTextOn]}>
+                          {on ? '✓ ' : ''}{t.tag}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ) : null}
+              <PopButton label="Find my matches →" onPress={() => void suggestForMe()} style={styles.selfStart} />
+            </>
           )}
         </SoftCard>
         )}
@@ -1088,24 +1215,38 @@ export default function Finder() {
               style={[styles.filterToggle, profileFacetPop.shadowStyle]}
               onPress={() => toggleFacet('profile', 320)}
             >
-              <Text style={styles.filterToggleText}>▾ Your Profile{selectedTag ? ' (1)' : ''}</Text>
+              <Text style={styles.filterToggleText}>
+                ▾ Themes{selectedThemes.size && selectedThemes.size < profileTags.length ? ` (${selectedThemes.size})` : ''}
+              </Text>
             </Pressable>
             {openFacet === 'profile' && (
-              /* Scrolls, because the tag list has no fixed length: it is as long as the
-                 profile is broad. This panel is absolutely positioned, so an over-long list
-                 simply ran off the bottom of the viewport and the tags below the fold could
-                 not be reached at all. `None` sits outside the scroller so the way to clear
-                 the filter is always visible, never scrolled past. */
+              /* PR4: this is the ONE facet that re-searches. Toggling a theme re-POSTs
+                 /api/match for a fresh recall (debounced), unlike the pool facets below,
+                 which narrow the returned rows client-side for free. Scrolls, because the
+                 theme list is as long as the profile is broad; "Select all" sits outside the
+                 scroller so it is always reachable. The panel stays open across toggles so the
+                 student can adjust several at once — each toggle just resets the debounce. */
               <View style={[styles.facetPanel, styles.facetPanelWide, facetAlign.profile === 'right' ? styles.facetPanelRight : styles.facetPanelLeft]}>
-                <Pressable style={styles.facetRow} onPress={() => { setSelectedTag(null); setVisibleCount(10); setOpenFacet(null); }}>
-                  <Text style={styles.facetRowText}>{selectedTag ? '○' : '●'} None</Text>
+                <Text style={styles.facetHint}>Changing these finds new matches.</Text>
+                <Pressable
+                  style={styles.facetRow}
+                  onPress={() => {
+                    setSelectedThemes(new Set(profileTags.map((t) => t.tag)));
+                    if (themeTimerRef.current) clearTimeout(themeTimerRef.current);
+                    themeTimerRef.current = setTimeout(() => { void rerunThemeMatch(); }, 500);
+                  }}
+                >
+                  <Text style={styles.facetRowText}>↺ Select all themes</Text>
                 </Pressable>
                 <ScrollView style={styles.facetScroll} nestedScrollEnabled>
-                  {profileTags.map((t) => (
-                    <Pressable key={t.tag} style={styles.facetRow} onPress={() => { setSelectedTag(t.tag); setVisibleCount(10); setOpenFacet(null); }}>
-                      <Text style={styles.facetRowText}>{selectedTag === t.tag ? '●' : '○'} {t.tag}</Text>
-                    </Pressable>
-                  ))}
+                  {profileTags.map((t) => {
+                    const on = !selectedThemes.size || selectedThemes.has(t.tag);
+                    return (
+                      <Pressable key={t.tag} style={styles.facetRow} onPress={() => toggleTheme(t.tag)}>
+                        <Text style={styles.facetRowText}>{on ? '☑' : '☐'} {t.tag}</Text>
+                      </Pressable>
+                    );
+                  })}
                 </ScrollView>
               </View>
             )}
@@ -1167,6 +1308,9 @@ export default function Finder() {
         )}
       </View>
       {!!note && <Text style={styles.note}>{note}</Text>}
+      {/* A theme-facet recall is in flight — hold the grid and its empty states back so a
+          brief in-between frame never reads as "no matches". */}
+      {themeMatching && <LoadingRow title="Finding new matches…" sub="Re-searching for your updated themes." inline />}
       {tagScoring && <LoadingRow title="Scoring matches against your profile…" inline />}
       {tagsBuilding && <LoadingRow title="Building your profile filters…" inline />}
 
@@ -1174,7 +1318,7 @@ export default function Finder() {
           message: "the search found nothing" is about the search, "your filters hid
           everything" is about a control the student can undo right here. Before this the
           page simply rendered nothing at all, which reads as broken rather than empty. */}
-      {!results.length && (
+      {!themeMatching && !results.length && (
         <SoftCard style={styles.emptyCard}>
           <Text style={styles.heroTitle}>No matches this time</Text>
           <Text style={[styles.heroSub, styles.heroSubItalic]}>
@@ -1190,7 +1334,7 @@ export default function Finder() {
           </View>
         </SoftCard>
       )}
-      {!!results.length && !filteredResults.length && (
+      {!themeMatching && !!results.length && !filteredResults.length && (
         <SoftCard style={styles.emptyCard}>
           <Text style={styles.heroTitle}>Your filters hid everything</Text>
           <Text style={[styles.heroSub, styles.heroSubItalic]}>
@@ -1201,7 +1345,7 @@ export default function Finder() {
       )}
 
       {/* Result cards */}
-      {visibleResults.map(({ opp, reason, tier, kind: resultKind, aiReasoning, aiRank }) => {
+      {!themeMatching && visibleResults.map(({ opp, reason, tier, kind: resultKind, aiReasoning, aiRank }) => {
         const isSelected = selected.has(opp.id);
         const isTracked = trackedIds.has(opp.id);
         // Prefer the kind whose ranking call actually surfaced this card. kindForOpp only
@@ -1308,7 +1452,7 @@ export default function Finder() {
         );
       })}
 
-      {filteredResults.length > visibleCount && (
+      {!themeMatching && filteredResults.length > visibleCount && (
         <View style={styles.centerLink}>
           <PopButton label={`Show more (${filteredResults.length - visibleCount} left)`} variant="ink" small square shadowColor={colors.slate900} onPress={() => setVisibleCount((c) => c + 10)} />
         </View>
@@ -1480,6 +1624,15 @@ const styles = StyleSheet.create({
   facetScroll: { maxHeight: 320 },
   facetRow: { paddingVertical: 4 },
   facetRowText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: colors.slate900 },
+  // Marks the profile/theme facet as the one that re-searches, vs the pool facets that narrow.
+  facetHint: { fontFamily: fonts.bodyBold, fontSize: 10, color: colors.muted, letterSpacing: 0.4, marginBottom: 6 },
+
+  // First-screen theme picker chips (PR4). Selected = filled lavender; unselected = outlined.
+  themeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8, marginBottom: 4 },
+  themeChip: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate400, borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 8 },
+  themeChipOn: { backgroundColor: colors.lavender, borderColor: colors.slate900 },
+  themeChipText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate500 },
+  themeChipTextOn: { color: colors.slate900 },
 
   resultCard: { backgroundColor: colors.white, borderWidth: 4, borderColor: colors.slate900, borderRadius: radius.xxl, padding: 24, gap: 16 },
   // Raised only while a popover is open, so the panel overlaps the cards BELOW this one

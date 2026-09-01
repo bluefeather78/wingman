@@ -100,6 +100,10 @@ const QUIZ_SUB: Record<string, { label: string; desc: string; kind: string }[]> 
   ],
 };
 
+// How many of the recall pool's best rows get a "why it fits" reason. Matches rankCandidates'
+// own 10-12 cap; these are the rows above the fold that the student actually reads.
+const REASON_TOP_N = 12;
+
 const FILTER_FIELDS = [
   { key: 'type', label: 'Type' },
   { key: 'price', label: 'Cost' },
@@ -548,13 +552,37 @@ export default function Finder() {
     gradeNum: number | null,
   ): Promise<{ mapped: Result[]; note: string | null }> {
     const resp = await httpClient.match(buildMatchBlob(themeTags, gradeNum));
-    const mapped: Result[] = (resp.results || []).map((row) => ({
-      opp: row,
-      reason: '',
-      tier: row.strong ? 'strong' : 'look',
-      score: row.score ?? null,
-      strong: !!row.strong,
-    }));
+    const rows = resp.results || [];
+    // "WHY IT FITS" — reintroduced from main's ranker (rankCandidates), NOT the retired
+    // curation pass. Semantic recall (embeddings) does the coarse cut server-side; here one
+    // Gemini call writes a specific second-person reason for the best rows and judges each
+    // 'strong'/'look'. That LLM tier — not the profile-dependent cosine magnitude — drives the
+    // Strong Fit badge, so a great entrepreneurship match reads "strong" even though its
+    // absolute cosine (~0.57) is lower than a robotics match's (~0.73). Only the top slice is
+    // reasoned (the model caps at 10-12 and those are the rows the student actually reads);
+    // the rest stay "worth a look". A reasoning failure degrades to no reason, never a crash.
+    const reasons: Record<string, { reason: string; tier: 'strong' | 'look' }> = {};
+    try {
+      const top = rows.slice(0, REASON_TOP_N) as unknown as Opportunity[];
+      if (top.length) {
+        const ranked = await rankCandidates(callGemini, profileText, top, buildPrefs() || null, false);
+        ranked.forEach((p) => {
+          if (p && p.id) reasons[p.id] = { reason: p.reason || '', tier: p.tier === 'strong' ? 'strong' : 'look' };
+        });
+      }
+    } catch (e) {
+      console.warn('why-it-fits reasoning failed, showing matches without reasons:', (e as Error).message);
+    }
+    const mapped: Result[] = rows.map((row) => {
+      const rz = reasons[row.id];
+      return {
+        opp: row,
+        reason: rz?.reason ?? '',
+        tier: rz ? rz.tier : 'look',
+        score: row.score ?? null,
+        strong: rz ? rz.tier === 'strong' : false,
+      };
+    });
     return { mapped, note: resp.note ?? null };
   }
 

@@ -1,8 +1,35 @@
 # Plan — Semantic recall + eligibility, in the main-style grid
 
-*Status: BUILDING (2026-08-31) on branch `recall-grid-matching` off `main`. A deliberate,
-minimal extraction from the `opportunity-matching` branch onto `main`. NOT a git merge — see
-"Why not a merge".*
+*Status: BUILT (2026-08-31) on branch `recall-grid-matching` off `main` — 4 commits, all tests
+green (bar one pre-existing main failure), `tsc` clean, endpoint smoke-tested in mock mode.
+Awaiting Shama's review + the prod backfill decision. A deliberate, minimal extraction from the
+`opportunity-matching` branch onto `main`. NOT a git merge — see "Why not a merge".*
+
+## What was built (commits on `recall-grid-matching`, oldest first)
+
+- `30d239d` **PR1** — recall modules (`matching`/`eligibility`/`curation`/`embeddings`), the
+  `gemini_common` embed path, `match_vector` config/cache/strip, schema + backfill. No
+  user-visible change. All copied tests green.
+- `34a36c6` **MARQUEE M8** — `ELIGIBILITY_ONLY_SYSTEM` prompt + `gate_pool_eligibility` +
+  `match_eligibility` cost signature. Built without pre-signoff per waiver; own commit for review.
+- `5ac9660` **PR3** — `POST /api/match` (new route module `app/routes/matching.py`) +
+  `recall_query` helpers (scoring + strong badge). Smoke-tested end-to-end in mock mode.
+- `e58c52c` **PR4** — frontend: `httpClient.match()`, suggest path → `/api/match`, first-screen
+  theme picker, theme query-facet that re-runs recall, strong badge. `tsc` clean.
+
+**Findings that changed the rollout:**
+- **PR2 is mostly already done in prod.** The dry-run ran clean (no 400), so
+  `match_vector_schema.sql` is ALREADY migrated and ~1,456 of 1,678 rows are already embedded
+  (the earlier branch's live backfill). Only **222 rows need embedding, est. ~$0.0036** — not the
+  full-catalog spend the plan budgeted. Left unrun per D3 (paid write to prod); trivially cheap.
+- **No activation hook exists anywhere** — not even on `opportunity-matching`. `refresh_row_embedding`
+  has NO call site; the existing vectors came from manual `backfill_match_vectors.py` runs. So
+  D7 "wire the hook" was never built: re-embedding is a **manual backfill run** (cheap), to be
+  done after activating new rows. Wiring the hook is an optional future nicety, not a blocker.
+- **`EMBED_MODEL` (`gemini-embedding-001`) resolves** — a stray real embed call during smoke
+  testing returned 429 (rate-limited), not 404, confirming the model id is live.
+
+## Build decision log (2026-08-31 — Shama authorized "build it now", waived M8 pre-signoff, review tomorrow)
 
 ## Build decision log (2026-08-31 — Shama authorized "build it now", waived M8 pre-signoff, review tomorrow)
 
@@ -18,8 +45,26 @@ minimal extraction from the `opportunity-matching` branch onto `main`. NOT a git
   its own comment; needed by `embeddings.py` + `backfill_match_vectors.py`.
 - **D5** — The client-strip of `match_vector` was hand-added to **main's** route
   (`handle_opportunities`) rather than merging the branch's funnel-entangled route file.
+- **D6** — PR4 frontend rewire **delegated to a subagent** with a bounded spec + `tsc`-clean
+  gate; diff reviewed before commit. The **form/quiz path kept** the old
+  `preFilter`/`rankCandidates` (only the suggest path moved to `/api/match`); blob
+  `location.state` comes only from the `homeState` field for now (profile-basics source is a
+  follow-up); old single-tag client scoring left **inert, not deleted** (clean-up later).
 - **NOTE** — `tests/unit/test_ops_shaping.py::test_paid_tools` fails on **clean main** too
   (verified by stashing) — a PRE-EXISTING failure, unrelated to this work.
+
+## What's left for Shama (tomorrow)
+
+1. **Review the M8 prompt** (`34a36c6`, `app/services/pool_eligibility.py`) — built under waiver.
+2. **Run the 222-row backfill** (`python backfill_match_vectors.py --yes-really`, ~$0.0036) so
+   the newest rows are recallable. Schema is already migrated; this is the only paid step, and
+   it's <1¢.
+3. **Decide the merge**: this branch → `main`, and how it relates to `opportunity-matching`
+   (the fuller funnel/curation branch). This cut is designed to co-exist / supersede cleanly.
+4. **Optional**: wire `refresh_row_embedding` into the activation path so new rows self-embed
+   (today: re-run the backfill after activating rows — cheap).
+5. **Calibrate** `WINGMAN_STRONG_MATCH_MIN` (and `WINGMAN_RECALL_MIN_SCORE`) once live recall
+   scores are logged — the defaults are provisional.
 
 ## Goal
 

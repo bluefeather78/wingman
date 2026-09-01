@@ -122,6 +122,10 @@ export interface RankedPick {
   tier: 'strong' | 'look';
 }
 
+// Output budget for the ranker. Must cover up to 12 items x a 20-40 word reason PLUS Gemini
+// 3.x thinking tokens (same budget). Clamped server-side to MESSAGES_MAX_TOKENS_CEILING (8000).
+export const RANK_MAX_TOKENS = 6000;
+
 export async function rankCandidates(
   callGemini: GeminiCall,
   description: string,
@@ -141,7 +145,11 @@ export async function rankCandidates(
   const system = `You are Wingman, helping a student find the best-fit extracurricular opportunities (programs, internships, competitions, research positions) for their specific passion project, from a candidate list. Read their project description and preferences carefully. ${selectionRule} For each, write the reason as the WOW moment — it should make the student feel genuinely SEEN, like a mentor who knows both them and this opportunity picked it for them. Draw a concrete line connecting TWO specific halves: (1) a SPECIFIC thing about THEM from their description/preferences below — a project, skill, goal, or next step they stated — and (2) a SPECIFIC thing THIS opportunity actually offers, from its own name/summary — what they would build, compete in, publish, research, or walk away with. The more precisely the two halves lock together, the better. Write 1-2 sentences, roughly 20-40 words; every clause must carry real information, never filler. GOAL-FORMAT: when their stated goal or next step names an outcome, prefer AND frame opportunities whose FORMAT delivers it — "publish" → a journal or conference; "compete/win" → a competition; "get mentorship / go deeper" → a research program or lab; "launch/build a product" → a build program, accelerator, or hackathon. GOOD: "You're taking Adio from concept to market — this accelerator gets you to your first real users and a pitch in front of investors." GOOD: "Your grapheme-to-phoneme research is exactly what this olympiad rewards — you'd crack original computational-linguistics problems against the strongest students." BAD (thin, could be anyone): "Great fit for your software interest." BAD (vague filler): "A wonderful chance to learn and grow." BAD (invented — never do this): naming a mentor, prize, cohort size, or feature the opportunity's own text never states. Use ONLY real details from their description and the opportunity's own text, and write it in second person ("you"/"your"), never third person ("the student"/"their"). Assign a tier: 'strong' (excellent, highly specific fit) or 'look' (solid, worth a look). Respond with ONLY a raw JSON array, no markdown, no preamble, no text after the array, matching: [{"id":"...","reason":"...","tier":"strong|look"}]. Stay within a 1500-token response; 10-12 items is a hard cap.`;
   const prefsText = prefs ? `\n\nStudent preferences: ${prefs}` : '';
   const userContent = `Student's passion project:\n${description}${prefsText}\n\nCandidate opportunities (JSON):\n${JSON.stringify(compact)}\n\nSelect and rank the best matches per the schema.`;
-  const arr = await callGeminiJSON<unknown>(callGemini, system, userContent, false);
+  // Real headroom (server clamps to <=8000): the WOW reasons are 20-40 words x up to 12 items,
+  // AND Gemini 3.x thinking tokens draw from this SAME budget — at the 2000 default the JSON
+  // truncated mid-array, the parse failed, and the WHOLE batch of reasons vanished. Unused
+  // budget is free (billing is on tokens produced).
+  const arr = await callGeminiJSON<unknown>(callGemini, system, userContent, false, RANK_MAX_TOKENS);
   return Array.isArray(arr) ? (arr as RankedPick[]) : [];
 }
 

@@ -577,16 +577,26 @@ export default function Finder() {
       .join('\n');
     const reasonDesc = themeDesc || profileText;
     const reasons: Record<string, { reason: string; tier: 'strong' | 'look' }> = {};
-    try {
-      const top = rows.slice(0, REASON_TOP_N) as unknown as Opportunity[];
-      if (top.length) {
-        const ranked = await rankCandidates(callGemini, reasonDesc, top, buildPrefs() || null, false);
-        ranked.forEach((p) => {
-          if (p && p.id) reasons[p.id] = { reason: p.reason || '', tier: p.tier === 'strong' ? 'strong' : 'look' };
-        });
+    const top = rows.slice(0, REASON_TOP_N) as unknown as Opportunity[];
+    if (top.length) {
+      // One reasoning call produces every card's "why it fits", so a single failure wipes them
+      // ALL — retry once after a short backoff before degrading to no reasons. callGeminiJSON
+      // already retries a parse failure internally; this covers a transient network/API error.
+      let ranked: RankedPick[] = [];
+      try {
+        ranked = await rankCandidates(callGemini, reasonDesc, top, buildPrefs() || null, false);
+      } catch (e1) {
+        console.warn('why-it-fits reasoning failed once, retrying:', (e1 as Error).message);
+        try {
+          await new Promise((r) => setTimeout(r, 1200));
+          ranked = await rankCandidates(callGemini, reasonDesc, top, buildPrefs() || null, false);
+        } catch (e2) {
+          console.warn('why-it-fits reasoning failed after retry, showing matches without reasons:', (e2 as Error).message);
+        }
       }
-    } catch (e) {
-      console.warn('why-it-fits reasoning failed, showing matches without reasons:', (e as Error).message);
+      ranked.forEach((p) => {
+        if (p && p.id) reasons[p.id] = { reason: p.reason || '', tier: p.tier === 'strong' ? 'strong' : 'look' };
+      });
     }
     const mapped: Result[] = rows.map((row) => {
       const rz = reasons[row.id];

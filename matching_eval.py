@@ -74,6 +74,25 @@ SEED_ELIGIBILITY_CASES = [
      "student": {"grade": 9, "location": {"state": "TX"}},
      "gold_eligible": True,
      "note": "a rising 10th grader IS a current 9th grader — eligible; a numeric grade_min=10 would wrongly cut."},
+    # --- entry window / too late (under-exclusion watch: the real Transition School miss) ---
+    {"case_id": "past-entry-window-grade9", "dimension": "entry_window",
+     "name": "Transition School", "org": "Robinson Center at the University of Washington",
+     "summary": "A one-year college-preparatory program for advanced learners who apply during their "
+                "8th grade year and participate during what would otherwise be their 9th grade year.",
+     "eligibility": "Students apply during their 8th grade year and participate during their 9th grade year.",
+     "student": {"grade": 9, "location": {"state": "WA"}},
+     "gold_eligible": False,
+     "note": "TOO LATE: the application happens in 8th grade, so a current 9th grader has passed the "
+             "entry window even though the numeric participation grade (9) matches. The worst "
+             "direction — no code guard; the whole reason this case exists."},
+    {"case_id": "in-entry-window-sophomore", "dimension": "entry_window",
+     "name": "Sophomore Research Track", "org": "State University",
+     "summary": "A year-long research track for current sophomores.",
+     "eligibility": "Open to current sophomores.",
+     "student": {"grade": 10, "location": {"state": "WA"}},
+     "gold_eligible": True,
+     "note": "CONTROL: the student IS in the stated window (a current sophomore) — the too-late rule "
+             "must NOT over-fire and exclude an in-window student."},
     # --- citizenship ---
     {"case_id": "citizen-noncitizen", "dimension": "citizenship",
      "name": "Federal STEM Internship", "org": "NIH",

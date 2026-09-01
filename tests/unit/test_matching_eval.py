@@ -57,7 +57,7 @@ def test_by_dimension_breakdown():
 
 
 def test_run_eligibility_eval_with_stub():
-    # stub verdict_fn: everyone eligible -> the two gold-ineligible seed cases become under-exclusions
+    # stub verdict_fn: everyone eligible -> every gold-ineligible seed case becomes an under-exclusion
     graded = ev.run_eligibility_eval(ev.SEED_ELIGIBILITY_CASES, lambda case: True)
     report = ev.score_eligibility(graded)
     gold_ineligible = sum(1 for c in ev.SEED_ELIGIBILITY_CASES if not c["gold_eligible"])

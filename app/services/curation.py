@@ -117,6 +117,14 @@ including a long shot.
 - GRADE: "rising Nth grader" means a student CURRENTLY FINISHING grade N-1. A grade-9 student is \
 eligible for "rising 10th graders". Do not exclude on a numeric grade range if the wording is \
 "rising"/age-based.
+- ENTRY WINDOW (too late): a student IS INELIGIBLE if the text names an application or entry point \
+in a grade they have ALREADY PASSED — being past the entry window is a real restriction, not a \
+stretch. The student's current grade is in their profile. Example: "Students apply during their 8th \
+grade year" makes a current 9th (or higher) grader INELIGIBLE — they can no longer apply, even \
+though they match the participation grade or the numeric grade range. Likewise "for current \
+sophomores" excludes a junior or senior. This is the ONE grade case that excludes for being too \
+OLD; the rising/age rule above only ever KEEPS a younger student and must NEVER be used to rescue a \
+student who is past a stated entry point. Quote the entry-window sentence like any other exclusion.
 - RESIDENCY: "Open only to Boston Public Schools students" is a hard gate; "Hosted at Northeastern \
 in Boston" is NOT — it says where it runs, not who may apply.
 - DEMOGRAPHIC: "Open to female, non-binary, and gender non-conforming students" is a hard gate (the \

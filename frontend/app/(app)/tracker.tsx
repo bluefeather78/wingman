@@ -1,6 +1,7 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Easing,
   Linking,
@@ -81,8 +82,8 @@ function sortEntries(entries: { item: TrackerItem; bucket: Bucket }[], newIds?: 
     return dateOf(a.item).localeCompare(dateOf(b.item));
   });
 }
-import { IconBtn, MiniBadge, PopButton, ReviewBadge, Screen, SoftCard, StatusPill, Txt, usePopInteraction } from '@/ui/components';
-import { CalendarIcon, CalendarSyncIcon, ListIcon, RefreshIcon, StarIcon, XIcon } from '@/ui/icons';
+import { IconBtn, MiniBadge, PopButton, ReviewBadge, RightDrawer, Screen, SoftCard, StatusPill, Txt, usePopInteraction } from '@/ui/components';
+import { CalendarIcon, CalendarSyncIcon, ListIcon, RefreshIcon, SearchIcon, StarIcon, XIcon } from '@/ui/icons';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
 // Quest Log — ported from the live app's #page-tracker: header controls (refresh status,
@@ -116,18 +117,20 @@ export default function Tracker() {
   const syncNoteAnim = useRef(new Animated.Value(1)).current;
   const syncTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  // "Add Opportunity" search dropdown — searches the catalog by opportunity NAME and adds a
-  // match to the Quest Log via the same shared catalog-add flow Fresh Finds uses.
+  // "Add Opportunity" search drawer — slides in like the profile chat, searches the catalog
+  // by opportunity NAME, and adds any number of picks in one shot via the shared catalog-add
+  // flow Fresh Finds uses.
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  // The active catalog, loaded lazily the first time the panel opens (free — same public
+  // The active catalog, loaded lazily the first time the drawer opens (free — same public
   // /api/opportunities Fresh Finds reads). Filtering happens client-side on `name`.
   const [catalog, setCatalog] = useState<Opportunity[] | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
-  // Which result is mid-add (its own spinner), so the whole list is not disabled while one
-  // row runs its extract + deadline check.
-  const [addingId, setAddingId] = useState<string | null>(null);
+  // Multi-select: the checked result ids, and the batch-add progress while adding them all.
+  const [selectedResults, setSelectedResults] = useState<Set<string>>(new Set());
+  const [adding, setAdding] = useState(false);
+  const [addProgress, setAddProgress] = useState<{ done: number; total: number } | null>(null);
   const [searchStatus, setSearchStatus] = useState('');
   // Snapshotted on focus rather than read during render: the batch is module state, so
   // reading it inline would make the sort order depend on when a re-render happened.
@@ -364,9 +367,22 @@ export default function Tracker() {
   }
 
   function openSearch() {
-    setSearchOpen((o) => {
-      const next = !o;
-      if (next) void ensureCatalog();
+    setSearchOpen(true);
+    void ensureCatalog();
+  }
+
+  function closeSearch() {
+    setSearchOpen(false);
+    setSearchQuery('');
+    setSelectedResults(new Set());
+    setSearchStatus('');
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedResults((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
@@ -395,28 +411,55 @@ export default function Tracker() {
     return catalog.filter((o) => (o.name ?? '').toLowerCase().includes(q)).slice(0, SEARCH_LIMIT);
   }, [searchQuery, catalog]);
 
-  async function addSearchResult(opp: Opportunity) {
-    if (addingId) return;
-    setAddingId(opp.id);
+  // Add every checked result in one shot. Mirrors Fresh Finds' addSelectedToTracker: each
+  // pick runs the shared catalog-add flow (meta/fit + cached deadline check + verified
+  // checklist), only the ids the store actually wrote are badged NEW, and duplicates are
+  // named rather than silently dropped.
+  async function addSelected() {
+    if (adding || !selectedResults.size || !catalog) return;
+    const byId = new Map(catalog.map((o) => [o.id, o] as const));
+    const ids = [...selectedResults];
+    setAdding(true);
     setSearchStatus('');
+    setAddProgress({ done: 0, total: ids.length });
+    const addedIds: string[] = [];
+    const duplicates: string[] = [];
     try {
-      // Same shared flow a Fresh Finds add uses: meta/fit extraction, the cached deadline
-      // check, and the server-verified checklist, all keyed off the catalog id.
-      const outcome = await addCatalogOpportunity(opp, bucketForOpp(opp), (opp.summary as string) || '');
-      if (!outcome.added) {
-        setSearchStatus(`“${outcome.existingName || opp.name}” is already in your Quest Log.`);
-        return;
+      for (let i = 0; i < ids.length; i++) {
+        const opp = byId.get(ids[i]);
+        if (opp) {
+          try {
+            const outcome = await addCatalogOpportunity(opp, bucketForOpp(opp), (opp.summary as string) || '');
+            if (outcome.added) addedIds.push(opp.id);
+            else duplicates.push(outcome.existingName || opp.name);
+          } catch (err) {
+            duplicates.push(`${opp.name} (${(err as Error).message})`);
+          }
+        }
+        setAddProgress({ done: i + 1, total: ids.length });
       }
-      setData(await loadTrackerData());
-      setSearchStatus(`Added “${opp.name}” ✓`);
-      // Same treatment a Fresh Finds add gets: badged NEW, floated to the top, jumped to.
-      markNewlyAdded([opp.id]);
-      setNewIds(new Set([opp.id]));
-      goToTrackerCard(opp.id);
-    } catch (err) {
-      setSearchStatus(`Couldn’t add “${opp.name}” — ${(err as Error).message}`);
+      if (addedIds.length) {
+        setData(await loadTrackerData());
+        // Same treatment a Fresh Finds add gets: badged NEW, floated to the top.
+        markNewlyAdded(addedIds);
+        setNewIds(new Set(addedIds));
+      }
+      const dupNote = duplicates.length
+        ? ` Already tracked: ${duplicates.slice(0, 3).join(', ')}${duplicates.length > 3 ? ` +${duplicates.length - 3} more` : ''}.`
+        : '';
+      if (addedIds.length) {
+        // Close the drawer and jump to the first new card — the point of adding is to go
+        // look at what you added.
+        const first = addedIds[0];
+        closeSearch();
+        goToTrackerCard(first);
+      } else {
+        setSelectedResults(new Set());
+        setSearchStatus(`Nothing new to add.${dupNote}`);
+      }
     } finally {
-      setAddingId(null);
+      setAdding(false);
+      setAddProgress(null);
     }
   }
 
@@ -470,68 +513,9 @@ export default function Tracker() {
               {syncing ? <SpinningRefresh size={16} /> : <CalendarSyncIcon size={16} color={colors.navy} />}
             </IconBtn>
           </View>
-          <View style={styles.intakeWrap}>
-            <PopButton label="Add Opportunity" onPress={openSearch} />
-            {searchOpen && (
-              <View style={styles.intakePanel}>
-                <Text style={styles.intakeTitle}>Search Opportunities</Text>
-                <Text style={styles.intakeLabel}>Search by name</Text>
-                <TextInput
-                  style={styles.intakeInput}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  placeholder="e.g. Research Science Institute"
-                  placeholderTextColor={colors.slate400}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  autoFocus
-                />
-                {catalogLoading && <Text style={styles.searchHint}>Loading opportunities…</Text>}
-                {!!catalogError && (
-                  <View style={styles.intakeErrorBox}>
-                    <Text style={styles.intakeErrorText}>{catalogError}</Text>
-                  </View>
-                )}
-                {!catalogLoading && !catalogError && !!searchQuery.trim() && searchResults.length === 0 && (
-                  <Text style={styles.searchHint}>No opportunities match “{searchQuery.trim()}”.</Text>
-                )}
-                {searchResults.length > 0 && (
-                  <ScrollView
-                    style={styles.searchResults}
-                    keyboardShouldPersistTaps="handled"
-                    nestedScrollEnabled
-                  >
-                    {searchResults.map((opp) => {
-                      const url = (opp.url as string) ?? '';
-                      const tracked = trackedKeys.ids.has(opp.id) || (!!url && trackedKeys.urls.has(url));
-                      const busy = addingId === opp.id;
-                      const sub = [opp.org, opp.type].filter(Boolean).join(' · ');
-                      return (
-                        <View key={opp.id} style={styles.searchRow}>
-                          <View style={styles.searchRowText}>
-                            <Text style={styles.searchRowName} numberOfLines={2}>{opp.name}</Text>
-                            {!!sub && <Text style={styles.searchRowSub} numberOfLines={1}>{sub}</Text>}
-                          </View>
-                          {tracked ? (
-                            <Text style={styles.searchRowTracked}>In Quest Log</Text>
-                          ) : (
-                            <PopButton
-                              small
-                              label={busy ? 'Adding…' : 'Add'}
-                              loading={busy}
-                              disabled={!!addingId}
-                              onPress={() => addSearchResult(opp)}
-                            />
-                          )}
-                        </View>
-                      );
-                    })}
-                  </ScrollView>
-                )}
-                {!!searchStatus && <Text style={styles.intakeStatusText}>{searchStatus}</Text>}
-              </View>
-            )}
-          </View>
+          <IconBtn onPress={openSearch}>
+            <SearchIcon size={16} color={colors.navy} />
+          </IconBtn>
         </View>
       </View>
 
@@ -623,6 +607,90 @@ export default function Tracker() {
           </View>
         </>
       )}
+
+      {/* Search drawer — slides in from the right like the profile chat. Search the catalog
+          by name, check any number of results, and add them all in one shot. */}
+      <RightDrawer open={searchOpen} onClose={closeSearch} width={440} duration={250} panelStyle={styles.searchDrawer}>
+        <>
+          <View style={styles.drawerHead}>
+            <View style={styles.drawerHeadText}>
+              <Text style={styles.drawerTitle}>Add opportunities</Text>
+              <Text style={styles.drawerSub}>Search the catalog by name, pick any you want, and add them all at once.</Text>
+            </View>
+            <Pressable onPress={closeSearch} hitSlop={10}>
+              <Text style={styles.drawerClose}>✕</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.searchBarWrap}>
+            <SearchIcon size={16} color={colors.slate400} />
+            <TextInput
+              style={styles.searchBarInput}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search by name…"
+              placeholderTextColor={colors.slate400}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus
+            />
+          </View>
+
+          <ScrollView style={styles.drawerBody} contentContainerStyle={styles.searchDrawerBody} keyboardShouldPersistTaps="handled">
+            {catalogLoading && <ActivityIndicator color={colors.navy} />}
+            {!!catalogError && (
+              <View style={styles.intakeErrorBox}>
+                <Text style={styles.intakeErrorText}>{catalogError}</Text>
+              </View>
+            )}
+            {!catalogLoading && !catalogError && !searchQuery.trim() && (
+              <Text style={styles.searchHint}>Start typing a program name to see matches.</Text>
+            )}
+            {!catalogLoading && !catalogError && !!searchQuery.trim() && searchResults.length === 0 && (
+              <Text style={styles.searchHint}>No opportunities match “{searchQuery.trim()}”.</Text>
+            )}
+            {searchResults.map((opp) => {
+              const url = (opp.url as string) ?? '';
+              const tracked = trackedKeys.ids.has(opp.id) || (!!url && trackedKeys.urls.has(url));
+              const checked = selectedResults.has(opp.id);
+              const sub = [opp.org, opp.type].filter(Boolean).join(' · ');
+              return (
+                <Pressable
+                  key={opp.id}
+                  style={[styles.searchRow, tracked && styles.searchRowDisabled]}
+                  onPress={tracked || adding ? undefined : () => toggleSelect(opp.id)}
+                >
+                  <View style={[styles.checkbox, checked && styles.checkboxOn, tracked && styles.checkboxTracked]}>
+                    {(checked || tracked) && <Text style={styles.checkboxMark}>✓</Text>}
+                  </View>
+                  <View style={styles.searchRowText}>
+                    <Text style={styles.searchRowName} numberOfLines={2}>{opp.name}</Text>
+                    {!!sub && <Text style={styles.searchRowSub} numberOfLines={1}>{sub}</Text>}
+                  </View>
+                  {tracked && <Text style={styles.searchRowTracked}>In Quest Log</Text>}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+
+          <View style={styles.drawerFoot}>
+            {!!searchStatus && <Text style={styles.searchStatusText}>{searchStatus}</Text>}
+            <PopButton
+              full
+              label={
+                adding
+                  ? `Adding ${addProgress ? `${addProgress.done}/${addProgress.total}` : ''}…`
+                  : selectedResults.size
+                    ? `Add ${selectedResults.size} to Quest Log`
+                    : 'Select opportunities to add'
+              }
+              loading={adding}
+              disabled={!selectedResults.size || adding}
+              onPress={addSelected}
+            />
+          </View>
+        </>
+      </RightDrawer>
     </Screen>
   );
 }
@@ -967,13 +1035,10 @@ function ListCard({
 }
 
 const styles = StyleSheet.create({
-  // zIndex here (and on topRight) is what keeps the Add Opportunity dropdown above the
-  // cards below it: the panel is absolute inside intakeWrap, but without a z-index on its
-  // ancestors the whole header row still paints under later siblings in the Screen.
-  topRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.lg, flexWrap: 'wrap', zIndex: 50 },
+  topRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.lg, flexWrap: 'wrap' },
   topLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   lastChecked: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate400 },
-  topRight: { flexDirection: 'row', alignItems: 'center', gap: 10, zIndex: 50 },
+  topRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   syncLabel: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.navy },
   syncLabelDone: { color: colors.statusNowFg },
   syncLabelError: { color: colors.red },
@@ -985,33 +1050,32 @@ const styles = StyleSheet.create({
   syncNoteError: { color: colors.red },
   syncLink: { color: colors.navy, textDecorationLine: 'underline', fontFamily: fonts.bodySemi },
 
-  intakeWrap: { position: 'relative', zIndex: 50 },
-  intakePanel: {
-    position: 'absolute',
-    top: '100%',
-    right: 0,
-    marginTop: 8,
-    width: 340,
-    backgroundColor: colors.white,
-    borderWidth: 2,
-    borderColor: colors.slate900,
-    borderRadius: radius.lg,
-    padding: 16,
-    zIndex: 50,
-  },
-  intakeTitle: { fontFamily: fonts.display, fontSize: 16, color: colors.ink, marginBottom: 12 },
-  intakeLabel: { fontFamily: fonts.bodyBold, fontSize: 10, color: colors.slate500, textTransform: 'uppercase', marginBottom: 4 },
-  intakeInput: { borderWidth: 2, borderColor: colors.slate900, borderRadius: 8, padding: 8, fontFamily: fonts.bodyMed, fontSize: 14, color: colors.ink, marginBottom: 12 },
-  intakeStatusText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.indigo600, textAlign: 'center', marginTop: 8 },
-  intakeErrorBox: { backgroundColor: colors.redSoft, borderWidth: 2, borderColor: '#881337', borderRadius: 8, padding: 8, marginTop: 8 },
+  // ---- Search drawer (mirrors the profile chat's .story-drawer head/body/foot) ----
+  searchDrawer: { borderLeftWidth: 4, borderLeftColor: colors.ink },
+  drawerHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16, borderBottomWidth: 2, borderBottomColor: colors.lavender },
+  drawerHeadText: { flex: 1, minWidth: 0 },
+  drawerTitle: { fontFamily: fonts.display, fontSize: 18, color: colors.ink },
+  drawerSub: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.muted, marginTop: 4 },
+  drawerClose: { fontFamily: fonts.bodyXBold, fontSize: 20, color: colors.muted },
+  searchBarWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 20, marginTop: 16, paddingHorizontal: 12, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.lg, backgroundColor: colors.white },
+  searchBarInput: { flex: 1, minWidth: 0, paddingVertical: 10, fontFamily: fonts.bodyMed, fontSize: 15, color: colors.ink },
+  drawerBody: { flex: 1, backgroundColor: colors.cream },
+  searchDrawerBody: { padding: 20, gap: 4 },
+  intakeErrorBox: { backgroundColor: colors.redSoft, borderWidth: 2, borderColor: '#881337', borderRadius: 8, padding: 8 },
   intakeErrorText: { fontFamily: fonts.bodyBold, fontSize: 12, color: '#881337' },
-  searchHint: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500, marginTop: 4, marginBottom: 4 },
-  searchResults: { maxHeight: 280, marginTop: 4 },
-  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.slate200 },
+  searchHint: { fontFamily: fonts.bodyMed, fontSize: 13, color: colors.slate500, textAlign: 'center', marginTop: 12 },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.lavender },
+  searchRowDisabled: { opacity: 0.55 },
   searchRowText: { flex: 1, flexShrink: 1, minWidth: 0 },
-  searchRowName: { fontFamily: fonts.bodyBold, fontSize: 13, color: colors.ink },
-  searchRowSub: { fontFamily: fonts.bodyMed, fontSize: 11, color: colors.slate500, marginTop: 2 },
-  searchRowTracked: { fontFamily: fonts.bodyBold, fontSize: 11, color: colors.slate400, textTransform: 'uppercase' },
+  searchRowName: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.ink },
+  searchRowSub: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500, marginTop: 2 },
+  searchRowTracked: { fontFamily: fonts.bodyBold, fontSize: 10, color: colors.slate400, textTransform: 'uppercase' },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: colors.slate900, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center' },
+  checkboxOn: { backgroundColor: colors.navy, borderColor: colors.navy },
+  checkboxTracked: { backgroundColor: colors.slate200, borderColor: colors.slate200 },
+  checkboxMark: { color: colors.white, fontFamily: fonts.bodyXBold, fontSize: 13, lineHeight: 15 },
+  drawerFoot: { padding: 20, paddingTop: 14, borderTopWidth: 2, borderTopColor: colors.lavender, gap: 8 },
+  searchStatusText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.indigo600, textAlign: 'center' },
 
   headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' },
   titleWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },

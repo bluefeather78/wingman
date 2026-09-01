@@ -508,6 +508,97 @@ def estimate_cost(usage):
     )
 
 
+# --------------------------------------------------------------------------- embeddings
+#
+# The catalog-matching pipeline (OPPORTUNITY_MATCHING_PLAN.md, Phase 5) embeds each active
+# opportunity and each student profile theme, then matches by cosine similarity. The SAME
+# pinned model + dimensionality MUST be used on both sides, or the cosine between a row vector
+# and a theme vector is meaningless — that is why this is one pin, here, next to the pricing.
+#
+# MODEL-ID CHURN WARNING (see the MODEL comment above — this repo has been 404'd before):
+# EMBED_MODEL is UNVERIFIED against the live API from the worktree it was written in. Confirm
+# it resolves (a 404 means it was renamed) before relying on a real run, exactly as MODEL /
+# MESSAGES_MODEL are periodically reconfirmed. gemini-embedding-001 supports a configurable
+# outputDimensionality; 768 keeps the per-row payload ~9MB across ~1,500 rows (the plan's
+# budget). If you must swap to text-embedding-004 it is natively 768-dim (ignore EMBED_DIM).
+EMBED_MODEL = "gemini-embedding-001"
+EMBED_DIM = 768
+GEMINI_EMBED_URL_TMPL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:batchEmbedContents"
+# batchEmbedContents accepts many requests per call; keep chunks modest so one oversized POST
+# can't time out a whole backfill. The activation hook embeds ONE row at a time; only a full
+# catalog backfill exercises the batching.
+EMBED_BATCH_SIZE = 100
+# Embedding input pricing (per token). gemini-embedding-001 is far cheaper than a generateContent
+# call (no output tokens, no reasoning). VERIFY against the live pricing page before a large
+# backfill — like every price constant here, this is an estimate feeding a local cost figure,
+# never a bill.
+EMBED_INPUT_PRICE_PER_TOKEN = 0.15 / 1_000_000
+
+
+def estimate_embed_cost(usage):
+    """Dollar cost of an embedding call from its usage dict ({"input_tokens": N}). Embeddings
+    have no output/search cost — input tokens only."""
+    return usage.get("input_tokens", 0) * EMBED_INPUT_PRICE_PER_TOKEN
+
+
+def call_gemini_embed(texts, api_key, model=None, output_dim=None, timeout=None):
+    """MARQUEE M9 (MARQUEE_DECISIONS.md): a money seam — a new paid call path. Approved for the
+    matching pipeline; changing the model/dim or adding callers is a marquee change.
+
+    Embed a list of texts via Gemini's batchEmbedContents endpoint. Returns
+    (vectors, usage) where `vectors` is a list of float lists aligned 1:1 with `texts`
+    (empty input -> []), and `usage` is {"input_tokens": N} for cost estimation. Chunks at
+    EMBED_BATCH_SIZE so a large backfill can't build one oversized request.
+
+    input_tokens is APPROXIMATE (~chars/4) — batchEmbedContents does not reliably return a
+    per-request token count, and this only feeds a local cost estimate, never a bill."""
+    if not texts:
+        return [], {"input_tokens": 0}
+    model = model or EMBED_MODEL
+    dim = output_dim if output_dim is not None else EMBED_DIM
+    url = GEMINI_EMBED_URL_TMPL.format(model=model)
+    vectors = []
+    approx_tokens = 0
+    for start in range(0, len(texts), EMBED_BATCH_SIZE):
+        chunk = texts[start:start + EMBED_BATCH_SIZE]
+        requests_body = []
+        for t in chunk:
+            t = "" if t is None else str(t)
+            approx_tokens += max(1, len(t) // 4)
+            entry = {"model": f"models/{model}", "content": {"parts": [{"text": t}]}}
+            if dim:
+                entry["outputDimensionality"] = dim
+            requests_body.append(entry)
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"requests": requests_body}).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+        )
+        _enforce_rate_limit()
+        try:
+            with urllib.request.urlopen(req, timeout=timeout or _default_timeout_secs) as resp:
+                data = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                print("[WARN] HTTP 429 on embed (rate limited), retrying once after delay...")
+                time.sleep(5)
+                _enforce_rate_limit()
+                with urllib.request.urlopen(req, timeout=timeout or _default_timeout_secs) as resp:
+                    data = json.loads(resp.read())
+            else:
+                raise
+        embeddings = data.get("embeddings") or []
+        for emb in embeddings:
+            vectors.append(list(emb.get("values") or []))
+        # Defensive: the API should return one embedding per request, in order. If a chunk
+        # comes back short, pad with empty vectors so alignment with `texts` is preserved —
+        # a caller reading vectors[i] for texts[i] must never silently get another row's vector.
+        while len(vectors) < start + len(chunk):
+            vectors.append([])
+    return vectors, {"input_tokens": approx_tokens}
+
+
 def extract_json(text):
     """Python port of script.js's extractJSON(): finds the first JSON value (object
     or array) in `text` by scanning brace/bracket depth (string/escape-aware) rather

@@ -213,7 +213,13 @@ export default function Finder() {
   const aliveRef = useRef(true);
   // The last-loaded student-profile record, so the slot readers don't re-fetch it per call.
   const profileRecord = useRef<ProfileRecord | null>(null);
-  const [profileText, setProfileText] = useState('');
+  // Seed from the last-loaded profile synchronously so the theme picker paints on the FIRST
+  // render, not after an /api/data/load round trip (expo-router remounts this screen on every
+  // visit). peekData never replaces the fetch below — it just skips the wait when we already
+  // have the data. Undefined on a cold cache; the async load then fills it in.
+  const [profileText, setProfileText] = useState(
+    () => httpClient.peekData<ProfileRecord>('student-profile')?.synthesized ?? '',
+  );
   // "Your profile is empty" is also what an unloaded profile looks like, so the hero flashed
   // that on every visit before the fetch landed. Gate it on the load actually resolving.
   const [profileLoaded, setProfileLoaded] = useState(false);
@@ -286,7 +292,13 @@ export default function Finder() {
     setFacetAlign((a) => ({ ...a, [key]: align }));
     setOpenFacet(key);
   };
-  const [profileTags, setProfileTags] = useState<EnrichedTag[]>([]);
+  // Seed the theme chips from the cached profile synchronously (see profileText above) — this
+  // is what makes the picker grid appear instantly instead of after the profile round trip.
+  const [profileTags, setProfileTags] = useState<EnrichedTag[]>(() => {
+    const p = httpClient.peekData<ProfileRecord>('student-profile');
+    const cached = p ? cachedProfileFilterTags(p) : null;
+    return (cached || []).filter((t) => t && typeof t.tag === 'string');
+  });
   // Which themes drive the recall query (PR4). This is now the profile facet: a MULTI-select
   // of themes that, on change, re-POSTs /api/match for a fresh recall (see rerunThemeMatch),
   // rather than the old single-tag client re-score. Initialized to all-selected once the

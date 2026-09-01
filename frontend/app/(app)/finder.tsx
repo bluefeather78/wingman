@@ -1433,6 +1433,46 @@ export default function Finder() {
   // The polished shortlist re-skin, driven by the server-curated `results` (tier + why-it-fits).
   // The legacy grid + facets below is kept only for the browse/form path (suggestMode === false).
   if (suggestMode) {
+    // Empty shortlist: curation now honestly returns nothing when no candidate clears the
+    // strong-fit bar (and the recall relevance floor can shrink the pool to zero for a thin/
+    // off-lane profile). Without this, ShortlistView would render "0 chosen for you" — a dead
+    // end. Offer the real ways forward instead of pretending a search failed.
+    if (results.length === 0) {
+      return (
+        <>
+          <Screen>
+            <SoftCard style={styles.emptyCard}>
+              <Text style={styles.heroTitle}>No strong matches this time</Text>
+              <Text style={[styles.heroSub, styles.heroSubItalic]}>
+                Nothing in your feasible pool was a strong-enough fit to put in front of you — and
+                we&apos;d rather show you nothing than pad the list with so-so matches. A few ways
+                forward:
+              </Text>
+              <View style={styles.heroActions}>
+                <PopButton label="Deepen your story" onPress={() => router.push('/(app)/profile')} />
+                <Pressable onPress={() => { setStage('home'); setBrowseOpen(true); }}>
+                  <Text style={styles.link}>Browse all opportunities</Text>
+                </Pressable>
+              </View>
+              <View style={styles.emptyLinksRow}>
+                <Pressable onPress={restartFunnel}>
+                  <Text style={styles.link}>Start fresh</Text>
+                </Pressable>
+                <Pressable onPress={() => setReviewOpen(true)}>
+                  <Text style={styles.link}>Review your answers</Text>
+                </Pressable>
+              </View>
+            </SoftCard>
+          </Screen>
+          <ReviewDrawer
+            open={reviewOpen}
+            onClose={() => setReviewOpen(false)}
+            sections={buildReviewSections()}
+            onAdjust={() => { setReviewOpen(false); restartFunnel(); }}
+          />
+        </>
+      );
+    }
     const picks: ShortlistItem[] = results.map((r) => ({
       opp: r.opp,
       reason: r.reason,
@@ -1842,6 +1882,7 @@ const styles = StyleSheet.create({
   // A primary action with a quieter alternative beside it (View matches / Search again,
   // Deepen your story / Browse all).
   heroActions: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 8, flexWrap: 'wrap' },
+  emptyLinksRow: { flexDirection: 'row', alignItems: 'center', gap: 20, marginTop: 16, flexWrap: 'wrap' },
   emptyCard: { padding: 32, gap: 8, alignItems: 'flex-start' },
   link: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.muted, textDecorationLine: 'underline' },
 

@@ -19,12 +19,16 @@ WHAT EXCLUDES A ROW HERE (and nothing else — see the plan's "Recall's filter s
                                        with escape hatches; see recall_grade_ok's docstring.
   * a geo scope check                — a location-restricted (local-only) row whose place the
                                        student cannot reach; national/remote rows always pass.
+  * a RELEVANCE floor (RECALL_MIN_SCORE) — a row whose best cosine is below the bar, so a thin/
+                                       off-lane profile's pool shrinks instead of padding with
+                                       near-noise. Only on the scored path; provisional value.
 (`is_active` is already enforced upstream by fetch_opportunities' `is_active=eq.true`, so it
 is not re-checked here.)
 """
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 
 import numpy as np
@@ -265,6 +269,44 @@ def best_theme_scores(row_vectors: np.ndarray, theme_vectors: np.ndarray) -> np.
 RECALL_POOL_SIZE = 100
 
 
+# --------------------------------------------------------------------------- relevance floor
+#
+# Added 2026-08-31. Without a floor, recall returns the top-`limit` rows by cosine REGARDLESS of
+# how low the best score is — so a THIN or OFF-LANE profile fills the fixed ~100 slots with
+# near-noise (the observed "a profile with zero STEM themes was handed a STEM stretch pick"
+# failure: the STEM rows were merely the least-dissimilar padding in a STEM-heavy catalog). The
+# floor DROPS a row whose best score is below RECALL_MIN_SCORE, so a weak profile's pool SHRINKS
+# below `limit` instead of padding — curation then honestly returns fewer (or none), and the
+# client's empty state handles zero. This is a filter on RELEVANCE, orthogonal to the objective
+# status/grade/geo/cost/time/type filters above.
+#
+# THE VALUE IS PROVISIONAL AND MUST BE CALIBRATED against the live gemini-embedding-001 score
+# distribution before it can be trusted to cut WEAK-BUT-RELATED rows (the aggressive job). At the
+# default 0.1 it only removes rows that are essentially ORTHOGONAL to every theme — unambiguously
+# safe (nothing genuinely related scores that low), but it will NOT on its own drop a row that
+# scores, say, 0.4. Once the distribution is measured (log recall scores over real searches; pick
+# the value that separates the on-lane cluster from the padding tail), raise it. Tune WITHOUT a
+# code change via the WINGMAN_RECALL_MIN_SCORE env var. Do not guess it higher blind — too high
+# empties real pools; that is the "measured, not guessed" rule this repo runs on.
+#
+# The floor compares against the FINAL score (max of theme and BOOSTED project cosines), so a
+# project match whose raw cosine is as low as RECALL_MIN_SCORE / PROJECT_MATCH_BOOST still clears
+# it. It applies ONLY on the scored path; a thin profile with no vectors takes the unscored
+# fallback (there are no scores to floor).
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+RECALL_MIN_SCORE = _env_float("WINGMAN_RECALL_MIN_SCORE", 0.1)
+
+
 # A match against one of the student's PROJECT vectors (passion / research) counts for more
 # than a theme match — a project is the most specific, distinctive signal a student has, so a
 # project-aligned opportunity should out-rank a merely theme-aligned one at the same cosine.
@@ -283,6 +325,7 @@ def recall(
     limit: int = RECALL_POOL_SIZE,
     project_vectors: list | None = None,
     type_prefs: list | None = None,
+    min_score: float | None = None,
 ) -> list[dict]:
     """Narrow the active catalog to the top-`limit` semantic matches for a student.
 
@@ -332,4 +375,10 @@ def recall(
     project_scores = best_theme_scores(rmat, pmat) * PROJECT_MATCH_BOOST
     scores = np.maximum(theme_scores, project_scores)
     ranked = sorted(zip(scores, range(len(scorable)), scorable), key=lambda t: (-t[0], t[1]))
+    # Relevance floor: drop rows below the bar so a weak/off-lane profile's pool SHRINKS rather
+    # than padding the fixed slots with near-noise (see RECALL_MIN_SCORE). A None arg uses the
+    # module default; <= 0 disables the floor entirely.
+    floor = RECALL_MIN_SCORE if min_score is None else min_score
+    if floor > 0:
+        ranked = [t for t in ranked if t[0] >= floor]
     return [row for _, _, row in ranked[:limit]]

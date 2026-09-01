@@ -233,8 +233,44 @@ def test_recall_project_match_boosted_over_theme_match():
 
 def test_recall_projects_only_still_scores():
     # No themes, only a project vector -> ranks by the (boosted) project cosine, still works.
-    out = m.recall([_row("a", [0.0, 1.0]), _row("b", [1.0, 0.0])], [], project_vectors=[[0.0, 1.0]])
+    # Both rows clear the relevance floor (b's cosine 0.8 * 1.2 = 0.96); a fully-orthogonal
+    # b (cosine 0) would be cut by the floor -- see test_recall_relevance_floor_* below.
+    out = m.recall([_row("a", [0.0, 1.0]), _row("b", [0.6, 0.8])], [], project_vectors=[[0.0, 1.0]])
     assert [r["id"] for r in out] == ["a", "b"]
+
+
+def test_recall_relevance_floor_drops_below_bar():
+    # The floor removes a weakly-matching row so the pool shrinks rather than padding with noise.
+    themes = [[1.0, 0.0]]
+    rows = [_row("strong", [1.0, 0.0]),          # cosine 1.0 -> keep
+            _row("weak", [0.2, 0.98])]            # cosine ~0.2 -> below a 0.5 floor -> drop
+    out = m.recall(rows, themes, min_score=0.5)
+    assert [r["id"] for r in out] == ["strong"]
+
+
+def test_recall_relevance_floor_can_empty_the_pool():
+    # A profile with NO row above the bar gets an empty pool (curation then returns nothing,
+    # and the client shows its empty state) -- never a padded list of near-noise.
+    themes = [[1.0, 0.0]]
+    rows = [_row("a", [0.1, 0.99]), _row("b", [0.0, 1.0])]   # both ~orthogonal to the theme
+    assert m.recall(rows, themes, min_score=0.5) == []
+
+
+def test_recall_relevance_floor_zero_or_negative_disables():
+    # min_score <= 0 turns the floor OFF: an orthogonal row is kept (the pre-floor behavior),
+    # which is what an operator sets to reproduce the old top-N-regardless recall.
+    themes = [[1.0, 0.0]]
+    rows = [_row("aligned", [1.0, 0.0]), _row("orthogonal", [0.0, 1.0])]
+    assert {r["id"] for r in m.recall(rows, themes, min_score=0)} == {"aligned", "orthogonal"}
+
+
+def test_recall_relevance_floor_default_is_conservative():
+    # The module default (RECALL_MIN_SCORE) only cuts near-orthogonal noise; a moderate 0.3
+    # match survives it, so the default is safe until calibrated upward.
+    themes = [[1.0, 0.0]]
+    rows = [_row("moderate", [0.32, 0.95])]       # cosine ~0.32, above the 0.1 default
+    assert [r["id"] for r in m.recall(rows, themes)] == ["moderate"]
+    assert m.RECALL_MIN_SCORE <= 0.2               # guards against an un-flagged aggressive bump
 
 
 def test_recall_time_pref_summer_keeps_summer_yearlong_unknown():

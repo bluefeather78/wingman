@@ -318,6 +318,7 @@ FEATURE_LABELS = {
     "profile_basics":    "Profile basics",
     "profile_extract":   "Profile extraction (tags + basics)",
     "deadline_check":    "Deadline check",
+    "match_eligibility": "Match eligibility gate",
     "other":             "Other",
 }
 
@@ -368,6 +369,9 @@ def provider_for_model(model, surface=None):
 # longer one has to be checked first — the same ordering constraint generate_mock_text()
 # already lives under.
 _FEATURE_SIGNATURES = [
+    # The eligibility-only gate over a recall pool (RECALL_GRID_MERGE_PLAN.md). Distinctive
+    # opening line, so position is unimportant — it collides with nothing else here.
+    ("Wingman's eligibility checker",                            "match_eligibility"),
     # The merged tags+basics pass. FIRST, because it does the work of `infer_subjects`'s tag
     # branch and `profile_basics` and so matches their wording too; whichever signature is
     # tested first wins, and this one is the accurate answer for that call.

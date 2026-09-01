@@ -20,8 +20,10 @@ import app.core as core
 # signature string that silently re-routes spend is caught here.
 # ---------------------------------------------------------------------------
 SIGNATURE_CASES = [
-    # First in the source too: the merged pass does the work of the tag-extraction and
-    # profile-basics prompts, so its wording matches theirs and precedence decides.
+    # First in the source too (RECALL_GRID_MERGE_PLAN.md eligibility gate).
+    ("Wingman's eligibility checker",                             "match_eligibility"),
+    # The merged pass does the work of the tag-extraction and profile-basics prompts, so its
+    # wording matches theirs and precedence decides.
     ("pulling out everything an opportunity-matching app needs",   "profile_extract"),
     ("infer which subject categories",                            "infer_subjects"),
     ("Rank the best 10-12 matches",                               "ranking"),

@@ -292,6 +292,13 @@ export default function Finder() {
   // Mirror of selectedThemes for the debounced re-run to read the latest picks at fire time.
   const selectedThemesRef = useRef(selectedThemes);
   useEffect(() => { selectedThemesRef.current = selectedThemes; }, [selectedThemes]);
+  // "Explore something new" — a free-text direction that is NOT one of the profile's themes.
+  // It is added to the recall query as its own theme, so a student can search a brand-new
+  // interest (or a stretch) that their profile doesn't mention yet. Mirrored to a ref for the
+  // same reason selectedThemes is — the debounced facet re-run reads the latest at fire time.
+  const [exploreText, setExploreText] = useState('');
+  const exploreTextRef = useRef(exploreText);
+  useEffect(() => { exploreTextRef.current = exploreText; }, [exploreText]);
   // Debounce rapid facet toggles into one recall call.
   const themeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A recall (POST /api/match) is in flight from the theme facet — the grid shows a loading
@@ -304,13 +311,8 @@ export default function Finder() {
   // True while the tag slot is being generated for a profile that has none yet.
   const [tagsBuilding, setTagsBuilding] = useState(false);
 
-  // Default the query to all themes once they load. Respects an existing subset (so a
-  // background tag refresh does not wipe the student's picks); a genuine deselect-all leaves
-  // the set empty, which the blob builder reads as "all themes".
-  useEffect(() => {
-    if (!profileTags.length) return;
-    setSelectedThemes((prev) => (prev.size ? prev : new Set(profileTags.map((t) => t.tag))));
-  }, [profileTags]);
+  // Themes start UNSELECTED — the student deliberately picks where to start (and must pick at
+  // least one, or type an "explore" direction, before we search). No auto-select-all.
 
   // Load the catalog, retrying transient failures quietly before admitting defeat. Every
   // entry point on this screen is dead without it, so a failure has to become something the
@@ -500,14 +502,13 @@ export default function Finder() {
     return parts.join(', ');
   }
 
-  // The themes to send as the recall query. A non-empty selection sends only those; an empty
-  // selection (nothing loaded yet, or the student deselected all) falls back to every theme,
-  // so the query is never empty.
+  // The themes to send as the recall query: exactly the picked profile themes, PLUS the
+  // free-text "explore something new" direction (as its own theme) when the student typed one.
+  // No fall-back-to-all — the button enforces at least one, so an empty query never runs.
   function themeTagsFor(sel: Set<string>): EnrichedTag[] {
-    if (!profileTags.length) return [];
-    if (!sel.size) return profileTags;
     const picked = profileTags.filter((t) => sel.has(t.tag));
-    return picked.length ? picked : profileTags;
+    const extra = exploreTextRef.current.trim();
+    return extra ? [...picked, { tag: extra }] : picked;
   }
 
   // Grade the same way the form path resolves it: the form dropdown wins, else the grade the
@@ -993,30 +994,27 @@ export default function Finder() {
               </View>
             </>
           ) : (
-            /* PR4 theme picker: a soft, reversible start. Themes default to all-selected;
-               the student can narrow before we recall, or just press through. No wall — a
-               student with no themes yet still gets the button, which recalls on all/none. */
+            /* PR4 theme picker: the student deliberately chooses where to start. Themes are
+               UNSELECTED by default; at least one theme (or an "explore something new"
+               direction) is required before we recall. */
             <>
               <Text style={styles.heroTitle}>What would you like to start with?</Text>
               <Text style={[styles.heroSub, styles.heroSubItalic]}>
-                You can always change this later in the filters.
+                Pick one or more — you can always change this later in the filters.
               </Text>
               {tagsBuilding && !profileTags.length ? (
                 <LoadingRow title="Building your themes…" inline />
               ) : profileTags.length ? (
                 <View style={styles.themeChips}>
                   {profileTags.map((t) => {
-                    const on = !selectedThemes.size || selectedThemes.has(t.tag);
+                    const on = selectedThemes.has(t.tag);
                     return (
                       <Pressable
                         key={t.tag}
                         style={[styles.themeChip, on && styles.themeChipOn]}
                         onPress={() =>
                           setSelectedThemes((prev) => {
-                            // First touch initializes from "all", so a single deselect means
-                            // "everything except this" rather than "only this".
-                            const base = prev.size ? prev : new Set(profileTags.map((x) => x.tag));
-                            const n = new Set(base);
+                            const n = new Set(prev);
                             if (n.has(t.tag)) n.delete(t.tag);
                             else n.add(t.tag);
                             return n;
@@ -1031,7 +1029,19 @@ export default function Finder() {
                   })}
                 </View>
               ) : null}
-              <PopButton label="Find my matches →" onPress={() => void suggestForMe()} style={styles.selfStart} />
+              {/* Explore something new: a free-text direction outside the profile's themes. */}
+              <Text style={styles.exploreLabel}>Explore something new</Text>
+              <SoftInput
+                value={exploreText}
+                onChangeText={setExploreText}
+                placeholder="e.g. marine biology, game design, journalism…"
+              />
+              <PopButton
+                label="Find my matches →"
+                onPress={() => void suggestForMe()}
+                disabled={!selectedThemes.size && !exploreText.trim()}
+                style={styles.selfStart}
+              />
             </>
           )}
         </SoftCard>
@@ -1240,7 +1250,7 @@ export default function Finder() {
                 </Pressable>
                 <ScrollView style={styles.facetScroll} nestedScrollEnabled>
                   {profileTags.map((t) => {
-                    const on = !selectedThemes.size || selectedThemes.has(t.tag);
+                    const on = selectedThemes.has(t.tag);
                     return (
                       <Pressable key={t.tag} style={styles.facetRow} onPress={() => toggleTheme(t.tag)}>
                         <Text style={styles.facetRowText}>{on ? '☑' : '☐'} {t.tag}</Text>
@@ -1628,6 +1638,7 @@ const styles = StyleSheet.create({
   facetHint: { fontFamily: fonts.bodyBold, fontSize: 10, color: colors.muted, letterSpacing: 0.4, marginBottom: 6 },
 
   // First-screen theme picker chips (PR4). Selected = filled lavender; unselected = outlined.
+  exploreLabel: { fontFamily: fonts.bodyBold, fontSize: 13, color: colors.inkSoft, marginTop: 14, marginBottom: 6 },
   themeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8, marginBottom: 4 },
   themeChip: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate400, borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 8 },
   themeChipOn: { backgroundColor: colors.lavender, borderColor: colors.slate900 },

@@ -555,9 +555,6 @@ export default function Profile() {
             <VibeField label="Home state" style={styles.flex1}>
               <Text style={basics.state ? styles.vibeValue : styles.vibeEmpty}>{basics.state || 'No info'}</Text>
             </VibeField>
-            <VibeField label="Gender" style={styles.flex1}>
-              <Text style={basics.gender ? styles.vibeValue : styles.vibeEmpty}>{basics.gender || 'No info'}</Text>
-            </VibeField>
           </View>
         )}
 

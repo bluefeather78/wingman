@@ -2270,6 +2270,49 @@ def _index_activated_rows(ids):
         return 0
 
 
+def _embed_match_vectors(ids):
+    """Best-effort (MARQUEE M9): compute and store the RECALL match_vector for the just-activated
+    rows, so semantic matching can score them the moment they go live — app/services/matching.recall
+    drops any row with no match_vector, so without this a newly-activated row is invisible to Fresh
+    Finds until the next backfill_match_vectors.py run.
+
+    Deliberately SEPARATE from _index_activated_rows: that feeds the scraper's dedupe index
+    (catalog_embeddings.jsonl), this writes the opportunities.match_vector column the student-facing
+    matcher reads — a different embedding, computed from different fields, for a different job.
+
+    Same contract as _index_activated_rows: active-only, never raises, never blocks or affects the
+    activation result. Reuses refresh_row_embedding, which self-checks a content hash — so a row
+    whose embedded fields are unchanged is a no-op (cost 0), and a mid-batch embed failure skips
+    only that row. Returns (count_written, cost_usd)."""
+    ids = [str(i).strip() for i in (ids or []) if str(i).strip()]
+    if not ids:
+        return 0, 0.0
+    try:
+        import os
+        key = os.environ.get("GEMINI_API_KEY")
+        if not key:
+            return 0, 0.0  # mock / no-key env: skip silently, exactly like _index_activated_rows
+        from app.services.embeddings import refresh_row_embedding
+        rows = _supabase_request("opportunities", params={
+            "select": "id,name,org,summary,subject_tags,type,is_active,match_vector_hash",
+            "id": f"in.({','.join(ids)})"}) or []
+        count, cost = 0, 0.0
+        for r in rows:
+            try:
+                patch = refresh_row_embedding(r, key)
+                if not patch:
+                    continue  # inactive or hash unchanged -> nothing to write, nothing billed
+                cost += patch.pop("_cost_usd", 0.0) or 0.0
+                patch.pop("_usage", None)
+                _commit_patch(r["id"], patch)
+                count += 1
+            except Exception:
+                continue  # one row's embed/write failure never affects the others or activation
+        return count, cost
+    except Exception:
+        return 0, 0.0
+
+
 # Sources whose rows arrive prefilled with refresh_opportunities' own extraction and therefore
 # never need to be queued for it: the scraper (M9 discovery gate, scrape_opportunities.py) and
 # the hub miner (combined_reader.extract_metadata, mine_hub_pages.py) both now run that same
@@ -2365,11 +2408,17 @@ def activate_opportunities(ids, active=True):
     # Keep the dedupe index current (MARQUEE M9): embed the rows just made live so the next scrape
     # matches new candidates against them. Best-effort — never affects the activation result above.
     indexed = _index_activated_rows(activated_ids) if active else 0
+    # Embed the just-activated rows into the RECALL match_vector column (MARQUEE M9) so the
+    # student-facing matcher can score them immediately — separate job from the dedupe index above.
+    embedded, embed_cost = _embed_match_vectors(activated_ids) if active else (0, 0.0)
     return {"ok": errors == 0, "activated": done if active else 0,
             "deactivated": 0 if active else done,
             # How many newly-activated rows were added to the embedding dedupe index (0 in a
             # mock/no-key env or on any embed failure — activation itself still succeeded).
             "indexed": indexed,
+            # How many newly-activated rows got a recall match_vector (0 in a mock/no-key env or
+            # on any embed failure), and the tiny embedding cost that implied.
+            "embedded": embedded, "embed_cost_usd": round(embed_cost, 6),
             "errors": errors, "error_details": details,
             # False means activation_refresh_schema.sql has not been run: the row was still
             # (de)activated, it just was not enqueued for a refresh.

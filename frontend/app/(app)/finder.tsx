@@ -303,6 +303,9 @@ export default function Finder() {
   const [exploreText, setExploreText] = useState('');
   const exploreTextRef = useRef(exploreText);
   useEffect(() => { exploreTextRef.current = exploreText; }, [exploreText]);
+  // The single theme (or explore direction) the currently-shown results were searched for,
+  // captured at search time so the "Showing matches for" header can't drift from the results.
+  const [resultsTheme, setResultsTheme] = useState<string | null>(null);
   // Debounce rapid facet toggles into one recall call.
   const themeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A recall (POST /api/match) is in flight from the theme facet — the grid shows a loading
@@ -551,6 +554,9 @@ export default function Finder() {
     themeTags: EnrichedTag[],
     gradeNum: number | null,
   ): Promise<{ mapped: Result[]; note: string | null }> {
+    // Single-select: themeTags holds exactly one entry (the chosen theme OR the explore text),
+    // so its tag is what these results are "for". Captured here so the header is always accurate.
+    setResultsTheme(themeTags[0]?.tag ?? null);
     const resp = await httpClient.match(buildMatchBlob(themeTags, gradeNum));
     const rows = resp.results || [];
     // "WHY IT FITS" — reintroduced from main's ranker (rankCandidates), NOT the retired
@@ -617,16 +623,31 @@ export default function Finder() {
     }
   }
 
-  // Toggle one theme in the query and schedule a single debounced recall.
-  function toggleTheme(tag: string) {
-    setSelectedThemes((prev) => {
-      const n = new Set(prev);
-      if (n.has(tag)) n.delete(tag);
-      else n.add(tag);
-      return n;
-    });
+  function scheduleThemeRerun() {
     if (themeTimerRef.current) clearTimeout(themeTimerRef.current);
     themeTimerRef.current = setTimeout(() => { void rerunThemeMatch(); }, 500);
+  }
+  // SINGLE-SELECT: exactly one theme at a time. Picking a theme replaces the selection
+  // (picking the current one again clears it) and clears any "explore" text — a chosen theme
+  // and a typed direction are mutually exclusive.
+  function pickTheme(tag: string) {
+    setSelectedThemes((prev) => (prev.has(tag) ? new Set<string>() : new Set([tag])));
+    setExploreText('');
+  }
+  // Typing a direction clears the selected theme (the other half of the mutual exclusion).
+  function onExploreChange(text: string) {
+    setExploreText(text);
+    if (text.trim()) setSelectedThemes(new Set());
+  }
+  // Results-view Themes dropdown: pick one theme AND re-run recall (debounced). The initial
+  // picker uses pickTheme directly (no re-run — the "Find my matches" button triggers it).
+  function toggleTheme(tag: string) {
+    pickTheme(tag);
+    scheduleThemeRerun();
+  }
+  function onFacetExploreChange(text: string) {
+    onExploreChange(text);
+    scheduleThemeRerun();
   }
 
   async function search(desc: string, k: string | null, prefs: string) {
@@ -1037,7 +1058,7 @@ export default function Finder() {
             <>
               <Text style={styles.heroTitle}>What would you like to start with?</Text>
               <Text style={[styles.heroSub, styles.heroSubItalic]}>
-                Pick one or more — you can always change this later in the filters.
+                Pick one — you can always change it later in the filters.
               </Text>
               {tagsBuilding && !profileTags.length ? (
                 <LoadingRow title="Building your themes…" inline />
@@ -1049,14 +1070,7 @@ export default function Finder() {
                       <Pressable
                         key={t.tag}
                         style={[styles.themeChip, on && styles.themeChipOn]}
-                        onPress={() =>
-                          setSelectedThemes((prev) => {
-                            const n = new Set(prev);
-                            if (n.has(t.tag)) n.delete(t.tag);
-                            else n.add(t.tag);
-                            return n;
-                          })
-                        }
+                        onPress={() => pickTheme(t.tag)}
                       >
                         <Text style={[styles.themeChipText, on && styles.themeChipTextOn]}>
                           {on ? '✓ ' : ''}{t.tag}
@@ -1066,11 +1080,12 @@ export default function Finder() {
                   })}
                 </View>
               ) : null}
-              {/* Explore something new: a free-text direction outside the profile's themes. */}
-              <Text style={styles.exploreLabel}>Explore something new</Text>
+              {/* Explore something new: a free-text direction outside the profile's themes.
+                  Mutually exclusive with a chosen theme (single-select). */}
+              <Text style={styles.exploreLabel}>Or explore something new</Text>
               <SoftInput
                 value={exploreText}
-                onChangeText={setExploreText}
+                onChangeText={onExploreChange}
                 placeholder="e.g. marine biology, game design, journalism…"
               />
               <PopButton
@@ -1252,6 +1267,16 @@ export default function Finder() {
         />
       )}
 
+      {/* Which theme these results are for — captured at search time so it can't drift. */}
+      {resultsTheme && results.length > 0 && (
+        <View style={styles.resultsForRow}>
+          <Text style={styles.resultsForLabel}>SHOWING MATCHES FOR</Text>
+          <View style={styles.resultsForPill}>
+            <Text style={styles.resultsForPillText}>{resultsTheme}</Text>
+          </View>
+        </View>
+      )}
+
       {/* Filter row */}
       <View style={styles.filterBar}>
         <Text style={styles.filterLabel}>FILTER:</Text>
@@ -1263,38 +1288,34 @@ export default function Finder() {
               onPress={() => toggleFacet('profile', 320)}
             >
               <Text style={styles.filterToggleText}>
-                ▾ Themes{selectedThemes.size && selectedThemes.size < profileTags.length ? ` (${selectedThemes.size})` : ''}
+                ▾ Themes
               </Text>
             </Pressable>
             {openFacet === 'profile' && (
-              /* PR4: this is the ONE facet that re-searches. Toggling a theme re-POSTs
-                 /api/match for a fresh recall (debounced), unlike the pool facets below,
-                 which narrow the returned rows client-side for free. Scrolls, because the
-                 theme list is as long as the profile is broad; "Select all" sits outside the
-                 scroller so it is always reachable. The panel stays open across toggles so the
-                 student can adjust several at once — each toggle just resets the debounce. */
+              /* The ONE facet that re-searches. Picking a theme re-POSTs /api/match for a fresh
+                 recall (debounced), unlike the pool facets below, which narrow the returned rows
+                 client-side for free. SINGLE-SELECT (one theme at a time), so it reads as a radio
+                 list; the "Or explore something new" box mirrors the initial picker and is
+                 mutually exclusive with the theme rows. Scrolls, because the theme list is as
+                 long as the profile is broad. */
               <View style={[styles.facetPanel, styles.facetPanelWide, facetAlign.profile === 'right' ? styles.facetPanelRight : styles.facetPanelLeft]}>
-                <Text style={styles.facetHint}>Changing these finds new matches.</Text>
-                <Pressable
-                  style={styles.facetRow}
-                  onPress={() => {
-                    setSelectedThemes(new Set(profileTags.map((t) => t.tag)));
-                    if (themeTimerRef.current) clearTimeout(themeTimerRef.current);
-                    themeTimerRef.current = setTimeout(() => { void rerunThemeMatch(); }, 500);
-                  }}
-                >
-                  <Text style={styles.facetRowText}>↺ Select all themes</Text>
-                </Pressable>
+                <Text style={styles.facetHint}>Changing this finds new matches.</Text>
                 <ScrollView style={styles.facetScroll} nestedScrollEnabled>
                   {profileTags.map((t) => {
                     const on = selectedThemes.has(t.tag);
                     return (
                       <Pressable key={t.tag} style={styles.facetRow} onPress={() => toggleTheme(t.tag)}>
-                        <Text style={styles.facetRowText}>{on ? '☑' : '☐'} {t.tag}</Text>
+                        <Text style={styles.facetRowText}>{on ? '●' : '○'} {t.tag}</Text>
                       </Pressable>
                     );
                   })}
                 </ScrollView>
+                <Text style={styles.facetExploreLabel}>Or explore something new</Text>
+                <SoftInput
+                  value={exploreText}
+                  onChangeText={onFacetExploreChange}
+                  placeholder="Type a new direction…"
+                />
               </View>
             )}
           </View>
@@ -1676,6 +1697,11 @@ const styles = StyleSheet.create({
 
   // First-screen theme picker chips (PR4). Selected = filled lavender; unselected = outlined.
   exploreLabel: { fontFamily: fonts.bodyBold, fontSize: 13, color: colors.inkSoft, marginTop: 14, marginBottom: 6 },
+  facetExploreLabel: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.inkSoft, marginTop: 10, marginBottom: 6 },
+  resultsForRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 },
+  resultsForLabel: { fontFamily: fonts.bodyBold, fontSize: 11, letterSpacing: 0.5, color: colors.muted },
+  resultsForPill: { backgroundColor: colors.lavender, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 5 },
+  resultsForPillText: { fontFamily: fonts.bodyBold, fontSize: 13, color: colors.slate900 },
   themeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8, marginBottom: 4 },
   themeChip: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate400, borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 8 },
   themeChipOn: { backgroundColor: colors.lavender, borderColor: colors.slate900 },

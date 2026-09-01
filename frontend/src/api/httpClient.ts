@@ -8,6 +8,8 @@ import type {
   GoogleFinishInput,
   GoogleSessionResult,
   LoginResponse,
+  MatchRequest,
+  MatchResponse,
   Opportunity,
   RegisterInput,
   SessionUser,
@@ -536,6 +538,16 @@ export const httpClient: ApiClient = {
       '/api/opportunities',
     );
     return Array.isArray(data) ? data : (data.opportunities ?? []);
+  },
+
+  // Semantic recall + eligibility. Authed POST like validatePromo/saveData — the 402 gate,
+  // 401 refresh and error shaping all come from request(). Returns the parsed pool response;
+  // the finder maps each row (a flattened Opportunity + score/strong) into its Result grid.
+  async match(blob: MatchRequest): Promise<MatchResponse> {
+    return request<MatchResponse>('/api/match', {
+      method: 'POST',
+      body: JSON.stringify(blob),
+    });
   },
 
   async getDeadlineCheck(oppId, force) {

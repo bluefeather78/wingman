@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request, Depends
 
 from app.config import (
     SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
+    OPPORTUNITIES_CLIENT_STRIP_FIELDS,
 )
 from app.core import touch_user_activity, record_user_cost_async
 from app.deps import (json_response, json_error, require_subscription,
@@ -45,6 +46,11 @@ def handle_opportunities(user: AuthedUser = Depends(optional_subscribed_user)):
         data = fetch_opportunities()
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
+    # Strip the server-only match_vector (~9MB across the catalog, no display value) before it
+    # reaches the client — recall scores it server-side; the browser never needs it.
+    strip = OPPORTUNITIES_CLIENT_STRIP_FIELDS
+    if strip:
+        data = [{k: v for k, v in row.items() if k not in strip} for row in data]
     return json_response(200, data)
 
 

@@ -13,7 +13,6 @@ import {
   View,
 } from 'react-native';
 import {
-  addTrackerItem,
   loadTrackerData,
   loadTrackerSaved,
   refreshTrackerDeadlines,
@@ -30,14 +29,8 @@ import { ALL_BUCKETS, type Bucket } from '@/lib/constants';
 import { googleCalendarReturnUri } from '@/auth/googleSignIn';
 import { clearNewlyAdded, getNewlyAdded, markNewlyAdded } from '@/lib/newlyAdded';
 import { getLastCheckedLabel, setLastCheckedLabel as rememberLastChecked } from '@/lib/lastChecked';
-import {
-  applyDeadlineCheckToInfo,
-  intakeExtractAndClassify,
-  normalizeVerifiedActionItems,
-  slugifyTracker,
-  staticGenericChecklist,
-  type NormalizedActionItem,
-} from '@/lib/tracker';
+import { addCatalogOpportunity, bucketForOpp } from '@/api/trackerAdd';
+import type { Opportunity } from '@/api/types';
 import {
   assignCalendarColors,
   BUCKET_LABELS,
@@ -123,13 +116,19 @@ export default function Tracker() {
   const syncNoteAnim = useRef(new Animated.Value(1)).current;
   const syncTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  // "Add Opportunity" intake dropdown — the retired SPA's #trackerIntakeForm panel.
-  const [intakeOpen, setIntakeOpen] = useState(false);
-  const [intakeUrl, setIntakeUrl] = useState('');
-  const [intakeNotes, setIntakeNotes] = useState('');
-  const [intakeBusy, setIntakeBusy] = useState(false);
-  const [intakeStatus, setIntakeStatus] = useState('');
-  const [intakeError, setIntakeError] = useState<string | null>(null);
+  // "Add Opportunity" search dropdown — searches the catalog by opportunity NAME and adds a
+  // match to the Quest Log via the same shared catalog-add flow Fresh Finds uses.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  // The active catalog, loaded lazily the first time the panel opens (free — same public
+  // /api/opportunities Fresh Finds reads). Filtering happens client-side on `name`.
+  const [catalog, setCatalog] = useState<Opportunity[] | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  // Which result is mid-add (its own spinner), so the whole list is not disabled while one
+  // row runs its extract + deadline check.
+  const [addingId, setAddingId] = useState<string | null>(null);
+  const [searchStatus, setSearchStatus] = useState('');
   // Snapshotted on focus rather than read during render: the batch is module state, so
   // reading it inline would make the sort order depend on when a re-render happened.
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
@@ -348,132 +347,76 @@ export default function Tracker() {
     }
   }
 
-  // ---------- Intake: add a custom opportunity by URL ----------
-  // trackerAnalyzeAndAdd(), ported: extract + classify, push into the right bucket, jump to
-  // the new card, then queue the row for the review queue in the background.
-  async function analyzeAndAdd() {
-    if (intakeBusy) return;
-    const url = intakeUrl.trim();
-    const notes = intakeNotes.trim();
-    setIntakeError(null);
-    if (!url) {
-      setIntakeError('Paste a URL first.');
-      return;
-    }
+  // ---------- Search: find a catalog opportunity by name and add it ----------
+  // Load the active catalog once, the first time the panel opens. Free — the same public
+  // /api/opportunities Fresh Finds reads (active rows only).
+  async function ensureCatalog() {
+    if (catalog || catalogLoading) return;
+    setCatalogLoading(true);
+    setCatalogError(null);
     try {
-      new URL(url);
-    } catch {
-      setIntakeError('That doesn’t look like a valid URL — include https://');
-      return;
-    }
-    setIntakeBusy(true);
-    setIntakeStatus('');
-    try {
-      const extracted = await intakeExtractAndClassify(httpClient.callGemini.bind(httpClient), url, notes);
-      const section = extracted.section ?? '';
-      const bucket: Bucket = (ALL_BUCKETS as readonly string[]).includes(section)
-        ? (section as Bucket)
-        : 'researchCompetitions';
-      const current = data ?? (await loadTrackerData());
-      const name = extracted.name || 'Custom Opportunity';
-      const meta = extracted.meta || '';
-      const fit = extracted.fit || '';
-      const note = extracted.note || 'Added manually via URL.';
-
-      // Register the opportunity in the catalog FIRST, and track it under the id that comes
-      // back. That id is the whole reason this happens before the item is built: it is what
-      // makes /api/opportunities/<id>/deadline resolve, so a hand-added opportunity gets the
-      // same shared, cached, web-searched deadline check a Fresh Finds one does — both on
-      // add and on every later "Check for updates". Previously this was fired and forgotten
-      // after the fact, the item kept a local slug, and the deadline endpoint 404'd forever.
-      //
-      // The row lands is_active=false and stays there until someone activates it in the
-      // console; being addressable is not being published. If the submission cannot be
-      // resolved we fall back to the slug and the item is simply un-auto-checkable, which
-      // the refresh now says out loud instead of reporting "no changes found".
-      const catalogId = await httpClient.submitUserOpportunity({
-        name,
-        url,
-        type: extracted.category || 'Program',
-        section: bucket,
-        meta,
-        fit,
-        note,
-        important_dates: extracted.important_dates ?? [],
-        requirements: extracted.requirements ?? [],
-        apply_url: extracted.apply_url || url,
-        category: extracted.category ?? null,
-      });
-      const id = catalogId ?? slugifyTracker(extracted.name || url, current[bucket].map((i) => i.id));
-
-      // Same two-step sequence a Fresh Finds add uses: the Gemini extraction above, then the
-      // shared deadline check overlaid on top of it. A brand-new row is never a cache hit,
-      // so this is a real (paid) check; a URL that deduped into an existing catalog row may
-      // come back free and already verified.
-      // The verified checklist for the row we just resolved. A URL that deduped into an
-      // existing catalog row comes back already generated and free; a genuinely new row is
-      // generated once here and then cached for every student after this one.
-      let sharedItems: NormalizedActionItem[] = [];
-      if (catalogId) {
-        applyDeadlineCheckToInfo(extracted, await httpClient.getDeadlineCheck(catalogId));
-        sharedItems = normalizeVerifiedActionItems(
-          (await httpClient.getActionItems(catalogId))?.action_items, catalogId);
-      }
-
-      const item: TrackerItem = {
-        id,
-        name,
-        url,
-        type: extracted.category || '',
-        bucket,
-        progressStatus: 'not_started',
-        status: ['running', 'not_running', 'rolling', 'unknown'].includes(extracted.status) ? extracted.status : 'unknown',
-        meta,
-        fit,
-        // applyDeadlineCheckToInfo may have replaced `note` with the check's own
-        // important_date_note, which is the more authoritative caveat of the two.
-        note: extracted.note || note,
-        noteType: extracted.status === 'not_running' ? 'flag' : (extracted.noteType || 'plain'),
-        importantDates: Array.isArray(extracted.important_dates)
-          ? extracted.important_dates
-              .filter((d) => d && d.date_iso)
-              // verified/sourceUrl survive the deadline-check overlay above; the intake
-              // model's own dates never carry them (nothing verified those).
-              .map((d) => ({
-                label: d.label || 'Date',
-                dateISO: d.date_iso,
-                type: d.type || 'deadline',
-                estimated: d.estimated,
-                verified: d.verified,
-                sourceUrl: d.source_url ?? null,
-              }))
-              .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
-          : [],
-        deadlineLabel: extracted.deadline_label || 'CHECK SITE',
-        wasEstimated: !!extracted.was_estimated,
-        applyUrl: extracted.apply_url || url,
-        applyLabel: extracted.apply_label || 'Apply / learn more',
-        // Verified list when the submission resolved to a catalog row; otherwise the
-        // static generic checklist (P8) — an unresolvable row has no page anything could
-        // have verified, and a generic list asserts nothing, so it cannot be wrong.
-        actionItems: sharedItems.length
-          ? sharedItems
-          : staticGenericChecklist(id, url),
-      };
-      setData(await addTrackerItem(bucket, item));
-      setIntakeStatus(`Added “${item.name}” ✓`);
-      setIntakeUrl('');
-      setIntakeNotes('');
-      // Same treatment a Fresh Finds add gets: badged NEW, floated to the top, jumped to.
-      markNewlyAdded([id]);
-      setNewIds(new Set([id]));
-      goToTrackerCard(id);
+      setCatalog(await httpClient.getOpportunities());
     } catch (err) {
-      setIntakeError(
-        `Couldn’t extract details — this only works with live API access. Error: ${(err as Error).message}`,
-      );
+      setCatalogError((err as Error).message || 'Could not load opportunities.');
     } finally {
-      setIntakeBusy(false);
+      setCatalogLoading(false);
+    }
+  }
+
+  function openSearch() {
+    setSearchOpen((o) => {
+      const next = !o;
+      if (next) void ensureCatalog();
+      return next;
+    });
+  }
+
+  // ids/urls already tracked, so a match already in the Quest Log shows "In Quest Log"
+  // instead of an Add button — the same rule addTrackerItemChecked enforces on write.
+  const trackedKeys = useMemo(() => {
+    const ids = new Set<string>();
+    const urls = new Set<string>();
+    if (data) {
+      ALL_BUCKETS.forEach((b) => data[b].forEach((i) => {
+        ids.add(i.id);
+        if (i.url) urls.add(i.url);
+      }));
+    }
+    return { ids, urls };
+  }, [data]);
+
+  // Case-insensitive substring match on the opportunity NAME, capped so a broad query does
+  // not render the whole catalog. An empty query shows nothing (the panel is a search box,
+  // not a browser — Fresh Finds is the browse surface).
+  const SEARCH_LIMIT = 25;
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q || !catalog) return [] as Opportunity[];
+    return catalog.filter((o) => (o.name ?? '').toLowerCase().includes(q)).slice(0, SEARCH_LIMIT);
+  }, [searchQuery, catalog]);
+
+  async function addSearchResult(opp: Opportunity) {
+    if (addingId) return;
+    setAddingId(opp.id);
+    setSearchStatus('');
+    try {
+      // Same shared flow a Fresh Finds add uses: meta/fit extraction, the cached deadline
+      // check, and the server-verified checklist, all keyed off the catalog id.
+      const outcome = await addCatalogOpportunity(opp, bucketForOpp(opp), (opp.summary as string) || '');
+      if (!outcome.added) {
+        setSearchStatus(`“${outcome.existingName || opp.name}” is already in your Quest Log.`);
+        return;
+      }
+      setData(await loadTrackerData());
+      setSearchStatus(`Added “${opp.name}” ✓`);
+      // Same treatment a Fresh Finds add gets: badged NEW, floated to the top, jumped to.
+      markNewlyAdded([opp.id]);
+      setNewIds(new Set([opp.id]));
+      goToTrackerCard(opp.id);
+    } catch (err) {
+      setSearchStatus(`Couldn’t add “${opp.name}” — ${(err as Error).message}`);
+    } finally {
+      setAddingId(null);
     }
   }
 
@@ -528,42 +471,64 @@ export default function Tracker() {
             </IconBtn>
           </View>
           <View style={styles.intakeWrap}>
-            <PopButton label="Add Opportunity" onPress={() => setIntakeOpen((o) => !o)} />
-            {intakeOpen && (
+            <PopButton label="Add Opportunity" onPress={openSearch} />
+            {searchOpen && (
               <View style={styles.intakePanel}>
-                <Text style={styles.intakeTitle}>Add Custom Opportunity</Text>
-                <Text style={styles.intakeLabel}>URL of the opportunity</Text>
+                <Text style={styles.intakeTitle}>Search Opportunities</Text>
+                <Text style={styles.intakeLabel}>Search by name</Text>
                 <TextInput
                   style={styles.intakeInput}
-                  value={intakeUrl}
-                  onChangeText={setIntakeUrl}
-                  placeholder="https://example.com/apply"
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder="e.g. Research Science Institute"
                   placeholderTextColor={colors.slate400}
                   autoCapitalize="none"
                   autoCorrect={false}
-                  inputMode="url"
+                  autoFocus
                 />
-                <Text style={styles.intakeLabel}>Extra context (optional)</Text>
-                <TextInput
-                  style={[styles.intakeInput, styles.intakeArea]}
-                  value={intakeNotes}
-                  onChangeText={setIntakeNotes}
-                  placeholder="Anything you already know..."
-                  placeholderTextColor={colors.slate400}
-                  multiline
-                />
-                <PopButton
-                  full
-                  label={intakeBusy ? 'Fetching and analyzing…' : 'Add'}
-                  loading={intakeBusy}
-                  onPress={analyzeAndAdd}
-                />
-                {!!intakeStatus && <Text style={styles.intakeStatusText}>{intakeStatus}</Text>}
-                {!!intakeError && (
+                {catalogLoading && <Text style={styles.searchHint}>Loading opportunities…</Text>}
+                {!!catalogError && (
                   <View style={styles.intakeErrorBox}>
-                    <Text style={styles.intakeErrorText}>{intakeError}</Text>
+                    <Text style={styles.intakeErrorText}>{catalogError}</Text>
                   </View>
                 )}
+                {!catalogLoading && !catalogError && !!searchQuery.trim() && searchResults.length === 0 && (
+                  <Text style={styles.searchHint}>No opportunities match “{searchQuery.trim()}”.</Text>
+                )}
+                {searchResults.length > 0 && (
+                  <ScrollView
+                    style={styles.searchResults}
+                    keyboardShouldPersistTaps="handled"
+                    nestedScrollEnabled
+                  >
+                    {searchResults.map((opp) => {
+                      const url = (opp.url as string) ?? '';
+                      const tracked = trackedKeys.ids.has(opp.id) || (!!url && trackedKeys.urls.has(url));
+                      const busy = addingId === opp.id;
+                      const sub = [opp.org, opp.type].filter(Boolean).join(' · ');
+                      return (
+                        <View key={opp.id} style={styles.searchRow}>
+                          <View style={styles.searchRowText}>
+                            <Text style={styles.searchRowName} numberOfLines={2}>{opp.name}</Text>
+                            {!!sub && <Text style={styles.searchRowSub} numberOfLines={1}>{sub}</Text>}
+                          </View>
+                          {tracked ? (
+                            <Text style={styles.searchRowTracked}>In Quest Log</Text>
+                          ) : (
+                            <PopButton
+                              small
+                              label={busy ? 'Adding…' : 'Add'}
+                              loading={busy}
+                              disabled={!!addingId}
+                              onPress={() => addSearchResult(opp)}
+                            />
+                          )}
+                        </View>
+                      );
+                    })}
+                  </ScrollView>
+                )}
+                {!!searchStatus && <Text style={styles.intakeStatusText}>{searchStatus}</Text>}
               </View>
             )}
           </View>
@@ -1037,10 +1002,16 @@ const styles = StyleSheet.create({
   intakeTitle: { fontFamily: fonts.display, fontSize: 16, color: colors.ink, marginBottom: 12 },
   intakeLabel: { fontFamily: fonts.bodyBold, fontSize: 10, color: colors.slate500, textTransform: 'uppercase', marginBottom: 4 },
   intakeInput: { borderWidth: 2, borderColor: colors.slate900, borderRadius: 8, padding: 8, fontFamily: fonts.bodyMed, fontSize: 14, color: colors.ink, marginBottom: 12 },
-  intakeArea: { minHeight: 56, textAlignVertical: 'top' },
   intakeStatusText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.indigo600, textAlign: 'center', marginTop: 8 },
   intakeErrorBox: { backgroundColor: colors.redSoft, borderWidth: 2, borderColor: '#881337', borderRadius: 8, padding: 8, marginTop: 8 },
   intakeErrorText: { fontFamily: fonts.bodyBold, fontSize: 12, color: '#881337' },
+  searchHint: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500, marginTop: 4, marginBottom: 4 },
+  searchResults: { maxHeight: 280, marginTop: 4 },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.slate200 },
+  searchRowText: { flex: 1, flexShrink: 1, minWidth: 0 },
+  searchRowName: { fontFamily: fonts.bodyBold, fontSize: 13, color: colors.ink },
+  searchRowSub: { fontFamily: fonts.bodyMed, fontSize: 11, color: colors.slate500, marginTop: 2 },
+  searchRowTracked: { fontFamily: fonts.bodyBold, fontSize: 11, color: colors.slate400, textTransform: 'uppercase' },
 
   headRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' },
   titleWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },

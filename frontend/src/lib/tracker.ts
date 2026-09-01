@@ -24,6 +24,17 @@ export function findBucketForKind(kind: string): Bucket {
   return map[kind] || 'summerPrograms';
 }
 
+// Catalog `type` -> kind key. Ported from finder.tsx so both Fresh Finds and the Quest
+// Log's catalog search resolve a bucket the same way; pair with findBucketForKind above.
+export function kindForOpp(opp: Opportunity): string {
+  const map: Record<string, string> = {
+    Program: 'summer', Internship: 'internship', Conference: 'conference',
+    Journal: 'journal', Research: 'research-competition', Competition: 'pure-competition',
+    Volunteer: 'volunteer', Academic: 'pure-competition',
+  };
+  return map[(opp.type as string) ?? ''] ?? 'summer';
+}
+
 export function todayLabel(): string {
   return new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 }

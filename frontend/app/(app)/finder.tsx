@@ -4,7 +4,8 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
-import { addTrackerItemChecked, flattenItems, loadTrackerData } from '@/api/trackerStore';
+import { flattenItems, loadTrackerData } from '@/api/trackerStore';
+import { addCatalogOpportunity } from '@/api/trackerAdd';
 import type { MatchFunnelOption, MatchResponse, MatchStudentBlob, Opportunity } from '@/api/types';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import { ACTIVE_KINDS, KIND_CONFIG } from '@/lib/kinds';
@@ -25,13 +26,7 @@ import { extractJSON } from '@/lib/extractJSON';
 import { preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
 import { markNewlyAdded } from '@/lib/newlyAdded';
 import { awaitProfileWrites } from '@/lib/profileWrites';
-import {
-  extractTrackerInfo,
-  findBucketForKind,
-  normalizeVerifiedActionItems,
-  staticGenericChecklist,
-  type TrackerInfo,
-} from '@/lib/tracker';
+import { findBucketForKind, kindForOpp } from '@/lib/tracker';
 import { MiniBadge, PopButton, ReviewBadge, Screen, SoftCard, Txt, usePopInteraction } from '@/ui/components';
 import {
   FullListView, FunnelLoading, SearchSetup, NotInterestedModal, ReviewDrawer, RungStep, ShortlistView,
@@ -120,15 +115,6 @@ const CATALOG_RETRY_DELAY_MS = 800;
 // Every type the catalog actually carries must appear here: an unmapped type falls through
 // to 'summer' and files the opportunity in the Quest Log as a summer program, which is how
 // volunteer roles and the lone `Academic` row ended up labelled camps.
-function kindForOpp(opp: Opportunity): string {
-  const map: Record<string, string> = {
-    Program: 'summer', Internship: 'internship', Conference: 'conference',
-    Journal: 'journal', Research: 'research-competition', Competition: 'pure-competition',
-    Volunteer: 'volunteer', Academic: 'pure-competition',
-  };
-  return map[(opp.type as string) ?? ''] ?? 'summer';
-}
-
 // The taxonomy quiz (QUIZ_ROOT/QUIZ_SUB, Direction E) was RETIRED in Phase 6 — the
 // progressive funnel replaced its "help me figure out what fits" job. Students who know the
 // kind they want still use the browse grid; everyone else uses "Suggest for me" (the funnel).
@@ -1000,80 +986,7 @@ export default function Finder() {
     // Same precedence as the card's category badge: the kind that actually surfaced this
     // beats a guess derived from opp.type, so the Quest Log files it where it was found.
     const bucket = findBucketForKind(resultKind ?? (suggestMode ? kindForOpp(opp) : kind));
-    const url = (opp.url as string) ?? null;
-    const type = (opp.type as string) ?? null;
-    const reviewStatus = (opp.review_status as string) ?? null;
-    const reviewSummary = (opp.review_summary as string) ?? null;
-    const summary = (opp.summary as string) || '';
-
-    let slim: { meta?: string; fit?: string } = {};
-    try {
-      try {
-        slim = await extractTrackerInfo(callGemini, opp);
-      } catch (firstErr) {
-        console.warn(`Retrying ${opp.name} after error:`, (firstErr as Error).message);
-        slim = await extractTrackerInfo(callGemini, opp);
-      }
-    } catch (err) {
-      console.warn(`meta/fit extraction failed for ${opp.name}:`, (err as Error).message);
-    }
-
-    let deadline: Partial<TrackerInfo> | null = null;
-    try {
-      deadline = await httpClient.getDeadlineCheck(opp.id);
-    } catch (err) {
-      console.warn(`Deadline check failed for ${opp.name}:`, (err as Error).message);
-    }
-
-    // The catalog's checklist, generated and quote-verified server-side (getActionItems
-    // never throws — null on failure). The static generic list is the fallback when the
-    // endpoint has nothing — it asserts nothing, so it cannot reintroduce the
-    // invented-prerequisite failure the old model fallback carried.
-    const shared = await httpClient.getActionItems(opp.id);
-    const verified = normalizeVerifiedActionItems(shared?.action_items, opp.id);
-    const sharedItems = verified.length ? verified : staticGenericChecklist(opp.id, url);
-
-    const status = deadline?.status
-      && ['running', 'not_running', 'rolling', 'unknown'].includes(deadline.status)
-      ? deadline.status
-      : 'unknown';
-    const res = await addTrackerItemChecked(bucket, {
-      id: opp.id,
-      name: opp.name,
-      url,
-      type,
-      bucket,
-      progressStatus: 'not_started',
-      status,
-      reviewStatus,
-      reviewSummary,
-      meta: slim.meta || [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · '),
-      fit: slim.fit || reason || summary,
-      note: deadline?.important_date_note
-        || (deadline
-          ? 'Details from the opportunities database — confirm on the official site.'
-          : "Live details couldn't be fetched — showing database info only. Check the official site directly."),
-      noteType: status === 'not_running' ? 'flag' : deadline ? 'plain' : 'flag',
-      importantDates: Array.isArray(deadline?.important_dates)
-        ? deadline.important_dates
-            .filter((d) => d && d.date_iso)
-            .map((d) => ({
-              label: d.label || 'Date',
-              dateISO: d.date_iso,
-              type: d.type || 'deadline',
-              estimated: d.estimated,
-              verified: d.verified,
-              sourceUrl: d.source_url ?? null,
-            }))
-            .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
-        : [],
-      deadlineLabel: 'CHECK SITE',
-      wasEstimated: !!deadline?.was_estimated,
-      applyUrl: url,
-      applyLabel: 'Apply / learn more',
-      actionItems: sharedItems,
-    });
-    return { added: res.added, existingName: res.existing?.name };
+    return addCatalogOpportunity(opp, bucket, reason);
   }
 
   async function addSelectedToTracker() {
@@ -1433,6 +1346,46 @@ export default function Finder() {
   // The polished shortlist re-skin, driven by the server-curated `results` (tier + why-it-fits).
   // The legacy grid + facets below is kept only for the browse/form path (suggestMode === false).
   if (suggestMode) {
+    // Empty shortlist: curation now honestly returns nothing when no candidate clears the
+    // strong-fit bar (and the recall relevance floor can shrink the pool to zero for a thin/
+    // off-lane profile). Without this, ShortlistView would render "0 chosen for you" — a dead
+    // end. Offer the real ways forward instead of pretending a search failed.
+    if (results.length === 0) {
+      return (
+        <>
+          <Screen>
+            <SoftCard style={styles.emptyCard}>
+              <Text style={styles.heroTitle}>No strong matches this time</Text>
+              <Text style={[styles.heroSub, styles.heroSubItalic]}>
+                Nothing in your feasible pool was a strong-enough fit to put in front of you — and
+                we&apos;d rather show you nothing than pad the list with so-so matches. A few ways
+                forward:
+              </Text>
+              <View style={styles.heroActions}>
+                <PopButton label="Deepen your story" onPress={() => router.push('/(app)/profile')} />
+                <Pressable onPress={() => { setStage('home'); setBrowseOpen(true); }}>
+                  <Text style={styles.link}>Browse all opportunities</Text>
+                </Pressable>
+              </View>
+              <View style={styles.emptyLinksRow}>
+                <Pressable onPress={restartFunnel}>
+                  <Text style={styles.link}>Start fresh</Text>
+                </Pressable>
+                <Pressable onPress={() => setReviewOpen(true)}>
+                  <Text style={styles.link}>Review your answers</Text>
+                </Pressable>
+              </View>
+            </SoftCard>
+          </Screen>
+          <ReviewDrawer
+            open={reviewOpen}
+            onClose={() => setReviewOpen(false)}
+            sections={buildReviewSections()}
+            onAdjust={() => { setReviewOpen(false); restartFunnel(); }}
+          />
+        </>
+      );
+    }
     const picks: ShortlistItem[] = results.map((r) => ({
       opp: r.opp,
       reason: r.reason,
@@ -1842,6 +1795,7 @@ const styles = StyleSheet.create({
   // A primary action with a quieter alternative beside it (View matches / Search again,
   // Deepen your story / Browse all).
   heroActions: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 8, flexWrap: 'wrap' },
+  emptyLinksRow: { flexDirection: 'row', alignItems: 'center', gap: 20, marginTop: 16, flexWrap: 'wrap' },
   emptyCard: { padding: 32, gap: 8, alignItems: 'flex-start' },
   link: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.muted, textDecorationLine: 'underline' },
 

@@ -561,11 +561,20 @@ export default function Finder() {
     // absolute cosine (~0.57) is lower than a robotics match's (~0.73). Only the top slice is
     // reasoned (the model caps at 10-12 and those are the rows the student actually reads);
     // the rest stay "worth a look". A reasoning failure degrades to no reason, never a crash.
+    // Describe the student to the reasoner from the CHOSEN themes' theme+intent+nextSteps —
+    // not raw profileText. Measured on real profiles: this makes the reason concrete and
+    // goal-aligned ("take Adio from concept to market") and gives the GOAL-FORMAT rule real
+    // signal, where the whole-profile text was unfocused on what the student actually searched.
+    const themeDesc = themeTags
+      .map((t) => [t.tag, t.intent || '', (t.nextSteps || []).join('; ')].filter(Boolean).join('. '))
+      .filter(Boolean)
+      .join('\n');
+    const reasonDesc = themeDesc || profileText;
     const reasons: Record<string, { reason: string; tier: 'strong' | 'look' }> = {};
     try {
       const top = rows.slice(0, REASON_TOP_N) as unknown as Opportunity[];
       if (top.length) {
-        const ranked = await rankCandidates(callGemini, profileText, top, buildPrefs() || null, false);
+        const ranked = await rankCandidates(callGemini, reasonDesc, top, buildPrefs() || null, false);
         ranked.forEach((p) => {
           if (p && p.id) reasons[p.id] = { reason: p.reason || '', tier: p.tier === 'strong' ? 'strong' : 'look' };
         });

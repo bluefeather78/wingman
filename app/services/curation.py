@@ -1,9 +1,11 @@
 """The final cross-kind curation pass (OPPORTUNITY_MATCHING_PLAN.md, Phase 3 / the second
 live call of Phase 1). ONE call, at the end: the funnel's survivors + the student blob in,
-the curated <=10 out, each with a "why you" reason, a tier, and an eligibility verdict.
+the curated shortlist out (up to ~13, cap CURATED_LIMIT), each with a "why you" reason, a tier,
+and an eligibility verdict.
 
-This replaces the 7-kind fan-out (40-70 rows) with a single pass that selects the best <=10
-OVERALL — fit + feasibility + a couple of deliberate exploration slots.
+This replaces the 7-kind fan-out (40-70 rows) with a single pass that selects the best OVERALL —
+fit + feasibility + a couple of deliberate exploration slots — returning FEWER (even zero) when
+nothing clears the strong-fit bar rather than padding to a target count.
 
 Split like the rest of the pipeline: the PURE, testable pieces (build the user payload,
 finalize the model's output through the eligibility guard) live here and are unit-tested; the
@@ -21,7 +23,7 @@ CURATION_CANDIDATE_FIELDS = (
     "review_status", "review_summary", "grade_min", "grade_max",
 )
 
-CURATED_LIMIT = 10
+CURATED_LIMIT = 15  # up to ~10 strong fits + up to 2-3 exploration picks (see CURATION_SYSTEM)
 
 
 def build_candidate_view(row: dict) -> dict:
@@ -104,7 +106,7 @@ def finalize_curation(parsed: dict, rows_by_id: dict[str, dict], limit: int = CU
 
 
 # --------------------------------------------------------------------------- the prompt (M8)
-CURATION_SYSTEM = """You are Wingman, building a high schooler's CURATED shortlist of at most 10 \
+CURATION_SYSTEM = """You are Wingman, building a high schooler's CURATED shortlist of up to 13 \
 extracurricular opportunities — each one a genuinely great fit they can actually do. You are given \
 the student's profile and a pool of candidate opportunities. Your job has two parts.
 
@@ -124,10 +126,12 @@ women" is NOT — anyone may apply.
 candidate's own text that states the restriction, and name which field it is in ("eligibility", \
 "summary", "name", or "org"). If you cannot quote it verbatim, do not exclude — mark them eligible.
 
-PART 2 — FIT. Among the eligible candidates, pick the best <=10. Most slots go to the strongest, \
-most SPECIFIC fits to this student's stated interests, goals, projects, AND their stated preferences \
-(the "what matters to them right now" list, when present — use it to ORDER and break ties, never to \
-exclude a candidate). \
+PART 2 — FIT. Among the eligible candidates, pick the best <=10 that are a STRONG fit — a SPECIFIC \
+fit to this student's stated interests, goals, projects, AND their stated preferences (the "what \
+matters to them right now" list, when present — use it to ORDER and break ties, never to exclude a \
+candidate). It is BETTER to return FEWER strong fits — even zero — than to pad the list with weak \
+ones: a padded shortlist of mediocre matches destroys the student's trust faster than a short, \
+sharp one. Do NOT backfill to a target count. \
 GOAL-FORMAT ALIGNMENT (important): when the student states a goal or outcome about the FORMAT or \
 output they want, treat it as a STRONG ranking signal, not a tie-breaker — rank opportunities \
 whose format actually DELIVERS that goal ABOVE ones that do not, EVEN WHEN the subject matches \
@@ -160,16 +164,24 @@ Use ONLY real details from the student's profile/choices and the candidate's OWN
 invent a program feature or a student detail, and never assert something the text does not \
 support. Second person ("you"/"your"). Do NOT state or infer any eligibility, grade, age, or \
 citizenship restriction. \
-Reserve 2-3 slots as deliberate EXPLORATION picks: a real stretch outside the student's usual lane \
-that is still excellent AND still feasible — mark those exploration_pick:true, and in the reason \
-name the leap honestly and why they'd shine anyway ("A new direction from your usual robotics, but \
-your data-modeling skills would stand out here"). Assign each a tier: "strong" (excellent, \
-specific) or "look" (solid, worth a look).
+Assign each pick a tier: "strong" (an excellent, specific fit) or "look" (a solid fit still worth \
+a look). \
+In ADDITION to the strong-fit picks above, you MAY add up to 2-3 deliberate EXPLORATION picks — but \
+they are NEVER required; add none if nothing genuinely adjacent exists. An exploration pick is a \
+real stretch outside the student's usual lane that is still excellent, still feasible, AND still \
+ANCHORED to one of the student's existing profile themes: it explores an interest they ALREADY have \
+in a NEW dimension, never a totally different theme. For example, a student who does computational \
+linguistics and physics olympiad could be stretched toward a computational-physics course — but NOT \
+toward a cancer-biology program, which shares none of their themes. Mark those exploration_pick:true, \
+and in the reason name the leap honestly and why they'd shine anyway ("A new direction from your \
+usual robotics, but your data-modeling skills would stand out here").
 
 Respond with ONLY raw JSON, no markdown, no preamble, matching:
 {"selected":[{"id":"...","reason":"...","tier":"strong|look","exploration_pick":false,\
 "eligible":true,"exclusion_quote":null,"exclusion_source_field":null}],\
 "excluded_ineligible":[{"id":"...","eligible":false,"exclusion_quote":"verbatim sentence",\
 "exclusion_source_field":"eligibility|summary|name|org"}]}
-"selected" is at most 10, best first. "excluded_ineligible" lists candidates you dropped for a \
-stated eligibility restriction (with the required quote) — leave it [] if none."""
+"selected" is at most 15, best first (up to ~10 strong fits plus up to 2-3 exploration picks); \
+returning fewer — or an empty list — is correct when nothing clears the bar. "excluded_ineligible" \
+lists candidates you dropped for a stated eligibility restriction (with the required quote) — leave \
+it [] if none."""

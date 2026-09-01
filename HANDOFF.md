@@ -9,7 +9,108 @@ it's kept current. This folder **is** a git repo (`origin` =
 
 ---
 
-# CURRENT THREAD: Opportunity matching — FULL PORT BUILT + LIVE (2026-08-30)
+# CURRENT THREAD: Matching golden-eval dataset + a pre-embed latency fix (2026-08-31)
+
+**Branch: `opportunity-matching` (the MAIN checkout at `C:\Users\shama\Documents\wingman`), not
+a worktree.** This thread is about (a) building a reusable **golden evaluation dataset** for the
+opportunity-matching funnel, and (b) shipping one committed latency fix that fell out of it.
+**The branch is VOLATILE** — HEAD moved twice mid-session (another session commits here and runs
+its own dev server on this folder). Always `git status` / `git log` before assuming file state.
+
+## Goal
+Create a golden dataset to evaluate the opportunity-matching funnel: take synthesized student
+profiles, run each all the way down the REAL funnel (real Gemini embeddings + recall + funnel
+questions + curation), and record the assumed answers + the final recommendations per profile —
+so ranking changes can be measured. Then use it to reason about **personalization** (avoid the
+"you like linguistics camps → here's the one everyone gets" / first-page-of-Google failure).
+
+## Current Progress
+- **10-profile pilot** (from the user's `fictional_high_school_profiles.csv`): ran the funnel via
+  an in-process driver reusing the shipped server pipeline. Delivered
+  `golden_dataset_matching.{csv,json}` + `__metrics.json`.
+- **50-profile baseline v1** (the durable asset): generated 50 diverse profiles (spec-balanced to
+  cover every single-choice option; ~23 carry Passion/Research project paragraphs) →
+  `golden_profiles_v1.json`. Ran the funnel with **spec-driven answers** (coverage-guaranteed).
+  **Only 30/50 completed** — Gemini free-tier quota hit a hard 429 wall (see What Didn't Work).
+  Delivered `golden_run_v1.{csv,json}` + `golden_run_v1__metrics.json`.
+- **Personalization eval metric**: `eval_personalization.py` (pure/offline) — reports
+  personalization (pairwise Jaccard, % unique), discovery (catalog coverage, Gini, entropy),
+  genericness (generic-row slot share), and type-shape (single-type %, cross-type stretch %).
+  Baseline v1 (30 profiles): **72% recs unique to one student, mean pairwise Jaccard 0.011,
+  0% generic slot share, 57% single-type lists, 16% cross-type stretch.**
+- **Committed a latency fix — `9291ea6` "Fresh Finds: pre-embed profile themes during setup so
+  recall is instant"** (6 files): a bounded server-side student-embed cache + `student_embed_texts`
+  + `POST /api/match {prewarm:true}` + client `prewarmMatch()` fired when the SearchSetup card
+  mounts. Effect: the theme embedding runs while the student answers the setup card, so rung-0
+  recall is a cache hit (embedding round trip off the critical path). All matching tests green,
+  `tsc --noEmit` clean. **NOT pushed.**
+
+## What Worked
+- **Reusing the shipped pipeline in-process** (importing `app.services.match_pipeline` /
+  `funnel` / `matching` / `embeddings` + `gemini_common`) rather than driving HTTP — faithful,
+  no auth/subscription gating, full control. Real embeddings + real model calls.
+- **Spec-driven answers** for coverage: assign each profile balanced targets (cost/timing/vibe/
+  citizenship/engagement-type) and answer fixed-option rungs from the spec → every single-choice
+  option gets exercised instead of the persona-LLM clustering on "free"/"immersive".
+- **Deterministic offline proof** of the citizenship-reask fix (see below) via the real
+  `next_funnel_rung` with a stub — no quota needed.
+
+## What Didn't Work / gotchas (don't repeat)
+- **Gemini free-tier quota is exhausted.** After ~10-profile + generation + 26-profile runs, the
+  key 429s on the FIRST call of a fresh process, and a 5s/7s inter-call gap does NOT help (the
+  first call has nothing to pace against; it's a quota cap, not a per-minute rate). The 50-profile
+  run is **resumable** (`run_eval.py` skips ids already in `golden_run_v1.json`) — just rerun once
+  quota resets or with a billing-enabled key.
+- **Bash `&` to background a python run** detached the child and lost output — use the tool's
+  `run_in_background`, never `&` (repo already warns this).
+- **Driver bug (fixed in `run_eval.py`, not the app):** the eval loop passed a STALE
+  `student["funnel_answers"]`, so `next_funnel_rung`'s re-ask guard (which reads that field) was
+  blind → citizenship got asked up to 5× in a row for low-cut profiles (e.g. p00). The shipped app
+  is fine (its client resends `funnel_answers` each round). Fix: mirror
+  `student["funnel_answers"] = dict(answers)` after each answer. **Any 30-profile journeys recorded
+  before this fix show the duplicate rungs; the recs are unaffected (repeats cut nothing).**
+- **The golden eval reproduces the RETIRED funnel.** The driver models engagement as a
+  post-recall rung; the branch has since made **experience-type a PRE-recall filter (`type_prefs`)
+  and dropped the engagement rung** (commit `0a0af6f`). So the recorded flows do not match current
+  `/api/match`. **Update the driver to send `type_prefs` and drop the engagement rung before the
+  eval is used as ground truth for THIS branch.**
+
+## Key findings (for the personalization work)
+- Personalization is already strong (89% unique on the narrow 10; 72% on the diverse 30). The
+  "first-page-of-Google" problem is narrow: a handful of **generic broad rows** (Teen Internship
+  Program, ASPIRE, PPPL, EnergyMag) recur across students; near-twins (Priya↔Sofia) share **0**
+  because recall separates them by their distinctive themes (divergence is recall-stage, healthy).
+- **Project-focus profiles already produce multi-type, cross-type-stretch lists** (they skip the
+  type filter) — the "personalized, not category-page" feel the user wants. Engagement/type-filter
+  profiles stay single-type by design.
+- Agreed levers to raise lesser-known-program visibility (not yet built): **inverse-popularity
+  down-weight** (tax rows that match everyone), **MMR diversity + a hidden-gem quota**, **cross-type
+  stretch picks + expand curated 10→15** (user endorsed), hook the "why you" to the distinctive
+  profile detail. Build the metric-in-CI first (done: `eval_personalization.py`).
+
+## Where the artifacts live
+Session scratchpad is gone for a fresh session — **durable copies are in
+`C:\Users\shama\Downloads\wingman_matching_eval\`**: `golden_profiles_v1.json` (frozen 50-profile
+input — the reusable asset), `run_eval.py` (the driver, resumable + the citizenship fix),
+`gen_profiles.py`, `golden_match.py`, `eval_personalization.py`, `theme_overlap.py`,
+`priya_sofia.py`, `prove_fix.py`, and the 10- and 30-profile runs + metrics. The user also has the
+individual files in `Downloads/`.
+
+## Next Steps
+1. **When Gemini quota resets** (or with a billing-enabled key): update `run_eval.py` to the
+   CURRENT funnel (send `type_prefs`, drop the engagement rung), then resume to a full 50-profile
+   v1 (`python run_eval.py` — it skips completed ids). Regenerate the scorecard with
+   `eval_personalization.py`. Run the baseline 2-3× and keep the band (model nondeterminism).
+2. **Verify the pre-embed fix in the browser** (unrun — blocked by dead quota + another session's
+   dev server): a logged-in profile → Fresh Finds → confirm rung-0 recall is a cache hit and the
+   post-setup spinner is gone.
+3. Consider pushing `9291ea6` after a `git pull`/rebase check (shared branch).
+4. Prototype the personalization levers (inverse-popularity + MMR + cross-type stretch + 10→15)
+   and diff the scorecard against v1.
+
+---
+
+# PRIOR THREAD: Opportunity matching — FULL PORT BUILT + LIVE (2026-08-30)
 
 **This thread runs in a separate worktree**: `opportunity-matching-improvement-fb6134`
 (branch `claude/opportunity-matching-improvement-fb6134`). Check which worktree a fresh session

@@ -521,7 +521,18 @@
         travels on each lead, because that is the one thing only whatever qualified the page knows —
         mining it the wrong way follows exactly the links that did <em>not</em> qualify it. Capturing a
         lead is free; draining it is paid — keeping those apart is what lets one approved search stay
-        one expense instead of quietly becoming three.</figcaption>
+        one expense instead of quietly becoming three.
+        <br><br>
+        <strong>Not the same classifier as the <code>classify:</code> pill in Fig. 02.</strong> This
+        router is deliberately FREE (HTTP + a title check + the &ge; 6-domains rule); the pill is a
+        paid LLM call. They also judge <em>different pages</em>: the router judges a search's
+        <em>discarded</em> pages (which become leads), the pill judges the <em>fetched</em>
+        candidate/program pages (which become rows) — disjoint sets, so neither can replace the other.
+        Making the router LLM-based was weighed (2026-09-02) and declined: it would add roughly
+        <strong>$0.30&ndash;$0.90 per run</strong> to classify mostly-noise discards for a modest
+        accuracy gain, and it could <em>not</em> let us drop the pill (which is the only thing that
+        ever classifies the actual program pages a mined hub links). If ever revisited, gate the LLM
+        behind the free title check so only borderline pages pay.</figcaption>
     </figure>
 
     <div class="steps">

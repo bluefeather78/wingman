@@ -107,7 +107,10 @@ The four classes:
 It describes that one thing: who it is for, when it runs, how to apply. A program page almost \
 always carries an ACTION for the student — an "Apply", "Register", or "Enroll" button or link, an \
 application DEADLINE, or "applications open/close" dates. A single clear apply-or-deadline call to \
-action describing ONE opportunity is a strong signal for "program".
+action describing ONE opportunity is a strong signal for "program". A DEADLINE or apply action \
+signals "program" only when the page presents ONE opportunity with ONE apply action; when a page \
+shows the dates or deadlines of SEVERAL distinct offerings side by side, each linking to its own \
+page, that is an INDEX — a hub — and the multiple separate detail links outweigh the inline dates.
   YES: a "Stanford AI4ALL Summer Program" page with dates and an "Apply Now" button.
   YES: a "Regeneron Science Talent Search" page with an entry deadline and rules.
   YES: a page that describes ONE opportunity in depth — its dates, who it is for, how to apply — \
@@ -123,6 +126,11 @@ real details live on a separate page it links to. The listed programs belong to 
 page, and it has no single apply action of its own.
   YES: "CMU Pre-College — Academic Programs" listing 15 Carnegie Mellon summer programs.
   YES: a university's "Summer Opportunities for High School Students" index.
+  YES: a page titled "Summer Writing Workshops" that lists an institution's OWN winter-online, \
+summer-online, and residential sessions — each linking to its own detail/registration page — EVEN \
+THOUGH it shows each one's dates and application deadline inline. A page indexing 2 or more distinct \
+offerings, each with its own page, is a hub no matter how few, and no matter that their dates are \
+listed.
   NO: a page about ONE program (that is "program").
   NO: a page that fully describes ONE program — its dates, eligibility, how to apply — and merely \
 names or links a sibling program (that is "program", not a hub).

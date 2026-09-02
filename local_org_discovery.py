@@ -359,7 +359,11 @@ def main():
     if not brief.get("region"):
         print("[STOP] could not resolve a region from the request."); return
 
-    seen_dom, results, total_cost = set(known), [], cost
+    # `known` = registrable domains already in the catalog (scraper + prior mining). An org whose
+    # domain is in `known` is one the catalog ALREADY has -> the comparison's "not net-new". A
+    # domain seen only earlier THIS run is a within-run duplicate (not interesting). Tracking the two
+    # separately is the whole point of the scraper-vs-feeder comparison.
+    run_seen, results, already, total_cost = set(), [], [], cost
     for k in chosen:
         print(f"\n=== archetype: {k} ===")
         orgs, acost, searches = discover_archetype(brief, labels[k], key, args)
@@ -371,25 +375,39 @@ def main():
             dom = url_dedupe.registrable_domain(host)
             if not dom:
                 continue
-            if dom in seen_dom:
-                print(f"    - skip (dup domain): {o.get('name')}  [{dom}]")
+            if dom in known:
+                already.append({"name": o.get("name"), "url": url, "archetype": k, "domain": dom})
+                print(f"    = already in catalog: {o.get('name')}  [{dom}]")
                 continue
-            seen_dom.add(dom)
+            if dom in run_seen:
+                print(f"    - skip (dup within run): {o.get('name')}  [{dom}]")
+                continue
+            run_seen.add(dom)
             row = {"name": o.get("name"), "url": url, "why": o.get("why"),
                    "archetype": k, "region": brief.get("region")}
             results.append(row)
-            print(f"    + {o.get('name')}  |  {url}")
+            print(f"    + NET-NEW: {o.get('name')}  |  {url}")
             if len(results) >= args.max_orgs:
                 break
         if len(results) >= args.max_orgs:
             print(f"\n[cap] reached --max-orgs {args.max_orgs}")
             break
 
-    print(f"\n=== {len(results)} unique candidate org(s) === total cost ${total_cost:.4f}")
+    total_considered = len(results) + len(already)
+    print(f"\n=== COMPARISON vs catalog (scraper's turf) ===")
+    print(f"  orgs considered : {total_considered}")
+    print(f"  NET-NEW (catalog does not have this domain): {len(results)}")
+    print(f"  already covered (domain in catalog)        : {len(already)}")
+    if already:
+        print("  already-covered orgs:")
+        for a in already:
+            print(f"    = {a['name']}  [{a['domain']}]")
+    print(f"\n=== {len(results)} net-new candidate org(s) === total cost ${total_cost:.4f}")
     if args.json:
         with open(args.json, "w", encoding="utf-8") as f:
             json.dump({"request": args.request, "brief": brief, "cost_usd": round(total_cost, 4),
-                       "orgs": results}, f, indent=1, ensure_ascii=False)
+                       "orgs": results, "already_in_catalog": already}, f, indent=1,
+                      ensure_ascii=False)
         print(f"[OK] wrote {args.json}")
     if args.emit_leads:
         emit(results, brief.get("region"))

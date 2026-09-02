@@ -124,14 +124,25 @@ def fetch_dedupe_index(supabase_url, key, active_only=True, include_inactive=Fal
     silently truncate the index and let duplicates through (the trap CLAUDE.md flags for this read).
     A missing column (schema not run yet) surfaces as an empty index, which degrades the dedupe hint
     to off — never an exception, matching the JSONL "no file -> empty index" behaviour it replaces.
+    Any OTHER failure (a timeout on the ~40MB two-page vector payload, an outage) also degrades to an
+    empty index so a run is never crashed by a HINT — but it is announced, because a SILENT empty
+    index reads as "no duplicates" when it means "we could not check", and that is the difference
+    between the hint being off and being wrong.
     """
+    import urllib.error
     from supabase_common import supabase_get
     params = {"select": DEDUPE_INDEX_SELECT}
     if active_only and not include_inactive:
         params["is_active"] = "eq.true"
     try:
         rows = supabase_get(supabase_url.rstrip("/"), "opportunities", params, key) or []
-    except Exception:
+    except urllib.error.HTTPError as e:
+        if e.code == 400:
+            return []   # column not migrated yet -> hint simply off, as designed
+        print(f"[WARN] dedupe index read failed (HTTP {e.code}) — dedupe hint OFF this run.")
+        return []
+    except Exception as e:                                          # noqa: BLE001
+        print(f"[WARN] dedupe index read failed ({type(e).__name__}) — dedupe hint OFF this run.")
         return []
     return rows_to_dedupe_entries(rows)
 

@@ -15,16 +15,26 @@ Plus one-level sub-hub recursion (an anchor like "Pre-College Programs" is itsel
 hard caps, so this can never wander into crawling the open web.
 
 COST: the harvest, both filters, recursion and catalog dedup are ALL FREE (plain HTTP + regex).
-Paid extraction is now TWO calls for a page that clears the refusal gate (~$0.003 each, page in /
-JSON out, because the URL is already real): the first decides it IS a single high-school program
-(and gets the one field refresh's schema doesn't cover, `state`); the second reuses
-refresh_opportunities' own `build_system`/`clean_update_dict`, unchanged, on the SAME page text —
-so a hub-mined row ends up filled exactly as richly as a `refresh_opportunities.py` pass would
-fill it, rather than needing that agent to catch it up later (see `extract_opportunity`). A page
-the first call refuses never pays for the second. `--preview` stops before ANY model call and
-prints what WOULD be extracted, at zero cost. A live run spends real money and — like every paid
-agent here — needs fresh explicit approval per run. Rows land is_active=false,
-source='hub-<domain>-<date>', found_via=<hub url>; nothing reaches students without a human yes.
+Paid work for a page that clears the refusal gate is the SAME per-candidate gate the search
+scraper runs (MARQUEE M9), so a hub-mined row reaches the review queue CLASSIFIED and LABELLED
+exactly like a scraper row, whatever its source (2026-09-02). Four no-search calls on the ONE
+fetched page (~$0.004 total, page in / JSON out, URL real by construction — see
+`extract_opportunity`):
+  1. refusal + `state`  — decides it IS a single high-school program and gets the one field
+     refresh's schema does not cover; a page it refuses never pays for the rest.
+  2. classify_page      — the page CLASSIFICATION (program / hub / none, confidence, staleness),
+     attached as the same `classify:` pill the scraper's discovery gate writes. Advisory here
+     (call 1 is the extraction gate): it LABELS, it never drops.
+  3. metadata           — refresh_opportunities' own `build_system`/`clean_update_dict`, unchanged,
+     so the row is filled as richly as a `refresh_opportunities.py` pass would fill it.
+  4. embedding dedupe   — cosine nearest in the catalog `dedupe_vector` index (dedupe_embed_store),
+     the SAME embedding dedupe the scraper attaches, merged into `dup_candidates` as a HINT.
+`--preview` stops before ANY model call and prints what WOULD be extracted, at zero cost. A live
+run spends real money and — like every paid agent here — needs fresh explicit approval per run.
+Rows land is_active=false, source='hub-<domain>-<date>', found_via=<hub url>; nothing reaches
+students without a human yes. (When embeddings are (re)computed, see MARQUEE_DECISIONS.md M9:
+dedupe + semantic vectors are written at ACTIVATION and on a metadata-changing refresh — the
+hub-miner run only READS the dedupe index for a hint, it does not write either vector.)
 
     python mine_hub_pages.py --hubs https://ceismc.gatech.edu/programs --preview   # FREE
     python mine_hub_pages.py --hubs-file seattle_hubs.json --preview               # FREE
@@ -39,13 +49,17 @@ import re
 import urllib.parse
 
 import combined_reader
+import classify_page
+import dedupe_embed_store
+import embed_common
 import page_text
+import queue_flags
 import url_dedupe
 import url_repair
 import url_validate
 from agent_common import safe_console, snapshot_stamp
 from scrape_opportunities import (build_row, next_id_generator, insert_rows, VALID_TYPES,
-                                  collapse_intra_run_twins,
+                                  collapse_intra_run_twins, gate_dup_candidates,
                                   FLAG_BARE_DOMAIN, FLAG_LOW_VALUE, FLAG_OFFSITE, FLAG_NO_TYPE)
 
 # --- pure audience/relevance filters (free, unit-tested) --------------------------------
@@ -289,36 +303,53 @@ _EXTRACT_SYSTEM = (
     "closest one; never invent another word and never leave it null.")
 
 
-def extract_opportunity(url, key, timeout=40, min_delay=5):
-    """PAID: up to two no-search model calls on the SAME fetched page text. Returns
-    (candidate|None, cost).
+def extract_opportunity(url, key, index=None, timeout=40, min_delay=5):
+    """PAID: the hub-miner's full page gate on ONE fetched page — the SAME classify + metadata +
+    embedding-dedupe the search scraper runs, so a hub-mined row reaches the review queue labelled
+    identically. Returns (candidate|None, cost, classification|None, dup_hints).
 
-    Call 1 (this module's own `_EXTRACT_SYSTEM`) owns the REFUSAL decision — "not a single
-    high-school program" -> {"name": null} — and `state`, the one field refresh's schema does
-    not ask for. No grounding is needed for either call; the URL is real by construction.
+    Four no-search model/embedding calls on the ONE fetched text (a page call 1 refuses pays for
+    nothing after it):
+      1. `_EXTRACT_SYSTEM`  — the REFUSAL decision ("not a single high-school program" ->
+         {"name": null}) and `state`, the one field refresh's schema does not ask for.
+      2. `classify_page`    — the page CLASSIFICATION (program/hub/none, confidence, staleness),
+         which the caller attaches as the same `classify:` pill the scraper's discovery gate writes.
+         ADVISORY here — call 1 is the extraction gate — so it LABELS, it never drops (the hub
+         miner reviews everything; the pill just tells the reviewer what the classifier thinks,
+         staleness included).
+      3. metadata           — `refresh_opportunities.build_system`/`clean_update_dict` UNCHANGED
+         (via `combined_reader.extract_metadata`, no second fetch), so the row is filled as richly
+         as a `refresh_opportunities.py` pass would. `cost` (refresh's key) is merged in as
+         `cost_detail` since refresh's schema has no separate free/paid enum to collide with.
+      4. embedding dedupe   — when `index` is given, cosine nearest in the catalog dedupe_vector
+         index (the SAME embedding dedupe the scraper attaches), returned as `dup_hints` for the
+         caller to merge into `dup_candidates`. A HINT only; it never rejects.
 
-    Call 2 only runs once call 1 has already produced a candidate, and reuses
-    `refresh_opportunities.build_system`/`clean_update_dict` UNCHANGED (via
-    `combined_reader.extract_metadata`, no second fetch) — the same prompt, model and field
-    validation a `refresh_opportunities.py` pass would use on this page. That is deliberate:
-    a row discovered here should arrive as richly filled as one `refresh_opportunities.py`
-    would produce, rather than depending on that agent to catch it up later. `cost` (refresh's
-    key) is merged in as `cost_detail` (this module's key for the same catalog column) since
-    refresh's schema has no separate free/paid enum to collide with.
+    The URL is real by construction (a followed link), so no call needs grounding.
     """
     from gemini_common import call_gemini, extract_json, estimate_cost, set_min_delay
     set_min_delay(min_delay)
     text, _reason = page_text.fetch_page_text(url, timeout)
     if not text:
-        return None, 0.0
+        return None, 0.0, None, []
     user = f"PAGE URL: {url}\n\nPAGE TEXT:\n{text[:14000]}\n\nReturn the JSON object now."
     out, usage = call_gemini(_EXTRACT_SYSTEM, user, key, use_web_search=False,
                              max_tokens=1500, timeout=timeout)
     cost = estimate_cost(usage)
     cand = extract_json(out)
     if not isinstance(cand, dict) or not (cand.get("name") or "").strip():
-        return None, cost
+        return None, cost, None, []
 
+    # 2. page classification -> the classify: pill (label + staleness signal), the same one the
+    # scraper's discovery gate attaches. Runs only for a page call 1 accepted, so we never pay to
+    # classify a refused page. classify_from_text banks its own cost before parsing.
+    classify_call = lambda system, u: call_gemini(system, u, key, use_web_search=False,
+                                                  max_tokens=800, timeout=timeout)
+    classification = classify_page.classify_from_text(
+        url, text, classify_call, name_hint=cand.get("name", ""), org_hint=cand.get("org", ""))
+    cost += classification.cost or 0.0
+
+    # 3. metadata overlay (refresh's own extraction, on the text we already hold).
     metadata_call = lambda system, u: call_gemini(
         system, u, key, use_web_search=False, timeout=timeout,
         max_tokens=combined_reader._METADATA_MAX_TOKENS, model=combined_reader._METADATA_MODEL)
@@ -329,7 +360,17 @@ def extract_opportunity(url, key, timeout=40, min_delay=5):
         if v is None:
             continue
         cand["cost_detail" if k == "cost" else k] = v
-    return cand, cost
+
+    # 4. embedding dedupe hint — cosine nearest in the catalog dedupe_vector index. Uses the row's
+    # own fields representation (default_representation), the SAME text the index was built from, so
+    # a hit means the same program at a URL url_dedupe's name/URL match could not see.
+    dup_hints = []
+    if index:
+        rep = combined_reader.default_representation(cand, text)
+        embed_fn = lambda t: embed_common.embed_text(t, key, timeout=timeout or 60)
+        dup_hints, dcost = combined_reader.dedup_hint(rep, embed_fn, index)
+        cost += dcost
+    return cand, cost, classification, dup_hints
 
 
 def discover(hub_url, off_domain=False, timeout=url_repair.DEFAULT_TIMEOUT, recurse=True):
@@ -751,6 +792,16 @@ def main():
     }, service_key)
     run_id = run_row["id"] if run_row else None
 
+    # The catalog dedupe_vector index (active rows only — only active rows carry a vector, written
+    # at activation) powers the SAME embedding dedupe hint the scraper attaches. Read once, in
+    # process; a missing column / no embeddings degrades to an empty index and the hint is simply
+    # off (no exception), exactly like the scraper's gate. gate_by_id enriches a hint with the
+    # survivor's name/url for the queue back-link.
+    gate_index = dedupe_embed_store.fetch_dedupe_index(supabase_url, service_key)
+    gate_by_id = {r["id"]: r for r in (existing or []) if r.get("id")}
+    print(f"[OK] Discovery gate ON (M9): classify pill + embedding dedupe per extracted row; "
+          f"dedupe index holds {len(gate_index)} embedded row(s).")
+
     # Bank the classifier spend up front so an exception in extraction cannot discard what SELECT
     # already paid — the same per-attempt banking the two-phase agents use.
     rows, review_by_id, cost, errors = [], {}, select_cost, 0
@@ -771,8 +822,9 @@ def main():
                 break
             tried += 1
             try:
-                cand, c = extract_opportunity(u, gemini_key, timeout=args.timeout,
-                                              min_delay=args.min_delay)
+                cand, c, classification, dup_hints = extract_opportunity(
+                    u, gemini_key, index=gate_index, timeout=args.timeout,
+                    min_delay=args.min_delay)
                 cost += c
             except Exception as e:
                 errors += 1
@@ -810,6 +862,14 @@ def main():
                 flags.append(FLAG_LOW_VALUE)
             if cand.get("type") not in VALID_TYPES:
                 flags.append(FLAG_NO_TYPE)
+            # The classify pill — the ONE thing that now makes a hub-mined row indistinguishable
+            # from a scraper row in the review queue. Same `classify:` prefix, same string
+            # (classify_page.Classification.flag()), so the console's flag_class() reads it the
+            # same way and renders the same pill, staleness included. upsert (not append) so a
+            # later change here can never leave two classify pills on one row.
+            if classification and classification.flag():
+                flags = queue_flags.upsert_flag(flags, queue_flags.CLASSIFY_PREFIX,
+                                                classification.flag())
             # fresh_candidates already dropped every EXACT-URL catalog match before we paid to
             # extract, so the risk that remains is the SAME program at a DIFFERENT URL (the
             # 2026-08-28 audit's Cut 2 — a rename, a second departmental path, a slug change).
@@ -823,6 +883,11 @@ def main():
                               "url": _exact.get("url"),
                               "reason": "identical URL and matching name",
                               "confidence": "strong"}] + dup_cands
+            # Merge the embedding dedupe hints (dedupe_vector cosine) on top of url_dedupe's
+            # name/URL hints, via the SAME helper the scraper uses — so both sources produce the
+            # same `dup_candidates` shape and the same queue back-links. Catches the twin at a
+            # DIFFERENT URL that a name/URL match cannot see. A no-op when the index is empty.
+            dup_cands = gate_dup_candidates(dup_hints, gate_by_id, dup_cands)
             review_by_id[row["id"]] = {"moderation_status": "pending_review",
                                        "dup_candidates": (dup_cands or None),
                                        "quality_flags": flags or None}

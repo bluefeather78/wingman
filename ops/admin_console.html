@@ -544,9 +544,9 @@ tr.disabled-seed { opacity: .48; }
       </div>
       <div class="card-body">
         <p style="margin:0 0 4px;color:var(--text-2);font-size:13px;max-width:74ch">
-          There are two ways to discover candidates. They end up in the same place, but one
-          arrives pre-checked and the other needs a short catch-up before it&rsquo;s ready to
-          review.
+          There are two ways to discover candidates. They end up in the same place, and as of
+          2026-09-02 both arrive <strong>pre-checked</strong> &mdash; classified, enriched, and
+          dedupe-hinted &mdash; so either is ready to review the moment it lands.
         </p>
         <div class="gsteps">
           <div class="gstep"><div class="dot">1</div><div>
@@ -561,18 +561,23 @@ tr.disabled-seed { opacity: .48; }
           <div class="gstep"><div class="dot">2</div><div>
             <h3>&hellip;or run Mine Hub Pages <span class="pill warn">Paid</span></h3>
             <p>Leave the URL blank and set &ldquo;take N from the discovery queue&rdquo; to work
-              through institution hub pages already found. These rows arrive URL-deduped and
-              filled in, but they bypass the classify/dedupe checks the Scraper runs
-              automatically &mdash; treat this as the start of a slightly longer path, not a
-              shortcut.</p>
+              through institution hub pages already found (see <em>How hub leads are found</em>
+              below). As of 2026-09-02 a page that clears its own refusal check runs the
+              <strong>full Scraper gate</strong> &mdash; the same refresh_opportunities extraction
+              for the fields, the classify label, and the embedding-dedupe check &mdash; so a
+              hub-mined row now arrives just as richly filled <em>and</em> just as labelled as a
+              Scraper row, with nothing separate to run afterward.</p>
             <span class="breadcrumb">Run &rarr; New Opportunities &rarr; Mine Hub Pages</span>
           </div></div>
           <div class="gstep"><div class="dot">3</div><div>
-            <h3>Catch up hub-mined rows: Classify, then Dedupe <span class="pill warn">Paid, cheap</span></h3>
-            <p>Only needed after mining, never after a Scraper run. Classify tags each row as
-              program / hub / none / stale; Dedupe checks it against the embedding index for
-              near-duplicates. Tick &ldquo;only rows already classified&rdquo; on the Dedupe step
-              so it doesn&rsquo;t re-pay to re-check rows the Scraper already handled.</p>
+            <h3>Catch up OLD rows: Classify, then Dedupe <span class="pill warn">Paid, cheap</span></h3>
+            <p><em>No longer part of the normal flow.</em> Since 2026-09-02 both the Scraper and the
+              Hub Miner classify and dedupe every row inline (steps 1&ndash;2), so a freshly-mined
+              row already has its label and its dedupe back-links. These queue tools stay only to
+              catch up rows queued before that date, or to force a re-check by hand. Classify tags a
+              row program / hub / none / stale; Dedupe checks it against the catalog vectors &mdash;
+              a comparison only, nothing here writes a vector. Tick &ldquo;only rows already
+              classified&rdquo; on Dedupe so it doesn&rsquo;t re-pay for rows already handled.</p>
             <span class="breadcrumb">Run &rarr; New Opportunities &rarr; New Opportunity Scout &rarr; Queue tools &rarr; Classify / Dedupe</span>
           </div></div>
           <div class="gstep"><div class="dot">4</div><div>
@@ -594,10 +599,65 @@ tr.disabled-seed { opacity: .48; }
         </div>
         <div class="notice info" style="margin-top:16px">
           <strong>What a real run cost, measured:</strong> a 5-angle Scraper run in Observe mode
-          turned 94 candidates into 21 queued rows for $0.4552. Classifying a 279-row queue cost
-          $0.4631 (about $0.0017/row); deduping that same queue cost $0.0036. Triage and Activate
-          cost nothing.
+          turned 94 candidates into 21 queued rows for $0.4552. Because both agents now classify and
+          dedupe inline, the separate Classify/Dedupe queue passes are only for legacy rows (for
+          reference: ~$0.0017/row, and $0.0036 for a whole queue). A page the Hub Miner accepts now
+          runs the full gate &mdash; four short no-search calls (refusal + state, classify, metadata,
+          embedding) &mdash; at roughly ~$0.004/accepted page; a page it refuses pays for nothing
+          after the first call. Triage and Activate cost nothing.
         </div>
+        <div class="notice" style="margin-top:12px">
+          <strong>How hub leads are found (free):</strong> two blind spots, two finders, one queue.
+          <em>The router</em> spots a round-up because it links <em>outward</em> &mdash; a page
+          linking &ge; 6 distinct other sites is a listicle, so its programs are on those sites and
+          it is mined off-domain. That is blind to a university&rsquo;s <em>own</em> pre-college
+          index, which links its programs on its own domain. <em>Walk-up</em>
+          (<span class="mono">walk_up_hubs.py</span>) fills that half: starting from a program the
+          catalog already trusts, it fetches the page&rsquo;s parent URL and asks one question
+          &mdash; does the parent link <em>back</em> to the child? If yes, the parent is proven to
+          be that program&rsquo;s index (never guessed from the URL shape) and is queued as a
+          same-domain hub lead. It never walks up to a bare domain. The lead carries which
+          <em>direction</em> to mine, because mining a same-domain index off-domain (or vice-versa)
+          follows exactly the links that did not qualify it.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>The two catalog embeddings</h2>
+        <div class="spacer"></div>
+        <div class="hint">When each vector is written &mdash; and by what</div>
+      </div>
+      <div class="card-body">
+        <p style="margin:0 0 10px;color:var(--text-2);font-size:13px;max-width:74ch">
+          Every active catalog row carries <strong>two</strong> embedding vectors in the database
+          (they used to be a <span class="mono">catalog_embeddings.jsonl</span> sidecar, which read
+          empty on a fresh checkout). They are a <strong>different vector for a different job and
+          never mix:</strong>
+        </p>
+        <div class="flow-row" style="margin:0 0 12px">
+          <div class="flow-chip"><span class="mono">dedupe_vector</span> &middot; duplicate detection</div>
+          <div class="flow-chip"><span class="mono">match_vector</span> &middot; Fresh Finds recall</div>
+        </div>
+        <p style="margin:0 0 6px;color:var(--text-2);font-size:13px;max-width:74ch">
+          Each is <strong>written in exactly two moments</strong>, and nothing else ever writes one:
+        </p>
+        <ul style="margin:0 0 12px;padding-left:20px;color:var(--text-2);font-size:13px;max-width:74ch">
+          <li>the moment a person <strong>Activates</strong> a row (both vectors, together);</li>
+          <li>when a <strong>Metadata Refresh changes a field the vector depends on</strong> &mdash;
+            hash-gated, so only a genuinely-changed row re-embeds, and only the vector whose fields
+            moved.</li>
+        </ul>
+        <p style="margin:0;color:var(--text-2);font-size:13px;max-width:74ch">
+          A row is never embedded while it sits pending &mdash; its vectors appear the instant it
+          goes live. Everything else only <strong>reads</strong>: the Scraper and Hub Miner compare a
+          new candidate against <span class="mono">dedupe_vector</span>; Fresh Finds compares a
+          student against <span class="mono">match_vector</span>; neither writes. Two one-off backfill
+          scripts (<span class="mono">build_catalog_embeddings.py</span> for dedupe,
+          <span class="mono">backfill_match_vectors.py</span> for match) exist to catch up rows
+          activated before this &mdash; the Health tab shows both coverages.
+        </p>
       </div>
     </div>
 
@@ -616,7 +676,9 @@ tr.disabled-seed { opacity: .48; }
           <div class="gjob"><div class="top"><h3>Metadata Refresh</h3><span class="pill warn">Paid</span></div>
             <div class="script">refresh_opportunities.py</div>
             <p>Re-checks name, org, summary, eligibility and pricing. Never touches the URL
-              &mdash; that&rsquo;s Link Health&rsquo;s job.</p>
+              &mdash; that&rsquo;s Link Health&rsquo;s job. When a change moves a field an embedding
+              depends on, it <strong>re-embeds that row on the spot</strong> (both vectors,
+              hash-gated), so the vectors never drift behind the facts.</p>
             <div class="cadence"><b>Cadence:</b> after activating a batch, or periodically</div></div>
           <div class="gjob"><div class="top"><h3>Org Reviews</h3><span class="pill warn">Paid</span></div>
             <div class="script">check_reviews.py</div>

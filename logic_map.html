@@ -1,0 +1,869 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Catalog Control Room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --bg:#F6F4EE;
+    --surface:#FFFFFF;
+    --surface-2:#EFECE2;
+    --ink:#1E2530;
+    --ink-soft:#57616F;
+    --line:#DAD5C8;
+    --accent:#2B5C82;
+    --accent-soft:#DCE7EE;
+    --shadow: 0 1px 2px rgba(30,37,48,0.06), 0 8px 24px rgba(30,37,48,0.06);
+
+    --paid-fg:#ffffff; --paid-bg:#B8791A;
+    --free-fg:#ffffff; --free-bg:#2F7D5A;
+    --manual-fg:#ffffff; --manual-bg:#626C7A;
+    --auto-fg:#ffffff;  --auto-bg:#2B5C82;
+  }
+
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#12161C;
+      --surface:#1A2029;
+      --surface-2:#212833;
+      --ink:#E8E5DD;
+      --ink-soft:#A6ADB8;
+      --line:#2B323C;
+      --accent:#7FB2D9;
+      --accent-soft:#20303D;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 28px rgba(0,0,0,0.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#12161C;
+    --surface:#1A2029;
+    --surface-2:#212833;
+    --ink:#E8E5DD;
+    --ink-soft:#A6ADB8;
+    --line:#2B323C;
+    --accent:#7FB2D9;
+    --accent-soft:#20303D;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 28px rgba(0,0,0,0.35);
+  }
+
+  *{ box-sizing:border-box; }
+  html{ -webkit-text-size-adjust:100%; }
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size:17px;
+    line-height:1.6;
+  }
+  ::selection{ background:var(--accent-soft); }
+
+  h1,h2,h3, .mono, .eyebrow, .badge, nav.jump, table, .path-label{
+    font-family:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  }
+  code, .figref, .cost, .breadcrumb, .cadence-cell.num{
+    font-family:"IBM Plex Mono","SFMono-Regular",Consolas,monospace;
+  }
+
+  .wrap{ max-width: 920px; margin:0 auto; padding: 0 24px 96px; }
+
+  /* ---------- header ---------- */
+  header.top{
+    border-bottom:1px solid var(--line);
+    background:var(--surface);
+  }
+  header.top .inner{ max-width:920px; margin:0 auto; padding:40px 24px 28px; }
+  .eyebrow{
+    font-size:12px; font-weight:600; letter-spacing:.11em; text-transform:uppercase;
+    color:var(--accent); margin:0 0 10px;
+  }
+  h1{
+    font-size: clamp(28px, 4vw, 40px);
+    line-height:1.1; margin:0 0 12px; font-weight:700;
+    text-wrap:balance;
+    letter-spacing:-0.01em;
+  }
+  .dek{
+    margin:0; color:var(--ink-soft); font-size:17px; max-width:62ch;
+    font-family:"Source Serif 4", serif;
+  }
+
+  /* legend */
+  .legend{
+    display:flex; flex-wrap:wrap; gap:10px 22px; margin-top:22px;
+  }
+  .legend-item{ display:flex; align-items:center; gap:8px; font-size:13px; color:var(--ink-soft); }
+  .badge{
+    display:inline-flex; align-items:center; justify-content:center;
+    font-size:10.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase;
+    padding:3px 9px; border-radius:99px; color:#fff; white-space:nowrap;
+  }
+  .badge.paid{ background:var(--paid-bg); }
+  .badge.free{ background:var(--free-bg); }
+  .badge.manual{ background:var(--manual-bg); }
+  .badge.auto{ background:var(--auto-bg); }
+
+  /* jump nav */
+  nav.jump{
+    position:sticky; top:0; z-index:5;
+    background:var(--bg);
+    border-bottom:1px solid var(--line);
+  }
+  nav.jump .inner{
+    max-width:920px; margin:0 auto; padding:10px 24px;
+    display:flex; gap:20px; overflow-x:auto;
+  }
+  nav.jump a{
+    color:var(--ink-soft); text-decoration:none; font-size:13px; font-weight:500;
+    white-space:nowrap; padding:4px 2px; border-bottom:2px solid transparent;
+  }
+  nav.jump a:hover, nav.jump a:focus-visible{ color:var(--ink); border-bottom-color:var(--accent); }
+
+  /* ---------- sections ---------- */
+  section{ padding-top:56px; scroll-margin-top:52px; }
+  section > .head{ margin-bottom:22px; }
+  .num{
+    font-family:"IBM Plex Mono",monospace; font-size:13px; color:var(--accent);
+    letter-spacing:.08em;
+  }
+  h2{ font-size:26px; margin:6px 0 10px; font-weight:700; text-wrap:balance; }
+  .lede{ color:var(--ink-soft); max-width:66ch; margin:0; }
+
+  p{ max-width:66ch; }
+  .prose{ max-width:66ch; }
+
+  /* ---------- diagram panel ---------- */
+  figure.panel{
+    margin: 28px 0 8px;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:3px;
+    box-shadow:var(--shadow);
+    overflow:hidden;
+  }
+  figure.panel .diagram-head{
+    display:flex; align-items:baseline; justify-content:space-between;
+    gap:12px; padding:14px 18px 0;
+  }
+  figure.panel .figref{
+    font-size:11px; color:var(--accent); letter-spacing:.08em; font-weight:600;
+  }
+  .diagram-holder{
+    padding: 6px 12px 10px;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 28px 28px;
+    background-position: -1px -1px;
+    opacity:1;
+  }
+  figure.panel svg{ display:block; width:100%; height:auto; }
+  figure.panel figcaption{
+    padding:12px 18px 18px;
+    font-size:14px; color:var(--ink-soft);
+    border-top:1px solid var(--line);
+    font-family:"Source Serif 4", serif;
+  }
+  figure.panel figcaption strong{ color:var(--ink); font-weight:600; }
+
+  svg text{ font-family:"IBM Plex Sans", sans-serif; }
+  svg .box-title{ font-size:14px; font-weight:600; fill:currentColor; }
+  svg .box-sub{ font-size:10.5px; fill:currentColor; opacity:.72; }
+  svg .path-eyebrow{ font-size:11px; font-weight:600; letter-spacing:.09em; fill:currentColor; opacity:.6; }
+  svg .arrow-label{ font-size:11px; fill:currentColor; opacity:.75; }
+  svg .badge-pill text{ font-size:10px; font-weight:700; letter-spacing:.04em; }
+
+  /* ---------- step cards ---------- */
+  .steps{ display:flex; flex-direction:column; gap:0; margin-top:28px; }
+  .step{
+    display:grid; grid-template-columns: 30px 1fr; gap:14px;
+    padding: 16px 0; border-top:1px solid var(--line);
+  }
+  .step:last-child{ border-bottom:1px solid var(--line); }
+  .step .dot{
+    width:28px; height:28px; border-radius:50%;
+    border:1.5px solid var(--accent); color:var(--accent);
+    display:flex; align-items:center; justify-content:center;
+    font-family:"IBM Plex Mono",monospace; font-size:12px; font-weight:600;
+    margin-top:2px;
+  }
+  .step .body h3{
+    font-size:16px; margin:0 0 4px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  }
+  .step .body p{ margin:6px 0 0; color:var(--ink-soft); font-size:15.5px; }
+  .breadcrumb{
+    display:inline-block; font-size:12.5px; color:var(--accent);
+    background:var(--accent-soft); padding:3px 8px; border-radius:3px; margin-top:8px;
+  }
+
+  /* ---------- radial cards (track B) ---------- */
+  .job-grid{
+    display:grid; grid-template-columns: repeat(auto-fit, minmax(260px,1fr));
+    gap:14px; margin-top:26px;
+  }
+  .job-card{
+    background:var(--surface); border:1px solid var(--line); border-radius:3px;
+    padding:16px 16px 15px;
+  }
+  .job-card .top{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+  .job-card h3{ font-size:15.5px; margin:0; font-family:"IBM Plex Sans"; font-weight:600; }
+  .job-card .script{ font-size:11.5px; color:var(--ink-soft); margin:3px 0 10px; }
+  .job-card p{ font-size:14.5px; color:var(--ink-soft); margin:0 0 10px; max-width:none; }
+  .job-card .meta{ display:flex; flex-wrap:wrap; gap:8px 14px; font-size:12.5px; color:var(--ink-soft); border-top:1px dashed var(--line); padding-top:10px; }
+  .job-card .meta b{ color:var(--ink); font-weight:600; }
+
+  /* ---------- aside / callout ---------- */
+  aside.note{
+    margin:22px 0; padding:16px 18px; border-left:3px solid var(--accent);
+    background:var(--accent-soft); border-radius:0 3px 3px 0; font-size:14.5px;
+  }
+  aside.note .cost{ color:var(--ink); }
+  aside.note ul{ margin:8px 0 0; padding-left:20px; }
+  aside.note li{ margin:3px 0; }
+  aside.note.warn{ border-left-color:#B8791A; background:#F7ECD9; }
+  :root[data-theme="dark"] aside.note.warn, @media (prefers-color-scheme: dark){ }
+
+  /* ---------- table ---------- */
+  .table-scroll{ overflow-x:auto; margin-top:22px; border:1px solid var(--line); border-radius:3px; }
+  table{ border-collapse:collapse; width:100%; min-width:640px; font-size:14px; background:var(--surface); }
+  thead th{
+    text-align:left; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--ink-soft); font-weight:600; padding:10px 14px; background:var(--surface-2);
+    border-bottom:1px solid var(--line); white-space:nowrap;
+  }
+  tbody td{ padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.job{ font-weight:600; }
+  td.script{ color:var(--ink-soft); font-size:12.5px; }
+
+  /* ---------- rules ---------- */
+  .rules{ display:grid; gap:12px; margin-top:24px; }
+  .rule{
+    display:grid; grid-template-columns:auto 1fr; gap:14px; align-items:start;
+    padding:14px 16px; background:var(--surface); border:1px solid var(--line); border-radius:3px;
+  }
+  .rule .mark{ font-size:20px; line-height:1; margin-top:1px; }
+  .rule h3{ font-size:15px; margin:0 0 3px; font-family:"IBM Plex Sans"; font-weight:600; }
+  .rule p{ margin:0; font-size:14.5px; color:var(--ink-soft); max-width:60ch; }
+
+  footer{
+    margin-top:64px; padding-top:20px; border-top:1px solid var(--line);
+    font-size:12.5px; color:var(--ink-soft);
+  }
+
+  @media (max-width:640px){
+    .step{ grid-template-columns: 24px 1fr; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="inner">
+    <p class="eyebrow">Highschool Wingman &middot; Admin Console</p>
+    <h1>Catalog Control Room</h1>
+    <p class="dek">A field guide for the person running the admin console: how to bring in new
+      opportunities and how to keep the ones already live accurate — without spending money you
+      didn't mean to.</p>
+
+    <div class="legend" aria-label="Badge legend">
+      <span class="legend-item"><span class="badge paid">Paid</span> costs API money — check the preview first</span>
+      <span class="legend-item"><span class="badge free">Free</span> no API cost, run it whenever</span>
+      <span class="legend-item"><span class="badge auto">Auto</span> runs by itself, nothing to click</span>
+      <span class="legend-item"><span class="badge manual">Manual</span> a click only you can make</span>
+    </div>
+  </div>
+</header>
+
+<nav class="jump" aria-label="Section navigation">
+  <div class="inner">
+    <a href="#overview">Overview</a>
+    <a href="#new">Add new opportunities</a>
+    <a href="#fresh">Keep it fresh</a>
+    <a href="#rules">Rules to remember</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <section id="overview">
+    <div class="head">
+      <p class="num">01</p>
+      <h2>How the pieces fit together</h2>
+      <p class="lede">Two jobs keep the catalog useful: finding opportunities that aren't in it yet,
+        and making sure the ones already in it are still true. Both funnel through the same review
+        queue and the same live table.</p>
+    </div>
+
+    <figure class="panel">
+      <div class="diagram-head"><span class="figref">FIG. 01 — SYSTEM OVERVIEW</span></div>
+      <div class="diagram-holder">
+        <svg viewBox="0 0 900 280" role="img" aria-label="A new candidate flows from the scraper or hub miner into the review queue, gets activated into the live catalog, and is served to students. Six maintenance jobs separately read the live catalog and write fresh data back into it.">
+          <defs>
+            <marker id="ov-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <!-- main pipeline -->
+          <rect x="10" y="40" width="170" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="95" y="65" text-anchor="middle" class="box-title">Scraper /</text>
+          <text x="95" y="82" text-anchor="middle" class="box-title">Hub Miner</text>
+
+          <rect x="240" y="40" width="170" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="325" y="65" text-anchor="middle" class="box-title">Review</text>
+          <text x="325" y="82" text-anchor="middle" class="box-title">Queue</text>
+
+          <rect x="470" y="40" width="170" height="60" rx="3" fill="currentColor" fill-opacity="0.07" stroke="currentColor" stroke-width="1.6"/>
+          <text x="555" y="65" text-anchor="middle" class="box-title">Live</text>
+          <text x="555" y="82" text-anchor="middle" class="box-title">Catalog</text>
+
+          <rect x="700" y="40" width="170" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="785" y="65" text-anchor="middle" class="box-title">Students</text>
+          <text x="785" y="82" text-anchor="middle" class="box-title">(the app)</text>
+
+          <line x1="180" y1="70" x2="234" y2="70" stroke="currentColor" stroke-width="1.6" marker-end="url(#ov-arrow)"/>
+          <text x="207" y="60" text-anchor="middle" class="arrow-label">finds</text>
+
+          <line x1="410" y1="70" x2="464" y2="70" stroke="currentColor" stroke-width="1.6" marker-end="url(#ov-arrow)"/>
+          <text x="437" y="60" text-anchor="middle" class="arrow-label">activate</text>
+
+          <line x1="640" y1="70" x2="694" y2="70" stroke="currentColor" stroke-width="1.6" marker-end="url(#ov-arrow)"/>
+          <text x="667" y="60" text-anchor="middle" class="arrow-label">serves</text>
+
+          <!-- maintenance loop -->
+          <rect x="440" y="190" width="230" height="60" rx="3" fill="currentColor" fill-opacity="0.045" stroke="currentColor" stroke-width="1.6" stroke-dasharray="4 3"/>
+          <text x="555" y="215" text-anchor="middle" class="box-title">6 Maintenance Jobs</text>
+          <text x="555" y="232" text-anchor="middle" class="box-sub">keep existing rows accurate</text>
+
+          <line x1="505" y1="100" x2="505" y2="184" stroke="currentColor" stroke-width="1.4" marker-end="url(#ov-arrow)"/>
+          <text x="466" y="146" text-anchor="end" class="arrow-label">reads active rows</text>
+
+          <line x1="615" y1="184" x2="615" y2="100" stroke="currentColor" stroke-width="1.4" marker-end="url(#ov-arrow)"/>
+          <text x="654" y="146" text-anchor="start" class="arrow-label">writes fresh facts</text>
+        </svg>
+      </div>
+      <figcaption>A candidate only ever reaches students by passing through the <strong>review
+        queue</strong>, and only a person clicking <strong>Activate</strong> makes that happen. Once
+        live, six independent jobs keep circling back to check and correct what's already there.</figcaption>
+    </figure>
+  </section>
+
+  <section id="new">
+    <div class="head">
+      <p class="num">02</p>
+      <h2>Adding new opportunities</h2>
+      <p class="lede">There are two ways to discover candidates. They end up in the same place, and
+        as of 2026-09-02 both arrive <strong>pre-checked</strong> — classified, enriched, and
+        dedupe-hinted — so either is ready to review the moment it lands.</p>
+    </div>
+
+    <figure class="panel">
+      <div class="diagram-head"><span class="figref">FIG. 02 — DISCOVERY WORKFLOW</span></div>
+      <div class="diagram-holder">
+        <svg viewBox="0 0 900 860" role="img" aria-label="Two paths that now produce identical rows: running the scraper, whose results are automatically classified, enriched, and checked against the catalog dedupe vectors before landing in the queue; or mining hub pages, which as of 2026-09-02 runs the same full gate — deciding the page is a real program, enriching it with refresh_opportunities' own extraction, classifying it, and checking it against the dedupe vectors — so a hub-mined row arrives fully classified and labelled with nothing to run afterward. Both paths converge on triaging the queue for free, then a manual review and activate step.">
+          <defs>
+            <marker id="ta-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <!-- start -->
+          <rect x="290" y="16" width="320" height="56" rx="3" fill="currentColor" fill-opacity="0.07" stroke="currentColor" stroke-width="1.6"/>
+          <text x="450" y="50" text-anchor="middle" class="box-title">Pick a discovery method</text>
+
+          <line x1="450" y1="72" x2="215" y2="122" stroke="currentColor" stroke-width="1.4" marker-end="url(#ta-arrow)"/>
+          <line x1="450" y1="72" x2="705" y2="122" stroke="currentColor" stroke-width="1.4" marker-end="url(#ta-arrow)"/>
+
+          <!-- column headers -->
+          <text x="195" y="112" text-anchor="middle" class="path-eyebrow">PATH 1 · SCRAPER</text>
+          <text x="705" y="112" text-anchor="middle" class="path-eyebrow">PATH 2 · HUB MINER</text>
+
+          <!-- left column -->
+          <rect x="45" y="130" width="300" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="195" y="153" text-anchor="middle" class="box-title">Run the Scraper</text>
+          <g transform="translate(195,172)" class="badge-pill"><rect x="-30" y="-10" width="60" height="18" rx="9" fill="#B8791A"/><text x="0" y="3" text-anchor="middle" fill="#fff">PAID</text></g>
+
+          <line x1="195" y1="190" x2="195" y2="230" stroke="currentColor" stroke-width="1.4" marker-end="url(#ta-arrow)"/>
+
+          <rect x="45" y="236" width="300" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="195" y="257" text-anchor="middle" class="box-title">Auto-gate runs itself</text>
+          <text x="195" y="272" text-anchor="middle" class="box-sub">classify → enrich → embed &amp; check index</text>
+          <g transform="translate(195,282)" class="badge-pill"><rect x="-24" y="-10" width="48" height="18" rx="9" fill="#2B5C82"/><text x="0" y="3" text-anchor="middle" fill="#fff">AUTO</text></g>
+
+          <line x1="195" y1="296" x2="195" y2="336" stroke="currentColor" stroke-width="1.4" marker-end="url(#ta-arrow)"/>
+
+          <rect x="45" y="342" width="300" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="195" y="368" text-anchor="middle" class="box-title">Lands in the queue,</text>
+          <text x="195" y="384" text-anchor="middle" class="box-title">already labelled</text>
+
+          <!-- right column -->
+          <rect x="555" y="130" width="300" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="705" y="153" text-anchor="middle" class="box-title">Run Mine Hub Pages</text>
+          <g transform="translate(705,172)" class="badge-pill"><rect x="-30" y="-10" width="60" height="18" rx="9" fill="#B8791A"/><text x="0" y="3" text-anchor="middle" fill="#fff">PAID</text></g>
+
+          <line x1="705" y1="190" x2="705" y2="230" stroke="currentColor" stroke-width="1.4" marker-end="url(#ta-arrow)"/>
+
+          <rect x="555" y="236" width="300" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="705" y="257" text-anchor="middle" class="box-title">Full gate runs itself</text>
+          <text x="705" y="272" text-anchor="middle" class="box-sub">classify → enrich → embed &amp; check</text>
+          <g transform="translate(705,282)" class="badge-pill"><rect x="-24" y="-10" width="48" height="18" rx="9" fill="#2B5C82"/><text x="0" y="3" text-anchor="middle" fill="#fff">AUTO</text></g>
+
+          <line x1="705" y1="296" x2="705" y2="336" stroke="currentColor" stroke-width="1.4" marker-end="url(#ta-arrow)"/>
+
+          <rect x="555" y="342" width="300" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="705" y="368" text-anchor="middle" class="box-title">Lands in the queue,</text>
+          <text x="705" y="384" text-anchor="middle" class="box-title">already labelled</text>
+
+          <!-- Both paths now converge straight into Triage: the Hub Miner's own gate (2026-09-02)
+               classifies and dedupes inline, so the separate Classify/Dedupe queue steps that used
+               to sit here are gone from the flow (they survive only as a legacy catch-up tool). -->
+          <text x="705" y="470" text-anchor="middle" class="box-sub" fill-opacity="0.7">(the old Classify + Dedupe</text>
+          <text x="705" y="486" text-anchor="middle" class="box-sub" fill-opacity="0.7">queue steps are no longer</text>
+          <text x="705" y="502" text-anchor="middle" class="box-sub" fill-opacity="0.7">needed — done inline above)</text>
+
+          <!-- convergence -->
+          <line x1="195" y1="402" x2="450" y2="662" stroke="currentColor" stroke-width="1.4" marker-end="url(#ta-arrow)"/>
+          <line x1="705" y1="402" x2="450" y2="662" stroke="currentColor" stroke-width="1.4" marker-end="url(#ta-arrow)"/>
+
+          <rect x="70" y="668" width="760" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="450" y="693" text-anchor="middle" class="box-title">Triage Queue — auto-rejects hub / none / stale rows</text>
+          <g transform="translate(450,710)" class="badge-pill"><rect x="-26" y="-9" width="52" height="17" rx="8.5" fill="#2F7D5A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">FREE</text></g>
+
+          <line x1="450" y1="724" x2="450" y2="764" stroke="currentColor" stroke-width="1.6" marker-end="url(#ta-arrow)"/>
+
+          <rect x="70" y="770" width="760" height="64" rx="3" fill="currentColor" fill-opacity="0.07" stroke="currentColor" stroke-width="1.6"/>
+          <text x="450" y="797" text-anchor="middle" class="box-title">Review the rest, then Activate the good ones</text>
+          <g transform="translate(450,816)" class="badge-pill"><rect x="-34" y="-9" width="68" height="17" rx="8.5" fill="#626C7A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">MANUAL</text></g>
+        </svg>
+      </div>
+      <figcaption>Both paths now produce an <strong>identical row</strong>. As of 2026-09-02 the Hub
+        Miner runs the <em>same</em> gate the Scraper does on every page it accepts — reuse of
+        <strong>refresh_opportunities</strong> for the fields, the <strong>classify</strong> label
+        (program / hub / none / stale), and the <strong>embedding-dedupe</strong> check against the
+        catalog vectors — so a row arrives in the queue fully classified and labelled whether it came
+        from the Scraper or the Hub Miner. <strong>Triage</strong> then clears the obvious junk for
+        free, so what's left for you to read is the real candidates.</figcaption>
+    </figure>
+
+    <figure class="panel">
+      <div class="diagram-head"><span class="figref">FIG. 02B — WHERE THE DISCOVERY QUEUE COMES FROM</span></div>
+      <div class="diagram-holder">
+        <svg viewBox="0 0 900 360" role="img" aria-label="Three free feeders fill the discovery lead queue (discovered_leads.jsonl): a paid search run's discarded pages, classified by the router; walk-up starting from a trusted catalog row; and an operator rejecting a round-up in the review queue. Two paid drains empty it: Mine Hub Pages for hub leads and Harvest Names for name leads.">
+          <defs>
+            <marker id="dq-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <!-- feeders (left, all FREE) -->
+          <text x="140" y="24" text-anchor="middle" class="path-eyebrow">FREE FEEDERS</text>
+          <rect x="20" y="34" width="240" height="66" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="140" y="60" text-anchor="middle" class="box-title">A paid search's discards</text>
+          <text x="140" y="78" text-anchor="middle" class="box-sub">~71 pages/run it didn't keep</text>
+          <g transform="translate(140,90)" class="badge-pill"><rect x="-26" y="-9" width="52" height="17" rx="8.5" fill="#2F7D5A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">FREE</text></g>
+
+          <rect x="20" y="140" width="240" height="66" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="140" y="166" text-anchor="middle" class="box-title">Walk-up from a trusted row</text>
+          <text x="140" y="184" text-anchor="middle" class="box-sub">parent must link back</text>
+          <g transform="translate(140,196)" class="badge-pill"><rect x="-26" y="-9" width="52" height="17" rx="8.5" fill="#2F7D5A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">FREE</text></g>
+
+          <rect x="20" y="246" width="240" height="66" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="140" y="272" text-anchor="middle" class="box-title">You reject a round-up</text>
+          <text x="140" y="290" text-anchor="middle" class="box-sub">in the review queue</text>
+          <g transform="translate(140,302)" class="badge-pill"><rect x="-30" y="-9" width="60" height="17" rx="8.5" fill="#626C7A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">MANUAL</text></g>
+
+          <!-- queue (middle) -->
+          <rect x="350" y="120" width="200" height="110" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor" stroke-width="1.8"/>
+          <text x="450" y="162" text-anchor="middle" class="box-title">discovered_leads</text>
+          <text x="450" y="180" text-anchor="middle" class="box-title">.jsonl</text>
+          <text x="450" y="200" text-anchor="middle" class="box-sub">the lead queue</text>
+
+          <line x1="260" y1="67" x2="348" y2="140" stroke="currentColor" stroke-width="1.5" marker-end="url(#dq-arrow)"/>
+          <text x="305" y="92" text-anchor="middle" class="arrow-label">router classifies</text>
+          <line x1="260" y1="173" x2="348" y2="173" stroke="currentColor" stroke-width="1.5" marker-end="url(#dq-arrow)"/>
+          <text x="305" y="164" text-anchor="middle" class="arrow-label">same-domain hub</text>
+          <line x1="260" y1="279" x2="348" y2="210" stroke="currentColor" stroke-width="1.5" marker-end="url(#dq-arrow)"/>
+          <text x="305" y="270" text-anchor="middle" class="arrow-label">confirmed round-up</text>
+
+          <!-- drains (right, PAID) -->
+          <text x="760" y="24" text-anchor="middle" class="path-eyebrow">PAID DRAINS</text>
+          <rect x="640" y="90" width="240" height="66" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="760" y="116" text-anchor="middle" class="box-title">Mine Hub Pages</text>
+          <text x="760" y="134" text-anchor="middle" class="box-sub">hub leads &#8594; program rows</text>
+          <g transform="translate(760,146)" class="badge-pill"><rect x="-30" y="-9" width="60" height="17" rx="8.5" fill="#B8791A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">PAID</text></g>
+
+          <rect x="640" y="196" width="240" height="66" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="760" y="222" text-anchor="middle" class="box-title">Harvest Names</text>
+          <text x="760" y="240" text-anchor="middle" class="box-sub">name leads &#8594; search each</text>
+          <g transform="translate(760,252)" class="badge-pill"><rect x="-30" y="-9" width="60" height="17" rx="8.5" fill="#B8791A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">PAID</text></g>
+
+          <line x1="550" y1="150" x2="638" y2="123" stroke="currentColor" stroke-width="1.5" marker-end="url(#dq-arrow)"/>
+          <text x="595" y="126" text-anchor="middle" class="arrow-label">drain</text>
+          <line x1="550" y1="200" x2="638" y2="229" stroke="currentColor" stroke-width="1.5" marker-end="url(#dq-arrow)"/>
+          <text x="595" y="226" text-anchor="middle" class="arrow-label">drain</text>
+        </svg>
+      </div>
+      <figcaption>&ldquo;Mine Hub Pages&rdquo; (Fig. 02) drains this queue — this is how it fills, and
+        it is nearly all FREE. <strong>The router</strong> (<code>discovered_leads.py</code>) is the
+        largest feeder: a paid search consults ~660 pages and keeps ~126 as programs; the router
+        catches what it <em>discards</em> and, by plain HTTP + a title check, sorts each — a page that
+        <strong>links programs on &ge; 6 distinct off-domain sites</strong> becomes a <em>hub</em> lead
+        (mined off-domain), one that <strong>names programs in prose</strong> becomes a
+        <em>name-harvest</em> lead. It never uses a model, and distinct <em>domains</em> (not link
+        count) is what stops a jobs page that links 10 sites from passing. <strong>Walk-up</strong>
+        adds same-domain hub leads from rows the catalog already trusts, and a <strong>round-up you
+        reject</strong> in the queue is captured too. The <em>scope</em> (off-domain vs same-domain)
+        travels on each lead, because that is the one thing only whatever qualified the page knows —
+        mining it the wrong way follows exactly the links that did <em>not</em> qualify it. Capturing a
+        lead is free; draining it is paid — keeping those apart is what lets one approved search stay
+        one expense instead of quietly becoming three.</figcaption>
+    </figure>
+
+    <div class="steps">
+      <div class="step">
+        <div class="dot">1</div>
+        <div class="body">
+          <h3>Run the Scraper <span class="badge paid">Paid</span></h3>
+          <p>Pick search angles (a general national sweep, a Seattle-area sweep, or one specific
+            angle), and set the gate mode to <strong>Observe</strong> — it keeps every result in the
+            queue, labelled, instead of quietly dropping or diverting anything. Cost scales with how
+            much the model has to search; a 5-angle run has cost roughly $0.005–$0.05 per candidate
+            found.</p>
+          <span class="breadcrumb">Console → Run → New Opportunities → Scraper</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="dot">2</div>
+        <div class="body">
+          <h3>…or run Mine Hub Pages <span class="badge paid">Paid</span></h3>
+          <p>Leave the URL blank and set "take N from the discovery queue" to work through
+            institution hub pages already found (see <em>How hub leads are found</em> below). As of
+            2026-09-02, a page that clears its own refusal check runs the <strong>full Scraper
+            gate</strong> — the same <strong>refresh_opportunities</strong> extraction for the fields,
+            the <strong>classify</strong> label, and the <strong>embedding-dedupe</strong> check — so a
+            hub-mined row now arrives just as richly filled <em>and</em> just as labelled as a Scraper
+            row. Nothing separate to run afterward.</p>
+          <span class="breadcrumb">Console → Run → New Opportunities → Mine Hub Pages</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="dot">3</div>
+        <div class="body">
+          <h3>Catch up OLD rows: Classify, then Dedupe <span class="badge paid">Paid, cheap</span></h3>
+          <p><em>No longer part of the normal flow</em> — since 2026-09-02 both the Scraper and the
+            Hub Miner classify and dedupe every row inline (steps 1–2), so a freshly-mined row already
+            has its label and its dedupe back-links. These queue tools stay only to <strong>catch up
+            rows queued before that date</strong>, or to force a re-check by hand. Classify tags a row
+            program / hub / none / stale; Dedupe checks each row's fields against the catalog vectors
+            (see Fig. 03) — a comparison only, nothing here writes a vector. Tick <strong>"only rows
+            already classified"</strong> on Dedupe so it doesn't re-pay for rows already handled.</p>
+          <span class="breadcrumb">Console → Run → New Opportunities → Queue tools → Classify / Dedupe</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="dot">4</div>
+        <div class="body">
+          <h3>Triage the queue <span class="badge free">Free</span></h3>
+          <p>Auto-rejects anything the classifier already called a hub page, not-an-opportunity, or
+            stale — reversibly, and for no cost. Run it right before you sit down to review, so you
+            aren't reading rows a machine can already rule out.</p>
+          <span class="breadcrumb">Console → Run → New Opportunities → Queue tools → Triage</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="dot">5</div>
+        <div class="body">
+          <h3>Review and Activate <span class="badge manual">Manual</span></h3>
+          <p>Open the Review Queue tab. Read the classify pill, the dedupe back-links, and the
+            quality flags on what's left, then <strong>Activate</strong> the ones worth keeping. This
+            is the only step in the whole document that makes a row visible to a student — nothing
+            upstream of it ever does that on its own.</p>
+          <span class="breadcrumb">Console → Review Queue</span>
+        </div>
+      </div>
+    </div>
+
+    <aside class="note">
+      <strong>What a real run cost, measured:</strong> a 5-angle Scraper run in Observe mode turned
+      94 candidates into 21 queued rows for <span class="cost">$0.4552</span>. Because both agents now
+      classify and dedupe inline, the separate Classify/Dedupe queue passes are only for legacy rows;
+      for reference they cost about $0.0017/row and <span class="cost">$0.0036</span> for a whole
+      queue. Triage and Activate cost nothing. A page the Hub Miner accepts now runs the full gate —
+      four short no-search calls (refusal + <code>state</code>, classify, metadata, embedding) — at
+      roughly <span class="cost">~$0.004</span>/accepted page (measured $0.0037 on one live page); a
+      page it refuses pays for nothing after the first call.
+    </aside>
+    <aside class="note">
+      <strong>How hub leads are found (free):</strong> two blind spots, two finders, one queue.
+      <strong>The router</strong> spots a <em>round-up</em> because it links <em>outward</em> — a page
+      linking ≥ 6 distinct other sites is almost always a listicle, so its programs are on those other
+      sites and it is mined <em>off-domain</em>. That is blind to a university's <em>own</em>
+      pre-college index, which links its programs on its <em>own</em> domain and looks like every other
+      page on the site. <strong>Walk-up</strong> (<code>walk_up_hubs.py</code>, free) fills that half:
+      starting from a program the catalog <em>already trusts</em>, it fetches the page's parent URL and
+      asks one question — <em>does the parent link back to the child?</em> If yes, the parent is proven
+      to be that program's index (never guessed from the URL's shape), and it is queued as a
+      <em>same-domain</em> hub lead. It never walks up to a bare domain (a homepage is a site, not an
+      index). Both finders write to the same discovery queue step 2 drains; the lead carries which
+      <em>direction</em> to mine, because mining a same-domain index off-domain (or vice-versa) follows
+      exactly the links that did <em>not</em> qualify it.
+    </aside>
+
+    <figure class="panel">
+      <div class="diagram-head"><span class="figref">FIG. 03 — THE TWO CATALOG EMBEDDINGS</span></div>
+      <div class="diagram-holder">
+        <svg viewBox="0 0 900 320" role="img" aria-label="The catalog carries two embedding vectors per row in the database: dedupe_vector and match_vector. Each is written in only two moments — when a row is activated, and when a metadata refresh changes a field it depends on. Readers (the Scraper and Hub Miner for dedupe, Fresh Finds recall for match) only compare against the vectors; they never write.">
+          <defs>
+            <marker id="ei-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <!-- store -->
+          <rect x="370" y="110" width="160" height="100" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor" stroke-width="1.8"/>
+          <text x="450" y="148" text-anchor="middle" class="box-title">opportunities row</text>
+          <text x="450" y="166" text-anchor="middle" class="box-title">dedupe_vector · match_vector</text>
+          <text x="450" y="184" text-anchor="middle" class="box-sub">two vectors, in the catalog DB</text>
+
+          <!-- writers (left) -->
+          <rect x="40" y="40" width="260" height="64" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="170" y="66" text-anchor="middle" class="box-title">Activate a row</text>
+          <g transform="translate(170,86)" class="badge-pill"><rect x="-34" y="-9" width="68" height="17" rx="8.5" fill="#626C7A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">MANUAL</text></g>
+
+          <rect x="40" y="216" width="260" height="64" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="170" y="240" text-anchor="middle" class="box-title">Metadata Refresh</text>
+          <text x="170" y="255" text-anchor="middle" class="box-sub">when it changes a field</text>
+          <g transform="translate(170,266)" class="badge-pill"><rect x="-30" y="-9" width="60" height="17" rx="8.5" fill="#B8791A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">PAID</text></g>
+
+          <line x1="300" y1="72" x2="368" y2="136" stroke="currentColor" stroke-width="1.6" marker-end="url(#ei-arrow)"/>
+          <text x="335" y="92" text-anchor="middle" class="arrow-label">writes both vectors</text>
+
+          <line x1="300" y1="248" x2="368" y2="184" stroke="currentColor" stroke-width="1.6" marker-end="url(#ei-arrow)"/>
+          <text x="335" y="238" text-anchor="middle" class="arrow-label">re-embeds the row</text>
+
+          <!-- readers (right) -->
+          <rect x="600" y="40" width="260" height="64" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="730" y="60" text-anchor="middle" class="box-title">Scraper + Hub Miner</text>
+          <text x="730" y="75" text-anchor="middle" class="box-sub">dedupe_vector</text>
+          <g transform="translate(730,88)" class="badge-pill"><rect x="-24" y="-9" width="48" height="17" rx="8.5" fill="#2B5C82"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">AUTO</text></g>
+
+          <rect x="600" y="216" width="260" height="64" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="730" y="240" text-anchor="middle" class="box-title">Fresh Finds recall</text>
+          <text x="730" y="255" text-anchor="middle" class="box-sub">match_vector</text>
+          <g transform="translate(730,266)" class="badge-pill"><rect x="-24" y="-9" width="48" height="17" rx="8.5" fill="#2B5C82"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">AUTO</text></g>
+
+          <line x1="600" y1="72" x2="532" y2="136" stroke="currentColor" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ei-arrow)"/>
+          <text x="565" y="92" text-anchor="middle" class="arrow-label">reads —</text>
+          <text x="565" y="104" text-anchor="middle" class="arrow-label">nothing saved</text>
+
+          <line x1="600" y1="248" x2="532" y2="184" stroke="currentColor" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ei-arrow)"/>
+          <text x="565" y="216" text-anchor="middle" class="arrow-label">reads —</text>
+          <text x="565" y="228" text-anchor="middle" class="arrow-label">nothing saved</text>
+        </svg>
+      </div>
+      <figcaption>Each vector lives on the catalog row <em>in the database</em> now (they used to be a
+        <code>catalog_embeddings.jsonl</code> sidecar, which read empty on a fresh checkout). Both are
+        WRITTEN in exactly two moments — solid arrows — the moment a person <strong>activates</strong> a
+        row (both vectors, together), and when a <strong>Metadata Refresh changes a field the vector
+        depends on</strong> (hash-gated, so only a genuinely-changed row re-embeds, and only the vectors
+        whose fields moved). A row is never embedded while it sits pending; its vectors appear the
+        instant it goes live. Two one-off backfill scripts exist to catch up rows activated before this
+        (<code>build_catalog_embeddings.py</code> for dedupe, <code>backfill_match_vectors.py</code> for
+        match). The dashed arrows only READ — the Scraper and Hub Miner compare a new candidate against
+        <code>dedupe_vector</code>; Fresh Finds compares a student against <code>match_vector</code> —
+        neither ever writes. <strong>The two vectors never mix:</strong> different fields, different job,
+        computed and compared entirely separately.</figcaption>
+    </figure>
+  </section>
+
+  <section id="fresh">
+    <div class="head">
+      <p class="num">03</p>
+      <h2>Keeping the catalog fresh</h2>
+      <p class="lede">Six jobs quietly re-check what's already live. They don't run in sequence —
+        each reads the same table and corrects a different slice of it, on its own schedule.</p>
+    </div>
+
+    <figure class="panel">
+      <div class="diagram-head"><span class="figref">FIG. 04 — MAINTENANCE JOBS</span></div>
+      <div class="diagram-holder">
+        <svg viewBox="0 0 900 700" role="img" aria-label="The live catalog sits in the middle. Three paid batch jobs above it — Metadata Refresh, Org Reviews, and Action Items — feed into it through a shared trunk line. Three free or automatic jobs below it — Link Health, Mailing Lists, and Deadlines — feed into it the same way.">
+          <defs>
+            <marker id="tb-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <!-- top group boxes -->
+          <rect x="40" y="40" width="220" height="64" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="150" y="66" text-anchor="middle" class="box-title">Metadata Refresh</text>
+          <g transform="translate(150,86)" class="badge-pill"><rect x="-30" y="-10" width="60" height="18" rx="9" fill="#B8791A"/><text x="0" y="3" text-anchor="middle" fill="#fff">PAID</text></g>
+
+          <rect x="340" y="40" width="220" height="64" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="450" y="66" text-anchor="middle" class="box-title">Org Reviews</text>
+          <g transform="translate(450,86)" class="badge-pill"><rect x="-30" y="-10" width="60" height="18" rx="9" fill="#B8791A"/><text x="0" y="3" text-anchor="middle" fill="#fff">PAID</text></g>
+
+          <rect x="640" y="40" width="220" height="64" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="750" y="66" text-anchor="middle" class="box-title">Action Items</text>
+          <g transform="translate(750,86)" class="badge-pill"><rect x="-30" y="-10" width="60" height="18" rx="9" fill="#B8791A"/><text x="0" y="3" text-anchor="middle" fill="#fff">PAID</text></g>
+
+          <!-- top branches + bus + trunk -->
+          <line x1="150" y1="104" x2="150" y2="140" stroke="currentColor" stroke-width="1.3"/>
+          <line x1="450" y1="104" x2="450" y2="140" stroke="currentColor" stroke-width="1.3"/>
+          <line x1="750" y1="104" x2="750" y2="140" stroke="currentColor" stroke-width="1.3"/>
+          <line x1="150" y1="140" x2="750" y2="140" stroke="currentColor" stroke-width="1.3"/>
+          <line x1="450" y1="140" x2="450" y2="336" stroke="currentColor" stroke-width="1.6" marker-end="url(#tb-arrow)"/>
+
+          <!-- hub -->
+          <rect x="340" y="340" width="220" height="70" rx="3" fill="currentColor" fill-opacity="0.08" stroke="currentColor" stroke-width="1.8"/>
+          <text x="450" y="368" text-anchor="middle" class="box-title">Live Catalog</text>
+          <text x="450" y="385" text-anchor="middle" class="box-sub">the opportunities table</text>
+
+          <!-- bottom branches + bus + trunk -->
+          <line x1="450" y1="414" x2="450" y2="520" stroke="currentColor" stroke-width="1.6" marker-end="url(#tb-arrow)"/>
+          <line x1="150" y1="520" x2="750" y2="520" stroke="currentColor" stroke-width="1.3"/>
+          <line x1="150" y1="520" x2="150" y2="576" stroke="currentColor" stroke-width="1.3"/>
+          <line x1="450" y1="520" x2="450" y2="576" stroke="currentColor" stroke-width="1.3"/>
+          <line x1="750" y1="520" x2="750" y2="576" stroke="currentColor" stroke-width="1.3"/>
+
+          <!-- bottom group boxes -->
+          <rect x="40" y="580" width="220" height="64" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="150" y="606" text-anchor="middle" class="box-title">Link Health</text>
+          <g transform="translate(150,626)" class="badge-pill"><rect x="-26" y="-9" width="52" height="17" rx="8.5" fill="#2F7D5A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">FREE</text></g>
+
+          <rect x="340" y="580" width="220" height="64" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="450" y="606" text-anchor="middle" class="box-title">Mailing Lists</text>
+          <g transform="translate(450,626)" class="badge-pill"><rect x="-26" y="-9" width="52" height="17" rx="8.5" fill="#2F7D5A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">FREE*</text></g>
+
+          <rect x="640" y="580" width="220" height="64" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="750" y="606" text-anchor="middle" class="box-title">Deadlines</text>
+          <g transform="translate(750,626)" class="badge-pill"><rect x="-24" y="-9" width="48" height="17" rx="8.5" fill="#2B5C82"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">AUTO</text></g>
+        </svg>
+      </div>
+      <figcaption>Each job writes a different slice of the same row — <strong>Metadata Refresh</strong>
+        touches the facts, <strong>Org Reviews</strong> the legitimacy verdict, <strong>Action
+        Items</strong> the checklist, <strong>Link Health</strong> the URL, <strong>Mailing
+        Lists</strong> the signup recipe, <strong>Deadlines</strong> the dates. None of them wait on
+        each other. *Mailing Lists only spends money on the rare page that turns out to have a form.</figcaption>
+    </figure>
+
+    <div class="job-grid">
+      <article class="job-card">
+        <div class="top"><h3>Metadata Refresh</h3><span class="badge paid">Paid</span></div>
+        <p class="script">refresh_opportunities.py</p>
+        <p>Re-checks name, org, summary, eligibility and pricing — the core facts on a row. Never
+          touches the URL; that's Link Health's job. Both discovery paths (Fig. 02) now fill these
+          same fields at intake, so this is a periodic sanity/backfill pass, not the first fill.
+          When a change here moves a field an embedding depends on, it <strong>re-embeds that row on
+          the spot</strong> (both vectors, hash-gated — Fig. 03), so the vectors never drift behind
+          the facts.</p>
+        <div class="meta"><span><b>Cadence:</b> periodic drift-check, or to backfill rows discovered before 2026-08-30</span></div>
+      </article>
+      <article class="job-card">
+        <div class="top"><h3>Org Reviews</h3><span class="badge paid">Paid</span></div>
+        <p class="script">check_reviews.py</p>
+        <p>Checks a program's legitimacy against independent sources and stores the verdict students
+          see. Self-limiting — it only re-checks rows unreviewed or over 30 days stale.</p>
+        <div class="meta"><span><b>Cadence:</b> safe to run anytime, does nothing if nothing's due</span></div>
+      </article>
+      <article class="job-card">
+        <div class="top"><h3>Action Items</h3><span class="badge paid">Paid</span></div>
+        <p class="script">generate_action_items.py</p>
+        <p>Builds each row's application checklist, verified line-by-line against the program's own
+          page. A page it can't read gets an honest generic checklist for free.</p>
+        <div class="meta"><span><b>Cadence:</b> after new rows activate</span></div>
+      </article>
+      <article class="job-card">
+        <div class="top"><h3>Link Health</h3><span class="badge free">Free</span></div>
+        <p class="script">check_links.py</p>
+        <p>Verifies every URL. Deactivates only what's provably gone (404 / 410 / unresolvable),
+          flags the rest without touching it, and tries a proven repair before giving up.</p>
+        <div class="meta"><span><b>Cadence:</b> run often — weekly is fine, no cost to weigh</span></div>
+      </article>
+      <article class="job-card">
+        <div class="top"><h3>Mailing Lists</h3><span class="badge free">Free*</span></div>
+        <p class="script">find_mailing_lists.py</p>
+        <p>Looks for a program's signup form and proposes a recipe. Nothing goes out to a student
+          until you promote a recipe to <strong>verified</strong> yourself.</p>
+        <div class="meta"><span><b>Cadence:</b> after a batch of activations, then verify what it found</span></div>
+      </article>
+      <article class="job-card">
+        <div class="top"><h3>Deadlines</h3><span class="badge auto">Auto</span></div>
+        <p class="script">check_deadlines.py</p>
+        <p>Fires automatically the first time a student opens a row, cached for 7 days. You only
+          touch this one to force a re-check or fix a known gap in a handful of rows.</p>
+        <div class="meta"><span><b>Cadence:</b> leave it alone; targeted re-checks only</span></div>
+      </article>
+    </div>
+
+    <aside class="note warn">
+      <strong>Why there's no "run everything nightly" button:</strong> a full-catalog pass isn't
+      always cheap. Measured full passes: Org Reviews <span class="cost">~$1.42</span>, Action Items
+      <span class="cost">~$5</span>, Deadlines <span class="cost">~$84</span>. That's why Deadlines
+      stays on-demand and Reviews relies on its own 30-day staleness filter instead of a blanket
+      re-check.
+    </aside>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Job</th><th>Cost</th><th>Recommended cadence</th><th>Console</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="job">Metadata Refresh</td><td>Paid</td><td>Periodic sanity/backfill only — both discovery paths self-fill now</td><td class="script">Agents → Metadata</td></tr>
+          <tr><td class="job">Org Reviews</td><td>Paid, self-limiting</td><td>Any time — idempotent within 30 days</td><td class="script">Agents → Reviews</td></tr>
+          <tr><td class="job">Action Items</td><td>Paid, cheap</td><td>After new rows activate</td><td class="script">Agents → Tasks</td></tr>
+          <tr><td class="job">Link Health</td><td>Free</td><td>Weekly</td><td class="script">Agents → Links</td></tr>
+          <tr><td class="job">Mailing Lists</td><td>Mostly free</td><td>After a batch of activations</td><td class="script">Agents → Mailing lists</td></tr>
+          <tr><td class="job">Deadlines</td><td>Auto / on-demand</td><td>Don't schedule it — let it fire itself</td><td class="script">Agents → Deadline</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="rules">
+    <div class="head">
+      <p class="num">04</p>
+      <h2>Rules to remember</h2>
+      <p class="lede">The console is built so a mistake here costs seconds, not students.</p>
+    </div>
+
+    <div class="rules">
+      <div class="rule">
+        <span class="mark">👀</span>
+        <div><h3>Preview before you pay</h3>
+          <p>Every paid job has a free preview that estimates the cost before anything runs. Check
+            it, especially the first time you try a new angle or a bigger batch.</p></div>
+      </div>
+      <div class="rule">
+        <span class="mark">🔒</span>
+        <div><h3>Nothing activates itself</h3>
+          <p>A scraped or mined row always lands inactive. The only way a student ever sees it is
+            you clicking Activate in the Review Queue — every time, no exceptions.</p></div>
+      </div>
+      <div class="rule">
+        <span class="mark">🖥️</span>
+        <div><h3>The console only runs on your machine</h3>
+          <p>Start it with <code>restart_server.ps1</code>, then open
+            <code>http://localhost:8000/admin</code>. It won't answer from anywhere else.</p></div>
+      </div>
+      <div class="rule">
+        <span class="mark">💵</span>
+        <div><h3>Only one job is free by design</h3>
+          <p>Link Health is the sole no-cost agent. The other six spend real API money per run —
+            that's the whole reason the preview step exists.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Catalog Control Room — a guide to the admin console's discovery and maintenance jobs.
+  </footer>
+</div>
+</body>
+</html>

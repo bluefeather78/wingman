@@ -53,6 +53,15 @@ def handle_admin_console():
     return Response(content=html.encode(), media_type="text/html; charset=utf-8")
 
 
+@router.get("/admin/logic-map")
+def handle_logic_map():
+    """The full Catalog Control Room map (repo-root logic_map.html), served with its SVGs.
+    Localhost-only like every route on this router; the console's guide tab links here so the
+    map has a single source and never needs re-porting into the console HTML."""
+    html = core.get_logic_map_html()
+    return Response(content=html.encode(), media_type="text/html; charset=utf-8")
+
+
 # ---------------- Agents: read ----------------
 
 @router.get("/api/agents/status")

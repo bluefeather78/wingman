@@ -470,6 +470,7 @@ tr.disabled-seed { opacity: .48; }
       <div class="sub" id="viewSubtitle">Background agents that maintain the Wingman opportunity catalog</div>
     </div>
     <div class="spacer"></div>
+    <a class="btn" style="text-decoration:none" href="https://claude.ai/code/artifact/233e609c-93c6-4cae-aeb7-1f77db1396c1" target="_blank" rel="noopener" title="Golden-set matching quality review: 10 profiles, 100 ranked results">Match Scorecard ↗</a>
     <label class="sub" for="timeRange">Range</label>
     <select id="timeRange">
       <option value="7">Last 7 days</option>
@@ -4497,6 +4498,10 @@ const SCOPE_FIELDS = {
       A 403, a TLS failure or a timeout is flagged and left active &mdash; those sites are refusing this checker,
       not reporting a missing page. Deactivated rows land in the <strong>Review queue</strong> with a flag saying why;
       nothing here ever re-activates anything.
+      <br><br>This run also does a free <strong>discontinuation check</strong>: a row whose summary says the program is gone
+      (&ldquo;ceased operations&rdquo;, &ldquo;discontinued its&hellip; camps&rdquo;, &ldquo;will not be offering&hellip;&rdquo;)
+      is marked <strong>not-running</strong> so it drops out of Fresh Finds and matching &mdash; only when its status is still
+      blank, so the deadline checker&rsquo;s verdict is never overwritten. The row is not deactivated; a person confirms.
     </div>`,
 };
 

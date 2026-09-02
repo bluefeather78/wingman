@@ -1,0 +1,11 @@
+profile_id,persona,theme_used,pool_size,excluded_ineligible,checked,embed_cost_usd,reasoned_count,strong_count,note
+P01,CS / AI app builder,Building software products that help students,89,11,74,0.000008,10,6,
+P02,Computational linguistics researcher,Computational linguistics research and problem-solving,93,7,77,0.000008,7,5,
+P03,Debate & policy,Competitive debate and public policy,89,11,83,0.000007,7,5,
+P04,Journalism & creative writing,Journalism and editorial writing,95,5,75,0.000006,8,4,
+P05,Environmental science & activism,Environmental science and watershed research,94,6,74,0.000007,8,5,
+P06,Business & entrepreneurship,Entrepreneurship and running a small business,90,10,78,0.000007,8,6,
+P07,Pre-med / biology researcher,Biomedical research and medicine,78,22,75,0.000005,6,4,
+P08,Scant — math only,Mathematics,100,0,65,0.000001,8,6,
+P09,Scant — vague helper,Medicine and helping people,75,25,76,0.000001,5,3,
+P10,Scant — arts,Art and drawing,100,0,74,0.000001,6,3,

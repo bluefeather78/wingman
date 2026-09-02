@@ -85,7 +85,7 @@ CHECK_AGENTS = [
 # marks the missing coverage "unavailable" rather than failing the whole report.
 _ACTIVE_FULL_SELECT = ("id,type,review_status,last_reviewed_at,link_status,link_checked_at,"
                        "dates_last_checked_at,action_items_source,action_items_checked_at,"
-                       "dedupe_vector_hash")
+                       "dedupe_vector_hash,match_vector_hash")
 _ACTIVE_BASE_SELECT = "id,type"
 
 
@@ -345,26 +345,32 @@ def collect_health(supabase_url=None, key=None):
                  "note": "Activated rows the Update Opportunity agent has not enriched yet."})
     out["queues"] = queues
 
-    # --- Dedupe embeddings (opportunities.dedupe_vector column; see dedupe_vector_schema.sql) ----
-    # Coverage = active rows carrying a dedupe_vector_hash (written together with the vector). Read
-    # from the same active-rows fetch above, so no extra query and no megabytes of float arrays are
-    # pulled. `columns_available` False means the migration has not run (or the FULL select degraded)
-    # — coverage is then UNKNOWABLE, not zero, so it must not alarm. This is the fix for the old
-    # false "0% covered" that a missing per-checkout JSONL sidecar used to produce.
-    emb = {"columns_available": columns_ok}
-    if columns_ok and active_rows:
-        indexed = sum(1 for r in active_rows if r.get("dedupe_vector_hash"))
-        total = len(active_rows)
-        pct = round(100.0 * indexed / total, 1) if total else None
-        emb.update({"active_rows": total, "indexed": indexed, "missing": total - indexed,
-                    "coverage_pct": pct})
-        emb["severity"] = (_ALERT if pct is not None and pct < 80
-                           else _WARN if pct is not None and pct < 95 else _OK)
-    else:
-        # No column yet, or no active rows to speak of: report nothing rather than a scary zero.
-        emb.update({"active_rows": active_n, "indexed": None, "missing": None,
-                    "coverage_pct": None, "severity": _OK})
-    out["embeddings"] = emb
+    # --- Embedding coverage: two separate vectors on `opportunities`, same coverage shape --------
+    # * dedupe_vector  — the scraper's duplicate-detection embedding (dedupe_vector_schema.sql)
+    # * match_vector   — the student-facing semantic RECALL embedding (match_vector_schema.sql)
+    # Coverage = active rows carrying the corresponding _hash (written together with the vector),
+    # read from the same active-rows fetch above so no extra query and no megabytes of float arrays
+    # are pulled. `columns_available` False means the migration has not run (or the FULL select
+    # degraded) — coverage is then UNKNOWABLE, not zero, so it must not alarm. This is the fix for
+    # the old false "0% covered" a missing per-checkout JSONL sidecar used to produce.
+    def _embedding_coverage(hash_field):
+        cov = {"columns_available": columns_ok}
+        if columns_ok and active_rows:
+            indexed = sum(1 for r in active_rows if r.get(hash_field))
+            total = len(active_rows)
+            pct = round(100.0 * indexed / total, 1) if total else None
+            cov.update({"active_rows": total, "indexed": indexed, "missing": total - indexed,
+                        "coverage_pct": pct})
+            cov["severity"] = (_ALERT if pct is not None and pct < 80
+                               else _WARN if pct is not None and pct < 95 else _OK)
+        else:
+            # No column yet, or no active rows to speak of: report nothing rather than a scary zero.
+            cov.update({"active_rows": active_n, "indexed": None, "missing": None,
+                        "coverage_pct": None, "severity": _OK})
+        return cov
+
+    emb = out["embeddings"] = _embedding_coverage("dedupe_vector_hash")
+    sem = out["semantic_embeddings"] = _embedding_coverage("match_vector_hash")
 
     # --- Freshness of each maintenance pass -----------------------------------------------
     latest = _latest_runs(supabase_url, key) if out["supabase_configured"] else {}
@@ -411,6 +417,10 @@ def collect_health(supabase_url=None, key=None):
         alerts.append({"level": emb["severity"],
                        "message": f"{_fmt(emb['missing'])} active rows have no dedupe embedding "
                                   f"({emb.get('coverage_pct')}% covered)"})
+    if sem.get("severity") in (_WARN, _ALERT) and sem.get("missing"):
+        alerts.append({"level": sem["severity"],
+                       "message": f"{_fmt(sem['missing'])} active rows have no semantic (recall) "
+                                  f"embedding ({sem.get('coverage_pct')}% covered)"})
     if coverage.get("dead_links_active"):
         alerts.append({"level": _WARN,
                        "message": f"{coverage['dead_links_active']} active rows have a dead link"})
@@ -465,16 +475,21 @@ def _print_report(h):
         print(f"  {_sev_mark(q['severity'])} {q['label']:<38} {_fmt(q['count']):>8}")
         print(f"       {q['note']}")
 
-    e = h.get("embeddings", {})
-    print("\nDEDUPE EMBEDDINGS")
-    if not e.get("columns_available"):
-        print(f"  {_sev_mark(e.get('severity'))} dedupe_vector column not present — run "
-              f"dedupe_vector_schema.sql (coverage unknown, not zero)")
-    else:
-        print(f"  {_sev_mark(e.get('severity'))} indexed {_fmt(e.get('indexed'))} of "
-              f"{_fmt(e.get('active_rows'))} active   "
-              f"missing {_fmt(e.get('missing'))}   coverage "
-              f"{e.get('coverage_pct') if e.get('coverage_pct') is not None else '—'}%")
+    def _print_embedding(section, label, missing_col, missing_sql):
+        print(f"\n{label}")
+        if not section.get("columns_available"):
+            print(f"  {_sev_mark(section.get('severity'))} {missing_col} column not present — run "
+                  f"{missing_sql} (coverage unknown, not zero)")
+        else:
+            print(f"  {_sev_mark(section.get('severity'))} indexed {_fmt(section.get('indexed'))} of "
+                  f"{_fmt(section.get('active_rows'))} active   "
+                  f"missing {_fmt(section.get('missing'))}   coverage "
+                  f"{section.get('coverage_pct') if section.get('coverage_pct') is not None else '—'}%")
+
+    _print_embedding(h.get("embeddings", {}), "DEDUPE EMBEDDINGS",
+                     "dedupe_vector", "dedupe_vector_schema.sql")
+    _print_embedding(h.get("semantic_embeddings", {}), "SEMANTIC EMBEDDINGS (recall match_vector)",
+                     "match_vector", "match_vector_schema.sql")
 
     print("\nLAST RUN OF EACH MAINTENANCE PASS")
     for chk in h.get("checks", []):

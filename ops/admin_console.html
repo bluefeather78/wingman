@@ -5236,7 +5236,7 @@ function renderHealth(h) {
   if (!h) { body.innerHTML = '<div class="empty">No data.</div>'; return; }
   $('healthStamp').textContent = h.generated_at ? 'as of ' + new Date(h.generated_at).toLocaleString() : '';
 
-  const c = h.catalog || {}, e = h.embeddings || {}, cov = h.coverage || {};
+  const c = h.catalog || {}, e = h.embeddings || {}, s = h.semantic_embeddings || {}, cov = h.coverage || {};
   const alerts = h.alerts || [];
   // Tab badge: number of alerts, so the count is visible without opening the tab.
   const badge = $('healthTabCount');
@@ -5244,11 +5244,13 @@ function renderHealth(h) {
 
   // --- KPI tiles ---
   const covPct = (e.coverage_pct === null || e.coverage_pct === undefined) ? '—' : e.coverage_pct + '%';
+  const semPct = (s.coverage_pct === null || s.coverage_pct === undefined) ? '—' : s.coverage_pct + '%';
   const kpis = [
     ['Total rows', num(c.total)],
     ['Active', num(c.active)],
     ['Inactive', num(c.inactive)],
-    ['Embedding coverage', covPct],
+    ['Dedupe coverage', covPct],
+    ['Semantic coverage', semPct],
     ['Alerts', String(alerts.length)],
   ];
   let html = `<div class="kpis" style="margin-bottom:20px">` + kpis.map(([l, v]) =>
@@ -5289,6 +5291,10 @@ function renderHealth(h) {
     <span style="margin-left:8px"><strong>Dedupe embeddings</strong> — ${e.columns_available === false
       ? `dedupe_vector column not present — run dedupe_vector_schema.sql (coverage unknown, not zero)`
       : `${num(e.indexed)} indexed, ${num(e.missing)} of ${num(e.active_rows)} active rows missing (${esc(covPct)} covered)`}.</span></div>`;
+  html += `<div style="margin-bottom:14px">${healthPill(s.severity, s.severity === 'ok' ? 'ok' : 'gap')}
+    <span style="margin-left:8px"><strong>Semantic embeddings</strong> <span style="color:var(--text-2);font-size:12px">(recall match_vector)</span> — ${s.columns_available === false
+      ? `match_vector column not present — run match_vector_schema.sql (coverage unknown, not zero)`
+      : `${num(s.indexed)} indexed, ${num(s.missing)} of ${num(s.active_rows)} active rows missing (${esc(semPct)} covered)`}.</span></div>`;
   if (cov.columns_available) {
     const rows = [['reviews', 'Reviews'], ['links', 'Link health'],
                   ['deadlines', 'Deadlines'], ['tasks', 'Action items']];

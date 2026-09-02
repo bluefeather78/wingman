@@ -177,7 +177,7 @@ def insert_user_opportunity(name, url, opp_type, section, meta, fit, note,
         return None
 
     exact, candidates = url_dedupe.find_duplicates(
-        url, name, existing, apply_url=apply_url or None)
+        url, name, existing, apply_url=apply_url or None, include_weak=False)
     if exact:
         print(f"[User Opportunity] Skipped — already in catalog as "
               f"{exact.get('id')} ({exact.get('name')}): {url}")

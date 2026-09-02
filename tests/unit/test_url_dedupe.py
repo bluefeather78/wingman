@@ -308,6 +308,38 @@ def test_find_duplicates_confidence_ordering_and_trim_to_five():
     assert cands[0]["confidence"] == "strong"
 
 
+def test_find_duplicates_include_weak_false_drops_weak_keeps_strong():
+    # A weak cross-host name-similarity hint and a strong same-site prefix hint on one call.
+    rows = [
+        _row("ecWeak", "Marine Biology Summer Academy", "https://elsewhere.org/marine-bio"),
+        _row("ecStrong", "Marine Biology Summer Academy", "https://ocean.org/programs"),
+    ]
+    # Default keeps both tiers.
+    exact, cands = ud.find_duplicates("https://ocean.org/programs/marine",
+                                      "Marine Biology Summer Academy", rows)
+    assert exact is None
+    confs = {c["confidence"] for c in cands}
+    assert "weak" in confs and "strong" in confs
+    # include_weak=False keeps only strong hints (the queue-feeder setting).
+    exact, cands = ud.find_duplicates("https://ocean.org/programs/marine",
+                                      "Marine Biology Summer Academy", rows,
+                                      include_weak=False)
+    assert exact is None
+    assert cands and all(c["confidence"] == "strong" for c in cands)
+
+
+def test_find_duplicates_include_weak_false_empty_when_only_weak():
+    # Only a weak same-site-few-peers hint exists -> include_weak=False returns nothing.
+    rows = [
+        _row("ec1", "Alpha Zither Contest", "https://naclo.org/alpha"),
+        _row("ec2", "Beta Quokka Meetup", "https://naclo.org/beta"),
+    ]
+    exact, cands = ud.find_duplicates("https://naclo.org/gamma", "Gamma Wombat Fair", rows,
+                                      include_weak=False)
+    assert exact is None
+    assert cands == []
+
+
 def test_find_duplicates_no_match_returns_empty():
     rows = [_row("ec1", "Wildly Unrelated Thing", "https://other.com/z")]
     exact, cands = ud.find_duplicates("https://mine.com/a", "My Unique Program XYZ", rows)

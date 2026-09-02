@@ -24,8 +24,30 @@ import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BASE = process.env.WINGMAN_API_BASE || 'http://127.0.0.1:8000';
-const TOKEN = process.env.WINGMAN_TOKEN;
+let TOKEN = process.env.WINGMAN_TOKEN;
+let REFRESH = process.env.WINGMAN_REFRESH;
 if (!TOKEN) { console.error('WINGMAN_TOKEN not set'); process.exit(1); }
+
+// Refresh the short-lived access token on a 401 so a long scoring run doesn't die partway.
+async function refreshToken() {
+  if (!REFRESH) throw new Error('access token expired and no WINGMAN_REFRESH provided');
+  const r = await fetch(`${BASE}/api/auth/refresh`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: REFRESH }),
+  });
+  if (!r.ok) throw new Error(`token refresh failed ${r.status}: ${await r.text()}`);
+  const d = await r.json();
+  TOKEN = d.token || d.accessToken;
+  REFRESH = d.refresh_token || d.refreshToken || REFRESH;
+}
+async function authedPost(path, body) {
+  const opts = () => ({ method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify(body) });
+  let r = await fetch(`${BASE}${path}`, opts());
+  if (r.status === 401) { await refreshToken(); r = await fetch(`${BASE}${path}`, opts()); }
+  return r;
+}
 
 // ---- minimal RFC4180 CSV parse/serialize ----
 function parseCSV(text) {
@@ -89,11 +111,7 @@ fab_evidence — if not "supported"/"none", quote the exact unsupported phrase f
 note — <=15 words, the single most useful observation.`;
   const userContent = `THEME: ${themeUsed}\n\nITEMS (JSON):\n${JSON.stringify(items)}\n\nReturn the JSON array, one object per item, same order.`;
   const body = { system, userContent, useWebSearch: false, maxTokens: 6000 };
-  const resp = await fetch(`${BASE}/api/messages`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify(body),
-  });
+  const resp = await authedPost('/api/messages', body);
   if (!resp.ok) throw new Error(`/api/messages ${resp.status}: ${await resp.text()}`);
   const data = await resp.json();
   const clean = (data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '')

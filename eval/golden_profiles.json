@@ -1,0 +1,904 @@
+[
+  {
+    "id": "P01",
+    "persona": "CS / AI app builder",
+    "category": "Computer Science",
+    "detail_level": "rich",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "California",
+    "gender": "male",
+    "profile_text": "I'm a junior in California who's really into computer science, especially building things people actually use. I teach myself full-stack development, I'm comfortable in Python and TypeScript, and I want to study CS or human-computer interaction in college. My goal this year is to take a real product from prototype to its first users.\n\nPassion Project: I'm building Adio, a mobile app that helps students with ADHD break assignments into timed steps. I've shipped a beta to about 40 classmates, I run weekly feedback sessions, and I'm now trying to get to real adoption and eventually pitch it to get funding or into an accelerator.",
+    "search_theme": "Building software products that help students",
+    "intent": "Take my ADHD-focused app Adio from beta to real adoption and pitch it for funding",
+    "next_steps": [
+      "reach real users",
+      "get into an accelerator or pitch competition",
+      "raise funding"
+    ]
+  },
+  {
+    "id": "P02",
+    "persona": "Computational linguistics researcher",
+    "category": "Linguistics / CS",
+    "detail_level": "rich",
+    "has_passion_project": "yes",
+    "has_research_project": "yes",
+    "grade": "12th grade",
+    "state": "Massachusetts",
+    "gender": "female",
+    "profile_text": "I'm a senior fascinated by language and computation. I love the overlap between linguistics, math, and programming, and I want to keep doing original research in this space. My near-term goal is to publish my work and compete against strong students in computational-linguistics problem solving.\n\nResearch Project: I'm studying grapheme-to-phoneme error rates in Finno-Ugric languages with two friends I met at a summer camp. We built our own dataset, we're running sequence models on it, and I'm writing up the results and looking for a venue to present or publish them.\n\nPassion Project: I run a small club at school where we design and solve original puzzle-style linguistics problems, and I'm assembling them into a practice set for the North American Computational Linguistics Olympiad.",
+    "search_theme": "Computational linguistics research and problem-solving",
+    "intent": "Publish my grapheme-to-phoneme research and compete in linguistics olympiads",
+    "next_steps": [
+      "find a venue to publish or present",
+      "train sequence models",
+      "prepare for NACLO"
+    ]
+  },
+  {
+    "id": "P03",
+    "persona": "Debate & policy",
+    "category": "Law / Debate / Political Science",
+    "detail_level": "moderate",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "10th grade",
+    "state": "Texas",
+    "gender": "nonbinary",
+    "profile_text": "I'm a sophomore in Texas and my thing is debate. I do policy and Lincoln-Douglas, I've gone to a couple of state qualifiers, and I care a lot about how law and public policy actually shape people's lives. I'm thinking about pre-law or political science eventually.\n\nOutside of debate I follow Supreme Court cases pretty closely and I like writing persuasive essays. I want to find summer programs and competitions that would sharpen my argumentation and get me around other people who take this as seriously as I do.",
+    "search_theme": "Competitive debate and public policy",
+    "intent": "Sharpen my argumentation and explore pre-law and political science",
+    "next_steps": [
+      "attend a debate summer program",
+      "compete at a higher level",
+      "study law and policy"
+    ]
+  },
+  {
+    "id": "P04",
+    "persona": "Journalism & creative writing",
+    "category": "Journalism / Writing",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "New York",
+    "gender": "female",
+    "profile_text": "I'm a junior in New York who wants to be a journalist. I write for our school paper, I read a lot of long-form reporting, and I'm interested in how storytelling can hold power accountable. I also write short fiction on the side.\n\nPassion Project: I founded and edit an online magazine covering issues that matter to students in my district. I manage a team of six writers, we publish every two weeks, and I'd love to grow our readership and get real editorial mentorship or a spot in a summer journalism program.",
+    "search_theme": "Journalism and editorial writing",
+    "intent": "Grow my student magazine and get real editorial mentorship",
+    "next_steps": [
+      "join a summer journalism program",
+      "grow readership",
+      "get mentorship"
+    ]
+  },
+  {
+    "id": "P05",
+    "persona": "Environmental science & activism",
+    "category": "Environmental Science",
+    "detail_level": "rich",
+    "has_passion_project": "yes",
+    "has_research_project": "yes",
+    "grade": "11th grade",
+    "state": "Washington",
+    "gender": "male",
+    "profile_text": "I'm a junior in Washington and I'm passionate about the environment, especially water and local ecosystems. I take AP Environmental Science and AP Chemistry, and I want to study environmental engineering or ecology. I'm happiest doing hands-on fieldwork.\n\nResearch Project: I've been sampling a creek near my house for a year, testing for nitrates and turbidity after storms, and correlating the results with upstream development. I'm trying to turn the data into a paper and enter it in a science fair.\n\nPassion Project: I started a volunteer group that does monthly shoreline cleanups and runs storm-drain stenciling with the city. I coordinate about 30 volunteers and I want to make it a registered nonprofit.",
+    "search_theme": "Environmental science and watershed research",
+    "intent": "Publish my creek water-quality study and grow my cleanup nonprofit",
+    "next_steps": [
+      "enter a science fair",
+      "register a nonprofit",
+      "study environmental engineering"
+    ]
+  },
+  {
+    "id": "P06",
+    "persona": "Business & entrepreneurship",
+    "category": "Business",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "12th grade",
+    "state": "Illinois",
+    "gender": "female",
+    "profile_text": "I'm a senior in Illinois interested in business and entrepreneurship. I like marketing and figuring out what makes a product actually sell, and I want to study business or economics in college.\n\nPassion Project: I run a small Etsy-style shop selling custom stationery that I designed, and I've turned about $4,000 in revenue over the last year reinvesting into inventory. I want to learn how to scale it and meet other young founders — a pitch competition or an accelerator would be perfect.",
+    "search_theme": "Entrepreneurship and running a small business",
+    "intent": "Scale my stationery shop and meet other young founders",
+    "next_steps": [
+      "join a pitch competition or accelerator",
+      "learn to scale",
+      "study business or economics"
+    ]
+  },
+  {
+    "id": "P07",
+    "persona": "Pre-med / biology researcher",
+    "category": "Medicine / Biology",
+    "detail_level": "rich",
+    "has_passion_project": "no",
+    "has_research_project": "yes",
+    "grade": "12th grade",
+    "state": "Ohio",
+    "gender": "male",
+    "profile_text": "I'm a senior in Ohio and I want to go into medicine, probably as an MD or MD-PhD. I love molecular biology and neuroscience, I take AP Bio and AP Chem, and I volunteer at a hospital on weekends. I'm looking for research experience and mentorship to go deeper.\n\nResearch Project: I work in a university lab studying how a particular protein misfolds in early-onset Alzheimer's. I run Western blots and help with cell culture, and my PI said I might be a co-author on the next paper. I want to keep building serious wet-lab research skills.",
+    "search_theme": "Biomedical research and medicine",
+    "intent": "Deepen my wet-lab research toward an MD or MD-PhD",
+    "next_steps": [
+      "find a research program",
+      "build wet-lab skills",
+      "get mentorship"
+    ]
+  },
+  {
+    "id": "P08",
+    "persona": "Scant — math only",
+    "category": "Mathematics",
+    "detail_level": "scant",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "",
+    "state": "",
+    "gender": "",
+    "profile_text": "I really like math and I'm pretty good at it. I want to do something with it.",
+    "search_theme": "Mathematics",
+    "intent": null,
+    "next_steps": []
+  },
+  {
+    "id": "P09",
+    "persona": "Scant — vague helper",
+    "category": "Mixed / undecided",
+    "detail_level": "scant",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "9th grade",
+    "state": "",
+    "gender": "",
+    "profile_text": "I want to help people and maybe do something in medicine or science one day.",
+    "search_theme": "Medicine and helping people",
+    "intent": null,
+    "next_steps": []
+  },
+  {
+    "id": "P10",
+    "persona": "Scant — arts",
+    "category": "Art",
+    "detail_level": "scant",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "",
+    "state": "",
+    "gender": "",
+    "profile_text": "I like drawing and painting and want to get better at art.",
+    "search_theme": "Art and drawing",
+    "intent": null,
+    "next_steps": []
+  },
+  {
+    "id": "P11",
+    "persona": "Competitive robotics lead",
+    "category": "Engineering / Robotics",
+    "detail_level": "rich",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "Michigan",
+    "gender": "male",
+    "profile_text": "I'm a junior in Michigan and I'm all about robotics. I'm the mechanical lead on my school's FIRST Robotics team, I love CAD and machining, and I want to study mechanical or electrical engineering.\n\nPassion Project: I lead the drivetrain subteam on our FRC robot — I designed a swerve module from scratch this year, I manage a build calendar for 15 students, and I want to get us to the world championship and pick up real engineering mentorship along the way.",
+    "search_theme": "Competitive robotics and mechanical engineering",
+    "intent": "Lead my FRC team to the world championship and study mechanical engineering",
+    "next_steps": [
+      "compete at regionals and worlds",
+      "learn CAD and controls",
+      "find an engineering summer program"
+    ]
+  },
+  {
+    "id": "P12",
+    "persona": "Exoplanet researcher",
+    "category": "Astronomy",
+    "detail_level": "rich",
+    "has_passion_project": "no",
+    "has_research_project": "yes",
+    "grade": "12th grade",
+    "state": "Arizona",
+    "gender": "female",
+    "profile_text": "I'm a senior in Arizona and I'm obsessed with astronomy and astrophysics. I've done a lot of self-study in physics and Python, and I want to study astrophysics and eventually do observational research.\n\nResearch Project: I analyze TESS light curves to look for exoplanet transit signals, working with an online mentor. I've written my own reduction pipeline in Python and I want to present my results at a student research symposium and go deeper with a real mentorship.",
+    "search_theme": "Astronomy and astrophysics research",
+    "intent": "Deepen my exoplanet transit research and study astrophysics",
+    "next_steps": [
+      "find a research mentorship",
+      "present at a symposium",
+      "study astrophysics"
+    ]
+  },
+  {
+    "id": "P13",
+    "persona": "Chemistry olympiad hopeful",
+    "category": "Chemistry",
+    "detail_level": "moderate",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "New Jersey",
+    "gender": "male",
+    "profile_text": "I'm a junior in New Jersey and chemistry is my favorite subject by far. I take AP Chem, I like the problem-solving side of it, and I want to push myself against strong students. My goal is to qualify for the national chemistry olympiad and find a serious summer chemistry program.",
+    "search_theme": "Competitive chemistry and the chemistry olympiad",
+    "intent": "Qualify for the national chemistry olympiad",
+    "next_steps": [
+      "study for the USNCO",
+      "join a chemistry summer program",
+      "compete"
+    ]
+  },
+  {
+    "id": "P14",
+    "persona": "Neuroscience lab researcher",
+    "category": "Neuroscience",
+    "detail_level": "rich",
+    "has_passion_project": "no",
+    "has_research_project": "yes",
+    "grade": "12th grade",
+    "state": "Pennsylvania",
+    "gender": "nonbinary",
+    "profile_text": "I'm a senior in Pennsylvania fascinated by how the brain produces attention and memory. I take AP Psychology and AP Biology and I want to study neuroscience or cognitive science.\n\nResearch Project: I work in a university cognitive-neuroscience lab running EEG sessions on a selective-attention task and helping with the signal analysis in MATLAB. I want to turn my piece of the project into a poster and keep building real research skills.",
+    "search_theme": "Cognitive neuroscience research",
+    "intent": "Turn my EEG attention project into a poster and study neuroscience",
+    "next_steps": [
+      "present a poster",
+      "learn signal analysis",
+      "find a neuroscience research program"
+    ]
+  },
+  {
+    "id": "P15",
+    "persona": "Public-health organizer",
+    "category": "Public Health",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "Georgia",
+    "gender": "female",
+    "profile_text": "I'm a junior in Georgia interested in public health and how communities stay healthy. I take AP Bio and I volunteer at a free clinic. I want to study public health or epidemiology.\n\nPassion Project: I started a health-education club that runs vaccine-info and nutrition workshops at community centers in my city. I've organized about a dozen sessions and I want to make it bigger and learn how real public-health programs are run.",
+    "search_theme": "Public health and community health education",
+    "intent": "Grow my health-education club and study public health",
+    "next_steps": [
+      "find a public-health summer program",
+      "learn program design",
+      "study epidemiology"
+    ]
+  },
+  {
+    "id": "P16",
+    "persona": "Psychology-curious sophomore",
+    "category": "Psychology",
+    "detail_level": "moderate",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "10th grade",
+    "state": "Florida",
+    "gender": "female",
+    "profile_text": "I'm a sophomore in Florida and I've gotten really into psychology — why people behave the way they do, how memory and bias work. I read a lot of pop-psych books and I'm thinking about studying psychology or cognitive science. I'd like to find a summer program or competition where I can go deeper than my school offers.",
+    "search_theme": "Psychology and human behavior",
+    "intent": "Explore psychology beyond what my school offers",
+    "next_steps": [
+      "find a psychology summer program",
+      "try a research experience"
+    ]
+  },
+  {
+    "id": "P17",
+    "persona": "Student investor",
+    "category": "Business / Economics",
+    "detail_level": "rich",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "12th grade",
+    "state": "New York",
+    "gender": "male",
+    "profile_text": "I'm a senior in New York and I love economics and investing. I read about markets constantly, I've taken AP Micro and Macro, and I want to study economics or finance.\n\nPassion Project: I founded my school's investment club and manage a real small portfolio with dues we pool — we're up modestly and I write a weekly markets memo for 40 members. I want to compete in stock-market and economics competitions and get around people who do this professionally.",
+    "search_theme": "Economics, investing, and financial markets",
+    "intent": "Grow my investment club and compete in economics and markets competitions",
+    "next_steps": [
+      "enter an economics or stock-market competition",
+      "learn valuation",
+      "study economics or finance"
+    ]
+  },
+  {
+    "id": "P18",
+    "persona": "Model UN leader",
+    "category": "Political Science / International Relations",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "District of Columbia",
+    "gender": "female",
+    "profile_text": "I'm a junior in DC and I'm deep into Model UN and international relations. I've won a few gavels and I care about diplomacy, human rights, and global policy. I want to study international relations or political science.\n\nPassion Project: I'm the secretary-general of my school's own MUN conference — I run committees for 200 delegates, write the background guides, and recruit the staff. I want to find summer programs and conferences that would sharpen my diplomacy and policy skills.",
+    "search_theme": "Model UN and international relations",
+    "intent": "Sharpen my diplomacy skills and study international relations",
+    "next_steps": [
+      "attend an international-relations summer program",
+      "compete at larger MUN conferences",
+      "study political science"
+    ]
+  },
+  {
+    "id": "P19",
+    "persona": "Oral-history researcher",
+    "category": "History",
+    "detail_level": "rich",
+    "has_passion_project": "no",
+    "has_research_project": "yes",
+    "grade": "12th grade",
+    "state": "Virginia",
+    "gender": "male",
+    "profile_text": "I'm a senior in Virginia and I love history, especially local and social history. I take AP US History and AP Euro and I want to study history and maybe become a historian or archivist.\n\nResearch Project: I'm running an oral-history project documenting the civil-rights era in my county — I've recorded 20 interviews with older residents, done archival work at the county library, and I'm writing it up. I want to publish it in a student history journal or present it at a conference.",
+    "search_theme": "History research and oral history",
+    "intent": "Publish my civil-rights oral-history project",
+    "next_steps": [
+      "submit to a student history journal",
+      "present at a history conference",
+      "study history"
+    ]
+  },
+  {
+    "id": "P20",
+    "persona": "Philosophy & ethics thinker",
+    "category": "Humanities / Philosophy",
+    "detail_level": "moderate",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "Massachusetts",
+    "gender": "nonbinary",
+    "profile_text": "I'm a junior in Massachusetts and I love philosophy — ethics especially, and questions about AI and what we owe each other. I read a lot of philosophy on my own and I do our school's ethics bowl. I want to study philosophy or cognitive science, and I'm looking for summer programs, essay competitions, or a place to develop these ideas seriously.",
+    "search_theme": "Philosophy and ethics",
+    "intent": "Develop my philosophy and ethics thinking beyond ethics bowl",
+    "next_steps": [
+      "enter a philosophy essay competition",
+      "attend a philosophy summer program"
+    ]
+  },
+  {
+    "id": "P21",
+    "persona": "Poet & literary editor",
+    "category": "Creative Writing",
+    "detail_level": "rich",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "12th grade",
+    "state": "Oregon",
+    "gender": "female",
+    "profile_text": "I'm a senior in Oregon and writing is my life — poetry especially, but also lyric essays. I read constantly and I want to study creative writing.\n\nPassion Project: I've assembled a poetry chapbook and I edit my school's literary magazine, where I run the submissions process for 30 contributors. I want to get my own work published, win recognition in writing competitions, and find a serious summer writing workshop.",
+    "search_theme": "Creative writing and poetry",
+    "intent": "Get my poetry published and win writing competitions",
+    "next_steps": [
+      "submit to literary magazines and contests",
+      "attend a summer writing workshop",
+      "study creative writing"
+    ]
+  },
+  {
+    "id": "P22",
+    "persona": "Young filmmaker",
+    "category": "Film / Media",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "California",
+    "gender": "male",
+    "profile_text": "I'm a junior in California and I make short films — I love directing and cinematography and I want to study film. I've taught myself editing and color grading.\n\nPassion Project: I write, shoot, and edit short narrative films and post them on YouTube; my last one got into a regional student festival. I want to find film programs and festivals where I can learn from real filmmakers and get my work seen.",
+    "search_theme": "Filmmaking and cinematography",
+    "intent": "Get my short films into festivals and learn from real filmmakers",
+    "next_steps": [
+      "submit to film festivals",
+      "attend a filmmaking summer program",
+      "study film"
+    ]
+  },
+  {
+    "id": "P23",
+    "persona": "Composer",
+    "category": "Music",
+    "detail_level": "rich",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "12th grade",
+    "state": "Illinois",
+    "gender": "female",
+    "profile_text": "I'm a senior in Illinois and I compose music — mostly for small ensembles and choir. I've studied theory seriously and I play piano and cello. I want to study composition in college.\n\nPassion Project: I write original pieces and I've had two performed by my school orchestra. I'm building a portfolio and I want to get my work performed more widely, win a young-composers competition, and study with real composers over the summer.",
+    "search_theme": "Music composition",
+    "intent": "Get my compositions performed and win a young-composers competition",
+    "next_steps": [
+      "enter a composition competition",
+      "attend a summer composition program",
+      "build a portfolio"
+    ]
+  },
+  {
+    "id": "P24",
+    "persona": "Indie game developer",
+    "category": "Computer Science / Game Design",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "Washington",
+    "gender": "male",
+    "profile_text": "I'm a junior in Washington and I make games. I code in C# with Unity and I love the mix of programming, art, and design. I want to study computer science or game design.\n\nPassion Project: I released a small puzzle-platformer on itch.io that a few thousand people have played, and I'm working on a bigger one. I want to find game-jam competitions and programs where I can level up and meet other developers.",
+    "search_theme": "Game design and development",
+    "intent": "Ship my next indie game and meet other developers",
+    "next_steps": [
+      "enter a game jam or competition",
+      "find a game-dev program",
+      "study computer science"
+    ]
+  },
+  {
+    "id": "P25",
+    "persona": "Cybersecurity CTF competitor",
+    "category": "Cybersecurity",
+    "detail_level": "rich",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "12th grade",
+    "state": "Texas",
+    "gender": "male",
+    "profile_text": "I'm a senior in Texas and I'm into cybersecurity — reverse engineering, web exploitation, the whole CTF world. I want to study computer science with a security focus.\n\nPassion Project: I captain my school's cyber team and we compete in CTFs like picoCTF and CyberPatriot; I write up our solutions and teach the younger members. I want to compete at a higher level and find a real security program or internship.",
+    "search_theme": "Cybersecurity and capture-the-flag competitions",
+    "intent": "Compete in CTFs at a higher level and find a security program",
+    "next_steps": [
+      "compete in national CTFs",
+      "find a cybersecurity program or internship",
+      "study computer science"
+    ]
+  },
+  {
+    "id": "P26",
+    "persona": "Applied ML researcher",
+    "category": "Data Science / Machine Learning",
+    "detail_level": "rich",
+    "has_passion_project": "yes",
+    "has_research_project": "yes",
+    "grade": "12th grade",
+    "state": "California",
+    "gender": "female",
+    "profile_text": "I'm a senior in California and I love machine learning and data science. I'm strong in Python and I've worked through a lot of ML courses. I want to study CS or statistics with an ML focus.\n\nResearch Project: I built a model that predicts local air-quality spikes from traffic and weather data, and I'm writing up the methodology. I want to publish it or enter it in a research competition.\n\nPassion Project: I run a data-science club where we take on real datasets for local nonprofits.",
+    "search_theme": "Machine learning and data-science research",
+    "intent": "Publish my air-quality ML project and enter it in a competition",
+    "next_steps": [
+      "enter a research competition",
+      "publish the methodology",
+      "study CS or statistics"
+    ]
+  },
+  {
+    "id": "P27",
+    "persona": "Coral reef researcher",
+    "category": "Marine Biology",
+    "detail_level": "rich",
+    "has_passion_project": "no",
+    "has_research_project": "yes",
+    "grade": "11th grade",
+    "state": "Hawaii",
+    "gender": "female",
+    "profile_text": "I'm a junior in Hawaii and I love the ocean — marine biology especially. I dive, I take AP Bio, and I want to study marine science or ecology.\n\nResearch Project: I monitor coral bleaching at a reef near me, logging transect data monthly and comparing it with water-temperature records. I want to turn it into a science-fair project and a paper, and find a marine-science research program.",
+    "search_theme": "Marine biology and reef research",
+    "intent": "Turn my coral-bleaching monitoring into a paper and find a marine-science program",
+    "next_steps": [
+      "enter a science fair",
+      "publish my findings",
+      "find a marine-science research program"
+    ]
+  },
+  {
+    "id": "P28",
+    "persona": "Climate policy activist",
+    "category": "Environmental Policy",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "10th grade",
+    "state": "Colorado",
+    "gender": "nonbinary",
+    "profile_text": "I'm a sophomore in Colorado and I care intensely about climate change — the policy and organizing side more than the lab side. I want to study environmental policy or political science.\n\nPassion Project: I organize a local youth climate group — we've run rallies, met with city council about a climate action plan, and registered voters. I want to find programs and fellowships that teach policy and advocacy so I can be more effective.",
+    "search_theme": "Climate policy and environmental advocacy",
+    "intent": "Become a more effective climate organizer and study environmental policy",
+    "next_steps": [
+      "find a policy or advocacy fellowship",
+      "learn campaign strategy",
+      "study environmental policy"
+    ]
+  },
+  {
+    "id": "P29",
+    "persona": "Baker & food-science tinkerer",
+    "category": "Culinary / Food Science",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "Louisiana",
+    "gender": "female",
+    "profile_text": "I'm a junior in Louisiana and I love baking and the science behind it — why gluten develops, how fermentation works. I'm curious about food science as a major.\n\nPassion Project: I run a small weekend baking business selling breads and pastries to neighbors, and I experiment with recipes like a lab notebook. I want to find culinary or food-science programs and maybe a competition to test myself.",
+    "search_theme": "Baking and food science",
+    "intent": "Grow my baking business and explore food science",
+    "next_steps": [
+      "find a culinary or food-science program",
+      "enter a baking competition"
+    ]
+  },
+  {
+    "id": "P30",
+    "persona": "Aspiring athletic trainer",
+    "category": "Health / Kinesiology",
+    "detail_level": "scant",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "Texas",
+    "gender": "male",
+    "profile_text": "I play football and I'm interested in sports medicine and how the body works. I might want to be an athletic trainer or physical therapist.",
+    "search_theme": "Sports medicine and kinesiology",
+    "intent": null,
+    "next_steps": []
+  },
+  {
+    "id": "P31",
+    "persona": "Hospital volunteer coordinator",
+    "category": "Nursing / Pre-Health",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "12th grade",
+    "state": "Ohio",
+    "gender": "female",
+    "profile_text": "I'm a senior in Ohio and I want to become a nurse. I take health-science classes and I've done a CNA course. I like the hands-on, patient-facing side of medicine.\n\nPassion Project: I coordinate the teen-volunteer program at my local hospital — I schedule 25 volunteers and run their orientation. I want to find nursing and pre-health summer programs and get more real clinical exposure.",
+    "search_theme": "Nursing and clinical pre-health",
+    "intent": "Get more clinical exposure and prepare for nursing school",
+    "next_steps": [
+      "find a nursing or pre-health program",
+      "get clinical volunteering hours"
+    ]
+  },
+  {
+    "id": "P32",
+    "persona": "Bioinformatics / genetics researcher",
+    "category": "Biotechnology / Genetics",
+    "detail_level": "rich",
+    "has_passion_project": "no",
+    "has_research_project": "yes",
+    "grade": "12th grade",
+    "state": "Maryland",
+    "gender": "male",
+    "profile_text": "I'm a senior in Maryland fascinated by genetics and biotech — CRISPR, sequencing, the computational side. I take AP Bio and I code in Python and R. I want to study bioengineering or computational biology.\n\nResearch Project: I'm doing a bioinformatics project analyzing gene-expression datasets to find markers for a disease, working from public data with a mentor's guidance. I want to publish it and find a serious biotech research program.",
+    "search_theme": "Genetics and bioinformatics research",
+    "intent": "Publish my gene-expression project and find a biotech research program",
+    "next_steps": [
+      "publish my analysis",
+      "find a biotech research program",
+      "study computational biology"
+    ]
+  },
+  {
+    "id": "P33",
+    "persona": "Rocketry team member",
+    "category": "Aerospace Engineering",
+    "detail_level": "rich",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "Alabama",
+    "gender": "male",
+    "profile_text": "I'm a junior in Alabama and I'm obsessed with aerospace and rocketry. I take physics and calculus and I want to study aerospace engineering.\n\nPassion Project: I'm on my school's rocketry team competing in The American Rocketry Challenge — I do the aerodynamics and recovery-system design, and we run our own test launches. I want to place nationally and find an aerospace program or internship.",
+    "search_theme": "Aerospace engineering and rocketry",
+    "intent": "Place nationally in rocketry and find an aerospace program",
+    "next_steps": [
+      "compete in the rocketry challenge",
+      "find an aerospace program or internship",
+      "study aerospace engineering"
+    ]
+  },
+  {
+    "id": "P34",
+    "persona": "Renewable-energy builder",
+    "category": "Engineering / Renewable Energy",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "California",
+    "gender": "female",
+    "profile_text": "I'm a junior in California interested in renewable energy and electrical engineering. I like building things and I care about climate solutions on the engineering side.\n\nPassion Project: I designed and built a small solar-charging station for my school's courtyard with a team, and I'm learning about batteries and power electronics. I want to find engineering programs focused on clean energy and maybe a competition.",
+    "search_theme": "Renewable-energy engineering",
+    "intent": "Go deeper on clean-energy engineering and find a program",
+    "next_steps": [
+      "find a clean-energy engineering program",
+      "enter an engineering competition",
+      "study electrical engineering"
+    ]
+  },
+  {
+    "id": "P35",
+    "persona": "Nonprofit founder",
+    "category": "Social Entrepreneurship",
+    "detail_level": "rich",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "12th grade",
+    "state": "North Carolina",
+    "gender": "female",
+    "profile_text": "I'm a senior in North Carolina and I care about educational equity. I'm drawn to social entrepreneurship — using an organization to fix a real problem. I want to study public policy or social impact.\n\nPassion Project: I founded a nonprofit that provides free tutoring and donated laptops to middle schoolers in under-resourced schools; we have 40 volunteer tutors and I've raised about $10,000 in grants. I want to scale it sustainably and find a social-impact fellowship or accelerator.",
+    "search_theme": "Social entrepreneurship and educational equity",
+    "intent": "Scale my tutoring nonprofit sustainably and find a social-impact fellowship",
+    "next_steps": [
+      "find a social-impact fellowship or accelerator",
+      "learn nonprofit management",
+      "raise more funding"
+    ]
+  },
+  {
+    "id": "P36",
+    "persona": "Mock trial captain",
+    "category": "Law / Mock Trial",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "Illinois",
+    "gender": "male",
+    "profile_text": "I'm a junior in Illinois and I'm into law — mock trial specifically. I love building a case and cross-examining. I want to study something pre-law, maybe political science.\n\nPassion Project: I captain my school's mock-trial team and we've made it to the state tournament; I coach the underclassmen on direct and cross. I want to find law-focused summer programs and compete at a higher level.",
+    "search_theme": "Mock trial and pre-law",
+    "intent": "Compete in mock trial at a higher level and explore pre-law",
+    "next_steps": [
+      "attend a pre-law summer program",
+      "advance at state and nationals",
+      "study political science"
+    ]
+  },
+  {
+    "id": "P37",
+    "persona": "Competitive programmer",
+    "category": "Computer Science / Competitive Programming",
+    "detail_level": "rich",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "12th grade",
+    "state": "Washington",
+    "gender": "male",
+    "profile_text": "I'm a senior in Washington and I do competitive programming seriously — algorithms, data structures, contest math. I compete in USACO and I'm at the Gold level pushing for Platinum. I want to study computer science at a strong program. I'm looking for competitions, camps, and anything that will push my algorithmic skills against the best students.",
+    "search_theme": "Competitive programming and algorithms",
+    "intent": "Reach USACO Platinum and push my algorithmic skills",
+    "next_steps": [
+      "train for USACO Platinum",
+      "attend an algorithms camp",
+      "compete internationally"
+    ]
+  },
+  {
+    "id": "P38",
+    "persona": "Sports-analytics blogger",
+    "category": "Statistics / Data",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "Massachusetts",
+    "gender": "male",
+    "profile_text": "I'm a junior in Massachusetts and I love statistics, especially sports analytics. I take AP Stats and I code in R. I want to study statistics or data science.\n\nPassion Project: I run a sports-analytics blog where I model team performance and player value, and I've built a small following. I want to enter data-science and statistics competitions and find a program that takes the analytical side seriously.",
+    "search_theme": "Statistics and sports analytics",
+    "intent": "Enter data-science competitions and go deeper on analytics",
+    "next_steps": [
+      "enter a statistics or data competition",
+      "find a data-science program",
+      "study statistics"
+    ]
+  },
+  {
+    "id": "P39",
+    "persona": "Animal-shelter volunteer",
+    "category": "Veterinary / Animal Science",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "10th grade",
+    "state": "Kentucky",
+    "gender": "female",
+    "profile_text": "I'm a sophomore in Kentucky and I love animals — I want to be a veterinarian. I take biology and I've shadowed at a vet clinic once.\n\nPassion Project: I volunteer every week at an animal shelter, where I help with intake and basic care, and I organized a supplies drive that collected a truckload of donations. I want to find pre-vet or animal-science programs and get more real experience.",
+    "search_theme": "Veterinary medicine and animal science",
+    "intent": "Get more pre-vet experience and find an animal-science program",
+    "next_steps": [
+      "find a pre-vet or animal-science program",
+      "get clinical animal experience"
+    ]
+  },
+  {
+    "id": "P40",
+    "persona": "Archaeology enthusiast",
+    "category": "Anthropology / Archaeology",
+    "detail_level": "moderate",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "New Mexico",
+    "gender": "nonbinary",
+    "profile_text": "I'm a junior in New Mexico fascinated by archaeology and anthropology — how people lived, material culture, ancient civilizations. I read a lot about it and I want to study anthropology or archaeology. I'm looking for a summer field school, a dig, or any program where I could get real hands-on experience instead of just reading.",
+    "search_theme": "Archaeology and anthropology",
+    "intent": "Get hands-on archaeology experience through a field program",
+    "next_steps": [
+      "find an archaeology field school or dig",
+      "study anthropology"
+    ]
+  },
+  {
+    "id": "P41",
+    "persona": "Theater actor",
+    "category": "Theater / Drama",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "12th grade",
+    "state": "New York",
+    "gender": "female",
+    "profile_text": "I'm a senior in New York and acting is everything to me. I've played leads in our school productions and done community theater. I want to study acting, ideally at a conservatory.\n\nPassion Project: I'm building an audition portfolio and I've started a student theater troupe that stages one original show a year. I want to find serious summer acting intensives and pre-conservatory programs.",
+    "search_theme": "Theater and acting",
+    "intent": "Build my audition portfolio and find a pre-conservatory acting program",
+    "next_steps": [
+      "find a summer acting intensive",
+      "prepare conservatory auditions",
+      "study acting"
+    ]
+  },
+  {
+    "id": "P42",
+    "persona": "Scant — dance",
+    "category": "Dance",
+    "detail_level": "scant",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "California",
+    "gender": "female",
+    "profile_text": "I dance ballet and contemporary and I want to keep getting better and maybe do it in college.",
+    "search_theme": "Dance",
+    "intent": null,
+    "next_steps": []
+  },
+  {
+    "id": "P43",
+    "persona": "Photographer",
+    "category": "Photography / Visual Arts",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "Washington",
+    "gender": "male",
+    "profile_text": "I'm a junior in Washington and I'm serious about photography — documentary and street work especially. I want to study photography or visual arts.\n\nPassion Project: I've built a portfolio, had two photos in a local exhibition, and I run a photo account with a small following. I want to find summer photography programs and competitions to sharpen my eye and get my work seen.",
+    "search_theme": "Photography and visual arts",
+    "intent": "Sharpen my photography and get my work exhibited",
+    "next_steps": [
+      "find a photography summer program",
+      "enter photography competitions",
+      "build my portfolio"
+    ]
+  },
+  {
+    "id": "P44",
+    "persona": "Peer-tutoring founder & future teacher",
+    "category": "Education / Teaching",
+    "detail_level": "moderate",
+    "has_passion_project": "yes",
+    "has_research_project": "no",
+    "grade": "12th grade",
+    "state": "Minnesota",
+    "gender": "female",
+    "profile_text": "I'm a senior in Minnesota and I want to be a teacher — I love explaining things and working with younger kids. I'm interested in education and child development.\n\nPassion Project: I founded a peer-tutoring program at my school that pairs upperclassmen with struggling freshmen; I train the tutors and track how the students improve. I want to find education-focused programs and learn how good teaching actually works.",
+    "search_theme": "Education and teaching",
+    "intent": "Grow my peer-tutoring program and explore becoming a teacher",
+    "next_steps": [
+      "find an education or teaching program",
+      "learn instructional methods"
+    ]
+  },
+  {
+    "id": "P45",
+    "persona": "Earth-science student",
+    "category": "Geology / Earth Science",
+    "detail_level": "moderate",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "11th grade",
+    "state": "Utah",
+    "gender": "male",
+    "profile_text": "I'm a junior in Utah and I love geology and earth science — rocks, plate tectonics, and the landscapes around me. I hike and collect minerals. I want to study geology or earth science and I'm looking for a summer field program or a competition where I can go beyond the classroom.",
+    "search_theme": "Geology and earth science",
+    "intent": "Go beyond the classroom in earth science through a field program",
+    "next_steps": [
+      "find a geology field program",
+      "study earth science"
+    ]
+  },
+  {
+    "id": "P46",
+    "persona": "Scant — science",
+    "category": "Mixed / undecided",
+    "detail_level": "scant",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "",
+    "state": "",
+    "gender": "",
+    "profile_text": "I like science, it's my favorite subject.",
+    "search_theme": "Science",
+    "intent": null,
+    "next_steps": []
+  },
+  {
+    "id": "P47",
+    "persona": "Scant — money/business",
+    "category": "Business",
+    "detail_level": "scant",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "10th grade",
+    "state": "",
+    "gender": "",
+    "profile_text": "I want to do business and make money someday.",
+    "search_theme": "Business",
+    "intent": null,
+    "next_steps": []
+  },
+  {
+    "id": "P48",
+    "persona": "Scant — games/computers",
+    "category": "Computer Science",
+    "detail_level": "scant",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "",
+    "state": "",
+    "gender": "",
+    "profile_text": "I'm into video games and computers.",
+    "search_theme": "Computers and video games",
+    "intent": null,
+    "next_steps": []
+  },
+  {
+    "id": "P49",
+    "persona": "Scant — animals",
+    "category": "Veterinary / Animal Science",
+    "detail_level": "scant",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "9th grade",
+    "state": "",
+    "gender": "",
+    "profile_text": "I like helping animals.",
+    "search_theme": "Helping animals",
+    "intent": null,
+    "next_steps": []
+  },
+  {
+    "id": "P50",
+    "persona": "Scant — undecided writer/artist",
+    "category": "Mixed / undecided",
+    "detail_level": "scant",
+    "has_passion_project": "no",
+    "has_research_project": "no",
+    "grade": "",
+    "state": "",
+    "gender": "",
+    "profile_text": "I'm not sure what I like yet, maybe writing or art.",
+    "search_theme": "Writing or art",
+    "intent": null,
+    "next_steps": []
+  }
+]

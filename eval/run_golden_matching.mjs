@@ -16,30 +16,48 @@
 //
 // Env: WINGMAN_TOKEN (bearer), WINGMAN_API_BASE (default http://127.0.0.1:8000).
 
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { rankCandidates } from '../frontend/src/lib/ranking.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BASE = process.env.WINGMAN_API_BASE || 'http://127.0.0.1:8000';
-const TOKEN = process.env.WINGMAN_TOKEN;
+let TOKEN = process.env.WINGMAN_TOKEN;
+let REFRESH = process.env.WINGMAN_REFRESH;
 if (!TOKEN) { console.error('WINGMAN_TOKEN not set'); process.exit(1); }
 
 const REASON_TOP_N = 12; // finder.tsx
+
+// The access token is short-lived; a 50-profile run outlives it. Refresh with the refresh
+// token on a 401 and retry once, so the whole run doesn't die partway through.
+async function refreshToken() {
+  if (!REFRESH) throw new Error('access token expired and no WINGMAN_REFRESH provided');
+  const r = await fetch(`${BASE}/api/auth/refresh`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: REFRESH }),
+  });
+  if (!r.ok) throw new Error(`token refresh failed ${r.status}: ${await r.text()}`);
+  const d = await r.json();
+  TOKEN = d.token || d.accessToken;
+  REFRESH = d.refresh_token || d.refreshToken || REFRESH;
+}
+async function authedPost(path, body) {
+  const opts = () => ({ method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify(body) });
+  let r = await fetch(`${BASE}${path}`, opts());
+  if (r.status === 401) { await refreshToken(); r = await fetch(`${BASE}${path}`, opts()); }
+  if (!r.ok) throw new Error(`${path} ${r.status}: ${await r.text()}`);
+  return r;
+}
 
 // callGemini shim: identical contract to httpClient.callGemini (POST /api/messages,
 // clean the text blocks). rankCandidates calls this via callGeminiJSON.
 async function callGemini(system, userContent, useWebSearch = false, maxTokens) {
   const body = { system, userContent, useWebSearch };
   if (maxTokens) body.maxTokens = maxTokens;
-  const r = await fetch(`${BASE}/api/messages`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error(`/api/messages ${r.status}: ${await r.text()}`);
-  const data = await r.json();
+  const data = await (await authedPost('/api/messages', body)).json();
   const clean = (data.content ?? [])
     .filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n')
     .replace(/```json|```/g, '').trim();
@@ -48,53 +66,21 @@ async function callGemini(system, userContent, useWebSearch = false, maxTokens) 
 }
 
 async function callMatch(blob) {
-  const r = await fetch(`${BASE}/api/match`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify(blob),
-  });
-  if (!r.ok) throw new Error(`/api/match ${r.status}: ${await r.text()}`);
-  return r.json();
+  return (await authedPost('/api/match', blob)).json();
 }
 
-// The 10 golden profiles + their ASSUMED chosen theme (theme-selection stage value).
-const PROFILES = [
-  { id: 'P01', persona: 'CS / AI app builder', grade: 11, state: 'California',
-    theme: 'Building software products that help students',
-    intent: 'Take my ADHD-focused app Adio from beta to real adoption and pitch it for funding',
-    nextSteps: ['reach real users', 'get into an accelerator or pitch competition', 'raise funding'] },
-  { id: 'P02', persona: 'Computational linguistics researcher', grade: 12, state: 'Massachusetts',
-    theme: 'Computational linguistics research and problem-solving',
-    intent: 'Publish my grapheme-to-phoneme research and compete in linguistics olympiads',
-    nextSteps: ['find a venue to publish or present', 'train sequence models', 'prepare for NACLO'] },
-  { id: 'P03', persona: 'Debate & policy', grade: 10, state: 'Texas',
-    theme: 'Competitive debate and public policy',
-    intent: 'Sharpen my argumentation and explore pre-law and political science',
-    nextSteps: ['attend a debate summer program', 'compete at a higher level', 'study law and policy'] },
-  { id: 'P04', persona: 'Journalism & creative writing', grade: 11, state: 'New York',
-    theme: 'Journalism and editorial writing',
-    intent: 'Grow my student magazine and get real editorial mentorship',
-    nextSteps: ['join a summer journalism program', 'grow readership', 'get mentorship'] },
-  { id: 'P05', persona: 'Environmental science & activism', grade: 11, state: 'Washington',
-    theme: 'Environmental science and watershed research',
-    intent: 'Publish my creek water-quality study and grow my cleanup nonprofit',
-    nextSteps: ['enter a science fair', 'register a nonprofit', 'study environmental engineering'] },
-  { id: 'P06', persona: 'Business & entrepreneurship', grade: 12, state: 'Illinois',
-    theme: 'Entrepreneurship and running a small business',
-    intent: 'Scale my stationery shop and meet other young founders',
-    nextSteps: ['join a pitch competition or accelerator', 'learn to scale', 'study business or economics'] },
-  { id: 'P07', persona: 'Pre-med / biology researcher', grade: 12, state: 'Ohio',
-    theme: 'Biomedical research and medicine',
-    intent: 'Deepen my wet-lab research toward an MD or MD-PhD',
-    nextSteps: ['find a research program', 'build wet-lab skills', 'get mentorship'] },
-  // Scant profiles: a bare theme, no intent, no next steps — mirrors the thin profile.
-  { id: 'P08', persona: 'Scant — math only', grade: null, state: null,
-    theme: 'Mathematics', intent: null, nextSteps: [] },
-  { id: 'P09', persona: 'Scant — vague helper', grade: 9, state: null,
-    theme: 'Medicine and helping people', intent: null, nextSteps: [] },
-  { id: 'P10', persona: 'Scant — arts', grade: null, state: null,
-    theme: 'Art and drawing', intent: null, nextSteps: [] },
-];
+// The golden profiles + their ASSUMED chosen theme (theme-selection stage value), loaded from
+// the single source of truth (eval/golden_profiles.json, written by gen_golden_profiles.py).
+function parseGrade(g) {
+  const m = String(g || '').match(/(\d{1,2})/);
+  return m ? parseInt(m[1], 10) : null;
+}
+const PROFILES = JSON.parse(readFileSync(join(__dirname, 'golden_profiles.json'), 'utf-8'))
+  .map((p) => ({
+    id: p.id, persona: p.persona,
+    grade: parseGrade(p.grade), state: p.state || null,
+    theme: p.search_theme, intent: p.intent ?? null, nextSteps: p.next_steps || [],
+  }));
 
 function csvCell(v) {
   const s = v == null ? '' : String(v);

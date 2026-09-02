@@ -27,3 +27,99 @@ Research Project: I work in a university lab studying how a particular protein m
 P08,Scant — math only,Mathematics,scant,no,no,,,,I really like math and I'm pretty good at it. I want to do something with it.
 P09,Scant — vague helper,Mixed / undecided,scant,no,no,9th grade,,,I want to help people and maybe do something in medicine or science one day.
 P10,Scant — arts,Art,scant,no,no,,,,I like drawing and painting and want to get better at art.
+P11,Competitive robotics lead,Engineering / Robotics,rich,yes,no,11th grade,Michigan,male,"I'm a junior in Michigan and I'm all about robotics. I'm the mechanical lead on my school's FIRST Robotics team, I love CAD and machining, and I want to study mechanical or electrical engineering.
+
+Passion Project: I lead the drivetrain subteam on our FRC robot — I designed a swerve module from scratch this year, I manage a build calendar for 15 students, and I want to get us to the world championship and pick up real engineering mentorship along the way."
+P12,Exoplanet researcher,Astronomy,rich,no,yes,12th grade,Arizona,female,"I'm a senior in Arizona and I'm obsessed with astronomy and astrophysics. I've done a lot of self-study in physics and Python, and I want to study astrophysics and eventually do observational research.
+
+Research Project: I analyze TESS light curves to look for exoplanet transit signals, working with an online mentor. I've written my own reduction pipeline in Python and I want to present my results at a student research symposium and go deeper with a real mentorship."
+P13,Chemistry olympiad hopeful,Chemistry,moderate,no,no,11th grade,New Jersey,male,"I'm a junior in New Jersey and chemistry is my favorite subject by far. I take AP Chem, I like the problem-solving side of it, and I want to push myself against strong students. My goal is to qualify for the national chemistry olympiad and find a serious summer chemistry program."
+P14,Neuroscience lab researcher,Neuroscience,rich,no,yes,12th grade,Pennsylvania,nonbinary,"I'm a senior in Pennsylvania fascinated by how the brain produces attention and memory. I take AP Psychology and AP Biology and I want to study neuroscience or cognitive science.
+
+Research Project: I work in a university cognitive-neuroscience lab running EEG sessions on a selective-attention task and helping with the signal analysis in MATLAB. I want to turn my piece of the project into a poster and keep building real research skills."
+P15,Public-health organizer,Public Health,moderate,yes,no,11th grade,Georgia,female,"I'm a junior in Georgia interested in public health and how communities stay healthy. I take AP Bio and I volunteer at a free clinic. I want to study public health or epidemiology.
+
+Passion Project: I started a health-education club that runs vaccine-info and nutrition workshops at community centers in my city. I've organized about a dozen sessions and I want to make it bigger and learn how real public-health programs are run."
+P16,Psychology-curious sophomore,Psychology,moderate,no,no,10th grade,Florida,female,"I'm a sophomore in Florida and I've gotten really into psychology — why people behave the way they do, how memory and bias work. I read a lot of pop-psych books and I'm thinking about studying psychology or cognitive science. I'd like to find a summer program or competition where I can go deeper than my school offers."
+P17,Student investor,Business / Economics,rich,yes,no,12th grade,New York,male,"I'm a senior in New York and I love economics and investing. I read about markets constantly, I've taken AP Micro and Macro, and I want to study economics or finance.
+
+Passion Project: I founded my school's investment club and manage a real small portfolio with dues we pool — we're up modestly and I write a weekly markets memo for 40 members. I want to compete in stock-market and economics competitions and get around people who do this professionally."
+P18,Model UN leader,Political Science / International Relations,moderate,yes,no,11th grade,District of Columbia,female,"I'm a junior in DC and I'm deep into Model UN and international relations. I've won a few gavels and I care about diplomacy, human rights, and global policy. I want to study international relations or political science.
+
+Passion Project: I'm the secretary-general of my school's own MUN conference — I run committees for 200 delegates, write the background guides, and recruit the staff. I want to find summer programs and conferences that would sharpen my diplomacy and policy skills."
+P19,Oral-history researcher,History,rich,no,yes,12th grade,Virginia,male,"I'm a senior in Virginia and I love history, especially local and social history. I take AP US History and AP Euro and I want to study history and maybe become a historian or archivist.
+
+Research Project: I'm running an oral-history project documenting the civil-rights era in my county — I've recorded 20 interviews with older residents, done archival work at the county library, and I'm writing it up. I want to publish it in a student history journal or present it at a conference."
+P20,Philosophy & ethics thinker,Humanities / Philosophy,moderate,no,no,11th grade,Massachusetts,nonbinary,"I'm a junior in Massachusetts and I love philosophy — ethics especially, and questions about AI and what we owe each other. I read a lot of philosophy on my own and I do our school's ethics bowl. I want to study philosophy or cognitive science, and I'm looking for summer programs, essay competitions, or a place to develop these ideas seriously."
+P21,Poet & literary editor,Creative Writing,rich,yes,no,12th grade,Oregon,female,"I'm a senior in Oregon and writing is my life — poetry especially, but also lyric essays. I read constantly and I want to study creative writing.
+
+Passion Project: I've assembled a poetry chapbook and I edit my school's literary magazine, where I run the submissions process for 30 contributors. I want to get my own work published, win recognition in writing competitions, and find a serious summer writing workshop."
+P22,Young filmmaker,Film / Media,moderate,yes,no,11th grade,California,male,"I'm a junior in California and I make short films — I love directing and cinematography and I want to study film. I've taught myself editing and color grading.
+
+Passion Project: I write, shoot, and edit short narrative films and post them on YouTube; my last one got into a regional student festival. I want to find film programs and festivals where I can learn from real filmmakers and get my work seen."
+P23,Composer,Music,rich,yes,no,12th grade,Illinois,female,"I'm a senior in Illinois and I compose music — mostly for small ensembles and choir. I've studied theory seriously and I play piano and cello. I want to study composition in college.
+
+Passion Project: I write original pieces and I've had two performed by my school orchestra. I'm building a portfolio and I want to get my work performed more widely, win a young-composers competition, and study with real composers over the summer."
+P24,Indie game developer,Computer Science / Game Design,moderate,yes,no,11th grade,Washington,male,"I'm a junior in Washington and I make games. I code in C# with Unity and I love the mix of programming, art, and design. I want to study computer science or game design.
+
+Passion Project: I released a small puzzle-platformer on itch.io that a few thousand people have played, and I'm working on a bigger one. I want to find game-jam competitions and programs where I can level up and meet other developers."
+P25,Cybersecurity CTF competitor,Cybersecurity,rich,yes,no,12th grade,Texas,male,"I'm a senior in Texas and I'm into cybersecurity — reverse engineering, web exploitation, the whole CTF world. I want to study computer science with a security focus.
+
+Passion Project: I captain my school's cyber team and we compete in CTFs like picoCTF and CyberPatriot; I write up our solutions and teach the younger members. I want to compete at a higher level and find a real security program or internship."
+P26,Applied ML researcher,Data Science / Machine Learning,rich,yes,yes,12th grade,California,female,"I'm a senior in California and I love machine learning and data science. I'm strong in Python and I've worked through a lot of ML courses. I want to study CS or statistics with an ML focus.
+
+Research Project: I built a model that predicts local air-quality spikes from traffic and weather data, and I'm writing up the methodology. I want to publish it or enter it in a research competition.
+
+Passion Project: I run a data-science club where we take on real datasets for local nonprofits."
+P27,Coral reef researcher,Marine Biology,rich,no,yes,11th grade,Hawaii,female,"I'm a junior in Hawaii and I love the ocean — marine biology especially. I dive, I take AP Bio, and I want to study marine science or ecology.
+
+Research Project: I monitor coral bleaching at a reef near me, logging transect data monthly and comparing it with water-temperature records. I want to turn it into a science-fair project and a paper, and find a marine-science research program."
+P28,Climate policy activist,Environmental Policy,moderate,yes,no,10th grade,Colorado,nonbinary,"I'm a sophomore in Colorado and I care intensely about climate change — the policy and organizing side more than the lab side. I want to study environmental policy or political science.
+
+Passion Project: I organize a local youth climate group — we've run rallies, met with city council about a climate action plan, and registered voters. I want to find programs and fellowships that teach policy and advocacy so I can be more effective."
+P29,Baker & food-science tinkerer,Culinary / Food Science,moderate,yes,no,11th grade,Louisiana,female,"I'm a junior in Louisiana and I love baking and the science behind it — why gluten develops, how fermentation works. I'm curious about food science as a major.
+
+Passion Project: I run a small weekend baking business selling breads and pastries to neighbors, and I experiment with recipes like a lab notebook. I want to find culinary or food-science programs and maybe a competition to test myself."
+P30,Aspiring athletic trainer,Health / Kinesiology,scant,no,no,11th grade,Texas,male,I play football and I'm interested in sports medicine and how the body works. I might want to be an athletic trainer or physical therapist.
+P31,Hospital volunteer coordinator,Nursing / Pre-Health,moderate,yes,no,12th grade,Ohio,female,"I'm a senior in Ohio and I want to become a nurse. I take health-science classes and I've done a CNA course. I like the hands-on, patient-facing side of medicine.
+
+Passion Project: I coordinate the teen-volunteer program at my local hospital — I schedule 25 volunteers and run their orientation. I want to find nursing and pre-health summer programs and get more real clinical exposure."
+P32,Bioinformatics / genetics researcher,Biotechnology / Genetics,rich,no,yes,12th grade,Maryland,male,"I'm a senior in Maryland fascinated by genetics and biotech — CRISPR, sequencing, the computational side. I take AP Bio and I code in Python and R. I want to study bioengineering or computational biology.
+
+Research Project: I'm doing a bioinformatics project analyzing gene-expression datasets to find markers for a disease, working from public data with a mentor's guidance. I want to publish it and find a serious biotech research program."
+P33,Rocketry team member,Aerospace Engineering,rich,yes,no,11th grade,Alabama,male,"I'm a junior in Alabama and I'm obsessed with aerospace and rocketry. I take physics and calculus and I want to study aerospace engineering.
+
+Passion Project: I'm on my school's rocketry team competing in The American Rocketry Challenge — I do the aerodynamics and recovery-system design, and we run our own test launches. I want to place nationally and find an aerospace program or internship."
+P34,Renewable-energy builder,Engineering / Renewable Energy,moderate,yes,no,11th grade,California,female,"I'm a junior in California interested in renewable energy and electrical engineering. I like building things and I care about climate solutions on the engineering side.
+
+Passion Project: I designed and built a small solar-charging station for my school's courtyard with a team, and I'm learning about batteries and power electronics. I want to find engineering programs focused on clean energy and maybe a competition."
+P35,Nonprofit founder,Social Entrepreneurship,rich,yes,no,12th grade,North Carolina,female,"I'm a senior in North Carolina and I care about educational equity. I'm drawn to social entrepreneurship — using an organization to fix a real problem. I want to study public policy or social impact.
+
+Passion Project: I founded a nonprofit that provides free tutoring and donated laptops to middle schoolers in under-resourced schools; we have 40 volunteer tutors and I've raised about $10,000 in grants. I want to scale it sustainably and find a social-impact fellowship or accelerator."
+P36,Mock trial captain,Law / Mock Trial,moderate,yes,no,11th grade,Illinois,male,"I'm a junior in Illinois and I'm into law — mock trial specifically. I love building a case and cross-examining. I want to study something pre-law, maybe political science.
+
+Passion Project: I captain my school's mock-trial team and we've made it to the state tournament; I coach the underclassmen on direct and cross. I want to find law-focused summer programs and compete at a higher level."
+P37,Competitive programmer,Computer Science / Competitive Programming,rich,no,no,12th grade,Washington,male,"I'm a senior in Washington and I do competitive programming seriously — algorithms, data structures, contest math. I compete in USACO and I'm at the Gold level pushing for Platinum. I want to study computer science at a strong program. I'm looking for competitions, camps, and anything that will push my algorithmic skills against the best students."
+P38,Sports-analytics blogger,Statistics / Data,moderate,yes,no,11th grade,Massachusetts,male,"I'm a junior in Massachusetts and I love statistics, especially sports analytics. I take AP Stats and I code in R. I want to study statistics or data science.
+
+Passion Project: I run a sports-analytics blog where I model team performance and player value, and I've built a small following. I want to enter data-science and statistics competitions and find a program that takes the analytical side seriously."
+P39,Animal-shelter volunteer,Veterinary / Animal Science,moderate,yes,no,10th grade,Kentucky,female,"I'm a sophomore in Kentucky and I love animals — I want to be a veterinarian. I take biology and I've shadowed at a vet clinic once.
+
+Passion Project: I volunteer every week at an animal shelter, where I help with intake and basic care, and I organized a supplies drive that collected a truckload of donations. I want to find pre-vet or animal-science programs and get more real experience."
+P40,Archaeology enthusiast,Anthropology / Archaeology,moderate,no,no,11th grade,New Mexico,nonbinary,"I'm a junior in New Mexico fascinated by archaeology and anthropology — how people lived, material culture, ancient civilizations. I read a lot about it and I want to study anthropology or archaeology. I'm looking for a summer field school, a dig, or any program where I could get real hands-on experience instead of just reading."
+P41,Theater actor,Theater / Drama,moderate,yes,no,12th grade,New York,female,"I'm a senior in New York and acting is everything to me. I've played leads in our school productions and done community theater. I want to study acting, ideally at a conservatory.
+
+Passion Project: I'm building an audition portfolio and I've started a student theater troupe that stages one original show a year. I want to find serious summer acting intensives and pre-conservatory programs."
+P42,Scant — dance,Dance,scant,no,no,11th grade,California,female,I dance ballet and contemporary and I want to keep getting better and maybe do it in college.
+P43,Photographer,Photography / Visual Arts,moderate,yes,no,11th grade,Washington,male,"I'm a junior in Washington and I'm serious about photography — documentary and street work especially. I want to study photography or visual arts.
+
+Passion Project: I've built a portfolio, had two photos in a local exhibition, and I run a photo account with a small following. I want to find summer photography programs and competitions to sharpen my eye and get my work seen."
+P44,Peer-tutoring founder & future teacher,Education / Teaching,moderate,yes,no,12th grade,Minnesota,female,"I'm a senior in Minnesota and I want to be a teacher — I love explaining things and working with younger kids. I'm interested in education and child development.
+
+Passion Project: I founded a peer-tutoring program at my school that pairs upperclassmen with struggling freshmen; I train the tutors and track how the students improve. I want to find education-focused programs and learn how good teaching actually works."
+P45,Earth-science student,Geology / Earth Science,moderate,no,no,11th grade,Utah,male,"I'm a junior in Utah and I love geology and earth science — rocks, plate tectonics, and the landscapes around me. I hike and collect minerals. I want to study geology or earth science and I'm looking for a summer field program or a competition where I can go beyond the classroom."
+P46,Scant — science,Mixed / undecided,scant,no,no,,,,"I like science, it's my favorite subject."
+P47,Scant — money/business,Business,scant,no,no,10th grade,,,I want to do business and make money someday.
+P48,Scant — games/computers,Computer Science,scant,no,no,,,,I'm into video games and computers.
+P49,Scant — animals,Veterinary / Animal Science,scant,no,no,9th grade,,,I like helping animals.
+P50,Scant — undecided writer/artist,Mixed / undecided,scant,no,no,,,,"I'm not sure what I like yet, maybe writing or art."

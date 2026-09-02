@@ -76,3 +76,33 @@ def merge_candidates(existing, new_entries):
     kept = [c for c in (existing or [])
             if not (isinstance(c, dict) and c.get("via") == DEDUPE_VIA)]
     return kept + list(new_entries)
+
+
+# --- discontinuation gate (pure, free) ----------------------------------------------------------
+# A model that READ a program's own page (mine_hub_pages today; any future page-extractor) can
+# report the program as no longer running. The review-queue contract is: DROP it before insert. A
+# discontinued program should never reach the reviewer at all -- keeping it out of the queue IS the
+# point, not inserting it and asking a human to re-confirm what the page already stated. This is the
+# SINGLE place the signal is interpreted, so every writer drops identically -- the alignment point:
+# an extractor only has to surface `running`, then hand the dropped candidate to its OWN
+# rejected-snapshot so nothing vanishes silently ("discard almost nothing, explain everything": we
+# discard it from the QUEUE but keep the full record on disk).
+#
+# Only a POSITIVE signal drops: `running is False`. True / None / missing -> keep. Absence of a
+# discontinuation signal is NEVER read as one, mirroring the deliberately narrow check in
+# check_links.py: act on real evidence the program is over, never on its silence. (This is why the
+# extract prompt must DEFAULT running to true and set it false only on explicit page evidence -- a
+# false positive here silently deletes a live program from discovery, with no reviewer to catch it.)
+
+
+def is_not_running(running):
+    """True when an extractor's page-read says the program is no longer offered -> DROP before
+    insert. Pure. Only `running is False` drops; True / None / missing keeps (never inferred from
+    silence)."""
+    return running is False
+
+
+def not_running_reason(reason):
+    """A short human explanation for the rejected-snapshot entry of a dropped not-running row. Pure."""
+    why = str(reason).strip()[:200] if (reason and str(reason).strip()) else "no reason given"
+    return f"page reads the program as no longer offered - {why}"

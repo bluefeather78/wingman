@@ -292,15 +292,36 @@ _EXTRACT_SYSTEM = (
     "You extract ONE high-school extracurricular opportunity from the text of its own web "
     "page. Return a single JSON object with keys: name, org, summary, type, price, state, "
     "location, intl, season, eligibility, grade_min, grade_max, subject_tags (array), "
-    "contact_email. Use ONLY what the page says; use null for anything the page does not "
-    "state. Do NOT invent a URL. If the page is not a single high-school program (a list, a "
-    "news article, a graduate/adult program), return {\"name\": null}.\n"
+    "contact_email, running, running_reason. Use ONLY what the page says; use null for "
+    "anything the page does not state. Do NOT invent a URL. If the page is not a single "
+    "high-school program (a list, a news article, a graduate/adult program), return "
+    "{\"name\": null}.\n"
     # `type` is a closed set on the catalog row. Naming the key without naming its values
     # made the model answer in its own vocabulary ("Summer Program"), which build_row parks
     # on a placeholder while the caller attaches FLAG_NO_TYPE — measured at 19 of 19 rows on
     # the first live run, i.e. every row needed a human to set a field the page states plainly.
     "`type` MUST be exactly one of: " + ", ".join(sorted(VALID_TYPES)) + ". Choose the "
-    "closest one; never invent another word and never leave it null.")
+    "closest one; never invent another word and never leave it null.\n"
+    # running / running_reason: the discontinuation signal. A false NEGATIVE (a dead program
+    # called running) just wastes a reviewer's glance; a false POSITIVE (a live program called
+    # dead) is DELETED from discovery with no reviewer to catch it — see queue_flags. So the
+    # examples below all bias the same way: default true, fire false ONLY on explicit page
+    # evidence. House style: define the term with concrete good/bad examples, never adjectives.
+    "`running` is a boolean: is this program STILL OFFERED? Default it to TRUE. Set it FALSE "
+    "ONLY when the page ITSELF shows the program is over, and put the deciding sentence in "
+    "`running_reason`. Exactly three things make it false: (a) the page says the program is "
+    "discontinued, cancelled, retired, or no longer offered — e.g. 'This program has been "
+    "discontinued' -> running=false, running_reason=\"page: 'This program has been "
+    "discontinued'\"; (b) applications are PERMANENTLY closed with no future cycle — e.g. "
+    "'Applications are closed and will not reopen' -> running=false; (c) the most recent cycle "
+    "the page NAMES has already passed AND no later cycle is announced — e.g. 'Program dates: "
+    "June 2022' with nothing later and no open application -> running=false, running_reason="
+    "\"newest cycle June 2022, no future cycle or open application\". Set it TRUE when the page "
+    "shows or implies a current or upcoming cycle — e.g. 'Summer 2026 applications open now' -> "
+    "running=true — and TRUE whenever the page gives no timing at all: a missing date is NOT "
+    "evidence a program ended. 'Deadline has passed' for a cycle that recurs is NOT discontinued "
+    "— that is a closed application for a live program, running=true. Never infer from outside "
+    "the page. When running=true, set running_reason to null.")
 
 
 def extract_opportunity(url, key, index=None, timeout=40, min_delay=5):
@@ -805,6 +826,7 @@ def main():
     # Bank the classifier spend up front so an exception in extraction cannot discard what SELECT
     # already paid — the same per-attempt banking the two-phase agents use.
     rows, review_by_id, cost, errors = [], {}, select_cost, 0
+    rejected = []          # not-running programs DROPPED before insert (kept for the snapshot)
     yield_by_hub = {}
     for hub_url, fresh in all_new:
         dom = url_dedupe.registrable_domain(urllib.parse.urlsplit(hub_url).netloc) or "hub"
@@ -831,6 +853,20 @@ def main():
                 print(f"  [WARN] extract failed {u}: {str(e)[:100]}")
                 continue
             if not cand:
+                refused_in_a_row += 1
+                continue
+            # Discontinuation gate (shared, free): the extractor READ the page and may report the
+            # program is no longer offered (`running`: false). A dead program must never reach the
+            # reviewer, so DROP it here rather than insert it — but record the full candidate in the
+            # rejected snapshot so nothing vanishes silently. A dropped page produced no row, so it
+            # counts toward the give-up streak exactly like a refusal: a hub that is all dead
+            # programs should stop costing money. queue_flags is the single interpreter of the
+            # signal, so every review-queue writer drops identically; only `running is False` drops.
+            if queue_flags.is_not_running(cand.get("running")):
+                reason = queue_flags.not_running_reason(cand.get("running_reason"))
+                print(f"  [DROP not-running] {(cand.get('name') or u)[:60]}: {reason[:90]}")
+                rejected.append({**cand, "url": u, "found_via": hub_url, "source": source,
+                                 "reject_reason": reason})
                 refused_in_a_row += 1
                 continue
             row = build_row(cand, next(mint), source, u, [])
@@ -909,7 +945,10 @@ def main():
                                f"hub_review_{args.mode}_{stamp}.json")
     with open(review_path, "w", encoding="utf-8") as f:
         json.dump({"inserted": [{**r, "review": review_by_id.get(r["id"], {})} for r in rows],
-                   "rejected": [], "merged": []}, f, indent=2, ensure_ascii=False)
+                   "rejected": rejected, "merged": []}, f, indent=2, ensure_ascii=False)
+    if rejected:
+        print(f"[OK] Dropped {len(rejected)} not-running program(s) before insert — recorded in "
+              f"{os.path.basename(review_path)} under 'rejected', never queued for review.")
 
     tier = None
     if args.dry_run:
@@ -930,7 +969,7 @@ def main():
             "errors": errors,
             "cost_usd": round(cost, 4),
             "notes": (f"hubs={len(hubs)}, candidates={total}, extracted={len(rows)}, "
-                      f"source-date={today}"
+                      f"dropped_not_running={len(rejected)}, source-date={today}"
                       + (f", would_have_added={len(rows)}" if args.dry_run else "")),
         }, service_key)
 

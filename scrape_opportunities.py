@@ -35,10 +35,13 @@ still silent is flagged for review rather than trusted.
 
 DISCARD ALMOST NOTHING, EXPLAIN EVERYTHING. Every row lands is_active=false with
 moderation_status='pending_review' and short, actionable `quality_flags` saying what to check.
-Only two things never reach the table: an exact duplicate (same normalized URL *and* matching
-name), and a candidate with no URL at all — the URL is the row's identity. Both are written to
-the review snapshot with their raw JSON so nothing vanishes silently. Never add a discard rule
-here without reading url_dedupe.py's measurements first.
+Only three things never reach the table: an exact duplicate (same normalized URL *and* matching
+name), a candidate with no URL at all — the URL is the row's identity — and a program the notes
+report as no longer running (queue_flags.is_not_running: a dead program should never reach the
+reviewer). All three are written to the review snapshot with their raw JSON so nothing vanishes
+silently. The not-running drop DEFAULTS to keeping — only an explicit running=false drops —
+because a false positive deletes a live program with no reviewer to catch it. Never add a
+DEDUP-based discard rule here without reading url_dedupe.py's measurements first.
 
 SETUP:
     .env (repo root) needs:
@@ -406,7 +409,10 @@ already know about, which is the entire job.
 HARD RULES:
 - Only write up opportunities you found actual evidence for in a search result. Never invent one, and \
 never pad the list with weak or speculative filler to look thorough.
-- Skip anything that looks defunct, or where nothing you found suggests it still runs.
+- Skip anything that looks defunct: a program described as discontinued, cancelled, or no longer \
+offered, or whose most recent cycle has already passed with no future one announced (e.g. the newest \
+thing you find is a "2022 program" with nothing later). If nothing you found suggests it still runs, \
+skip it. A closed application for a program that clearly recurs is NOT defunct — that program is still live.
 - Write an opportunity down even when you could not find its own page: give the name and say "no url". \
 A name on its own is still useful to us.
 
@@ -459,7 +465,11 @@ useful detail (this is the only descriptive text shown to students, so don't be 
 "subject_tags": ["3-5 short tags: one broad category from {subjects}, plus 2-4 more specific tags \
 naming the actual field, skill, or activity"], \
 "contact_email": "a real contact email address for the program if the notes contain one, else null — \
-never guess or construct one"}}
+never guess or construct one", \
+"running": true or false (default true) — is this program still offered? Set false ONLY when the notes \
+say it is discontinued, cancelled, or no longer offered, or that its most recent cycle has already \
+passed with no future one; a closed application for a program that clearly recurs is NOT discontinued, \
+"running_reason": "the sentence from the notes showing the program is over, or null when running is true"}}
 
 Rules for "url", which matter more than anything else here:
 - A list of SOURCE PAGES is supplied below. These are the pages that were actually retrieved. \
@@ -468,7 +478,10 @@ For each opportunity, copy the matching URL from that list VERBATIM, character f
 NEVER construct, complete, guess or pattern-match a URL — a plausible-looking wrong URL is worse \
 than no URL at all, because it looks correct to a reviewer.
 - "type" must be one of the seven listed values. Pick the best fit from the notes. Do not invent \
-a different value and do not leave it null."""
+a different value and do not leave it null.
+- "running" defaults to true. Set it false only on explicit evidence in the notes that the program is \
+discontinued or its most recent cycle has passed with no future one — a wrong "false" DELETES a live \
+program from discovery with no reviewer to catch it, so when in doubt, true."""
 
 SEATTLE_ADDENDUM = """
 
@@ -1113,6 +1126,7 @@ def main():
     merged = []            # same-URL candidates merged into an existing row instead of inserted
     total_cost = 0.0
     raw_found = duplicates_skipped = invalid_skipped = errors = 0
+    not_running_skipped = 0   # programs the notes report as no longer running — DROPPED before insert
     total_searches = silent_search_count = flagged_rows = dead_links = 0
     # Stage 1b (per-name URL resolution) run-level totals + the shared run budget.
     resolve_run_count = names_attempted = names_resolved = names_dropped = 0
@@ -1195,6 +1209,16 @@ def main():
                 if not name:
                     invalid_skipped += 1
                     rejected.append({"reason": "no name — a row cannot be identified", "raw": candidate})
+                    continue
+                # Discontinuation gate (shared, free): phase 2 may report the program is no longer
+                # running (from phase 1's notes). Drop it before insert — and before spending any
+                # stage-1b URL-resolution money on a dead program — recording the raw candidate in
+                # the rejected snapshot so nothing vanishes silently. queue_flags is the single
+                # interpreter every review-queue writer shares; only `running is False` drops.
+                if queue_flags.is_not_running(candidate.get("running")):
+                    not_running_skipped += 1
+                    rejected.append({"reason": queue_flags.not_running_reason(
+                        candidate.get("running_reason")), "raw": candidate})
                     continue
                 span_urls = spans_for_name(name, spans)
                 url, flags = reconcile_url(candidate.get("url"), resolved_urls, span_urls)
@@ -1457,6 +1481,7 @@ def main():
 
     print(f"\n[SUMMARY] seeds run: {len(seeds)}, raw candidates: {raw_found}, "
           f"duplicates skipped: {duplicates_skipped}, invalid skipped: {invalid_skipped}, "
+          f"not-running dropped: {not_running_skipped}, "
           f"errors: {errors}, new rows: {len(inserted_rows)} "
           f"({flagged_rows} flagged for review, {dead_links} with dead links), "
           f"searches: {total_searches}, silent seeds: {silent_search_count}/{len(seeds)}, "
@@ -1514,7 +1539,8 @@ def main():
             "total_web_searches": total_searches,
             "silent_search_count": silent_search_count,
             "notes": (f"raw_found={raw_found}, duplicates_skipped={duplicates_skipped}, "
-                      f"invalid_skipped={invalid_skipped}, flagged={flagged_rows}, "
+                      f"invalid_skipped={invalid_skipped}, not_running_dropped={not_running_skipped}, "
+                      f"flagged={flagged_rows}, "
                       f"dead_links={dead_links}, leads={len(captured_leads)}, "
                       f"resolve_attempted={names_attempted}, resolve_resolved={names_resolved}, "
                       f"resolve_dropped={names_dropped}, "

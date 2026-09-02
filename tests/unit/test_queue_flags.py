@@ -77,3 +77,41 @@ def test_merge_keeps_url_dedupe_entries_and_replaces_our_own():
 def test_merge_from_empty():
     fresh = [qf.dedupe_candidate({"id": "n", "name": "N", "url": "u"}, "proof", 1.0)]
     assert qf.merge_candidates(None, fresh) == fresh
+
+
+# --- is_not_running: DROP only on a positive signal ---------------------------------------
+
+def test_is_not_running_drops_only_on_explicit_false():
+    assert qf.is_not_running(False) is True
+
+
+def test_is_not_running_keeps_true_none_and_missing():
+    # A live program, an unknown, and a page that never mentioned status must all be KEPT.
+    # Silence is never read as discontinuation -- a false positive silently deletes a live program.
+    assert qf.is_not_running(True) is False
+    assert qf.is_not_running(None) is False
+    assert qf.is_not_running(cand_missing := {}.get("running")) is False  # missing key -> None
+
+
+def test_is_not_running_ignores_truthy_non_booleans():
+    # Only the boolean False drops. A stray string/0 from a malformed response must NOT delete a row.
+    assert qf.is_not_running("false") is False
+    assert qf.is_not_running(0) is False
+    assert qf.is_not_running("") is False
+
+
+# --- not_running_reason: the rejected-snapshot explanation --------------------------------
+
+def test_not_running_reason_carries_the_model_reason():
+    out = qf.not_running_reason("newest cycle June 2022, no future cycle")
+    assert "no longer offered" in out
+    assert "June 2022" in out
+
+
+def test_not_running_reason_handles_blank():
+    assert qf.not_running_reason(None).endswith("no reason given")
+    assert qf.not_running_reason("   ").endswith("no reason given")
+
+
+def test_not_running_reason_truncates():
+    assert len(qf.not_running_reason("x" * 500)) < 260

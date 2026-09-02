@@ -38,6 +38,16 @@ DEDUPE_SELECT_FIELDS = "id,name,org,type,summary,eligibility,is_active,dedupe_ve
 # What the READ path (the scraper gate index) selects: id + the vector itself.
 DEDUPE_INDEX_SELECT = "id,dedupe_vector,dedupe_vector_computed_at"
 
+# Rows per PostgREST page for the index read. The dedupe vector is gemini-embedding-001's full
+# 3072-dim output stored as jsonb — ~42KB/row, ~4x the 768-dim recall match_vector — so at ~1,680
+# active rows the whole index is ~70MB. A default 1000-row page (~42MB) exceeds Supabase's ~8s
+# statement timeout and 500s with code 57014, taking the dedupe hint dark (measured 2026-09-01:
+# 0-999 -> HTTP 500 at 8.6s; 0-199 -> 200 rows, 8.4MB, 1.3s). 200 keeps each request's serialize
+# well under the ceiling with room to spare; the result is identical, just more requests. The
+# ceiling is the DB STATEMENT timeout, not the client socket timeout — do not raise this without
+# re-measuring against the live payload.
+DEDUPE_INDEX_PAGE_SIZE = 200
+
 
 def dedupe_representation(row: dict) -> str:
     """The exact text embedded for one catalog row — the reader's own fields representation, so the
@@ -120,11 +130,13 @@ def fetch_dedupe_index(supabase_url, key, active_only=True, include_inactive=Fal
     """Read the stored dedupe vectors as an index (entry-shape list). Impure (one paginated GET).
 
     Replaces embed_common.load_index() for every live/analysis consumer. `supabase_get` pages past
-    PostgREST's 1000-row cap, so the whole ~1,300-row catalog comes back — an unpaginated read would
+    PostgREST's 1000-row cap, so the whole ~1,680-row catalog comes back — an unpaginated read would
     silently truncate the index and let duplicates through (the trap CLAUDE.md flags for this read).
+    Pages at DEDUPE_INDEX_PAGE_SIZE, well below the 1000-row cap, because the ~42KB/row vector makes
+    a full 1000-row page exceed Supabase's statement timeout (see that constant's note).
     A missing column (schema not run yet) surfaces as an empty index, which degrades the dedupe hint
     to off — never an exception, matching the JSONL "no file -> empty index" behaviour it replaces.
-    Any OTHER failure (a timeout on the ~40MB two-page vector payload, an outage) also degrades to an
+    Any OTHER failure (a statement timeout on the vector payload, an outage) also degrades to an
     empty index so a run is never crashed by a HINT — but it is announced, because a SILENT empty
     index reads as "no duplicates" when it means "we could not check", and that is the difference
     between the hint being off and being wrong.
@@ -135,7 +147,8 @@ def fetch_dedupe_index(supabase_url, key, active_only=True, include_inactive=Fal
     if active_only and not include_inactive:
         params["is_active"] = "eq.true"
     try:
-        rows = supabase_get(supabase_url.rstrip("/"), "opportunities", params, key) or []
+        rows = supabase_get(supabase_url.rstrip("/"), "opportunities", params, key,
+                            page_size=DEDUPE_INDEX_PAGE_SIZE) or []
     except urllib.error.HTTPError as e:
         if e.code == 400:
             return []   # column not migrated yet -> hint simply off, as designed

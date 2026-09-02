@@ -33,9 +33,16 @@ def load_dotenv(path=".env"):
                 os.environ[key] = value
 
 
-def supabase_get(supabase_url, table, params, key):
+def supabase_get(supabase_url, table, params, key, page_size=PAGE_SIZE):
     """Paginated GET against a Supabase/PostgREST table. `params` is a dict of
-    query params, e.g. {"select": "id,url", "is_active": "eq.true"}."""
+    query params, e.g. {"select": "id,url", "is_active": "eq.true"}.
+
+    `page_size` caps rows per PostgREST request (default PAGE_SIZE=1000, PostgREST's own max-rows
+    cap). LOWER it for a SELECT whose columns are large — e.g. a jsonb embedding vector — where a
+    full 1000-row page can exceed Supabase's ~8s statement timeout and 500 with code 57014
+    ("canceling statement due to statement timeout"). The total result is identical either way; a
+    smaller page just fetches it in more, smaller requests. Never RAISE it above 1000 — PostgREST
+    caps a single response there regardless, so a larger value would silently under-read."""
     query = urllib.parse.urlencode(params)
     rows = []
     offset = 0
@@ -45,15 +52,15 @@ def supabase_get(supabase_url, table, params, key):
             headers={
                 "apikey": key,
                 "Authorization": f"Bearer {key}",
-                "Range": f"{offset}-{offset + PAGE_SIZE - 1}",
+                "Range": f"{offset}-{offset + page_size - 1}",
             },
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
             page = json.loads(resp.read())
         rows.extend(page)
-        if len(page) < PAGE_SIZE:
+        if len(page) < page_size:
             break
-        offset += PAGE_SIZE
+        offset += page_size
     return rows
 
 

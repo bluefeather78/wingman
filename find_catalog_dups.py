@@ -12,9 +12,9 @@ acronym/token overlap) for what they were always good at: cheap, near-linear CAN
 generation over the whole catalog (domain bucketing and an inverted token index, not O(n^2)).
 What changed is the VERDICT: each candidate pair is now tiered by the SAME dedupe_confidence
 engine (PROOF / CONFIDENT / ADJUDICATE / SIBLING / HINT / NONE) dedupe_queue.py uses for the
-review queue, using a cosine looked up directly from the prebuilt embedding index
-(`catalog_embeddings.jsonl`) when both rows are embedded — one dot product per CANDIDATE, not a
-search over the whole index. A catalog with a few hundred candidate pairs costs a few hundred
+review queue, using a cosine looked up directly from the stored embedding index (the
+`opportunities.dedupe_vector` column) when both rows are embedded — one dot product per CANDIDATE,
+not a search over the whole index. A catalog with a few hundred candidate pairs costs a few hundred
 dot products, regardless of how large the catalog itself is.
 
 Cut 1 (exact URL) is judged directly here rather than delegated to classify_rows: a bare match on
@@ -222,7 +222,7 @@ def find_duplicate_pairs(rows, index=None):
 
     Each pair is {"rows": (a, b), "tier": <TIER_*>, "reasons": [...], "cosine": float|None},
     tier restricted to `_SURFACE_TIERS`. `index` defaults to the prebuilt on-disk index
-    (embed_common.load_index()) but takes an explicit list so this stays unit-testable with no
+    (the DB dedupe_vector columns) but takes an explicit list so this stays unit-testable with no
     disk or network access, matching the "every model call is injected" rule the rest of the
     dedupe stack follows.
 
@@ -232,7 +232,8 @@ def find_duplicate_pairs(rows, index=None):
     the whole index.
     """
     if index is None:
-        index = embed_common.load_index()
+        import dedupe_embed_store
+        index = dedupe_embed_store.fetch_dedupe_index_from_env()
     by_id = {r["id"]: r for r in rows if r.get("id")}
     vec = {e["id"]: e["vector"] for e in index if e.get("id") in by_id and e.get("vector")}
     unembedded = [rid for rid in by_id if rid not in vec]

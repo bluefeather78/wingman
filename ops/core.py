@@ -2228,13 +2228,18 @@ def get_db_health():
 # human just made live. See MARQUEE_DECISIONS.md M9. Toggling/removing the paid call is a marquee
 # change.
 def _index_activated_rows(ids):
-    """Best-effort: embed the just-activated rows into the dedupe index (catalog_embeddings.jsonl)
-    so a later scrape's embedding dedupe can see them. Never raises and never blocks activation —
-    on any failure (no GEMINI_API_KEY, network, etc.) the rows are simply left for the next
-    build_catalog_embeddings.py run to pick up. Active-only, matching the index's design: a row is
-    embedded when a human makes it LIVE, not while it sits pending. Reuses the build script's own
-    incremental selection + representation so the index and the reader can never drift. Returns the
-    count added."""
+    """Best-effort (MARQUEE M9): compute and store the DEDUPE embedding for the just-activated rows
+    (opportunities.dedupe_vector) so a later scrape's embedding dedupe can match new candidates
+    against rows a human just made live. Never raises and never blocks activation — on any failure
+    (no GEMINI_API_KEY, network, migration not run, etc.) the rows are simply left for the next
+    build_catalog_embeddings.py run to pick up. Active-only, matching the vector's design: a row is
+    embedded when a human makes it LIVE, not while it sits pending.
+
+    Deliberately PARALLEL to _embed_match_vectors: that writes the RECALL match_vector the
+    student-facing matcher reads; this writes the DEDUPE vector the scraper gate reads — a different
+    embedding, different fields, different job. Reuses refresh_row_dedupe_embedding, which self-checks
+    a content hash, so a row whose fields are unchanged is a no-op (cost 0) and one row's failure
+    skips only that row. Returns the count written."""
     ids = [str(i).strip() for i in (ids or []) if str(i).strip()]
     if not ids:
         return 0
@@ -2243,29 +2248,21 @@ def _index_activated_rows(ids):
         key = os.environ.get("GEMINI_API_KEY")
         if not key:
             return 0  # mock / no-key env: skip silently, exactly like the AI proxies do
-        import embed_common
-        import build_catalog_embeddings as bce
+        from dedupe_embed_store import refresh_row_dedupe_embedding, DEDUPE_SELECT_FIELDS
         rows = _supabase_request("opportunities", params={
-            "select": "id,name,org,type,summary,eligibility,is_active",
-            "id": f"in.({','.join(ids)})"})
-        if not rows:
-            return 0
-        existing = embed_common.load_index()
-        todo = bce.select_rows_to_embed(rows, {e.get("id") for e in existing})
-        if not todo:
-            return 0
-        entries = list(existing)
-        B = embed_common.DEFAULT_BATCH
-        for i in range(0, len(todo), B):
-            chunk = todo[i:i + B]
-            vectors, _cost = embed_common.embed_batch(
-                [bce.row_representation(r) for r in chunk], key)
-            for r, v in zip(chunk, vectors):
-                if v:
-                    entries.append(embed_common.index_entry(r["id"], v, rep="fields",
-                                                            source="catalog"))
-        embed_common.save_index(entries)
-        return len(todo)
+            "select": DEDUPE_SELECT_FIELDS, "id": f"in.({','.join(ids)})"}) or []
+        count = 0
+        for r in rows:
+            try:
+                patch = refresh_row_dedupe_embedding(r, key)
+                if not patch:
+                    continue  # inactive, hash unchanged, or empty rep -> nothing to write or bill
+                patch.pop("_cost_usd", None)
+                _commit_patch(r["id"], patch)
+                count += 1
+            except Exception:
+                continue  # one row's embed/write failure never affects the others or activation
+        return count
     except Exception:
         return 0
 
@@ -2276,9 +2273,10 @@ def _embed_match_vectors(ids):
     drops any row with no match_vector, so without this a newly-activated row is invisible to Fresh
     Finds until the next backfill_match_vectors.py run.
 
-    Deliberately SEPARATE from _index_activated_rows: that feeds the scraper's dedupe index
-    (catalog_embeddings.jsonl), this writes the opportunities.match_vector column the student-facing
-    matcher reads — a different embedding, computed from different fields, for a different job.
+    Deliberately SEPARATE from _index_activated_rows: that writes the opportunities.dedupe_vector
+    column the scraper gate reads, this writes the opportunities.match_vector column the
+    student-facing matcher reads — a different embedding, computed from different fields, for a
+    different job.
 
     Same contract as _index_activated_rows: active-only, never raises, never blocks or affects the
     activation result. Reuses refresh_row_embedding, which self-checks a content hash — so a row
@@ -3809,18 +3807,18 @@ MAINTENANCE_TOOLS = {
     },
     "embedindex": {
         "name": "Refresh Dedupe Embeddings",
-        "description": "Embed any active catalog rows missing from the dedupe index, so a scrape "
-                       "matches new finds against everything live. Usually unnecessary — "
-                       "activating a row now embeds it automatically. Preview is free; a commit "
-                       "is PAID (~cents).",
+        "description": "Embed active catalog rows whose dedupe vector is missing or stale (the "
+                       "opportunities.dedupe_vector column), so a scrape matches new finds against "
+                       "everything live. Usually unnecessary — activating a row now embeds it "
+                       "automatically; this is the ad-hoc catch-up. Re-embeds only rows whose "
+                       "fields changed (content-hash gated). Preview is free; a commit is PAID "
+                       "(~cents). Needs dedupe_vector_schema.sql to have been run.",
         "script": "build_catalog_embeddings.py",
         "free": False, "writes": True,
         "params": [
             {"key": "mode", "type": "select", "label": "Mode", "options": [
                 ["preview", "Preview — free: how many rows need embedding"],
-                ["commit", "Commit — PAID (~cents): embed and write the index"]]},
-            {"key": "rebuild", "type": "check",
-             "label": "Rebuild — re-embed every row, not just the missing ones"},
+                ["commit", "Commit — PAID (~cents): embed and write the column"]]},
         ],
     },
 }
@@ -3919,11 +3917,10 @@ def build_tool_args(tool_key, params):
         if str(params.get("mode") or "preview") != "reject":
             args.append("--dry-run")
     elif tool_key == "embedindex":
-        # build_catalog_embeddings.py: [--commit] [--rebuild]; no flag = free preview.
-        if str(params.get("mode") or "preview") == "commit":
-            args.append("--commit")
-            if params.get("rebuild"):
-                args.append("--rebuild")
+        # build_catalog_embeddings.py requires one of --dry-run (free preview) or --yes-really
+        # (PAID embed + write). Re-embedding is content-hash gated, so there is no --rebuild.
+        args.append("--yes-really" if str(params.get("mode") or "preview") == "commit"
+                    else "--dry-run")
     return args
 
 

@@ -258,9 +258,10 @@ def _tiers(pairs, labels):
     printing them lets the operator eyeball the false-positive rate before auto-merge is turned on."""
     import embed_common
     import dedupe_confidence as dc
-    index = {e["id"]: e["vector"] for e in embed_common.load_index()}
+    import dedupe_embed_store
+    index = {e["id"]: e["vector"] for e in dedupe_embed_store.fetch_dedupe_index_from_env()}
     if not index:
-        print("[ERROR] No catalog index — run build_catalog_embeddings.py --commit first.")
+        print("[ERROR] No catalog dedupe index — run build_catalog_embeddings.py --yes-really first.")
         return
     by_tier = {}
     detail = {dc.TIER_CONFIDENT: [], dc.TIER_SIBLING: [], dc.TIER_ADJUDICATE: []}

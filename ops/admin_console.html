@@ -5286,9 +5286,9 @@ function renderHealth(h) {
     <span class="hint">How much of the active catalog each subsystem has processed</span></div>
     <div class="card-body">`;
   html += `<div style="margin-bottom:14px">${healthPill(e.severity, e.severity === 'ok' ? 'ok' : 'gap')}
-    <span style="margin-left:8px"><strong>Dedupe embeddings</strong> —
-    ${num(e.indexed)} indexed, ${num(e.missing)} of ${num(e.active_rows)} active rows missing
-    (${esc(covPct)} covered)${e.newest_embedded_at ? `, index last built ${esc(e.newest_embedded_at)}` : ''}.</span></div>`;
+    <span style="margin-left:8px"><strong>Dedupe embeddings</strong> — ${e.columns_available === false
+      ? `dedupe_vector column not present — run dedupe_vector_schema.sql (coverage unknown, not zero)`
+      : `${num(e.indexed)} indexed, ${num(e.missing)} of ${num(e.active_rows)} active rows missing (${esc(covPct)} covered)`}.</span></div>`;
   if (cov.columns_available) {
     const rows = [['reviews', 'Reviews'], ['links', 'Link health'],
                   ['deadlines', 'Deadlines'], ['tasks', 'Action items']];

@@ -68,6 +68,7 @@ import url_validate
 import classify_page
 import combined_reader
 import embed_common
+import dedupe_embed_store
 import queue_flags
 from agent_common import add_agent_args, apply_timing, clean_email, emit_preview, snapshot_stamp
 from contact_email_common import resolve_contact_email
@@ -1088,7 +1089,7 @@ def main():
     # enrich program rows with page metadata (refresh's own extraction), and add an embedding
     # dedupe hint. The catalog embedding index powers the dedupe half; a missing index degrades
     # the gate to classify+metadata (the embed half then costs nothing). See MARQUEE_DECISIONS.md.
-    gate_index = embed_common.load_index()
+    gate_index = dedupe_embed_store.fetch_dedupe_index(supabase_url, service_key)
     gate_by_id = {r["id"]: r for r in existing if r.get("id")}
     print(f"[OK] Discovery gate ON (M9): classify + metadata + dedupe per candidate; "
           f"embedding index holds {len(gate_index)} row(s).")

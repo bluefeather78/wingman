@@ -15,11 +15,13 @@ console tabs and run three scripts to piece together:
     table (accurate even for runs triggered by cron or a bare CLI, not just this console);
   * and a short list of ALERTS — the handful of numbers that are out of their healthy band.
 
-WHY A SEPARATE SCRIPT and not just SQL: half of what matters here does not live in Postgres.
-The two lead queues are a repo-root JSONL (discovered_leads.jsonl); the dedupe embeddings are a
-repo-root JSONL (catalog_embeddings.jsonl). A health check that only queried the database would
-silently report "0 leads" and "no embeddings" because it was looking in the wrong place. This
-reads all three sources — Supabase, the leads file, the embedding index — and reconciles them.
+WHY A SEPARATE SCRIPT and not just SQL: some of what matters here does not live in Postgres.
+The two lead queues are a repo-root JSONL (discovered_leads.jsonl). A health check that only
+queried the database would silently report "0 leads" because it was looking in the wrong place.
+This reads both sources — Supabase and the leads file — and reconciles them. (The dedupe
+embeddings USED to be a repo-root JSONL too, which is exactly why a fresh checkout read "0%
+covered"; they now live in opportunities.dedupe_vector, read from the catalog like every other
+coverage column — see dedupe_vector_schema.sql.)
 
 FREE and SAFE: it issues read-only PostgREST GETs and reads two local files. It makes no model
 call, writes nothing, and is safe to run as often as you like. Unlike the six paid agents there
@@ -40,7 +42,6 @@ import urllib.parse
 import urllib.request
 
 import discovered_leads
-import embed_common
 from supabase_common import load_dotenv, supabase_get
 
 # ---------------------------------------------------------------------------------------------
@@ -83,7 +84,8 @@ CHECK_AGENTS = [
 # migrated before them 400s the whole select — _fetch_active_rows() degrades to the base set and
 # marks the missing coverage "unavailable" rather than failing the whole report.
 _ACTIVE_FULL_SELECT = ("id,type,review_status,last_reviewed_at,link_status,link_checked_at,"
-                       "dates_last_checked_at,action_items_source,action_items_checked_at")
+                       "dates_last_checked_at,action_items_source,action_items_checked_at,"
+                       "dedupe_vector_hash")
 _ACTIVE_BASE_SELECT = "id,type"
 
 
@@ -343,30 +345,25 @@ def collect_health(supabase_url=None, key=None):
                  "note": "Activated rows the Update Opportunity agent has not enriched yet."})
     out["queues"] = queues
 
-    # --- Dedupe embeddings (a repo-root JSONL index, not a table) --------------------------
-    emb = {"index_exists": os.path.exists(embed_common.DEFAULT_INDEX_PATH)}
-    try:
-        index = embed_common.load_index()
-        indexed_ids = {e.get("id") for e in index if e.get("id")}
-        stamps = sorted(e.get("embedded_at") for e in index if e.get("embedded_at"))
-        emb["indexed"] = len(indexed_ids)
-        emb["newest_embedded_at"] = stamps[-1] if stamps else None
-        emb["oldest_embedded_at"] = stamps[0] if stamps else None
-        if active_ids:
-            missing = active_ids - indexed_ids
-            emb["active_rows"] = len(active_ids)
-            emb["missing"] = len(missing)
-            emb["coverage_pct"] = round(100.0 * (len(active_ids) - len(missing)) / len(active_ids), 1)
-            emb["severity"] = (_ALERT if emb["coverage_pct"] < 80
-                               else _WARN if emb["coverage_pct"] < 95 else _OK)
-        else:
-            emb["active_rows"] = active_n
-            emb["missing"] = None
-            emb["coverage_pct"] = None
-            emb["severity"] = _OK
-    except Exception as e:                                      # noqa: BLE001
-        out["errors"].append(f"Could not read the embedding index: {e}")
-        emb["severity"] = _OK
+    # --- Dedupe embeddings (opportunities.dedupe_vector column; see dedupe_vector_schema.sql) ----
+    # Coverage = active rows carrying a dedupe_vector_hash (written together with the vector). Read
+    # from the same active-rows fetch above, so no extra query and no megabytes of float arrays are
+    # pulled. `columns_available` False means the migration has not run (or the FULL select degraded)
+    # — coverage is then UNKNOWABLE, not zero, so it must not alarm. This is the fix for the old
+    # false "0% covered" that a missing per-checkout JSONL sidecar used to produce.
+    emb = {"columns_available": columns_ok}
+    if columns_ok and active_rows:
+        indexed = sum(1 for r in active_rows if r.get("dedupe_vector_hash"))
+        total = len(active_rows)
+        pct = round(100.0 * indexed / total, 1) if total else None
+        emb.update({"active_rows": total, "indexed": indexed, "missing": total - indexed,
+                    "coverage_pct": pct})
+        emb["severity"] = (_ALERT if pct is not None and pct < 80
+                           else _WARN if pct is not None and pct < 95 else _OK)
+    else:
+        # No column yet, or no active rows to speak of: report nothing rather than a scary zero.
+        emb.update({"active_rows": active_n, "indexed": None, "missing": None,
+                    "coverage_pct": None, "severity": _OK})
     out["embeddings"] = emb
 
     # --- Freshness of each maintenance pass -----------------------------------------------
@@ -470,12 +467,14 @@ def _print_report(h):
 
     e = h.get("embeddings", {})
     print("\nDEDUPE EMBEDDINGS")
-    print(f"  {_sev_mark(e.get('severity'))} indexed {_fmt(e.get('indexed'))} of "
-          f"{_fmt(e.get('active_rows'))} active   "
-          f"missing {_fmt(e.get('missing'))}   coverage "
-          f"{e.get('coverage_pct') if e.get('coverage_pct') is not None else '—'}%")
-    if e.get("newest_embedded_at"):
-        print(f"     index built {e.get('oldest_embedded_at')} … {e.get('newest_embedded_at')}")
+    if not e.get("columns_available"):
+        print(f"  {_sev_mark(e.get('severity'))} dedupe_vector column not present — run "
+              f"dedupe_vector_schema.sql (coverage unknown, not zero)")
+    else:
+        print(f"  {_sev_mark(e.get('severity'))} indexed {_fmt(e.get('indexed'))} of "
+              f"{_fmt(e.get('active_rows'))} active   "
+              f"missing {_fmt(e.get('missing'))}   coverage "
+              f"{e.get('coverage_pct') if e.get('coverage_pct') is not None else '—'}%")
 
     print("\nLAST RUN OF EACH MAINTENANCE PASS")
     for chk in h.get("checks", []):

@@ -647,10 +647,13 @@ class TestMaintenanceTools:
 
     def test_paid_tools(self):
         # The paid tools: the contact-email backfill, the dead-link re-finder, hub mining (its
-        # extraction call) and name harvesting (a search per name). Angle proposing and every
-        # PREVIEW are free. Pinned so a new tool cannot quietly join the list that spends.
+        # extraction call), name harvesting (a search per name), the queue classifier and queue
+        # embedder (both call Gemini), and the dedupe-embedding backfill (build_catalog_embeddings,
+        # a paid embed). Angle proposing and every PREVIEW are free. Pinned so a new tool cannot
+        # quietly join the list that spends.
         paid = {k for k, c in core.MAINTENANCE_TOOLS.items() if not c.get("free")}
-        assert paid == {"contactemail", "refind", "minehub", "harvestnames"}
+        assert paid == {"contactemail", "refind", "minehub", "harvestnames",
+                        "classifyqueue", "dedupequeue", "embedindex"}
 
     def test_harvestnames_args(self):
         # Operator-pointed only — the router never sends work here. Free preview by default;

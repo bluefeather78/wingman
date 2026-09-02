@@ -22,9 +22,9 @@ dup_candidates back-link (evidence for a human to read), it does not flag, unfla
 deactivate anything. A flagged row stays exactly as flagged; a pending row stays exactly pending.
 
 The only cost is embedding the selected rows (a fraction of a cent for either source, since
-`--source flagged` selections are typically small); the active catalog is already in
-`catalog_embeddings.jsonl`. Nothing is written to Supabase without --write — this only tells you
-what the logic WOULD judge.
+`--source flagged` selections are typically small); the active catalog's dedupe vectors are read
+from the `opportunities.dedupe_vector` column (see dedupe_vector_schema.sql). Nothing is written to
+Supabase without --write — this only tells you what the logic WOULD judge.
 
     python dedupe_queue.py                     # embeds the review queue, prints tier verdicts
     python dedupe_queue.py --preview            # FREE: just the counts + estimated embed cost
@@ -140,11 +140,12 @@ def main():
     selected = [r for r in selected if reps[r["id"]].strip()]
 
     est = embed_common.estimate_embed_cost([reps[r["id"]] for r in selected])
-    active_index = embed_common.load_index()
+    import dedupe_embed_store
+    active_index = dedupe_embed_store.fetch_dedupe_index_from_env()
     print(f"[OK] {len(selected)} {label} row(s); active index holds {len(active_index)}. "
           f"Embedding them costs ~${est:.4f}.")
     if not active_index:
-        print("[ERROR] No catalog index — run build_catalog_embeddings.py --commit first.")
+        print("[ERROR] No catalog dedupe index — run build_catalog_embeddings.py --yes-really first.")
         return
     if not selected:
         print(f"[OK] Nothing to judge — no {label} rows.")

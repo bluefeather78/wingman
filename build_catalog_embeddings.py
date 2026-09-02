@@ -1,121 +1,133 @@
 #!/usr/bin/env python3
-"""Build the catalog embedding index — the vector side of duplicate detection.
+"""Build / backfill the catalog DEDUPE embeddings — the vector side of duplicate detection.
 
 Embeds every active catalog row's FIELDS (name + org + type + summary + eligibility) into the
-sidecar `catalog_embeddings.jsonl`, so the combined reader can, for each NEW candidate, find the
-nearest existing row and attach a duplicate hint.
+`opportunities.dedupe_vector` column, so the scraper gate can, for each NEW candidate, find the
+nearest existing row and attach a duplicate hint. New scraped rows embed at ACTIVATION via the
+console hook (ops/core._index_activated_rows); this script is the ad-hoc catch-up that fills in
+whatever the hook missed (rows activated before the migration, or a text edit that changed the
+representation).
 
 **Fields, not pages — and that is the whole practical win.** The 2026-08-30 eval chose the fields
-representation over page text for two reasons: its high-cosine band is nearly pure duplicates, and
-it needs NO page fetch — so this backfill embeds ~1500 stored rows with no catalog-wide crawl, it is
-fast, and it covers rows whose page has since died (10% link rot). The index is built with
-`combined_reader.default_representation`, the SAME function the reader queries with, so the index and
-the query can never drift apart.
+representation over page text: its high-cosine band is nearly pure duplicates, and it needs NO page
+fetch — so this backfill embeds ~1500 stored rows with no catalog-wide crawl, it is fast, and it
+covers rows whose page has since died (10% link rot). The representation and its freshness hash come
+from dedupe_embed_store, the SAME functions the activation hook and the scraper query with, so the
+stored index and the query can never drift apart.
 
-    python build_catalog_embeddings.py                 # FREE preview: row count + estimated cost
-    python build_catalog_embeddings.py --commit        # PAID: embed the rows missing from the index
-    python build_catalog_embeddings.py --commit --rebuild   # re-embed everything (e.g. rep changed)
+    python build_catalog_embeddings.py --dry-run        # FREE: count what needs embedding + est cost
+    python build_catalog_embeddings.py --yes-really     # PAID: embed the stale/missing rows + write
+    python build_catalog_embeddings.py --dry-run --limit 50
 
-Incremental by default: a row already in the index is skipped, so a second run only pays for what is
-new. Embedding is PAID (M9) — cheap (~$0.15/1M tokens, ~$0.20 for the whole catalog) but a money
-seam, so the write is gated behind --commit and each run needs fresh approval.
+Incremental by content hash: a row is embedded only when its dedupe_vector_hash differs from the
+current field values, so a second run right after a first does nothing, and a refresh_opportunities
+edit self-heals on the next pass. Embedding is PAID (M9) — cheap (~$0.15/1M tokens, ~$0.20 for the
+whole catalog) but a money seam, so the write is gated behind --yes-really and each run needs fresh
+approval. See MARQUEE_DECISIONS.md M9.
 """
 import argparse
+import datetime
 import os
+import sys
 
 import embed_common
-from combined_reader import default_representation
+from dedupe_embed_store import (dedupe_representation, rows_needing_dedupe_embedding,
+                                DEDUPE_SELECT_FIELDS)
 
-# The Supabase columns the fields representation needs. is_active drives the active-only default.
-_SELECT = "id,name,org,type,summary,eligibility,is_active"
+WRITE_CHUNK = 100  # embed + PATCH in chunks so a mid-run failure doesn't lose the whole pass
 
 
 def row_representation(row):
-    """The exact text embedded for one row — the reader's own fields representation. Pure."""
-    return default_representation(row, "")
-
-
-def select_rows_to_embed(rows, existing_ids, rebuild=False):
-    """The rows that actually need embedding: those with a non-empty representation and (unless
-    rebuild) not already in the index. Pure — the testable core of the incremental logic."""
-    existing = set(existing_ids or ())
-    out = []
-    for r in rows or []:
-        if not r.get("id") or not row_representation(r).strip():
-            continue
-        if not rebuild and r["id"] in existing:
-            continue
-        out.append(r)
-    return out
-
-
-def _fetch_rows(include_inactive=False):
-    from supabase_common import supabase_get, load_dotenv
-    load_dotenv()
-    su = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
-    if not su or not key:
-        raise SystemExit("[ERROR] SUPABASE_URL and a key must be set in .env.")
-    rows = supabase_get(su, "opportunities", {"select": _SELECT}, key) or []
-    return rows if include_inactive else [r for r in rows if r.get("is_active")]
-
-
-def _gemini_key():
-    from supabase_common import load_dotenv
-    load_dotenv()
-    k = os.environ.get("GEMINI_API_KEY")
-    if not k:
-        raise SystemExit("[ERROR] GEMINI_API_KEY must be set in .env to embed (--commit).")
-    return k
+    """The exact text embedded for one row — the dedupe store's fields representation. Pure.
+    Kept as a thin alias so the activation hook and tests have one name to call."""
+    return dedupe_representation(row)
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--commit", action="store_true",
-                    help="PAID: embed the rows and write the index. Without it, a FREE preview.")
-    ap.add_argument("--rebuild", action="store_true",
-                    help="Re-embed EVERY row, not just those missing from the index.")
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dry-run", action="store_true", help="Count + estimate, write nothing (FREE).")
+    ap.add_argument("--yes-really", action="store_true",
+                    help="PAID: embed the stale/missing rows and write the dedupe_vector column.")
     ap.add_argument("--include-inactive", action="store_true",
                     help="Also embed is_active=false rows (default: active catalog only).")
-    ap.add_argument("--limit", type=int, help="Cap the rows embedded this run (a pilot).")
-    ap.add_argument("--out", default=embed_common.DEFAULT_INDEX_PATH, help="Index file path.")
+    ap.add_argument("--limit", type=int, default=None, help="Cap the rows embedded this run (a pilot).")
     args = ap.parse_args()
+    if not args.dry_run and not args.yes_really:
+        ap.error("pass --dry-run to preview, or --yes-really to embed + write (PAID)")
 
-    rows = _fetch_rows(include_inactive=args.include_inactive)
-    existing = embed_common.load_index(args.out)
-    existing_ids = {e["id"] for e in existing}
-    todo = select_rows_to_embed(rows, existing_ids, rebuild=args.rebuild)
-    if args.limit:
-        todo = todo[:args.limit]
+    from supabase_common import load_dotenv, supabase_get, supabase_patch
+    load_dotenv()
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not url or not key:
+        print("[ERROR] SUPABASE_URL and a key must be set in .env.")
+        sys.exit(1)
+    if not args.dry_run and not gemini_key:
+        print("[ERROR] GEMINI_API_KEY not set — cannot embed (--yes-really).")
+        sys.exit(1)
 
-    est = embed_common.estimate_embed_cost([row_representation(r) for r in todo])
-    print(f"[OK] {len(rows)} row(s) fetched; index holds {len(existing_ids)}; "
-          f"{len(todo)} to embed this run. Estimated cost ~${est:.4f}.")
-    if not todo:
-        print("[OK] Nothing to embed — index is up to date.")
+    try:
+        params = {"select": DEDUPE_SELECT_FIELDS}
+        if not args.include_inactive:
+            params["is_active"] = "eq.true"
+        rows = supabase_get(url, "opportunities", params, key) or []
+    except Exception as e:
+        # A 400 here is almost always the migration not being run yet — name the file.
+        print(f"[ERROR] Could not read the catalog: {e}")
+        print("        If this is a missing-column error, run dedupe_vector_schema.sql first.")
+        sys.exit(1)
+
+    needing = rows_needing_dedupe_embedding(rows)
+    if args.limit is not None:
+        needing = needing[:args.limit]
+
+    est = embed_common.estimate_embed_cost([row_representation(r) for r, _ in needing])
+    print(f"[OK] {len(rows)} row(s) fetched; {len(needing)} need (re)embedding this run "
+          f"(model {embed_common.EMBED_MODEL}). Estimated cost ~${est:.4f}.")
+    if not needing:
+        print("[OK] Nothing to embed — every row's dedupe vector is current.")
         return
-    if not args.commit:
-        print("\n[PREVIEW] free. Re-run with --commit to embed and write the index (PAID).")
+    if args.dry_run:
+        for r, _ in needing[:15]:
+            print(f"     would embed {r['id']}  {str(r.get('name'))[:55]}")
+        if len(needing) > 15:
+            print(f"     ... and {len(needing) - 15} more")
+        print("\n[DRY RUN] No writes performed. Re-run with --yes-really to embed + write (PAID).")
         return
 
-    api_key = _gemini_key()
-    # Start from the existing index and append this run's vectors. save_index keeps the LAST entry
-    # per id, so a re-embed (rebuild, or a changed row) supersedes its old vector while rows not
-    # touched this run — including inactive ones — are preserved. One path serves both modes.
-    entries, total_cost = list(existing), 0.0
-    B = embed_common.DEFAULT_BATCH
-    for i in range(0, len(todo), B):
-        chunk = todo[i:i + B]
-        vectors, cost = embed_common.embed_batch([row_representation(r) for r in chunk], api_key)
-        total_cost += cost
-        for r, v in zip(chunk, vectors):
-            if v:
-                entries.append(embed_common.index_entry(r["id"], v, rep="fields",
-                                                         source="catalog"))
-        print(f"    embedded {min(i + B, len(todo))}/{len(todo)}  (~${total_cost:.4f})")
+    written, errors, spent = 0, 0, 0.0
+    B = WRITE_CHUNK
+    for start in range(0, len(needing), B):
+        chunk = needing[start:start + B]
+        texts = [row_representation(r) for r, _ in chunk]
+        try:
+            vectors, cost = embed_common.embed_batch(texts, gemini_key)
+            spent += cost
+        except Exception as e:
+            errors += len(chunk)
+            print(f"[ERROR] embed batch @{start} failed: {e}")
+            continue
+        stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        for (r, current_hash), vec in zip(chunk, vectors):
+            if not vec:
+                errors += 1
+                print(f"[WARN] {r['id']}: empty vector, skipped (not persisted).")
+                continue
+            try:
+                supabase_patch(url, "opportunities", {"id": f"eq.{r['id']}"}, {
+                    "dedupe_vector": vec,
+                    "dedupe_vector_hash": current_hash,
+                    "dedupe_vector_computed_at": stamp,
+                }, key)
+                written += 1
+            except Exception as e:
+                errors += 1
+                print(f"[ERROR] PATCH {r['id']}: {e}")
+        print(f"     ...{min(start + B, len(needing))}/{len(needing)}  (~${spent:.4f})")
 
-    written = embed_common.save_index(entries, args.out)
-    print(f"\n[OK] Index written: {written} row(s) at {args.out}. Spend this run ~${total_cost:.4f}.")
+    print(f"\n[OK] Embedded {written} row(s), {errors} error(s). Spend this run ~${spent:.4f}.")
 
 
 if __name__ == "__main__":

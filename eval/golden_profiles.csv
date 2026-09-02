@@ -1,0 +1,29 @@
+id,persona,theme,detail_level,has_passion_project,has_research_project,grade,state,gender,profile_text
+P01,CS / AI app builder,Computer Science,rich,yes,no,11th grade,California,male,"I'm a junior in California who's really into computer science, especially building things people actually use. I teach myself full-stack development, I'm comfortable in Python and TypeScript, and I want to study CS or human-computer interaction in college. My goal this year is to take a real product from prototype to its first users.
+
+Passion Project: I'm building Adio, a mobile app that helps students with ADHD break assignments into timed steps. I've shipped a beta to about 40 classmates, I run weekly feedback sessions, and I'm now trying to get to real adoption and eventually pitch it to get funding or into an accelerator."
+P02,Computational linguistics researcher,Linguistics / CS,rich,yes,yes,12th grade,Massachusetts,female,"I'm a senior fascinated by language and computation. I love the overlap between linguistics, math, and programming, and I want to keep doing original research in this space. My near-term goal is to publish my work and compete against strong students in computational-linguistics problem solving.
+
+Research Project: I'm studying grapheme-to-phoneme error rates in Finno-Ugric languages with two friends I met at a summer camp. We built our own dataset, we're running sequence models on it, and I'm writing up the results and looking for a venue to present or publish them.
+
+Passion Project: I run a small club at school where we design and solve original puzzle-style linguistics problems, and I'm assembling them into a practice set for the North American Computational Linguistics Olympiad."
+P03,Debate & policy,Law / Debate / Political Science,moderate,no,no,10th grade,Texas,nonbinary,"I'm a sophomore in Texas and my thing is debate. I do policy and Lincoln-Douglas, I've gone to a couple of state qualifiers, and I care a lot about how law and public policy actually shape people's lives. I'm thinking about pre-law or political science eventually.
+
+Outside of debate I follow Supreme Court cases pretty closely and I like writing persuasive essays. I want to find summer programs and competitions that would sharpen my argumentation and get me around other people who take this as seriously as I do."
+P04,Journalism & creative writing,Journalism / Writing,moderate,yes,no,11th grade,New York,female,"I'm a junior in New York who wants to be a journalist. I write for our school paper, I read a lot of long-form reporting, and I'm interested in how storytelling can hold power accountable. I also write short fiction on the side.
+
+Passion Project: I founded and edit an online magazine covering issues that matter to students in my district. I manage a team of six writers, we publish every two weeks, and I'd love to grow our readership and get real editorial mentorship or a spot in a summer journalism program."
+P05,Environmental science & activism,Environmental Science,rich,yes,yes,11th grade,Washington,male,"I'm a junior in Washington and I'm passionate about the environment, especially water and local ecosystems. I take AP Environmental Science and AP Chemistry, and I want to study environmental engineering or ecology. I'm happiest doing hands-on fieldwork.
+
+Research Project: I've been sampling a creek near my house for a year, testing for nitrates and turbidity after storms, and correlating the results with upstream development. I'm trying to turn the data into a paper and enter it in a science fair.
+
+Passion Project: I started a volunteer group that does monthly shoreline cleanups and runs storm-drain stenciling with the city. I coordinate about 30 volunteers and I want to make it a registered nonprofit."
+P06,Business & entrepreneurship,Business,moderate,yes,no,12th grade,Illinois,female,"I'm a senior in Illinois interested in business and entrepreneurship. I like marketing and figuring out what makes a product actually sell, and I want to study business or economics in college.
+
+Passion Project: I run a small Etsy-style shop selling custom stationery that I designed, and I've turned about $4,000 in revenue over the last year reinvesting into inventory. I want to learn how to scale it and meet other young founders — a pitch competition or an accelerator would be perfect."
+P07,Pre-med / biology researcher,Medicine / Biology,rich,no,yes,12th grade,Ohio,male,"I'm a senior in Ohio and I want to go into medicine, probably as an MD or MD-PhD. I love molecular biology and neuroscience, I take AP Bio and AP Chem, and I volunteer at a hospital on weekends. I'm looking for research experience and mentorship to go deeper.
+
+Research Project: I work in a university lab studying how a particular protein misfolds in early-onset Alzheimer's. I run Western blots and help with cell culture, and my PI said I might be a co-author on the next paper. I want to keep building serious wet-lab research skills."
+P08,Scant — math only,Mathematics,scant,no,no,,,,I really like math and I'm pretty good at it. I want to do something with it.
+P09,Scant — vague helper,Mixed / undecided,scant,no,no,9th grade,,,I want to help people and maybe do something in medicine or science one day.
+P10,Scant — arts,Art,scant,no,no,,,,I like drawing and painting and want to get better at art.

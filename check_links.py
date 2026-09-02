@@ -58,6 +58,25 @@ naming its old URL so the edit is auditable and reversible by hand. Nothing else
 activates anything: a row whose original URL simply comes back to life on its own is
 reported, its link_status corrected, and it stays inactive for a person to decide.
 
+DISCONTINUATION CONTENT CHECK (added 2026-09-01). The same "evidence of absence" idea, one
+level up from the URL: a row whose SUMMARY plainly says the program is gone ("has ceased all
+contest operations", "discontinued its Summer Art Camps", "will not be offering ... in summer
+2026"). Its link is usually still live — the page loads and truthfully announces the program's
+end — so the URL sweep above never catches it. `status = 'not_running'` is the catalog's
+canonical "discontinued" value, and BOTH the finder's catalog list and the matcher's recall()
+already drop not_running rows — so an unmarked one leaks into Fresh Finds and the /api/match
+grid. It leaked exactly that way (Caribou, UMD Summer Art Camps, UC Berkeley CED Build Camp
+surfaced as live matches, 2026-09-01) because only check_deadlines.py writes `status` and it is
+paid + on-demand, so it had never touched these rows.
+
+This check is free (a regex over text we already fetched) and deliberately conservative:
+  * it ONLY fills a status that is currently NULL/blank — it never overwrites check_deadlines.py's
+    verdict, so the two writers cannot drift (deadline owns the field; this only fills the gap);
+  * matched on a small set of unambiguous program-is-gone phrases (see DISCONTINUED_RX), which
+    hit exactly 3 of 1678 active rows with zero false positives on the 2026-09-01 catalog;
+  * it writes not_running and a review flag but does NOT deactivate the row — not_running already
+    hides it everywhere that matters, and a later real deadline check can still confirm/correct it.
+
 SETUP:
     .env needs SUPABASE_URL and SUPABASE_SERVICE_KEY. No model key.
     link_health_schema.sql is a one-time manual step in the Supabase SQL editor. Without
@@ -79,6 +98,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -115,6 +135,11 @@ FLAG_DEAD = "dead link ({code}) - page is gone; find the current URL or reject"
 FLAG_BLOCKED = "link unverifiable ({code}) - site blocks automated checks; open it manually"
 FLAG_UNREACHABLE = "link unreachable ({code}) - could not connect; open it manually"
 FLAG_SOFT_404 = "link redirects to a site homepage - the program's own page may be gone"
+# Written on a row whose SUMMARY announces the program is gone (see the DISCONTINUATION
+# CONTENT CHECK section of the module docstring). It says to CONFIRM, not that a decision was
+# made — the row is only marked not_running, never deactivated.
+FLAG_DISCONTINUED = ("summary says program is discontinued/ended - marked not-running; "
+                     "confirm it is really gone")
 # Written on a row whose URL was REPAIRED. It carries the old URL because that is the only
 # record of what changed: `url` now holds the new value, and this is what makes the edit
 # auditable and reversible by hand. Truncated to keep the console pill readable.
@@ -126,7 +151,38 @@ FLAG_SUGGESTION = "possible replacement found but NOT verified: {url}"
 # prefix rather than exact text means an edited wording does not orphan the old flags.
 _OWNED_PREFIXES = ("dead link (", "link unverifiable (", "link unreachable (",
                    "link redirects to a site homepage", "URL was dead (",
-                   "possible replacement found")
+                   "possible replacement found", "summary says program is discontinued")
+
+# Discontinuation language for the content check. Deliberately narrow: each pattern asserts the
+# PROGRAM ITSELF is gone or paused, not merely that some part of a page mentions ending (an
+# eligibility note like "discontinue use of..." must not match). Measured over the 1678 active
+# rows on 2026-09-01, this hit exactly 3 rows — all genuinely dead — and nothing else. Keep it
+# tight: a false positive here yanks a live program out of Fresh Finds and matching.
+DISCONTINUED_RX = re.compile("|".join((
+    r"\bdiscontinu",                                    # discontinued / discontinuing
+    r"\bceased?\b",                                     # ceased / cease
+    r"no longer (be )?(offer|offered|offering|available|running|accept)",
+    r"will not (be )?(offer|be offering|be held|run|be running)",
+    r"not (be )?offer(ing|ed)? (this|the|its)",
+    r"has (ended|closed|shut down|been cancell?ed|been discontinued)",
+    r"is (no longer|not) (running|active|offered|available)",
+    r"(program|contest|camp|competition|series) (has )?(ended|closed|been cancell?ed)",
+    r"winding down",
+    r"permanently closed",
+)), re.I)
+
+
+def discontinued_phrase(row):
+    """The matched discontinuation phrase in a row's summary, or None. Free — no I/O."""
+    m = DISCONTINUED_RX.search(row.get("summary") or "")
+    return m.group(0) if m else None
+
+
+def _status_blank(row):
+    """True when the row carries no deadline-checker verdict yet — the only case this agent may
+    fill `status`. A real not_running/running/rolling/unknown value is check_deadlines.py's and
+    is never overwritten here."""
+    return str(row.get("status") or "").strip().lower() in ("", "null", "none")
 
 # WHAT THIS AGENT DELIBERATELY DOES NOT FLAG, and the measurement behind each. Both checks
 # exist in url_validate and both are used by scrape_opportunities.py, where they earn their
@@ -239,7 +295,7 @@ def select_rows(supabase_url, service_key, args):
     against a database missing the migration would take the entire agent down rather than
     costing it one feature.
     """
-    base = "id,name,org,url,is_active,quality_flags,moderation_status"
+    base = "id,name,org,url,is_active,quality_flags,moderation_status,summary,status"
     schema_ready = True
     # `flagged` scope walks INACTIVE rows — the ones an earlier pass deactivated — so the
     # is_active filter flips. Everything else about the read is identical.
@@ -344,9 +400,19 @@ def sweep(rows, timeout, workers):
     return results
 
 
-def build_update(row, action, flags, result, now_iso, schema_ready, repair=None):
-    """The PATCH body for one row, or None if nothing about it changed."""
+def build_update(row, action, flags, result, now_iso, schema_ready, repair=None,
+                 mark_not_running=False):
+    """The PATCH body for one row, or None if nothing about it changed.
+
+    `mark_not_running` is set when the row's summary announces the program is gone AND its
+    `status` is still blank (see discontinued_phrase / _status_blank). It writes the catalog's
+    canonical discontinued value; the caller has already added FLAG_DISCONTINUED to `flags`."""
     update = {}
+    if mark_not_running:
+        # A CONTENT change to the opportunity (unlike the link_* telemetry), so this correctly
+        # bumps updated_at below. Guarded on _status_blank upstream, so it never overwrites
+        # check_deadlines.py's verdict.
+        update["status"] = "not_running"
     if action == "repair":
         # The row's URL was dead and a replacement was PROVEN to be this program's own page
         # (url_repair's three tests). Write it, and treat the link as live from here — the
@@ -527,6 +593,7 @@ def main():
     flagged = 0
     repaired = 0
     restored = 0
+    discontinued = 0
     written = 0
     errors = 0
     snapshot = []
@@ -538,6 +605,17 @@ def main():
         action, flags = classify(row, result, repair)
         if action == "deactivate" and args.flag_only:
             action = "flag"
+
+        # Content check (free, no HTTP): a summary that announces the program is gone. Adds a
+        # review flag whenever the language is present, but only WRITES status=not_running when
+        # the field is still blank — never overwriting check_deadlines.py. Orthogonal to the
+        # link verdict above: a discontinued program's URL is usually still live.
+        disc_phrase = discontinued_phrase(row)
+        mark_not_running = bool(disc_phrase) and _status_blank(row)
+        if disc_phrase:
+            flags = flags + [FLAG_DISCONTINUED]
+            if mark_not_running:
+                discontinued += 1
 
         name = (row.get("name") or "?")[:55].encode("utf-8", "ignore").decode("utf-8")
         mark = {"repair": "REPAIRED", "deactivate": "DEACTIVATE",
@@ -558,6 +636,9 @@ def main():
             deactivated += 1
         elif action == "flag":
             flagged += 1
+        if mark_not_running:
+            print(f"               summary reads discontinued -> status=not_running "
+                  f"({disc_phrase!r})")
 
         snapshot.append({
             "id": row["id"], "name": row.get("name"), "org": row.get("org"),
@@ -565,6 +646,10 @@ def main():
             "code": str(result.get("code")), "final_url": result.get("final_url"),
             "action": action, "flags": flags,
             "was_active": bool(row.get("is_active")),
+            # The discontinuation content signal, independent of the link verdict: the matched
+            # phrase (if any) and whether this run marked the row not_running for it.
+            "discontinued_phrase": disc_phrase,
+            "marked_not_running": mark_not_running,
             # The whole repair record, accepted or not: the URL chosen, the title that
             # proved it, and every candidate that was rejected and why. This is what makes
             # an automatic URL edit reviewable after the fact rather than a mystery.
@@ -573,7 +658,8 @@ def main():
 
         if args.dry_run:
             continue
-        update = build_update(row, action, flags, result, now_iso, schema_ready, repair)
+        update = build_update(row, action, flags, result, now_iso, schema_ready, repair,
+                              mark_not_running=mark_not_running)
         if not update:
             continue
         try:
@@ -615,6 +701,12 @@ def main():
     if args.flag_only and counts["dead"]:
         print(f"[NOTE] --flag-only: {counts['dead']} dead row(s) were left ACTIVE. "
               f"Re-run without it to deactivate them.")
+    if discontinued:
+        verb = "would mark" if args.dry_run else "marked"
+        print(f"[SUMMARY] {verb} {discontinued} row(s) status=not_running from discontinuation "
+              f"language in their summary (status was blank). They drop out of Fresh Finds and "
+              f"matching; the row stays for a person to confirm. This never overwrites a "
+              f"deadline-checker verdict.")
 
     if args.repair:
         attempted = len(repairs)
@@ -655,7 +747,7 @@ def main():
         supabase_patch(supabase_url, "agent_runs", {"id": f"eq.{run_id}"}, {
             "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "items_processed": total,
-            "items_updated": deactivated + flagged,
+            "items_updated": deactivated + flagged + discontinued,
             "errors": errors,
             # Genuinely zero, not unknown. This is the one agent for which a 0 in the cost
             # column is a fact rather than a run that died before its closing PATCH.
@@ -664,7 +756,8 @@ def main():
             "silent_search_count": 0,
             "notes": f"live={counts['live']}, dead={counts['dead']}, "
                      f"unverified={counts['unverified']}, deactivated={deactivated}, "
-                     f"flagged={flagged}, repaired={repaired}, restored={restored}",
+                     f"flagged={flagged}, repaired={repaired}, restored={restored}, "
+                     f"discontinued={discontinued}",
         }, service_key)
         print(f"[OK] Logged agent_runs id={run_id}.")
 

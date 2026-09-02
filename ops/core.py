@@ -167,12 +167,18 @@ AGENT_CONFIGS_SCHEMA = {
     },
     "links": {
         "name": "Link Checker",
-        "description": "Find catalog rows whose URL is broken; deactivate the ones that are gone",
+        "description": "Verify catalog URLs (deactivate the gone ones); also mark programs whose summary says they're discontinued",
         "script": "check_links.py",
         "db_agent": "link_checker",
         "unit": "rows",
         # The only agent that DEACTIVATES rows. It never activates and never rejects — a
         # dead link puts a row in the review queue, it is not a verdict on the program.
+        # It ALSO runs a free content check (added 2026-09-01): a row whose SUMMARY plainly
+        # says the program is gone ("ceased operations", "discontinued its ... camps", "will
+        # not be offering ...") gets status='not_running' — but only when that field is still
+        # blank, so it never overwrites the deadline checker's verdict. not_running hides the
+        # row from Fresh Finds and matching without deactivating it; a person confirms. This
+        # closed a leak where discontinued-but-live-URL rows surfaced as matches.
         "writes": "deactivates",
         "uses_gemini_search": False,
         "api": "None — plain HTTP. This agent is free.",

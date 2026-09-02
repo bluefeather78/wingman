@@ -141,6 +141,54 @@ def _get_opportunities(supabase_url, params, service_key):
         raise
 
 
+# MARQUEE M9: a refresh that changes a row's embed fields makes both catalog embeddings stale
+# (the recall match_vector and the scraper dedupe_vector are computed from these fields), and
+# refresh does NOT otherwise re-embed — so a full pass silently drifts them until the next manual
+# backfill. These fields are the UNION of what the two vectors read: match_vector uses
+# name+org+summary+subject_tags+type; dedupe_vector uses name+org+type+summary+eligibility. When a
+# live PATCH actually CHANGES one of them, the row is re-embedded on both vectors (a paid Gemini
+# embedding call, ~cents/row, only for rows that changed). Toggling/removing this paid call is a
+# marquee change. See MARQUEE_DECISIONS.md M9, match_vector_schema.sql, dedupe_vector_schema.sql.
+EMBED_TRIGGER_FIELDS = ("name", "org", "summary", "subject_tags", "type", "eligibility")
+
+
+def _embed_columns_present(supabase_url, service_key):
+    """True if the match_vector/dedupe_vector migrations have been run — a cheap one-row probe so a
+    missing column disables the re-embed for the whole run rather than paying for an embed whose
+    write then 400s. A non-400 error propagates (a real outage, not a missing column)."""
+    try:
+        supabase_get(supabase_url, "opportunities",
+                     {"select": "id,match_vector_hash,dedupe_vector_hash", "limit": "1"}, service_key)
+        return True
+    except urllib.error.HTTPError as e:
+        if e.code == 400:
+            return False
+        raise
+
+
+def _reembed_row(supabase_url, service_key, merged_row, gemini_key):
+    """Re-embed one just-updated row on BOTH catalog vectors and PATCH the changed columns. Returns
+    the embedding cost (0.0 if nothing was recomputed). Best-effort by design — a single row's embed
+    or write failure never breaks the refresh, and each vector self-checks a content hash, so an
+    inactive row or an unchanged representation is a no-op. Imported lazily to avoid an import cycle
+    (dedupe_embed_store -> combined_reader -> refresh_opportunities)."""
+    from app.services.embeddings import refresh_row_embedding          # recall match_vector
+    from dedupe_embed_store import refresh_row_dedupe_embedding        # scraper dedupe_vector
+    cost = 0.0
+    for refresh_fn in (refresh_row_embedding, refresh_row_dedupe_embedding):
+        try:
+            patch = refresh_fn(merged_row, gemini_key)
+            if not patch:
+                continue
+            cost += patch.pop("_cost_usd", 0.0) or 0.0
+            patch.pop("_usage", None)
+            supabase_patch(supabase_url, "opportunities", {"id": f"eq.{merged_row['id']}"},
+                           patch, service_key)
+        except Exception as e:                                         # noqa: BLE001
+            print(f"[WARN] re-embed {merged_row.get('id')}: {e}")
+    return cost
+
+
 def build_system(opp):
     today = datetime.date.today().isoformat()
     # MARQUEE M1 (MARQUEE_DECISIONS.md): this agent fills metadata by READING THE PROGRAM'S
@@ -348,7 +396,7 @@ def main():
     # rather than being left unresolved for want of a second key.
 
     select = ("id,name,org,url,summary,type,price,location,intl,season,eligibility,"
-              "grade_min,grade_max,cost,subject_tags,contact_email,"
+              "grade_min,grade_max,cost,subject_tags,contact_email,is_active,"
               + ACTIVATION_REFRESH_COLUMN)
 
     # --ids / --pending target queued or just-activated rows (they ignore the is_active
@@ -440,6 +488,17 @@ def main():
     contact_found = 0
     contact_model_calls = 0
     dequeued = 0                # activation-refresh markers cleared (rows drained off the queue)
+    reembedded = 0              # rows re-embedded because a live PATCH changed their embed fields
+
+    # MARQUEE M9: keep the catalog embeddings fresh as metadata changes. Enabled only for a live
+    # run with a key AND when the vector columns exist (a one-row probe), so a dry run never spends
+    # on embeddings and a DB without the migrations degrades to "no re-embed" rather than paying for
+    # a write that 400s. A changed row is re-embedded from its post-PATCH values in the loop below.
+    embed_enabled = bool(gemini_key) and not args.dry_run and \
+        _embed_columns_present(supabase_url, service_key)
+    if not args.dry_run:
+        print(f"[OK] Auto re-embed on metadata change: "
+              f"{'ON (MARQUEE M9)' if embed_enabled else 'off (no key or vector columns missing)'}.")
 
     for i, opp in enumerate(items):
         # The stdout reconfigure above makes this print encoding-safe on Windows; just
@@ -516,6 +575,18 @@ def main():
                     dequeued += 1
                 supabase_patch(supabase_url, "opportunities", {"id": f"eq.{opp['id']}"}, updates, service_key)
 
+                # MARQUEE M9: re-embed only when this PATCH actually CHANGED an embed field (the
+                # page re-states name/summary/etc. every pass, so field PRESENCE is not change —
+                # compare each stated value against the pre-update row). The merged row carries the
+                # new values; the vector helpers gate on is_active + a content hash, so nothing is
+                # embedded for an inactive or genuinely-unchanged row.
+                if embed_enabled and any(f in updates and updates[f] != opp.get(f)
+                                         for f in EMBED_TRIGGER_FIELDS):
+                    ec = _reembed_row(supabase_url, service_key, {**opp, **updates}, gemini_key)
+                    if ec:
+                        total_cost += ec
+                        reembedded += 1
+
             updated += 1
             print(f"{n_fields} field(s) from page, ${cost:.4f}"
                   + (" [dequeued]" if queued and not args.dry_run else ""))
@@ -535,6 +606,7 @@ def main():
           f"unfetchable(skipped): {skipped_unfetchable}, unreadable(skipped): {unparsed}, "
           f"errors: {errors}, contact emails found: {contact_found} "
           f"({contact_model_calls} model call(s)), activation-queue drained: {dequeued}, "
+          f"re-embedded(changed): {reembedded}, "
           f"cost: ${total_cost:.4f}  "
           f"(metadata read from each program's live page — MARQUEE M1)")
     if mode == "sample" and items:
@@ -566,7 +638,7 @@ def main():
             "notes": f"pages_read={fetched}, unfetchable={skipped_unfetchable}, "
                      f"unparsed={unparsed}, contact_emails_found={contact_found}, "
                      f"contact_model_calls={contact_model_calls}, "
-                     f"activation_queue_drained={dequeued}",
+                     f"activation_queue_drained={dequeued}, reembedded={reembedded}",
         }, service_key)
         print(f"[OK] Logged agent_runs id={run_id}.")
 

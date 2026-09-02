@@ -287,7 +287,7 @@ def _prefix_relation(path_a, path_b):
     return bool(a) and a != "/" and b.startswith(a + "/")
 
 
-def find_duplicates(url, name, existing_rows, apply_url=None):
+def find_duplicates(url, name, existing_rows, apply_url=None, include_weak=True):
     """Compare one submission against the catalog.
 
     existing_rows: dicts with at least id/name/url, optionally apply_url.
@@ -295,6 +295,15 @@ def find_duplicates(url, name, existing_rows, apply_url=None):
     Returns (exact_row, candidates). `exact_row` is a hard duplicate — same page, do not
     insert. `candidates` are ranked hints for a human, each {id, name, url, reason,
     confidence}; they NEVER justify rejecting on their own.
+
+    `include_weak=False` drops the `weak`-confidence hints (cross-host name similarity and
+    same-site-few-peers) from the returned candidates, keeping only `strong` ones. Measured
+    2026-09-01, the weak tier was 592 of 796 stored url_dedupe hints (74%) and its lowest-value
+    half — cross-host name-sim ≥88% ('1-Week' vs '3-Week Medical Academy') and same-site-busy
+    hints. The queue feeders pass False so those stop reaching the reviewer; the exact-URL
+    reject and every strong hint are unaffected, and the content-embedding hint (which is also
+    catalog-wide) backstops genuine cross-host duplicates. Default stays True so every other
+    caller and the pure-function tests are unchanged.
     """
     key = match_key(url)
     _, host, path, _ = split_url(url)
@@ -369,6 +378,8 @@ def find_duplicates(url, name, existing_rows, apply_url=None):
             continue
         candidates.append(dict(row, reason=reason, confidence=confidence, ratio=ratio))
 
+    if not include_weak:
+        candidates = [c for c in candidates if c.get("confidence") == "strong"]
     order = {"strong": 0, "weak": 1}
     candidates.sort(key=lambda c: (order.get(c["confidence"], 9), -c.get("ratio", 0)))
     trimmed = [{"id": c.get("id"), "name": c.get("name"), "url": c.get("url"),

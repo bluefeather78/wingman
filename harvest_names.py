@@ -605,7 +605,8 @@ def main():
             if not url:
                 print(f"  [UNPROVEN] {name}  — no grounding page whose title proves it; wrote nothing.")
                 continue
-            exact, dup_candidates = url_dedupe.find_duplicates(url, name, existing)
+            exact, dup_candidates = url_dedupe.find_duplicates(url, name, existing,
+                                                               include_weak=False)
             if exact:
                 print(f"  [DUPE] {name} -> {url} already in the catalog as {exact}.")
                 continue

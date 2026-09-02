@@ -1275,7 +1275,8 @@ def main():
                 # Everything weaker than an exact/same-URL match becomes a hint on the row:
                 # url_dedupe.py's measurements show URL-alone rejects shared application portals
                 # and name-alone rejects 257 genuinely distinct catalog pairs.
-                exact, dup_candidates = url_dedupe.find_duplicates(url, candidate.get("name"), existing)
+                exact, dup_candidates = url_dedupe.find_duplicates(url, candidate.get("name"),
+                                                                   existing, include_weak=False)
                 # Phase 3, via the one shared rule (classify_same_url) the harness also grades:
                 # a same-URL candidate on a DEDICATED page is the same program -> merge into the
                 # incumbent (Round 2: incumbent won 27/28); on a BARE DOMAIN it is rejected if the

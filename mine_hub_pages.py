@@ -877,7 +877,7 @@ def main():
             # hints; without this the row reached the queue with no link to its twin. Hints
             # only — the hub miner never auto-rejects, so an exact hit (should not occur here)
             # is downgraded to a strong candidate rather than dropping the row.
-            _exact, dup_cands = url_dedupe.find_duplicates(u, name, existing)
+            _exact, dup_cands = url_dedupe.find_duplicates(u, name, existing, include_weak=False)
             if _exact and not any(c.get("id") == _exact.get("id") for c in dup_cands):
                 dup_cands = [{"id": _exact.get("id"), "name": _exact.get("name"),
                               "url": _exact.get("url"),

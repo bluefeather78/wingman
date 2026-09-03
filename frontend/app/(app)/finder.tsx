@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { addTrackerItemChecked, flattenItems, loadTrackerData } from '@/api/trackerStore';
@@ -620,7 +620,19 @@ export default function Finder() {
         strong: rz ? rz.tier === 'strong' : false,
       };
     });
-    return { mapped, note: resp.note ?? null };
+    // CURATION (suggest path only): the reranker writes a "why it fits" reason ONLY for the
+    // candidates it genuinely vouches for; every other row is padding pulled up from the cosine
+    // recall pool purely to fill the 10-card grid. Measured on the golden set, blurb-less cards
+    // are ~70% weak matches against ~7% for blurbed ones (an absent blurb is the reranker's own
+    // implicit rejection), and the good matches lost by dropping them all ranked mid-pack (avg
+    // display position 7.79, never top-3) — so show ONLY what the reranker justified. This
+    // curation lives here, not at the render layer, so it can NEVER touch the strict-type
+    // (Conference/Journal, requireAll) path or the keyword fallback — both are separate code
+    // paths in search() that legitimately show un-reasoned rows.
+    // GUARD: if NOTHING got a reason (both rank attempts above threw), fall back to the full
+    // recall order rather than curating the page down to a false "No matches this time".
+    const vouched = mapped.filter((m) => m.reason.trim());
+    return { mapped: vouched.length ? vouched : mapped, note: resp.note ?? null };
   }
 
   // The theme facet's fresh recall. Runs the debounced re-POST against the current picks,
@@ -1014,6 +1026,18 @@ export default function Finder() {
     return filtered as (Result & { aiReasoning?: string; aiRank?: number })[];
   }, [sortedResults, untrackedOnly, filters, trackedIds, selectedTag, tagScores, tagScoring]);
   const visibleResults = filteredResults.slice(0, visibleCount);
+  // Tier section split. The reranker grades every vouched card 'strong' or 'look' (strong is
+  // 97% good on the golden set, look 81%), so lead with the strong picks and mark where the
+  // "worth a look" tier begins with a section header — recovering the good mid-pack look-tier
+  // matches instead of dropping them. `sortedResults` already orders strong-before-look, so
+  // the boundary is just the first look card. Suggest path only, and suppressed while a
+  // profile-tag filter is active: that path re-sorts by aiRank, so tier order no longer holds.
+  const tierSplitId =
+    suggestMode && !selectedTag &&
+    visibleResults.some((r) => r.tier === 'strong') &&
+    visibleResults.some((r) => r.tier === 'look')
+      ? visibleResults.find((r) => r.tier === 'look')?.opp.id ?? null
+      : null;
 
   // ---------- Home stage ----------
   if (stage === 'home') {
@@ -1449,7 +1473,7 @@ export default function Finder() {
         const metaPills = [opp.org, opp.type, opp.price, opp.location, opp.state && opp.state !== 'All States' ? opp.state : null, opp.season]
           .filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
         const cardHovered = hoveredCardId === opp.id;
-        return (
+        const card = (
           <Pressable
             key={opp.id}
             onHoverIn={() => setHoveredCardId(opp.id)}
@@ -1540,6 +1564,20 @@ export default function Finder() {
             )}
           </Pressable>
         );
+        // Header marking the start of the 'look' tier — the reranker's second-tier picks.
+        if (opp.id === tierSplitId) {
+          return (
+            <Fragment key={opp.id}>
+              <View style={styles.tierDivider}>
+                <View style={styles.tierDividerLine} />
+                <Text style={styles.tierDividerText}>MORE TO EXPLORE</Text>
+                <View style={styles.tierDividerLine} />
+              </View>
+              {card}
+            </Fragment>
+          );
+        }
+        return card;
       })}
 
       {!themeMatching && filteredResults.length > visibleCount && (
@@ -1730,6 +1768,10 @@ const styles = StyleSheet.create({
   themeChipText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate500 },
   themeChipTextOn: { color: colors.slate900 },
 
+  // Section header between the reranker's 'strong' picks and its 'look' (worth-a-look) tier.
+  tierDivider: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4, marginBottom: 4 },
+  tierDividerLine: { flex: 1, height: 2, backgroundColor: colors.slate200 },
+  tierDividerText: { fontFamily: fonts.bodyBold, fontSize: 11, letterSpacing: 1, color: colors.muted },
   resultCard: { backgroundColor: colors.white, borderWidth: 4, borderColor: colors.slate900, borderRadius: radius.xxl, padding: 24, gap: 16 },
   // Raised only while a popover is open, so the panel overlaps the cards BELOW this one
   // (equal z-index means the later sibling wins). Deliberately below filterBar's 20: the

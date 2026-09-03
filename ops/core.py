@@ -3845,11 +3845,15 @@ MAINTENANCE_TOOLS = {
     "dedupequeue": {
         "name": "Dedupe the Review Queue",
         "description": "Embed rows and find the same program at a DIFFERENT URL that the name/URL "
-                       "check misses, tagging a tiered 'possible duplicate of…' back-link. Choose "
-                       "the source: the pending review queue, or rows the catalog scan already "
-                       "flagged suspected_duplicate (adds real tier/cosine evidence to what the "
-                       "scan proposed — never changes moderation_status or is_active). Preview is "
-                       "free; a real run is PAID (~a cent total; the catalog index is prebuilt).",
+                       "check misses, adding a tiered 'possible duplicate of…' back-link. It writes "
+                       "into the row's dup_candidates PILE (its own entry, tagged content-embedding, "
+                       "alongside url_dedupe's) — NOT the single dup_verdict the Duplicate queue "
+                       "uses; the review queue then shows the STRONGEST of that pile as one line "
+                       "(the rest stay in the Duplicate modal). Choose the source: the pending "
+                       "review queue, or rows the catalog scan already flagged suspected_duplicate "
+                       "(adds real tier/cosine evidence to what the scan proposed — never changes "
+                       "moderation_status or is_active). Preview is free; a real run is PAID (~a "
+                       "cent total; the catalog index is prebuilt).",
         "script": "dedupe_queue.py",
         "free": False, "writes": True,
         "params": [

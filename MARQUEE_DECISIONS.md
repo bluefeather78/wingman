@@ -62,12 +62,15 @@ run) — it does **not** mean fall back to memory.
 ---
 
 ### M2 — No opportunity is ever auto-activated
-*Ratified 2026-08-28 by Shama.*
+*Ratified 2026-08-28 by Shama. Amended 2026-09-02 by Shama: the `--repair-flagged` exception was
+removed — there is now NO auto-activation path at all.*
 
-A person activates every catalog row from the console; no code path sets `is_active = true`
-automatically. The one narrow, documented exception is `url_repair --repair-flagged`, which restores
-rows a human originally vetted and a machine removed over a link. Do not add another auto-activation
-path.
+A person activates every catalog row from the console; **no** code path sets `is_active = true`
+automatically. There is no exception. `check_links.py --repair-flagged` used to be the one narrow
+exception (it restored a row when it proved a moved link), but as of 2026-09-02 it no longer
+activates: a proven repair now writes the new URL onto the still-inactive row and parks it at
+`link_review_status = 'repaired'` on the console's Links tab, where a person verifies the link and
+clicks Activate. Do not add any auto-activation path, and do not re-introduce the repair one.
 
 ### M3 — No paid agent runs without fresh explicit approval in chat
 *Ratified 2026-08-28 by Shama.*

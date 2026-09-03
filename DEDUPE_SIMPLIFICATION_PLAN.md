@@ -247,6 +247,27 @@ this project's guardrails exist to prevent. Consequence: because the review queu
 line from `dup_candidates`, that column **cannot be removed** in Phase 5 until this storage half
 lands. Flagged for Shama.
 
+### Phase 5 — PARTIAL (2026-09-02): safe parts only; deletion blocked by the deferral
+
+With the insert-time storage half deferred (above), most of Phase 5's deletions are **blocked**, and
+the earlier deprecation notes were premature — corrected 2026-09-02:
+
+- **Neither offline agent is deletable.** `dedupe_queue.py` is still the live "Dedupe the Review
+  Queue" console tool (the review-queue/pending dedupe path that Phase 4 would have replaced), and
+  `find_catalog_dups.find_duplicate_pairs` is still imported by it. Their docstrings now say
+  "PARTLY SUPERSEDED" rather than deprecated.
+- **`dup_candidates` cannot be removed** — the review queue's one-line view derives from it.
+- **`suspected_duplicate`**: 0 rows carry it; nothing new writes it (the Duplicate queue is
+  `dup_verdict`-driven). The legacy OR in the `flagged` filter and the `dupeKeepSelected` handling
+  are kept as harmless one-release safety, removable once confirmed unused.
+- The old two-step Scan→flag modal (`openDupScan`/`duplicate-report`) is orphaned by Phase 3's
+  button repoint; still on disk, safe to remove later.
+
+**Done:** deprecation notes corrected to reflect what's actually still live. **Net:** the revamp's
+user-visible goal (one verdict line in both queues) and consolidation (one field, one resolver, one
+offline agent, one console line for the Duplicate queue) are shipped; full legacy removal waits on
+the deferred insert-time half.
+
 ---
 
 ## 7. Non-goals / guardrails

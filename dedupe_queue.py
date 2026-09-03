@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Run the dedupe confidence logic over a set of rows. Read-only unless --write.
 
-BEING SUPERSEDED (dedupe revamp, DEDUPE_SIMPLIFICATION_PLAN.md): the ONE-verdict resolver
+PARTLY SUPERSEDED (dedupe revamp, DEDUPE_SIMPLIFICATION_PLAN.md): the ONE-verdict resolver
 (`dup_verdict.resolve_dup_verdict`) is replacing this tool's back-link writes in phases. As of
 Phase 3 the catalog/`--source flagged` role is handled by `dedupe_resolve.run` behind the
-console's Scan button; the `--source queue` (pending review-queue) role is handled at INSERT
-time in Phase 4. This file is kept on disk until the Phase-5 cleanup; do not build new callers.
+console's Scan button. The `--source queue` (pending review-queue) role is STILL LIVE here — it
+was to move to INSERT time in Phase 4, but that half is DEFERRED (it spans four paid feeders and
+needs a paid validation run), so this remains the review queue's dedupe tool. Not deletable yet;
+do not build new callers.
 
 
 Two independent selections feed the SAME embedding + dedupe_confidence tier engine (`--source`):

@@ -585,20 +585,15 @@ tr.disabled-seed { opacity: .48; }
     </div>
 
     <div class="subview" id="rsub-dupes">
-      <div class="flowhead"><h2>Duplicates</h2><span class="step">scan &rarr; flag &rarr; keep or confirm</span>
-        <p>Find live rows that look like the same opportunity and flag the weaker ones. Flagging
-        never hides a row &mdash; both stay live and visible to students until you either
-        <strong>Keep</strong> them (a false positive, e.g. a shared application portal) or confirm
-        the real <strong>Duplicate</strong> (which retires the loser and points it at the survivor).</p></div>
+      <div class="flowhead"><h2>Duplicates</h2><span class="step">scan &rarr; review each pair</span>
+        <p>Each card is one pair (or small group) that might be the same opportunity. Both rows stay
+        live and visible to students until you decide: click <strong>Keep this one</strong> under the
+        row to keep (the other is retired), or <strong>Not a duplicate</strong> to keep them all.</p></div>
       <div class="card">
         <div class="card-head">
-          <h2>Flagged as suspected duplicates</h2>
+          <h2>Possible duplicates to review</h2>
           <div class="spacer"></div>
           <button class="btn btn-sm" id="dupScanBtn" title="Scan active rows and stamp one dup_verdict per suspected duplicate (~30-40s, free)">Scan for duplicates</button>
-          <button class="btn btn-sm" id="dupeSelectAll">Select all</button>
-          <button class="btn btn-sm" id="dupeClear">Clear</button>
-          <button class="btn btn-danger" id="dupeConfirmBtn" disabled>Confirm duplicate</button>
-          <button class="btn" id="dupeKeepBtn" disabled>Keep selected</button>
         </div>
         <div class="card-body tight">
           <div class="hint hidden" id="dupeModerationSetup" style="padding:10px 14px">
@@ -606,14 +601,8 @@ tr.disabled-seed { opacity: .48; }
             <span class="mono">user_submissions_schema.sql</span> in the Supabase SQL editor
             (it is idempotent), then restart with <span class="mono">restart_server.ps1</span>.
           </div>
-          <div class="tbl-wrap">
-            <table>
-              <thead><tr>
-                <th style="width:34px"></th><th>Name</th><th>Org</th><th>Type</th>
-                <th>Source</th><th>Found</th><th></th>
-              </tr></thead>
-              <tbody id="dupeBody"><tr><td colspan="7" class="empty">Loading&hellip;</td></tr></tbody>
-            </table>
+          <div id="dupeBody" style="padding:4px 8px 10px">
+            <div class="empty" style="padding:16px">Loading&hellip;</div>
           </div>
         </div>
       </div>
@@ -2068,19 +2057,18 @@ function renderPending() {
   updateReviewButtons();
 }
 
-/* ---------- Run → Duplicates tab: the flagged (suspected_duplicate) live rows ----------
-   A duplicate relationship is symmetric — dedupe_resolve stamps a verdict on BOTH sides of a pair
-   (A→B and B→A), so a naive list shows every pair twice. Selecting both halves and confirming
-   would try to retire both; only a server-side guard (a survivor can't itself be marked duplicate)
-   keeps the catalog from losing a live program, and it surfaces as a confusing "N could not be
-   confirmed". So collapse the flagged rows into connected components first and act on the whole
-   group as a unit: each pair/cluster is shown ONCE, with one chosen survivor that stays live, and
-   confirm only ever retires the losers against it. */
+/* ---------- Run → Duplicates tab: review possible duplicates, one card per pair ----------
+   The detector stamps a verdict on BOTH sides of a pair (A→B and B→A). Rather than list each row
+   (which showed every pair twice, with opposite "who survives" meaning depending on row shape),
+   group the flagged rows into connected components and render ONE plain-language card per pair or
+   small cluster. The reviewer makes a single choice: "Keep this one" on the row to keep (every
+   other row in the card is retired against it) or "Not a duplicate" (clear the flags, keep them
+   all). No survivor/loser direction to decode, no checkboxes, no bulk-confirm guard to trip. */
 
-// Group the flagged rows into connected components joined by their verdict pointers. Only an edge
-// whose survivor is ALSO flagged joins two rows — a pointer to a live, non-flagged row is an
-// external survivor and leaves the pointing row a singleton (the pre-revamp single-row case).
-function buildDupeClusters() {
+// Group flagged rows into connected components joined by their verdict pointers. A singleton's
+// survivor is a LIVE row not in the queue; it is added as a (non-flagged) candidate so a card
+// always shows both sides to compare. Returns [{key, members, candidates}].
+function dupeComponents() {
   const rows = S.flagged || [];
   const byId = new Map(rows.map(o => [o.id, o]));
   const survivorOf = o => o.duplicate_of || (o.dup_verdict && o.dup_verdict.duplicate_of) || null;
@@ -2088,207 +2076,129 @@ function buildDupeClusters() {
   const parent = new Map(rows.map(o => [o.id, o.id]));
   const find = x => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
   const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent.set(ra, rb); };
-  for (const o of rows) {
-    const s = survivorOf(o);
-    if (s && byId.has(s)) union(o.id, s);
-  }
+  for (const o of rows) { const s = survivorOf(o); if (s && byId.has(s)) union(o.id, s); }
   const comps = new Map();
-  for (const o of rows) {
-    const r = find(o.id);
-    if (!comps.has(r)) comps.set(r, []);
-    comps.get(r).push(o);
-  }
+  for (const o of rows) { const r = find(o.id); if (!comps.has(r)) comps.set(r, []); comps.get(r).push(o); }
 
-  const clusters = [];
+  const out = [];
   for (const members of comps.values()) {
-    if (members.length === 1) {
-      // Singleton: the flagged row's survivor is external (or missing). Keep the pre-revamp
-      // behaviour — the shown row IS the one retired on confirm, against its own verdict target.
-      const o = members[0];
-      clusters.push({ kind: 'single', repId: o.id, displayOpp: o, members,
-                      survivorId: survivorOf(o) || null, retire: [o] });
-      continue;
-    }
-    // A real group: pick the survivor as the most-pointed-at member (a pair's / chain's sink),
-    // tie-broken toward the row that points at no one inside the group, then by id for stability.
-    const incoming = new Map(members.map(m => [m.id, 0]));
-    const outIn = new Map(members.map(m => [m.id, 0]));
+    const ids = new Set(members.map(m => m.id));
+    // Candidates: every flagged member, plus any external live survivor a singleton points at.
+    const cands = members.map(m => ({ id: m.id, name: m.name, url: m.url, org: m.org, type: m.type, flagged: true }));
+    const extSeen = new Set();
     for (const m of members) {
-      const s = survivorOf(m);
-      if (s && incoming.has(s)) { incoming.set(s, incoming.get(s) + 1); outIn.set(m.id, outIn.get(m.id) + 1); }
+      const v = m.dup_verdict || {}; const s = survivorOf(m);
+      if (s && !ids.has(s) && !extSeen.has(s)) { extSeen.add(s); cands.push({ id: s, name: v.name || s, url: v.url, flagged: false }); }
     }
-    let survivor = members[0];
-    for (const m of members) {
-      const better = incoming.get(m.id) !== incoming.get(survivor.id)
-        ? incoming.get(m.id) > incoming.get(survivor.id)
-        : outIn.get(m.id) !== outIn.get(survivor.id)
-          ? outIn.get(m.id) < outIn.get(survivor.id)
-          : m.id < survivor.id;
-      if (better) survivor = m;
-    }
-    clusters.push({ kind: 'group', repId: survivor.id, displayOpp: survivor, members,
-                    survivorId: survivor.id, retire: members.filter(m => m.id !== survivor.id) });
+    out.push({ key: [...ids].sort()[0], members, candidates: cands,
+               cosine: (members[0].dup_verdict || {}).cosine });
   }
-  return clusters;
+  return out;
 }
 
-// The verdict line for a collapsed GROUP: the shown row stays live; name the duplicate(s) it will
-// retire, each with its own confidence (the loser's own verdict points back at this survivor).
-function dupeClusterLine(cluster) {
-  const n = cluster.retire.length;
-  const items = cluster.retire.map(o => {
-    const v = o.dup_verdict || {};
-    const conf = String(v.confidence || 'possible').toLowerCase();
-    const name = esc(o.name || o.id);
-    const link = o.url
-      ? `<a href="${esc(o.url)}" target="_blank" rel="noopener" title="${esc(o.url)}">${name} &#8599;</a>`
-      : name;
-    const cos = (typeof v.cosine === 'number') ? ` · cos ${v.cosine.toFixed(3)}` : '';
-    const sib = v.sibling ? ' · looks similar, fields differ' : '';
-    return `<div class="dupe-back-row">
-      <span class="pill ${VERDICT_PILL_CLASS[conf] || 'info'}">${esc(conf)}</span>
-      ${link}<span class="mono dupe-back-id">${esc(o.id)}</span>
-      <span class="dupe-back-why">${cos}${sib}</span></div>`;
+function dupeCardHtml(comp) {
+  const pct = (typeof comp.cosine === 'number') ? `${Math.round(comp.cosine * 100)}% similar` : '';
+  const panels = comp.candidates.map(c => {
+    const badge = c.flagged ? '' : ` <span class="pill info" title="Already live — not in the review queue. This is the row a singleton points at.">already live</span>`;
+    const link = c.url
+      ? `<div style="margin-top:4px"><a href="${esc(c.url)}" target="_blank" rel="noopener" class="mono" style="font-size:11.5px">${esc(c.url)} &#8599;</a></div>`
+      : '';
+    const meta = (c.org || c.type)
+      ? `<div class="hint" style="margin-top:2px">${esc(c.org || '')}${c.type ? ` &middot; ${esc(c.type)}` : ''}</div>` : '';
+    return `<div style="flex:1 1 240px;min-width:220px;border:1px solid var(--line);border-radius:10px;padding:10px 12px">
+      <div style="font-weight:600">${esc(c.name || '(no name)')}${badge}</div>
+      ${meta}${link}
+      <div style="margin-top:8px"><button class="btn btn-sm" ${S.moderationReady ? '' : 'disabled'}
+        onclick="dupeMergeKeep('${esc(comp.key)}','${esc(c.id)}')">Keep this one</button></div>
+    </div>`;
   }).join('');
-  return `<div class="dupe-back">
-    <span class="dupe-back-head">This row stays &middot; confirm retires ${n} duplicate${n > 1 ? 's' : ''}</span>
-    ${items}</div>`;
-}
-
-// One table row for a collapsed group (same 7 columns as pendingRowHtml). The checkbox selects the
-// WHOLE cluster (keyed by the survivor id); there is no per-row Duplicate button because the shown
-// row is the survivor, not a candidate to retire.
-function dupeClusterRowHtml(cluster) {
-  const o = cluster.displayOpp;
-  const on = S.selectedDupes.has(cluster.repId);
-  return `<tr class="${on ? 'sel-row' : ''}">
-    <td><input type="checkbox" ${on ? 'checked' : ''} onchange="toggleDupe('${esc(cluster.repId)}', this.checked)"></td>
-    <td><div>${esc(o.name || '(no name)')} <span class="pill info">survivor</span></div>
-        ${o.summary ? `<div class="hint" style="margin-top:3px">${esc(String(o.summary).slice(0, 120))}</div>` : ''}
-        ${dupeClusterLine(cluster)}</td>
-    <td>${esc(o.org || '—')}</td>
-    <td>${esc(o.type || '—')}</td>
-    <td class="mono" style="font-size:11.5px">${esc(o.source || '—')}</td>
-    <td style="white-space:nowrap;color:var(--text-2)">${ago(o.created_at)}</td>
-    <td style="white-space:nowrap">${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener">Open ↗</a>` : ''}</td>
-  </tr>`;
+  return `<div class="card" style="margin:10px 0;padding:12px 14px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <strong>Same program?</strong>
+      <span class="hint">Keep the better row &mdash; the other is retired from the catalog.</span>
+      <span style="flex:1"></span>
+      ${pct ? `<span class="pill warn">${esc(pct)}</span>` : ''}
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">${panels}</div>
+    <div style="margin-top:10px">
+      <button class="btn btn-sm" onclick="dupeKeepBoth('${esc(comp.key)}')">Not a duplicate &mdash; keep all</button>
+    </div>
+  </div>`;
 }
 
 function renderDupes() {
-  const rows = S.flagged || [];
-  const clusters = buildDupeClusters();
-  S.dupeClusters = clusters;
-  // Drop selections for clusters that no longer exist (e.g. after a refresh re-groups the rows).
-  const live = new Set(clusters.map(c => c.repId));
-  for (const id of [...S.selectedDupes]) if (!live.has(id)) S.selectedDupes.delete(id);
-
-  $('dupeTabCount').textContent = rows.length ? num(rows.length) : '';
+  const comps = dupeComponents();
+  S.dupeComps = comps;
+  const total = (S.flagged || []).length;
+  $('dupeTabCount').textContent = comps.length ? num(comps.length) : '';
   $('dupeModerationSetup').classList.toggle('hidden', S.moderationReady);
   const body = $('dupeBody');
   if (!body) return;
-  if (!clusters.length) {
-    body.innerHTML = `<tr><td colspan="7" class="empty">No suspected duplicates. Run the
-      duplicate detector (<span class="mono">dedupe_resolve.py</span>) or
-      <strong>Scan for duplicates</strong> to populate this.</td></tr>`;
-    updateDupeButtons();
+  if (!comps.length) {
+    body.innerHTML = `<div class="empty" style="padding:16px">No possible duplicates right now.
+      Run <strong>Scan for duplicates</strong> (free) to re-check the live catalog.</div>`;
     return;
   }
-  // Each pair/cluster appears ONCE. A singleton keeps the standard row (hideEdit: live rows aren't
-  // editable via the pending-update endpoint; the shown row is the one retired on confirm). A real
-  // group renders its survivor with the duplicate(s) it will retire.
-  body.innerHTML = clusters.map(c => c.kind === 'single'
-    ? pendingRowHtml(c.displayOpp, S.selectedDupes, 'toggleDupe', { hideEdit: true, verdict: true })
-    : dupeClusterRowHtml(c)).join('');
-  updateDupeButtons();
+  const head = `<div class="hint" style="margin:2px 2px 8px">${comps.length} to review${
+    total !== comps.length ? ` &middot; ${total} rows paired up` : ''}. Each card is one decision.</div>`;
+  body.innerHTML = head + comps.map(dupeCardHtml).join('');
 }
 
-function toggleDupe(id, on) {
-  if (on) S.selectedDupes.add(id); else S.selectedDupes.delete(id);
-  renderDupes();
+function findDupeComp(key) { return (S.dupeComps || []).find(c => c.key === key); }
+
+// "Keep this one": retire every OTHER row in the card against the chosen survivor. Because the
+// survivor is the row that stays live, it is never a moderation target, so no guard can trip.
+async function dupeMergeKeep(key, survivorId) {
+  const comp = findDupeComp(key);
+  if (!comp) return;
+  const survivor = comp.candidates.find(c => c.id === survivorId);
+  const losers = comp.candidates.filter(c => c.id !== survivorId);
+  if (!losers.length) return;
+  const names = losers.map(l => l.name || l.id).join(', ');
+  if (!confirm(`Keep "${survivor ? survivor.name : survivorId}" and retire: ${names}?\n\nThe retired row(s) leave the catalog (reversible from the Rejected tab).`)) return;
+  let done = 0, failed = 0;
+  for (const l of losers) {
+    try {
+      const r = await api('/api/agents/pending/moderate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [l.id], status: 'duplicate', duplicate_of: survivorId }),
+      });
+      if (r && r.ok && r.moderated) done += r.moderated; else failed++;
+    } catch (_) { failed++; }
+  }
+  // If the survivor was itself a flagged row, clear its verdict so it leaves the queue.
+  if (comp.members.some(m => m.id === survivorId)) {
+    try {
+      await api('/api/agents/pending/clear-dup-verdict', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [survivorId] }),
+      });
+    } catch (_) { /* best effort — the next scan also clears it */ }
+  }
+  toast(`Kept 1, retired ${done}.` + (failed ? ` ${failed} failed.` : ''));
+  refreshDashboard();
 }
 
-function selectedDupeClusters() {
-  return (S.dupeClusters || []).filter(c => S.selectedDupes.has(c.repId));
-}
-
-function updateDupeButtons() {
-  const sel = selectedDupeClusters();
-  const keep = $('dupeKeepBtn'), conf = $('dupeConfirmBtn');
-  if (!keep || !conf) return;
-  const keepCount = sel.reduce((a, c) => a + c.members.length, 0);
-  const retireCount = sel.reduce((a, c) => a + c.retire.length, 0);
-  keep.disabled = !sel.length;
-  keep.textContent = keepCount ? `Keep ${keepCount} (not a dup)` : 'Keep selected';
-  conf.disabled = !sel.length || !S.moderationReady;
-  conf.title = S.moderationReady ? '' : 'Run user_submissions_schema.sql first.';
-  conf.textContent = retireCount ? `Confirm ${retireCount} duplicate${retireCount > 1 ? 's' : ''}` : 'Confirm duplicate';
-}
-
-// Keep = release the suspicion for EVERY row in the selected clusters. Clearing dup_verdict drops
-// them from the Duplicate queue; a legacy suspected_duplicate flag is moderated to 'approved'
-// (leaves is_active untouched). Touches nothing else — the programs stay exactly as they were.
-async function dupeKeepSelected() {
-  const rows = selectedDupeClusters().flatMap(c => c.members);
-  const ids = rows.map(o => o.id);
+// "Not a duplicate": clear the flags on every row in the card (a legacy suspected_duplicate flag is
+// moderated to 'approved'). Nothing is retired; all rows stay exactly as they were.
+async function dupeKeepBoth(key) {
+  const comp = findDupeComp(key);
+  if (!comp) return;
+  const ids = comp.members.map(m => m.id);
   if (!ids.length) return;
   try {
     await api('/api/agents/pending/clear-dup-verdict', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids }),
     });
-    // Legacy: a pre-revamp suspected_duplicate flag lives in moderation_status — clear it to
-    // 'approved' (leaves is_active untouched) so old flags also stop surfacing.
-    const legacy = rows.filter(o => o.moderation_status === 'suspected_duplicate').map(o => o.id);
+    const legacy = comp.members.filter(m => m.moderation_status === 'suspected_duplicate').map(m => m.id);
     if (legacy.length) await api('/api/agents/pending/moderate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids: legacy, status: 'approved' }),
     });
-    S.selectedDupes.clear();
     toast(`Kept ${ids.length} row(s) — no longer flagged as duplicates.`);
     refreshDashboard();
   } catch (e) { notice('Could not keep: ' + e.message); }
-}
-
-// Confirm = these really are duplicates. Rows are collapsed into clusters with ONE survivor each,
-// so we only ever retire the LOSERS against a live survivor — the survivor is never in the retire
-// list, so the "a survivor can't itself be a duplicate" guard cannot trip and the
-// both-sides-deactivated hazard is structurally impossible. moderate takes one row per call, loop.
-async function dupeConfirmSelected() {
-  const clusters = selectedDupeClusters();
-  if (!clusters.length) return;
-  const missing = clusters.filter(c => !c.survivorId);
-  if (missing.length) {
-    notice(`${missing.length} selected group(s) have no surviving row to point at — open Duplicate `
-      + `on a row to pick a survivor. Confirming the rest.`);
-  }
-  let done = 0, failed = 0;
-  const survivors = new Set();
-  for (const c of clusters) {
-    if (!c.survivorId) { failed += c.retire.length; continue; }
-    for (const o of c.retire) {
-      try {
-        const r = await api('/api/agents/pending/moderate', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids: [o.id], status: 'duplicate', duplicate_of: c.survivorId,
-                                 reason: o.moderation_reason || undefined }),
-        });
-        if (r && r.ok && r.moderated) { done += r.moderated; survivors.add(c.survivorId); } else failed++;
-      } catch (_) { failed++; }
-    }
-  }
-  // The survivor kept its OWN dup_verdict pointing back at a row we just retired — clear it so it
-  // doesn't linger in the Duplicate queue pointing at a now-inactive loser.
-  if (survivors.size) {
-    try {
-      await api('/api/agents/pending/clear-dup-verdict', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: [...survivors] }),
-      });
-    } catch (_) { /* best effort — the next detector run also clears it */ }
-  }
-  S.selectedDupes.clear();
-  toast(`Confirmed ${done} duplicate(s).` + (failed ? ` ${failed} could not be confirmed.` : ''));
-  refreshDashboard();
 }
 
 /* ---------- Mailing-list signup recipes ----------
@@ -5018,10 +4928,6 @@ $('activateBtn').onclick = activateSelected;
 $('dupClose').onclick = () => { $('dupModal').classList.remove('open'); S.dupSubject = null; };
 $('dupSave').onclick = saveDuplicate;
 $('dupScanBtn').onclick = runDuplicateScan;
-$('dupeSelectAll').onclick = () => { (S.dupeClusters || buildDupeClusters()).forEach(c => S.selectedDupes.add(c.repId)); renderDupes(); };
-$('dupeClear').onclick = () => { S.selectedDupes.clear(); renderDupes(); };
-$('dupeKeepBtn').onclick = dupeKeepSelected;
-$('dupeConfirmBtn').onclick = dupeConfirmSelected;
 $('dupScanClose').onclick = () => $('dupScanModal').classList.remove('open');
 $('dupScanSelectAll').onclick = () => {
   S.dupScan.pairs.forEach((_, i) => S.dupScan.sel.add(i));

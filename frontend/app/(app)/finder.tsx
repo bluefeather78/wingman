@@ -25,6 +25,7 @@ import { parseGradeFromText } from '@/lib/grade';
 import { extractJSON } from '@/lib/extractJSON';
 import { inferSubjects, preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
 import { markNewlyAdded } from '@/lib/newlyAdded';
+import { buildMetaPills } from '@/lib/opportunityPills';
 import { awaitProfileWrites } from '@/lib/profileWrites';
 import {
   extractTrackerInfo,
@@ -943,6 +944,11 @@ export default function Finder() {
       reviewStatus,
       reviewSummary,
       meta: slim.meta || [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · '),
+      // Structured facets for the Quest Log's meta pills (opp.location is the FORMAT).
+      price: (opp.price as string) ?? null,
+      format: (opp.location as string) ?? null,
+      state: (opp.state as string) ?? null,
+      season: (opp.season as string) ?? null,
       fit: slim.fit || reason || summary,
       note: deadline?.important_date_note
         || (deadline
@@ -1557,8 +1563,10 @@ export default function Finder() {
             : KIND_CONFIG[kind].name;
         const reviewOpen = openReviewId === opp.id;
         // org is no longer a pill — it now sits under the opportunity name (see resultOrg below).
-        const metaPills = [opp.type, opp.price, opp.location, opp.state && opp.state !== 'All States' ? opp.state : null, opp.season]
-          .filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+        // The pill set (cost / format / season / location-if-in-person) is shared with the Quest
+        // Log via buildMetaPills so the two cards cannot drift. `opp.location` is the FORMAT and
+        // `opp.state` the actual place; the opportunity `type` is deliberately not a pill.
+        const metaPills = buildMetaPills({ price: opp.price, format: opp.location, state: opp.state, season: opp.season });
         const cardHovered = hoveredCardId === opp.id;
         const card = (
           <Pressable

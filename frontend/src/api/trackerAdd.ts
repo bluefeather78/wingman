@@ -86,6 +86,11 @@ export async function addCatalogOpportunity(
     reviewStatus,
     reviewSummary,
     meta: slim.meta || [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · '),
+    // Structured facets for the Quest Log's meta pills (opp.location is the FORMAT).
+    price: (opp.price as string) ?? null,
+    format: (opp.location as string) ?? null,
+    state: (opp.state as string) ?? null,
+    season: (opp.season as string) ?? null,
     fit: slim.fit || reason || summary,
     note: deadline?.important_date_note
       || (deadline

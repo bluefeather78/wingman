@@ -161,6 +161,14 @@ export interface TrackerItem {
   reviewStatus?: string | null;
   reviewSummary?: string | null;
   meta?: string;
+  // Structured catalog facets, captured at add-time so the Quest Log card can render the same
+  // meta pills Fresh Finds does (buildMetaPills). Absent on items added before this existed —
+  // those fall back to the free-text `meta` line. `format` is the catalog `location` column
+  // (In-Person / Remote / In-Person and Remote); `state` is the actual place.
+  price?: string | null;
+  format?: string | null;
+  state?: string | null;
+  season?: string | null;
   fit?: string;
   note?: string;
   noteType?: string;

@@ -29,6 +29,7 @@ import { httpClient } from '@/api/httpClient';
 import { ALL_BUCKETS, type Bucket } from '@/lib/constants';
 import { googleCalendarReturnUri } from '@/auth/googleSignIn';
 import { clearNewlyAdded, getNewlyAdded, markNewlyAdded } from '@/lib/newlyAdded';
+import { buildMetaPills } from '@/lib/opportunityPills';
 import { getLastCheckedLabel, setLastCheckedLabel as rememberLastChecked } from '@/lib/lastChecked';
 import { addCatalogOpportunity, bucketForOpp } from '@/api/trackerAdd';
 import type { Opportunity } from '@/api/types';
@@ -870,6 +871,7 @@ function ListCard({
   // answer (G3). It reads as Happening Now via computeProgressStatus; the badge and note
   // below make the "no dates is correct here" explicit so an empty card doesn't look broken.
   const rolling = item.status === 'rolling';
+  const metaPills = buildMetaPills({ price: item.price, format: item.format, state: item.state, season: item.season });
 
   // Group milestone rows by year, split into two balanced columns past 5 entries.
   const entries: ({ kind: 'tag'; year: string; cont?: boolean } | { kind: 'date'; m: Milestone })[] = [];
@@ -979,7 +981,20 @@ function ListCard({
           <Text style={styles.cardName}>{item.name}</Text>
         </Pressable>
         {!!item.org && <Text style={styles.cardOrg} numberOfLines={1}>{item.org}</Text>}
-        {!!item.meta && <Text style={styles.cardMeta} numberOfLines={1}>{item.meta}</Text>}
+        {/* Meta pills, matching Fresh Finds (buildMetaPills): cost / format / season /
+            location-if-in-person. Items added before these structured fields existed carry
+            only the free-text `meta` line, so fall back to it when there are no pills. */}
+        {metaPills.length > 0 ? (
+          <View style={styles.metaRow}>
+            {metaPills.map((p, i) => (
+              <View key={i} style={styles.metaPill}>
+                <Text style={styles.metaPillText}>{p}</Text>
+              </View>
+            ))}
+          </View>
+        ) : (
+          !!item.meta && <Text style={styles.cardMeta} numberOfLines={1}>{item.meta}</Text>
+        )}
       </View>
 
       {(item.wasEstimated || projected) && !notRunning && (
@@ -1147,6 +1162,10 @@ const styles = StyleSheet.create({
   // same treatment Fresh Finds gives it (resultOrg).
   cardOrg: { fontFamily: fonts.bodyMed, fontSize: 14, color: colors.slate500, marginTop: 4 },
   cardMeta: { fontFamily: fonts.bodyMed, fontSize: 14, color: colors.slate500, marginTop: 2 },
+  // Meta pills — kept byte-identical to Fresh Finds' metaRow/metaPill so the two cards match.
+  metaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  metaPill: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.indigo200, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6 },
+  metaPillText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate900 },
   estimatedNote: { backgroundColor: '#FEF08A', borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, paddingHorizontal: 16, paddingVertical: 10 },
   estimatedText: { fontFamily: fonts.bodyBold, fontSize: 12, color: '#92400E' },
   staleBad: { backgroundColor: '#FFE4E6' },

@@ -2,11 +2,11 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Switch, View } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
-import { Field, PopButton, PopCard, Screen, Txt } from '@/ui/components';
+import { PopButton, PopCard, Screen, Txt } from '@/ui/components';
 import { colors, fonts, space } from '@/ui/theme';
 
 // Resumes the Google redirect flow: reads the one-time google_token, resolves it, then either
-// enters the app (existing/linked account) or collects consent + location for a new account.
+// enters the app (existing/linked account) or collects consent for a new account.
 export default function GoogleAuth() {
   const router = useRouter();
   const { googleSession, googleFinish } = useAuth();
@@ -18,7 +18,6 @@ export default function GoogleAuth() {
   const [info, setInfo] = useState<{ firstName?: string; lastName?: string; email?: string }>({});
   const [busy, setBusy] = useState(false);
 
-  const [location, setLocation] = useState('');
   const [isAdult, setIsAdult] = useState(false);
   const [parentalConsent, setParentalConsent] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -52,7 +51,7 @@ export default function GoogleAuth() {
     setError(null);
     setBusy(true);
     try {
-      await googleFinish(handoff, { location: location.trim(), isAdult, parentalConsent, acceptedTerms });
+      await googleFinish(handoff, { isAdult, parentalConsent, acceptedTerms });
       router.replace('/(app)');
     } catch (e) {
       setError((e as Error).message || 'Could not finish sign-up.');
@@ -98,7 +97,6 @@ export default function GoogleAuth() {
       </View>
 
       <PopCard style={{ gap: space.md }}>
-        <Field label="Location" value={location} onChangeText={setLocation} placeholder="e.g. Seattle, WA" />
         <ConsentRow label="I'm 18 or older" value={isAdult} onValueChange={setIsAdult} />
         <ConsentRow
           label="If under 18, I have a parent/guardian's permission (Terms §2)"

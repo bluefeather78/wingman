@@ -356,7 +356,6 @@ export const httpClient: ApiClient = {
       lastName: input.lastName,
       email: input.email,
       userid: input.userid,
-      location: input.location,
       passwordHash,
       isAdult: input.isAdult,
       parentalConsent: input.parentalConsent,

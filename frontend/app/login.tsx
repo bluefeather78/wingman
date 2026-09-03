@@ -23,7 +23,6 @@ export default function Login() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
-  const [location, setLocation] = useState('');
   const [isAdult, setIsAdult] = useState(false);
   const [parentalConsent, setParentalConsent] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -39,7 +38,7 @@ export default function Login() {
     setBusy(true);
     try {
       if (isRegister) {
-        await register({ firstName: firstName.trim(), lastName: lastName.trim(), email: email.trim(), userid: userid.trim().toLowerCase(), location: location.trim(), password, isAdult, parentalConsent, acceptedTerms });
+        await register({ firstName: firstName.trim(), lastName: lastName.trim(), email: email.trim(), userid: userid.trim().toLowerCase(), password, isAdult, parentalConsent, acceptedTerms });
       } else {
         await login(userid.trim().toLowerCase(), password);
       }
@@ -116,7 +115,6 @@ export default function Login() {
                 </View>
                 <Field label="Email" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" />
                 <Field label="User ID" value={userid} onChangeText={setUserid} autoCapitalize="none" placeholder="Pick a user ID" />
-                <Field label="Location" value={location} onChangeText={setLocation} placeholder="e.g. Seattle, WA" />
                 <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="At least 8 characters" />
                 <Field label="Confirm password" value={passwordConfirm} onChangeText={setPasswordConfirm} secureTextEntry placeholder="••••••••" />
                 <View style={styles.consentBox}>

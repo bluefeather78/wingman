@@ -60,7 +60,6 @@ export interface RegisterInput {
   lastName: string;
   email: string;
   userid: string;
-  location: string;
   password: string;
   isAdult: boolean;
   parentalConsent: boolean;
@@ -69,13 +68,12 @@ export interface RegisterInput {
 
 // Google sign-in. The redirect flow hands back a one-time `handoff` token; /session either
 // resolves it to a full session (existing/linked account) or reports `pending` (new account),
-// in which case the app collects consent + location and calls /finish.
+// in which case the app collects consent and calls /finish.
 export type GoogleSessionResult =
   | { status: 'session'; user: SessionUser }
   | { status: 'pending'; firstName?: string; lastName?: string; email?: string };
 
 export interface GoogleFinishInput {
-  location: string;
   isAdult: boolean;
   parentalConsent: boolean;
   acceptedTerms: boolean;

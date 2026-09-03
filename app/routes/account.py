@@ -30,8 +30,10 @@ def handle_register(request: Request, body: dict = Depends(json_body)):
     email = (body.get("email") or "").strip()
     userid = (body.get("userid") or "").strip()
     password_hash = body.get("passwordHash") or ""
+    # Location is no longer collected at sign-up — it is captured in-app on the student
+    # profile. Still read from the body (older clients may send it) and default to empty.
     location = (body.get("location") or "").strip()
-    if not all([first_name, last_name, email, userid, password_hash, location]):
+    if not all([first_name, last_name, email, userid, password_hash]):
         return json_error(400, "Missing required fields.")
 
     # Consent gate, re-checked server-side (the browser control is a convenience).

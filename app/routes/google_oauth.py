@@ -241,6 +241,8 @@ def handle_google_finish(request: Request, body: dict = Depends(json_body)):
         return json_error(400, "This sign-in link has expired. Please try "
                                "signing in with Google again.")
 
+    # Location is no longer collected at sign-up — it is captured in-app on the student
+    # profile. Still read from the body (older clients may send it) and default to empty.
     location = (body.get("location") or "").strip()
     is_adult = bool(body.get("isAdult"))
     parental_consent = bool(body.get("parentalConsent"))
@@ -248,8 +250,6 @@ def handle_google_finish(request: Request, body: dict = Depends(json_body)):
     consent_error = _check_signup_consent(is_adult, parental_consent, accepted_terms)
     if consent_error:
         return json_error(400, consent_error)
-    if not location:
-        return json_error(400, "Missing required fields.")
 
     try:
         if get_user_by_google_id(entry["google_id"]) or get_user_by_email(entry["email"]):

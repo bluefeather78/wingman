@@ -2021,7 +2021,9 @@ function pendingRowHtml(o, selected, toggleFn, opts) {
     <td><div>${esc(o.name || '(no name)')}</div>
         ${o.summary ? `<div class="hint" style="margin-top:3px">${esc(String(o.summary).slice(0, 120))}</div>` : ''}
         ${tags ? `<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px">${tags}</div>` : ''}
-        ${opts.verdict ? dupVerdictLine(o.dup_verdict) : dupeBackLinks(dupes)}</td>
+        ${opts.verdict ? dupVerdictLine(o.dup_verdict)
+          : SHOW_LEGACY_DUP_HINTS ? dupeBackLinks(dupes)
+          : dupVerdictLine(o.dup_verdict || strongestCandidateVerdict(dupes))}</td>
     <td>${esc(o.org || '—')}</td>
     <td>${esc(o.type || '—')}</td>
     <td class="mono" style="font-size:11.5px">${esc(o.source || '—')}</td>
@@ -2587,6 +2589,29 @@ function dupVerdictLine(v) {
     </div>
   </div>`;
 }
+// Review queue (Phase 4, presentation half): a pending row carries insert-time dup_candidates
+// (url_dedupe + embedding HINTS), not a resolved verdict. Collapse that pile into the SAME single
+// line the Duplicate queue shows by taking the strongest candidate. This is derived at READ from
+// data already on the row — it edits no insert path. (Storing a real dup_verdict at insert across
+// the paid feeders is the deferred deeper half; see DEDUPE_SIMPLIFICATION_PLAN.md Phase 4.)
+const CAND_RANK = { proof: 4, confident: 3, strong: 3, adjudicate: 2, match: 1, hint: 1, weak: 0 };
+const CAND_TO_CONF = { proof: 'certain', confident: 'likely', strong: 'likely',
+                       adjudicate: 'possible', match: 'possible', hint: 'possible', weak: 'possible' };
+function strongestCandidateVerdict(dupes) {
+  if (!Array.isArray(dupes) || !dupes.length) return null;
+  let best = null, bestRank = -1;
+  for (const c of dupes) {
+    const rank = CAND_RANK[String(c.confidence || 'hint').toLowerCase()] ?? 1;
+    if (rank > bestRank) { bestRank = rank; best = c; }
+  }
+  if (!best || !best.id) return null;
+  const conf = String(best.confidence || 'hint').toLowerCase();
+  return { confidence: CAND_TO_CONF[conf] || 'possible', duplicate_of: best.id,
+           name: best.name, url: best.url, cosine: null, sibling: false,
+           reasons: best.reason ? [best.reason] : [] };
+}
+// Flip true to restore the pre-revamp multi-hint list (kept for one release as an escape hatch).
+const SHOW_LEGACY_DUP_HINTS = false;
 function dupeBackLinks(dupes) {
   if (!dupes.length) return '';
   return `<div class="dupe-back">

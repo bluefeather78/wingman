@@ -224,6 +224,29 @@ returns `scanned 1686 / with_verdict 50 / changed 9 / wrote 9`; flagged slice re
 all verdict-backed; console functions load clean. Phases 4 (insert-time unification) and 5 (delete
 legacy) remain.
 
+### Phase 4 — PARTIAL (2026-09-02): presentation half done, storage half deferred
+
+**Done (safe, testable): the review queue now shows ONE line, not a hint pile.** A pending row
+carries insert-time `dup_candidates` (url_dedupe + embedding HINTS). `strongestCandidateVerdict()`
+collapses that pile into the single `dupVerdictLine` the Duplicate queue uses — taking the
+strongest candidate — derived at READ from data already on the row. `SHOW_LEGACY_DUP_HINTS=false`
+gates the old multi-hint list as a one-release escape hatch. This edits **no insert path**.
+Verified: collapse unit-checked in-browser; renderer already proven in Phase 2; the review queue is
+currently empty so there were no live rows to show, but the binding is live for the next
+submission/scrape.
+
+**Deferred (needs a paid validation run): storing a real `dup_verdict` at insert.** The literal
+plan — feeders call `resolve_dup_verdict` at insert and stop writing `dup_candidates` — was NOT
+done, deliberately. It spans FOUR live, paid ingestion sites (scraper, hub miner, name harvest,
+user submission), and each loads candidate rows with a **slim `select: id,name,url`**
+(`scrape_opportunities.py:1096`) — no hard fields — so an insert-time verdict there would be
+name+cosine only and **inconsistent** with the offline detector's full-field verdicts. Doing it
+right needs (a) widening each feeder's candidate load to the fields `field_relation` reads, and
+(b) a paid scrape/submission run to validate — editing four live paid paths blind is the over-reach
+this project's guardrails exist to prevent. Consequence: because the review queue still DERIVES its
+line from `dup_candidates`, that column **cannot be removed** in Phase 5 until this storage half
+lands. Flagged for Shama.
+
 ---
 
 ## 7. Non-goals / guardrails

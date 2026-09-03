@@ -33,25 +33,62 @@ def _select_without_match_vector():
     )
 
 
-def _paginated_catalog_fetch(select_fields):
-    """Fetch all active rows for `select_fields`, paginating past PostgREST's 1000-row cap."""
+# A full page of 768-dim `match_vector`s is what pushed the old 1000-row page past Supabase's
+# per-statement timeout: measured 2026-09-02, a 1000-row page of the vector column sits right at
+# the edge (~6-7s) and intermittently 500s with PostgREST code 57014 ("canceling statement due to
+# statement timeout"), while the same rows without the vector return in ~0.5s. That failure had no
+# graceful path (the 57014 is a 500, not the 400 the match_vector-missing degrade handles), so a
+# cold cache surfaced it to the app as a 502. Keep each page's vector payload well under the
+# timeout AND retry the occasional slow page, since the timeout is load-dependent and variable.
+CATALOG_PAGE_SIZE = 250
+_PAGE_FETCH_ATTEMPTS = 4
+
+
+def _is_statement_timeout(exc):
+    """True if `exc` is a PostgREST 500 for a canceled statement (timeout, code 57014)."""
+    if not isinstance(exc, urllib.error.HTTPError) or exc.code != 500:
+        return False
+    try:
+        return "57014" in exc.read().decode("utf-8", "replace")
+    except Exception:
+        return False
+
+
+def _fetch_catalog_page(select_fields, offset, page_size):
     query = urllib.parse.urlencode({
         "select": select_fields, "is_active": "eq.true", "order": "id",
     })
-    page_size = 1000
+    req = urllib.request.Request(
+        f"{SUPABASE_URL}/rest/v1/opportunities?{query}",
+        headers={
+            "apikey": SUPABASE_ANON_KEY,
+            "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+            "Range": f"{offset}-{offset + page_size - 1}",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read())
+
+
+def _paginated_catalog_fetch(select_fields):
+    """Fetch all active rows for `select_fields`, paginating past PostgREST's 1000-row cap.
+
+    Pages are deliberately small (CATALOG_PAGE_SIZE) so a page carrying the large `match_vector`
+    column stays under Supabase's statement timeout, and a page that still times out (a load
+    spike) is retried a few times with backoff rather than failing the whole fetch mid-way."""
+    page_size = CATALOG_PAGE_SIZE
     data = []
     offset = 0
     while True:
-        req = urllib.request.Request(
-            f"{SUPABASE_URL}/rest/v1/opportunities?{query}",
-            headers={
-                "apikey": SUPABASE_ANON_KEY,
-                "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
-                "Range": f"{offset}-{offset + page_size - 1}",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            page = json.loads(resp.read())
+        for attempt in range(_PAGE_FETCH_ATTEMPTS):
+            try:
+                page = _fetch_catalog_page(select_fields, offset, page_size)
+                break
+            except urllib.error.HTTPError as e:
+                if _is_statement_timeout(e) and attempt < _PAGE_FETCH_ATTEMPTS - 1:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                raise
         data.extend(page)
         if len(page) < page_size:
             break

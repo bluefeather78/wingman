@@ -522,3 +522,89 @@ Mixed ≈ 25-30 RPS with AI held under ~3 RPS.
 10. Then load-test with the real mix (`k6`/`locust`) against a staging instance; the numbers
     above are static estimates, and the two unknowns that most affect them are Supabase's
     region relative to Render (RTT) and the org's provider tiers.
+
+---
+
+## Addendum — live investigation of the catalog fetch (2026-09-02)
+
+Everything above section 10 was static reading. This addendum is from a **live** investigation
+triggered by a real user report ("searched for a new profile theme → *Search failed: Could not
+reach Supabase: HTTP Error 500*"), so the numbers here are measured against the running Supabase,
+not estimated. It refines section E's line *"cache read under lock (0 GETs, or the 20 MB
+refresh)"* — that refresh was not merely heavy, it was **intermittently failing**.
+
+### F1. Confirmed bug: the catalog refresh times out on the embedding column
+
+`fetch_opportunities()` (`app/services/opportunities.py`) pulls `OPPORTUNITIES_FIELDS` —
+including the server-only 768-dim `match_vector` — for **all 1,686 active rows** (count grew from
+the ~1,330 the static review assumed), paginated in **1,000-row pages**. Measured live:
+
+- A page carrying `match_vector` takes ~4.5 s for 686 rows (~6.6 ms/row); the *same* rows without
+  the vector return in ~0.5 s. A full 1,000-row vector page sits right at Supabase's per-statement
+  timeout.
+- Full pagination therefore **intermittently 500s** with PostgREST `{"code":"57014","message":
+  "canceling statement due to statement timeout"}`. Reproduced directly; failure rate is
+  load-dependent (some trials completed at ~3.7 s max/page, the next trial 500'd).
+- That 500 had **no graceful path**: the module only degrades from the *400* it gets when
+  `match_vector` is un-migrated. On a **cold cache** the timeout propagated out of the route as
+  the `502 Could not reach Supabase: HTTP Error 500` the finder rendered as "Search failed".
+  (With a warm cache it silently serves stale, which is why it looked intermittent.)
+
+### F2. Shipped fix (low-risk, in place)
+
+In `_paginated_catalog_fetch`:
+- **Smaller pages** (`CATALOG_PAGE_SIZE = 250`) so a page's vector payload stays well under the
+  statement timeout.
+- **Retry the transient timeout** — a page that still 500s with `57014` is retried up to 4× with
+  backoff; a 500 that is *not* a statement timeout is surfaced immediately.
+
+Verified: 4/4 cold fetches now return all 1,686 rows with vectors where it previously flaked.
+Regression tests added (`tests/unit/test_opportunities_cache.py`:
+`test_statement_timeout_page_is_retried`, `test_non_timeout_500_is_not_retried`; file green).
+**Latency is roughly unchanged** (~9-11 s on a cold refresh — the old *successful* path was
+already ~11 s across its two big pages); the win is that the refresh is now **reliable** rather
+than fast-but-flaky. Not yet committed (working tree carries unrelated dedupe changes from a
+concurrent session).
+
+### F3. Recommended follow-up — decouple the two caches (greenlight-when-ready)
+
+The deeper inefficiency, and the operator's product framing around it:
+
+- **`/api/opportunities` (catalog browsing) loads `match_vector` only to strip it**
+  (`app/routes/opportunities.py:49-53`) — the browser never sees it. Only `/api/match` uses the
+  vectors (`recall()` reads `row["match_vector"]`).
+- Today both endpoints share **one 300 s-TTL cache** (`_opportunities_cache`), so the ~20 MB
+  vector transfer repeats every 5 minutes and whichever request triggers the refresh eats the
+  ~10 s stall under the lock.
+
+Proposed shape:
+1. **Split the cache.** A light, vector-free catalog cache for `/api/opportunities` (small
+   payload, keep the short TTL so admin edits to names/summaries still appear quickly), and a
+   separate vector-bearing cache used only by `/api/match`.
+2. **Vectors refresh on a 24 h backstop, not 5 min** (operator decision, 2026-09-02). Rationale:
+   a row's embedding changes only when the matching pipeline re-embeds it, never on an ordinary
+   edit, so a 5-minute cadence is pure waste. The 24 h is a *backstop for a totally idle system*,
+   not a "changes take a day to appear" rule — see next point.
+3. **Keep instant-on-change.** The console already busts the catalog cache on
+   activate/moderate (`ops/core.py` sets `fetched_at = 0.0` in 3 places); the split must bust
+   **both** caches so a newly-activated opportunity is matchable immediately. Any decoupling
+   work has to preserve this or it regresses into "new listing invisible for 24 h".
+4. **Optional: pre-warm the vector cache on startup** (and just after the 24 h timer rolls). The
+   product intent is for **matching to be the primary feature**; without a warm-up, the *first*
+   match after a deploy or timer expiry is the unlucky request that pays the ~10 s cold load. Note
+   this composes well: because the cache amortizes the load across every match request, feature
+   popularity does **not** multiply the cost — the heavy pull happens ~once/24 h (or per deploy),
+   not per search.
+
+Known caveat to record: an **offline** re-embed run against production would not propagate to a
+running instance for up to 24 h (vs 5 min today) unless the instance is nudged (restart, or the
+same bust trigger). Acceptable given re-embeds are infrequent and manual; just flag it in the
+runbook.
+
+**Why paused:** the split touches shared plumbing (`ops/core.py`'s cache-bust sites and the
+`_opportunities_cache` import) that a concurrent workstream is editing, plus the tested contract
+in `test_opportunities_cache.py`. It is a "clean it up properly" task, not an emergency — the F2
+fix already removes the user-facing failure. Also relevant to section D's egress math: a
+vector-free catalog cache is what makes Fix 6/7 (pre-serialized, gzipped, ETag'd catalog) simplest
+to implement.
+

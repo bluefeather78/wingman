@@ -26,6 +26,15 @@ def _http_400(body):
         fp=io.BytesIO(json.dumps(body).encode()))
 
 
+def _http_500(body):
+    return urllib.error.HTTPError(
+        url="http://x", code=500, msg="Internal Server Error", hdrs=None,
+        fp=io.BytesIO(json.dumps(body).encode()))
+
+
+_STATEMENT_TIMEOUT = {"code": "57014", "message": "canceling statement due to statement timeout"}
+
+
 @pytest.fixture(autouse=True)
 def _reset_state(monkeypatch):
     # fresh cache + re-armed latch for every test
@@ -86,6 +95,41 @@ def test_non_column_failure_with_no_cache_raises(monkeypatch):
     monkeypatch.setattr(opp.urllib.request, "urlopen", fake_urlopen)
     with pytest.raises(Exception):
         opp.fetch_opportunities()
+
+
+def test_statement_timeout_page_is_retried(monkeypatch):
+    # A page that 500s with a statement timeout (57014) is a transient DB-load spike, not a
+    # dead catalog — retry it rather than failing the whole fetch (that is what surfaced the
+    # 502 to the app). First attempt times out, second succeeds.
+    monkeypatch.setattr(opp.time, "sleep", lambda *_: None)  # no real backoff in the test
+    attempts = []
+
+    def fake_urlopen(req, timeout=10):
+        attempts.append(req.full_url)
+        if len(attempts) == 1:
+            raise _http_500(_STATEMENT_TIMEOUT)
+        return _FakeResp(json.dumps([{"id": "a", "match_vector": [0.1]}]).encode())
+
+    monkeypatch.setattr(opp.urllib.request, "urlopen", fake_urlopen)
+    data = opp.fetch_opportunities()
+    assert data == [{"id": "a", "match_vector": [0.1]}]
+    assert len(attempts) == 2  # retried once past the timeout
+
+
+def test_non_timeout_500_is_not_retried(monkeypatch):
+    # A 500 that is NOT a statement timeout is not a spike we can wait out — surface it (no
+    # cache to fall back on here), and do not spend the retry budget on it.
+    monkeypatch.setattr(opp.time, "sleep", lambda *_: None)
+    attempts = []
+
+    def fake_urlopen(req, timeout=10):
+        attempts.append(req.full_url)
+        raise _http_500({"code": "42P01", "message": "some other server error"})
+
+    monkeypatch.setattr(opp.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(urllib.error.HTTPError):
+        opp.fetch_opportunities()
+    assert len(attempts) == 1  # no retry
 
 
 def test_transient_failure_serves_stale_cache(monkeypatch):

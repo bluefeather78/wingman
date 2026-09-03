@@ -29,6 +29,35 @@ The five specialist reports it summarises, with file:line for every finding, are
 3. Hosting: recommended stay on Render + Supabase, move to a paid tier, two instances after Phase 4.
 4. Retire `opportunity-matching` as a branch (archive tag, extract per decision)? Recommended yes.
 5. Keep logging chat turns + IP to `conversations`? Recommended stop, or hash IP + add RLS.
+6. Split the catalog cache and refresh embeddings on a **24 h** backstop instead of 5 min?
+   **Decided yes (Shama, 2026-09-02).** See "Live finding" below.
+
+## Live finding (2026-09-02): catalog fetch statement-timeout + cache decoupling
+
+Surfaced by a real user report ("search a profile theme → *Search failed: Could not reach
+Supabase: HTTP Error 500*"), investigated live. Full detail in
+[docs/review-2026-09-02/perf_report.md](docs/review-2026-09-02/perf_report.md) §F.
+
+- **Bug (confirmed live).** `fetch_opportunities()` pulls the server-only 768-dim `match_vector`
+  for all **1,686** active rows in 1,000-row pages; a full vector page sits at Supabase's
+  per-statement timeout and **intermittently 500s** (`57014 canceling statement due to statement
+  timeout`). No graceful path (the code only degrades from the *400* of an un-migrated column), so
+  a cold cache surfaced it as a 502 = "Search failed".
+- **Fix (shipped, low-risk, uncommitted).** Smaller pages (`CATALOG_PAGE_SIZE = 250`) + retry the
+  transient `57014` with backoff, in `app/services/opportunities.py`. 4/4 cold fetches now succeed;
+  regression tests added. Latency unchanged (~10 s cold), but reliable. Removes the user-facing
+  failure now.
+- **Planned cleanup (Phase 2, greenlight-when-ready).** `/api/opportunities` (browsing) loads the
+  vector only to strip it; only `/api/match` uses it, and vectors change only on a re-embed. So:
+  (a) split into a light vector-free catalog cache (keep short TTL — admin edits still appear fast)
+  and a vector cache used only by matching; (b) refresh the vector cache on a **24 h backstop**
+  (decision 6) since a 5-min cadence on rarely-changing embeddings is pure waste; (c) **keep
+  instant-on-change** — `ops/core.py` busts the cache on activate/moderate and the split must bust
+  both, or a new listing goes un-matchable for a day; (d) optionally **pre-warm on startup** so the
+  first match after a deploy/timer doesn't eat the ~10 s cold load (matching is intended to be the
+  primary feature, and the cache amortizes the load across all searches, so cost does not scale
+  with popularity). **Paused** because it touches `ops/core.py` + the tested cache contract that a
+  concurrent workstream is editing; it also makes Phase-2 Fix 6/7 (gzip+ETag catalog) simplest.
 
 ## Phase plan (one engineer, AI-assisted; ~31 engineer-days over ~8 weeks)
 
@@ -49,6 +78,9 @@ The five specialist reports it summarises, with file:line for every finding, are
 - Async AI lane: under a burst some AI calls answer "try again shortly". Skip it and ~10 concurrent AI calls freeze the app.
 - Identity cache: a lapse enforces up to 60 s late. Skip it and every signed-in request pays a DB read.
 - Catalog cache headers: an activation shows up to 5 min late (server TTL already 5 min).
+- Split catalog/vector caches + 24 h embedding backstop: browsing gets snappier and the ~20 MB
+  vector pull drops from every 5 min to ~once/day; cost is that an *offline* re-embed on prod lags
+  up to 24 h unless the instance is nudged (activations still refresh instantly via the console bust).
 - Never merge `opportunity-matching`: the funnel stays unshipped unless rebuilt on the recall grid.
 - Scheduled paid agents: M3 moves from a yes-per-run to a yes-per-schedule; keep behind a toggle + dollar ceiling.
 - Stay on Render/Supabase: revisit only past ~500 rps; a move now is churn for no measured gain.

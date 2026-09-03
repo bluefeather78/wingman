@@ -81,8 +81,8 @@ offline agent so they cannot drift — the same role `deadline_write_decision` a
 2. **Judge each pair** with `dedupe_confidence.classify_rows(row, other, cosine)` — the
    existing fused engine, unchanged.
 3. **Return the single winner**: highest tier, then highest cosine. Surface only
-   `proof / confident / adjudicate / hint`. **`sibling` and `none` return `None`** — the row
-   enters the queue as an ordinary pending item with *no* dupe line. That suppression is the
+   `proof / confident / adjudicate / hint`. **`sibling` and `none` return `None`** — the row gets
+   *no* `dup_verdict`, so it never appears in the Duplicate queue at all. That suppression is the
    main noise cut.
 
 `Verdict = { confidence, duplicate_of, name, url, reasons[], cosine, computed_at }`.
@@ -94,14 +94,24 @@ Holds the single resolved `Verdict` (or null). Replaces the dedupe role of `dup_
 `duplicate_of` (the **confirmed** survivor, set only by a human) is unchanged.
 See §6 for the DDL-vs-no-DDL decision.
 
-### 3.3 The one agent — `dedupe.py`
+### 3.3 The one agent — `dedupe.py` (and the two-queue boundary)
 
-Merges `dedupe_queue.py` + `find_catalog_dups.py`. For every pending **and** active row it
-calls `resolve_dup_verdict` and writes `dup_verdict`. Read-only without `--write`. Free — the
-heuristics are string logic and the cosines are index lookups; the reverted 18-min embedding
-sweep is avoided by doing one **bulk matmul** over the stored vectors, not a per-row index
-search (measured 2026-09-02: full catalog 1,690 rows in **33 s**, of which 31 s was the read).
-`--preview` prints the tier histogram and would-be writes.
+**There are TWO queues, and the same `resolve_dup_verdict` fusion feeds both — but from
+different triggers over different populations. They must not cross.**
+
+| Queue | Population | Trigger | Cosine source |
+|---|---|---|---|
+| **Review queue** | pending, `is_active=false` | **insert-time**, per new row (Phase 4) | the new row is embedded **live** (paid) — it has no stored vector yet |
+| **Duplicate queue** | active, `is_active=true` | the **offline/ad-hoc** agent (batch) | **lookup** of stored `dedupe_vector`s — free |
+
+The offline agent (this section) merges `dedupe_queue.py` + `find_catalog_dups.py`, reads
+**ACTIVE rows only**, resolves each against the active catalog, and publishes to the **Duplicate
+queue**. It must **never** write a verdict onto a pending review-queue row — that is deduped at
+insert (Phase 4), and an offline scanner reaching into the review queue is the cross-queue
+contamination this revamp removes. Read-only without `--write`. Free — string logic + one **bulk
+matmul** over stored vectors (measured 2026-09-02: 1,690 active rows in **33 s**, ~31 s of it the
+read). `--preview` prints the tier histogram and would-be writes. `dedupe_resolve.py` is the
+Phase-1 seed of this agent.
 
 ### 3.4 The one console surface
 

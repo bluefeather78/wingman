@@ -50,6 +50,11 @@ _NN_K = 10
 
 
 def fetch_rows(url, key, limit=None):
+    # ACTIVE rows ONLY. This is the ad-hoc catalog duplicate detector: its job is to find
+    # active-vs-active duplicates already live in the catalog and publish them to the DUPLICATE
+    # queue. It must NEVER touch pending (is_active=false) review-queue rows — those are deduped
+    # at INSERT time by the detection path, and writing a verdict onto them here is exactly the
+    # cross-contamination between the two queues this revamp exists to remove.
     rows = supabase_get(url, "opportunities", {"select": _SELECT, "is_active": "eq.true"}, key)
     if limit:
         rows = rows[:limit]

@@ -198,6 +198,15 @@ async def handle_pending_update(request: Request):
     return json_response(200 if result.get("ok") else 400, result, default=str)
 
 
+@router.post("/api/agents/pending/clear-dup-verdict")
+async def handle_clear_dup_verdict(request: Request):
+    """Clear the resolved dup_verdict on the given rows — the Duplicate queue's "not a
+    duplicate" action. Body: {ids: [...]}. Touches only dup_verdict."""
+    body = await read_json_body(request)
+    result = core.clear_dup_verdict(body.get("ids") or [])
+    return json_response(200 if result.get("ok") else 400, result, default=str)
+
+
 @router.get("/api/agents/metadata-refresh-queue")
 def handle_metadata_refresh_queue(request: Request):
     """Read-only: rows activated but not yet run through refresh_opportunities.py. Backs the

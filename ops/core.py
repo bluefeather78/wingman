@@ -1489,6 +1489,26 @@ def _commit_patch(opp_id, updates):
         resp.read()
 
 
+def clear_dup_verdict(ids):
+    """Clear the resolved `dup_verdict` on the given rows — the Duplicate queue's "not a
+    duplicate" action. Sets ONLY `dup_verdict = null`; it never touches `is_active` or
+    `moderation_status`, because dismissing a suspected duplicate is a verdict on the PAIR, not on
+    the program. The row then leaves the Duplicate queue (that slice filters on dup_verdict). The
+    next ad-hoc detector run may re-surface it if the pair still scores — that is correct: "not a
+    duplicate" is one operator's call on the current evidence, not a permanent suppression."""
+    ids = [i for i in (ids or []) if i]
+    if not ids:
+        return {"ok": False, "error": "No ids given."}
+    cleared = 0
+    for oid in ids:
+        try:
+            _commit_patch(oid, {"dup_verdict": None})
+            cleared += 1
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"Could not clear {oid}: {e}", "cleared": cleared}
+    return {"ok": True, "cleared": cleared}
+
+
 def _commit_insert(rows):
     req = urllib.request.Request(
         f"{SUPABASE_URL}/rest/v1/opportunities",
@@ -1628,10 +1648,16 @@ def list_pending_opportunities(limit=500, source=None, status="queue"):
 
     filters = {}
     if status == "flagged":
-        # The only slice that lists is_active=TRUE rows: a suspected duplicate is left live
-        # on purpose, so it cannot come from the is_active=false base every other slice uses.
+        # The Duplicate queue — the ONLY slice that lists is_active=TRUE rows. A suspected
+        # duplicate is left live on purpose, so it cannot come from the is_active=false base
+        # every other slice uses. As of the dedupe revamp (Phase 2) this slice is driven by the
+        # ad-hoc detector's resolved `dup_verdict` (one verdict per active row). Legacy
+        # suspected_duplicate rows are OR'd in so a pre-revamp flag still surfaces until Phase 5
+        # migrates them. A missing dup_verdict column 400s these filtered attempts and degrades
+        # to an empty slice (the guard below), never the whole live catalog.
         base["is_active"] = "eq.true"
-        filters["moderation_status"] = f"in.({','.join(FLAGGED_STATUSES)})"
+        filters["or"] = ("(dup_verdict.not.is.null,moderation_status.in."
+                         f"({','.join(FLAGGED_STATUSES)}))")
     else:
         base["is_active"] = "eq.false"
         if status == "queue":
@@ -1648,7 +1674,13 @@ def list_pending_opportunities(limit=500, source=None, status="queue"):
     # working queue and reject button — only the reason column reads as missing. Without
     # any migration there is no moderation_status to select or filter on either, and a
     # queue with no reject button beats no queue at all.
+    # `dup_verdict` (the dedupe revamp's one-verdict column) is tried in the fullest select
+    # first; if it is not migrated yet the attempt 400s and falls through to the pre-revamp
+    # selects, so the queue/rejected slices are unaffected (only `flagged`, which filters on the
+    # column, degrades — to an empty slice, per the guard below).
     attempts = [
+        (dict(base, select=f"{_BASE_PENDING_SELECT},{_MODERATION_SELECT},"
+                           f"{_MODERATION_REASON_COLUMN},dup_verdict", **filters), True, True),
         (dict(base, select=f"{_BASE_PENDING_SELECT},{_MODERATION_SELECT},"
                            f"{_MODERATION_REASON_COLUMN}", **filters), True, True),
         (dict(base, select=f"{_BASE_PENDING_SELECT},{_MODERATION_SELECT}", **filters),

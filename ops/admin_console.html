@@ -2011,7 +2011,7 @@ function pendingRowHtml(o, selected, toggleFn, opts) {
     ...flags.map(f => String(f).startsWith('classify:') ? classifyPill(f)
       : `<span class="pill warn" title="${esc(String(f))}">${esc(String(f).slice(0, 90))}</span>`),
     isAdjudicated(o) ? `<span class="pill danger">${esc(o.moderation_status)}${o.reviewed_at ? ' ' + ago(o.reviewed_at) : ''}</span>` : '',
-    o.moderation_status === 'suspected_duplicate' ? `<span class="pill warn">suspected duplicate</span>` : '',
+    (o.moderation_status === 'suspected_duplicate' && !o.dup_verdict) ? `<span class="pill warn">suspected duplicate</span>` : '',
     o.duplicate_of ? `<span class="pill info">of ${esc((S.duplicateTargets[o.duplicate_of] || {}).name || o.duplicate_of)}</span>` : '',
     o.moderation_reason ? `<span class="pill info" title="${esc(String(o.moderation_reason))}">why: ${esc(String(o.moderation_reason).slice(0, 60))}</span>` : '',
   ].filter(Boolean).join(' ');
@@ -2021,7 +2021,7 @@ function pendingRowHtml(o, selected, toggleFn, opts) {
     <td><div>${esc(o.name || '(no name)')}</div>
         ${o.summary ? `<div class="hint" style="margin-top:3px">${esc(String(o.summary).slice(0, 120))}</div>` : ''}
         ${tags ? `<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px">${tags}</div>` : ''}
-        ${dupeBackLinks(dupes)}</td>
+        ${opts.verdict ? dupVerdictLine(o.dup_verdict) : dupeBackLinks(dupes)}</td>
     <td>${esc(o.org || '—')}</td>
     <td>${esc(o.type || '—')}</td>
     <td class="mono" style="font-size:11.5px">${esc(o.source || '—')}</td>
@@ -2074,14 +2074,16 @@ function renderDupes() {
   const body = $('dupeBody');
   if (!body) return;
   if (!rows.length) {
-    body.innerHTML = `<tr><td colspan="7" class="empty">Nothing flagged. Use
-      <strong>Scan for duplicates</strong> to find and flag suspected pairs.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="7" class="empty">No suspected duplicates. Run the
+      duplicate detector (<span class="mono">dedupe_resolve.py</span>) or
+      <strong>Scan for duplicates</strong> to populate this.</td></tr>`;
     updateDupeButtons();
     return;
   }
   // hideEdit: these rows are live (is_active=true) and the pending-update endpoint only edits
-  // inactive rows. The useful per-row action here is Duplicate (confirm) — that stays.
-  body.innerHTML = rows.map(o => pendingRowHtml(o, S.selectedDupes, 'toggleDupe', { hideEdit: true })).join('');
+  // inactive rows. verdict: render the ONE dup_verdict line, not the legacy back-link pile.
+  body.innerHTML = rows.map(o => pendingRowHtml(o, S.selectedDupes, 'toggleDupe',
+    { hideEdit: true, verdict: true })).join('');
   updateDupeButtons();
 }
 
@@ -2105,16 +2107,25 @@ function updateDupeButtons() {
 // AND the stale duplicate_of pointer, and — because 'approved' is not an adjudicated status —
 // leaves is_active untouched, so the row stays live. Reject = pull it (deactivates).
 async function dupeKeepSelected() {
-  const ids = [...S.selectedDupes];
+  const rows = (S.flagged || []).filter(o => S.selectedDupes.has(o.id));
+  const ids = rows.map(o => o.id);
   if (!ids.length) return;
   try {
-    const r = await api('/api/agents/pending/moderate', {
+    // New model: "not a duplicate" clears the dup_verdict, so the row leaves the Duplicate
+    // queue. Touches nothing else — the program stays exactly as it was.
+    await api('/api/agents/pending/clear-dup-verdict', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids, status: 'approved' }),
+      body: JSON.stringify({ ids }),
     });
-    if (!r || !r.ok) throw new Error((r && r.error) || 'Keep failed');
+    // Legacy: a pre-revamp suspected_duplicate flag lives in moderation_status — clear it to
+    // 'approved' (leaves is_active untouched) so old flags also stop surfacing.
+    const legacy = rows.filter(o => o.moderation_status === 'suspected_duplicate').map(o => o.id);
+    if (legacy.length) await api('/api/agents/pending/moderate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: legacy, status: 'approved' }),
+    });
     S.selectedDupes.clear();
-    toast(`Kept ${r.moderated || ids.length} row(s) — no longer flagged.`);
+    toast(`Kept ${ids.length} row(s) — no longer flagged as duplicates.`);
     refreshDashboard();
   } catch (e) { notice('Could not keep: ' + e.message); }
 }
@@ -2125,22 +2136,37 @@ async function dupeKeepSelected() {
 async function dupeConfirmSelected() {
   const rows = (S.flagged || []).filter(o => S.selectedDupes.has(o.id));
   if (!rows.length) return;
-  const missing = rows.filter(o => !o.duplicate_of);
+  // The survivor is the resolved verdict's best guess (dup_verdict.duplicate_of); a legacy
+  // human-set duplicate_of still wins if present.
+  const survivorOf = o => o.duplicate_of || (o.dup_verdict && o.dup_verdict.duplicate_of) || null;
+  const missing = rows.filter(o => !survivorOf(o));
   if (missing.length) {
-    notice(`${missing.length} selected row(s) have no survivor to confirm against — open `
-      + `Duplicate on each to pick one. Confirming the rest.`);
+    notice(`${missing.length} selected row(s) have no suggested duplicate — open Duplicate on `
+      + `each to pick one. Confirming the rest.`);
   }
   let done = 0, failed = 0;
+  const survivors = new Set();
   for (const o of rows) {
-    if (!o.duplicate_of) { failed++; continue; }
+    const surv = survivorOf(o);
+    if (!surv) { failed++; continue; }
     try {
       const r = await api('/api/agents/pending/moderate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: [o.id], status: 'duplicate', duplicate_of: o.duplicate_of,
+        body: JSON.stringify({ ids: [o.id], status: 'duplicate', duplicate_of: surv,
                                reason: o.moderation_reason || undefined }),
       });
-      if (r && r.ok && r.moderated) done += r.moderated; else failed++;
+      if (r && r.ok && r.moderated) { done += r.moderated; survivors.add(surv); } else failed++;
     } catch (_) { failed++; }
+  }
+  // The survivor kept its OWN dup_verdict pointing back at the row we just retired — clear it so
+  // it doesn't linger in the Duplicate queue pointing at a now-inactive loser.
+  if (survivors.size) {
+    try {
+      await api('/api/agents/pending/clear-dup-verdict', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [...survivors] }),
+      });
+    } catch (_) { /* best effort — the next detector run also clears it */ }
   }
   S.selectedDupes.clear();
   toast(`Confirmed ${done} duplicate(s).` + (failed ? ` ${failed} could not be confirmed.` : ''));
@@ -2536,6 +2562,31 @@ const DUPE_PILL_CLASS = {
   strong: 'danger', proof: 'danger', confident: 'danger',
   adjudicate: 'warn', weak: 'warn', hint: 'warn', match: 'warn',
 };
+// The dedupe revamp's ONE verdict per row (dup_verdict): a single confidence label + the one
+// best-guess survivor, replacing the multi-writer dupeBackLinks pile. Used by the Duplicate
+// queue only (the review queue keeps its insert-time hints until Phase 4).
+const VERDICT_PILL_CLASS = { certain: 'danger', likely: 'danger', possible: 'warn' };
+function dupVerdictLine(v) {
+  if (!v || !v.duplicate_of) return '';
+  const conf = String(v.confidence || 'possible').toLowerCase();
+  const label = esc(v.name || v.duplicate_of || '(unnamed)');
+  const link = v.url
+    ? `<a href="${esc(v.url)}" target="_blank" rel="noopener" title="${esc(v.url)}">${label} &#8599;</a>`
+    : label;
+  const cos = (typeof v.cosine === 'number') ? ` · cos ${v.cosine.toFixed(3)}` : '';
+  const sib = v.sibling ? ' · looks similar, fields differ' : '';
+  const why = Array.isArray(v.reasons)
+    ? esc(v.reasons.filter(r => !/different program/.test(r)).join(' · ')) : '';
+  return `<div class="dupe-back">
+    <span class="dupe-back-head">Suspected duplicate of</span>
+    <div class="dupe-back-row">
+      <span class="pill ${VERDICT_PILL_CLASS[conf] || 'info'}">${esc(conf)}</span>
+      ${link}
+      <span class="mono dupe-back-id">${esc(v.duplicate_of)}</span>
+      <span class="dupe-back-why">${why}${cos}${sib}</span>
+    </div>
+  </div>`;
+}
 function dupeBackLinks(dupes) {
   if (!dupes.length) return '';
   return `<div class="dupe-back">

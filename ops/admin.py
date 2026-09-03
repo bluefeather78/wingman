@@ -10,6 +10,7 @@ import threading
 
 from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 
 import dryrun_common
 from ops import core
@@ -225,10 +226,23 @@ def handle_db_health():
     return json_response(200, core.get_db_health(), default=str)
 
 
+@router.post("/api/agents/duplicate-scan")
+async def handle_duplicate_scan(request: Request):
+    """Phase 3: run the unified ad-hoc duplicate detector over ACTIVE rows and stamp one
+    dup_verdict per changed row. Backs the console's 'Scan for duplicates' button. FREE, but
+    synchronous (~30-40s). Body: {write: bool} (default true)."""
+    body = await read_json_body(request)
+    write = body.get("write", True)
+    # ~30-40s of blocking IO + numpy — offload so it doesn't freeze the ops event loop.
+    result = await run_in_threadpool(core.scan_catalog_duplicates, write=bool(write))
+    return json_response(200 if result.get("ok") else 502, result, default=str)
+
+
 @router.get("/api/agents/duplicate-report")
 def handle_duplicate_report(request: Request):
-    """Read-only scan for flag-eligible duplicate pairs (both rows live). Writes nothing —
-    the operator reviews the pairs and flags a chosen subset via the POST below."""
+    """DEPRECATED (Phase 3 → removed in Phase 5): the old read-only pair report backing the
+    two-step Scan→flag flow, superseded by /api/agents/duplicate-scan. Kept reachable so a
+    stale bundle does not 404 mid-migration."""
     limit = _qs_int(request, "limit", 2000) or 2000
     result = core.duplicate_report_pairs(limit=limit)
     return json_response(200 if result.get("ok") else 502, result, default=str)

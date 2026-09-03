@@ -201,6 +201,29 @@ now caught** (`ec17185 ↔ ec18702`), the pair `find_catalog_dups` was structura
 Nothing wired to the app/console and no other column touched — verdicts written to `dup_verdict`
 in shadow mode for inspection. Phase 2 (console reads it) is next and depends on nothing further.
 
+### Phase 2 — DONE (2026-09-02)
+
+Console **Duplicate queue** (the `flagged`/active-rows slice) now renders one `dup_verdict` line
+per row (confidence pill + best-guess survivor link + reasons/cosine/sibling note) via
+`dupVerdictLine()`. Backend: the `flagged` slice is driven by `dup_verdict` (OR legacy
+`suspected_duplicate`); `clear_dup_verdict` + `POST /api/agents/pending/clear-dup-verdict` back the
+**"not a duplicate"** action; **Confirm** takes the survivor from `dup_verdict.duplicate_of`. The
+**review queue is untouched** (keeps legacy `dupeBackLinks` until Phase 4). Verified live: 58 rows
+render, no console errors, 225 tests green.
+
+### Phase 3 — DONE (2026-09-02)
+
+The **one agent**. `dedupe_resolve.run()` is the unified ad-hoc detector (active rows only →
+Duplicate queue), with **change-only writes** (a re-scan PATCHes only the rows whose verdict
+differs — 9, not 1,686). The console **"Scan for duplicates"** button now runs it in one step
+(`POST /api/agents/duplicate-scan` → `ops.core.scan_catalog_duplicates`, offloaded to a
+threadpool), replacing the old two-step report+flag modal. `find_catalog_dups.py` and
+`dedupe_queue.py` are marked **deprecated** (kept on disk for the Phase-5 cleanup; the SYCCL blind
+spot they carried is closed by the resolver's embedding candidate-gen). Verified live: scan
+returns `scanned 1686 / with_verdict 50 / changed 9 / wrote 9`; flagged slice reconciled to 50,
+all verdict-backed; console functions load clean. Phases 4 (insert-time unification) and 5 (delete
+legacy) remain.
+
 ---
 
 ## 7. Non-goals / guardrails

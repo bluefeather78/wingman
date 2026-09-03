@@ -2104,6 +2104,26 @@ def _pick_survivor(a, b):
     return a, b  # tie keeps `a`, which the finder orders id.asc (the incumbent)
 
 
+def scan_catalog_duplicates(write=True):
+    """Phase 3: the unified ad-hoc duplicate detector, run from the console's 'Scan for
+    duplicates' button. Reads ACTIVE rows only, resolves ONE dup_verdict per row (dedupe_resolve
+    fuses url_dedupe + dedupe_confidence + the embedding index), and writes only the CHANGED
+    rows. FREE — string logic + one bulk matmul over stored vectors. This REPLACES the old
+    two-step report+flag flow (find_catalog_dups + flag_suspected_duplicate_pairs), which stays
+    on disk only until the Phase-5 cleanup. Synchronous (~30-40s; the paged vector read
+    dominates), which is acceptable for a localhost, occasionally-run ops action."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
+    try:
+        import dedupe_resolve
+        summary = dedupe_resolve.run(SUPABASE_URL, SUPABASE_SERVICE_KEY, write=bool(write))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"Duplicate scan failed: {e}"}
+    # The Duplicate queue reads the live table (list_pending_opportunities is uncached), so no
+    # opportunities-cache bust is needed here — the freshly written verdicts show on refresh.
+    return summary
+
+
 def duplicate_report_pairs(limit=2000):
     """Run the read-only catalog duplicate finder and return FLAG-ELIGIBLE pairs.
 

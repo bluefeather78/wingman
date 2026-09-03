@@ -1,5 +1,13 @@
 """Report duplicate rows already inside the opportunities table. Free, READ-ONLY.
 
+DEPRECATED 2026-09-02 (dedupe revamp Phase 3): the console's 'Scan for duplicates' button now
+runs `dedupe_resolve.run` (via `ops.core.scan_catalog_duplicates`), which resolves ONE
+`dup_verdict` per active row instead of this module's heuristic pair report. This file is kept
+on disk only until the Phase-5 cleanup (see DEDUPE_SIMPLIFICATION_PLAN.md); do not build new
+callers on it. It also has a known blind spot the resolver closes — its heuristic candidate
+generation never pairs same-program rows whose names barely overlap (the SYCCL case).
+
+
 2026-08-30: this was briefly rewritten to a pure embedding nearest-neighbor sweep (search every
 active row against every other), then reverted the same day once that sweep was measured live —
 1686 active rows, 3072-dim vectors (gemini-embedding-001) — at ~0.66s per row's search, i.e.

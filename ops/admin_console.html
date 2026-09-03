@@ -594,7 +594,7 @@ tr.disabled-seed { opacity: .48; }
         <div class="card-head">
           <h2>Flagged as suspected duplicates</h2>
           <div class="spacer"></div>
-          <button class="btn btn-sm" id="dupScanBtn" title="Scan the live catalog for duplicate pairs and flag a reviewed subset">Scan for duplicates</button>
+          <button class="btn btn-sm" id="dupScanBtn" title="Scan active rows and stamp one dup_verdict per suspected duplicate (~30-40s, free)">Scan for duplicates</button>
           <button class="btn btn-sm" id="dupeSelectAll">Select all</button>
           <button class="btn btn-sm" id="dupeClear">Clear</button>
           <button class="btn btn-danger" id="dupeConfirmBtn" disabled>Confirm duplicate</button>
@@ -2691,6 +2691,35 @@ async function saveDuplicate() {
 }
 
 /* ---- Scan for duplicates → flag a reviewed subset as suspected_duplicate ---------------- */
+// Phase 3: the unified one-step scan. Runs the ad-hoc detector over active rows, stamps one
+// dup_verdict per changed row, and refreshes the Duplicate queue. Replaces openDupScan (the old
+// two-step report+flag modal, kept dormant for Phase-5 removal).
+async function runDuplicateScan() {
+  if (!confirm('Scan the active catalog for duplicates? Takes ~30-40s and refreshes the '
+      + 'Duplicate queue. Free — no API cost.')) return;
+  const btn = $('dupScanBtn');
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Scanning… (~30s)';
+  try {
+    const r = await api('/api/agents/duplicate-scan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ write: true }),
+    });
+    if (!r || !r.ok) throw new Error((r && r.error) || 'Scan failed');
+    const h = r.histogram || {};
+    toast(`Scanned ${r.scanned} active rows · ${r.with_verdict} suspected duplicate(s) `
+      + `(${h.certain || 0} certain / ${h.likely || 0} likely / ${h.possible || 0} possible) · `
+      + `${r.wrote} updated.`);
+    refreshDashboard();
+  } catch (e) {
+    notice('Duplicate scan failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
+
 async function openDupScan() {
   S.dupScan = { pairs: [], sel: new Set(), swap: new Set() };
   $('dupScanError').classList.add('hidden');
@@ -4847,7 +4876,7 @@ document.querySelectorAll('#userCostTabs .tab')
 $('activateBtn').onclick = activateSelected;
 $('dupClose').onclick = () => { $('dupModal').classList.remove('open'); S.dupSubject = null; };
 $('dupSave').onclick = saveDuplicate;
-$('dupScanBtn').onclick = openDupScan;
+$('dupScanBtn').onclick = runDuplicateScan;
 $('dupeSelectAll').onclick = () => { (S.flagged || []).forEach(o => S.selectedDupes.add(o.id)); renderDupes(); };
 $('dupeClear').onclick = () => { S.selectedDupes.clear(); renderDupes(); };
 $('dupeKeepBtn').onclick = dupeKeepSelected;

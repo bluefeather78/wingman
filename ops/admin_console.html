@@ -485,6 +485,7 @@ tr.disabled-seed { opacity: .48; }
     <button class="vtab" data-view="guide">Catalog Control Room</button>
     <button class="vtab active" data-view="metrics">Dashboard<span class="count" id="metricsTabCount"></span></button>
     <button class="vtab" data-view="run">Run</button>
+    <button class="vtab" data-view="links">Links<span class="count" id="linkQueueTabCount"></span></button>
     <button class="vtab" data-view="money">Money<span class="count" id="userTabCount"></span></button>
     <button class="vtab" data-view="comms">Comms<span class="count" id="emailTabCount"></span></button>
     <button class="vtab" data-view="health">Health<span class="count" id="healthTabCount"></span></button>
@@ -663,9 +664,10 @@ tr.disabled-seed { opacity: .48; }
 
     <div class="subview" id="rsub-utils">
       <div class="flowhead"><h2>Utilities</h2><span class="step">catalog hygiene &amp; maintenance</span>
-        <p>Cross-cutting maintenance that isn&rsquo;t part of one pipeline &mdash; pruning dead
-        links, and backups.</p></div>
-      <div class="section-label">Catalog hygiene</div>
+        <p>Cross-cutting maintenance that isn&rsquo;t part of one pipeline &mdash; backfills and
+        backups. (Link checking and its review queue moved to the <strong>Links</strong> tab.)</p></div>
+      <!-- Kept as the home for any agent not mapped to a workflow (see renderCards' extras
+           fallback), so a newly added agent can never silently vanish. Empty in normal use. -->
       <div class="agents" id="wf-utils"></div>
       <div class="section-label">Backfills</div>
       <div class="agents" id="tools-utils-backfill"></div>
@@ -681,6 +683,85 @@ tr.disabled-seed { opacity: .48; }
       <div id="slot-log-history"></div>
       <div id="slot-log-snapshots"></div>
       <div id="slot-log-timing"></div>
+    </div>
+  </div>
+
+  <!-- ==========================================================================
+       Links — the link checker and its review queue, together. The checker verifies
+       every catalog URL and QUEUES what it finds (link_review_status='pending'); it
+       never deactivates anything on its own. A person drains the queue here: select
+       rows and Clear (leave the row live) or Deactivate (take it out of the catalog).
+  =========================================================================== -->
+  <div class="view hidden" id="view-links">
+    <div class="view-lead">
+      The link checker verifies every catalog URL and <strong>queues</strong> what it finds
+      below &mdash; it <strong>never deactivates anything on its own</strong>. Review the queue:
+      tick rows and either <strong>Clear</strong> them (dismiss the finding, the program stays
+      live) or <strong>Deactivate</strong> them (take them out of the catalog, into the review
+      queue). Run the checker itself from the card at the top; it is free (plain HTTP, no API).
+    </div>
+
+    <div class="flowhead"><h2>Links</h2><span class="step">check &rarr; queue &rarr; clear or deactivate</span>
+      <p>Broken, unverifiable, and discontinued findings all land in one queue. A dead link is a
+      page that is provably gone (404/410); an unverifiable one is a site that blocks our checker
+      but usually loads fine in a browser &mdash; read the finding before you deactivate.</p></div>
+    <div class="agents" id="wf-links"></div>
+
+    <div class="card" id="linkQueueCard">
+      <div class="card-head">
+        <h2>Link review queue<span class="count" id="linkQueueCount"></span></h2>
+        <div class="spacer"></div>
+        <button class="btn btn-sm" id="linkQueueRefresh">Refresh</button>
+        <button class="btn btn-sm" id="linkSelectAll">Select all</button>
+        <button class="btn btn-sm" id="linkClearSel">Clear selection</button>
+        <button class="btn btn-sm" id="linkClearBtn" disabled title="Dismiss the finding; the program stays live in the catalog.">Clear selected</button>
+        <button class="btn btn-danger" id="linkDeactivateBtn" disabled title="Take these rows out of the catalog (is_active=false, into the review queue).">Deactivate selected</button>
+      </div>
+      <div class="card-body tight">
+        <div class="hint hidden" id="linkQueueSetup" style="padding:10px 14px">
+          The review queue is unavailable: the link-health columns do not exist yet. Run
+          <span class="mono">link_health_schema.sql</span> in the Supabase SQL editor (it is
+          idempotent), then restart with <span class="mono">restart_server.ps1</span>. The
+          checker still runs; it just cannot queue findings until the migration is applied.
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr>
+              <th style="width:34px"></th><th>Program</th><th>Finding</th>
+              <th>Code</th><th>Dead for</th><th></th>
+            </tr></thead>
+            <tbody id="linkQueueBody"><tr><td colspan="6" class="empty">Loading&hellip;</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card hidden" id="linkRepairedCard">
+      <div class="card-head">
+        <h2>Repaired &mdash; awaiting activation<span class="count" id="linkRepairedCount"></span></h2>
+        <div class="spacer"></div>
+        <button class="btn btn-sm" id="linkRepSelectAll">Select all</button>
+        <button class="btn btn-sm" id="linkRepClearSel">Clear selection</button>
+        <button class="btn" id="linkActivateBtn" disabled title="Restore these rows to the live catalog with their repaired URL.">Activate selected</button>
+        <button class="btn btn-sm btn-danger" id="linkRepDeactivateBtn" disabled title="Keep off: dismiss the repair and leave the row inactive.">Keep off</button>
+      </div>
+      <div class="card-body tight">
+        <div class="hint" style="padding:10px 14px">
+          The repair pass found and <strong>proved</strong> a new URL for these inactive rows
+          (three title tests) and already wrote it &mdash; the row is still <strong>off</strong>.
+          Click the link to check it, then <strong>Activate</strong> to put it live. Nothing here
+          re-activates on its own.
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr>
+              <th style="width:34px"></th><th>Program</th><th>Repaired URL</th>
+              <th>Was</th><th></th>
+            </tr></thead>
+            <tbody id="linkRepairedBody"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1647,6 +1728,8 @@ const S = {
   metrics: null, metricPanel: 'funnel', metricSort: 'stage', expandedStage: null,
   lastRefresh: null, seedYield: null, userPanel: 'provider',
   snapshots: [], pending: [], pendingSource: '', pendingClass: '', selectedPending: new Set(),
+  linkQueue: [], selectedLinks: new Set(), linkSchemaReady: true,
+  linkRepaired: [], selectedRepaired: new Set(),
   signups: [], signupStatus: 'pending_review', selectedSignups: new Set(),
   signupCounts: {}, mailingListReady: true,
   emails: null, emailKind: 'welcome',
@@ -1743,7 +1826,7 @@ async function loadConfig() {
 async function refreshDashboard() {
   markRefreshing(true);
   try {
-    const [status, summary, history, billed, userCosts, metrics, snapshots, pending, flagged] = await Promise.all([
+    const [status, summary, history, billed, userCosts, metrics, snapshots, pending, flagged, linkQueue] = await Promise.all([
       api('/api/agents/status'),
       api(`/api/agents/summary?days=${S.range}`),
       api(`/api/agents/history?days=${S.range}&limit=100`),
@@ -1757,6 +1840,9 @@ async function refreshDashboard() {
       // Flagged-in-place rows are is_active=TRUE, so they are NOT in the status=all fetch
       // above (which reads inactive rows). They need their own request.
       api('/api/agents/pending?limit=2000&status=flagged').catch(() => null),
+      // The link review queue (link_review_status='pending'). Polled here so the nav badge
+      // stays current even while the operator is on another tab.
+      api('/api/agents/link-queue?limit=2000').catch(() => null),
     ]);
     S.status = status; S.summary = summary; S.history = history; S.billed = billed;
     S.userCosts = userCosts;
@@ -1768,9 +1854,16 @@ async function refreshDashboard() {
     S.moderationReady = !pending || pending.moderation_ready !== false;
     S.reasonReady = !pending || pending.reason_ready !== false;
     S.duplicateTargets = (pending && pending.duplicate_targets) || {};
+    // Only replace the link queue on a successful fetch, so a one-off 502 doesn't wipe a
+    // list the operator may be mid-review on. schema_ready:false is a valid (empty) answer.
+    if (linkQueue) {
+      S.linkQueue = linkQueue.opportunities || [];
+      S.linkRepaired = linkQueue.repaired || [];
+      S.linkSchemaReady = linkQueue.schema_ready !== false;
+    }
     notice('');
     renderKPIs(); renderBilled(); renderUserCosts(); renderMetrics(); renderChart(); renderCards(); renderHistory();
-    renderSnapshots(); renderPending(); renderDupes();
+    renderSnapshots(); renderPending(); renderDupes(); renderLinkQueue();
     S.lastRefresh = Date.now();
   } catch (e) {
     notice('Could not reach the agent API: ' + e.message);
@@ -2432,6 +2525,224 @@ function togglePending(id, on) {
   renderPending();
 }
 
+/* ---------------------------------------------------------------------------
+   Links tab — the link checker's review queue.
+
+   The checker no longer deactivates anything (2026-09-02): every broken/unverifiable/
+   discontinued finding sits at link_review_status='pending' and shows up here. A person
+   selects rows and either CLEARs the finding (row stays live) or DEACTIVATEs it (row leaves
+   the catalog). A second list holds link_review_status='repaired' rows — inactive rows whose
+   URL the repair pass proved a replacement for; a person verifies and ACTIVATEs them. All
+   actions are explicit, multi-select — there is no "resolve all", and nothing auto-activates.
+--------------------------------------------------------------------------- */
+async function loadLinkQueue() {
+  try {
+    const d = await api('/api/agents/link-queue?limit=2000');
+    S.linkQueue = d.opportunities || [];
+    S.linkRepaired = d.repaired || [];
+    S.linkSchemaReady = d.schema_ready !== false;
+  } catch (e) {
+    notice('Could not load the link queue: ' + e.message);
+  }
+  renderLinkQueue();
+}
+
+// The link-owned finding flags, worded to match check_links.py's FLAG_* text. The reviewer
+// hint (repair suggestion, "open it manually", the old URL of a repair) lives in quality_flags;
+// pick out the ones this agent wrote so the row explains itself without opening the record.
+const LINK_FLAG_PREFIXES = ['dead link (', 'link unverifiable (', 'link unreachable (',
+  'link redirects to a site homepage', 'URL was dead (', 'possible replacement found',
+  'summary says program is discontinued'];
+
+function linkStatusPill(o) {
+  const st = o.link_status || '';
+  if (st === 'dead') return '<span class="pill danger">dead</span>';
+  if (st === 'unverified') return '<span class="pill warn">unverifiable</span>';
+  if (st === 'live') return '<span class="pill">live</span>';
+  return `<span class="pill">${esc(st || '—')}</span>`;
+}
+
+function linkRowHtml(o) {
+  const on = S.selectedLinks.has(o.id);
+  const hints = (o.quality_flags || []).filter(
+    f => typeof f === 'string' && LINK_FLAG_PREFIXES.some(p => f.startsWith(p)));
+  const hintHtml = hints.length
+    ? `<div class="hint" style="margin-top:3px">${hints.map(esc).join('<br>')}</div>` : '';
+  const urlHtml = o.url
+    ? `<div style="margin-top:3px"><a href="${esc(o.url)}" target="_blank" rel="noopener" class="mono" style="font-size:11px">${esc(o.url)} &#8599;</a></div>`
+    : '';
+  const inactive = o.is_active === false
+    ? ' <span class="pill" title="Already inactive — deactivated earlier; still carrying an open finding.">inactive</span>' : '';
+  return `<tr class="${on ? 'sel-row' : ''}">
+    <td><input type="checkbox" ${on ? 'checked' : ''} onchange="toggleLink('${esc(o.id)}', this.checked)"></td>
+    <td>
+      <div><strong>${esc(o.name || o.id)}</strong>${inactive}</div>
+      <div class="hint">${esc(o.org || '')}</div>
+      ${urlHtml}
+    </td>
+    <td>${linkStatusPill(o)}${hintHtml}</td>
+    <td class="mono">${esc(o.link_status_code || '—')}</td>
+    <td class="mono">${o.link_dead_since ? esc(ago(o.link_dead_since)) : '—'}</td>
+    <td style="white-space:nowrap">
+      <button class="btn btn-sm" onclick="resolveLink(['${esc(o.id)}'], 'clear')" title="Dismiss the finding; the program stays live.">Clear</button>
+      <button class="btn btn-sm btn-danger" onclick="resolveLink(['${esc(o.id)}'], 'deactivate')" title="Take this row out of the catalog.">Deactivate</button>
+    </td>
+  </tr>`;
+}
+
+// A repaired row: proven replacement URL already written, row still inactive, awaiting Activate.
+function linkRepairedRowHtml(o) {
+  const on = S.selectedRepaired.has(o.id);
+  // The old URL is preserved in the FLAG_REPAIRED entry ("...; previously <url>").
+  const wasFlag = (o.quality_flags || []).find(
+    f => typeof f === 'string' && f.startsWith('URL was dead ('));
+  const wasUrl = wasFlag && wasFlag.includes('previously ')
+    ? wasFlag.split('previously ').pop() : '';
+  const urlHtml = o.url
+    ? `<a href="${esc(o.url)}" target="_blank" rel="noopener" class="mono" style="font-size:11px">${esc(o.url)} &#8599;</a>`
+    : '—';
+  return `<tr class="${on ? 'sel-row' : ''}">
+    <td><input type="checkbox" ${on ? 'checked' : ''} onchange="toggleRepaired('${esc(o.id)}', this.checked)"></td>
+    <td>
+      <div><strong>${esc(o.name || o.id)}</strong></div>
+      <div class="hint">${esc(o.org || '')}</div>
+    </td>
+    <td>${urlHtml}</td>
+    <td class="mono" style="font-size:11px;opacity:.7">${esc(wasUrl || '—')}</td>
+    <td style="white-space:nowrap">
+      <button class="btn btn-sm" onclick="resolveRepaired(['${esc(o.id)}'], 'activate')" title="Put this row live with its repaired URL.">Activate</button>
+      <button class="btn btn-sm btn-danger" onclick="resolveRepaired(['${esc(o.id)}'], 'deactivate')" title="Keep off — dismiss the repair, row stays inactive.">Keep off</button>
+    </td>
+  </tr>`;
+}
+
+function renderLinkQueue() {
+  const rows = S.linkQueue || [];
+  const repaired = S.linkRepaired || [];
+  // The nav badge counts everything awaiting a decision — findings plus repairs to activate.
+  const badge = (rows.length + repaired.length) ? num(rows.length + repaired.length) : '';
+  $('linkQueueTabCount').textContent = badge;
+  $('linkQueueCount').textContent = rows.length ? num(rows.length) : '';
+  const setup = $('linkQueueSetup');
+  if (setup) setup.classList.toggle('hidden', S.linkSchemaReady);
+
+  const body = $('linkQueueBody');
+  if (body) {
+    if (!S.linkSchemaReady) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">Waiting on link_health_schema.sql.</td></tr>';
+    } else if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">Nothing queued — every checked link is fine.</td></tr>';
+    } else {
+      // Drop selections for rows no longer in the queue (e.g. resolved in another tab) so the
+      // button counts never claim more than is on screen.
+      const ids = new Set(rows.map(o => o.id));
+      [...S.selectedLinks].forEach(id => { if (!ids.has(id)) S.selectedLinks.delete(id); });
+      body.innerHTML = rows.map(linkRowHtml).join('');
+    }
+  }
+
+  // Repaired-awaiting-activation card: shown only when there is something to activate.
+  const repCard = $('linkRepairedCard'), repBody = $('linkRepairedBody');
+  if (repCard) repCard.classList.toggle('hidden', !repaired.length);
+  $('linkRepairedCount').textContent = repaired.length ? num(repaired.length) : '';
+  if (repBody && repaired.length) {
+    const ids = new Set(repaired.map(o => o.id));
+    [...S.selectedRepaired].forEach(id => { if (!ids.has(id)) S.selectedRepaired.delete(id); });
+    repBody.innerHTML = repaired.map(linkRepairedRowHtml).join('');
+  }
+  updateLinkButtons();
+}
+
+function toggleLink(id, on) {
+  if (on) S.selectedLinks.add(id); else S.selectedLinks.delete(id);
+  renderLinkQueue();
+}
+
+function toggleRepaired(id, on) {
+  if (on) S.selectedRepaired.add(id); else S.selectedRepaired.delete(id);
+  renderLinkQueue();
+}
+
+function updateLinkButtons() {
+  const n = S.selectedLinks.size;
+  const clr = $('linkClearBtn'), dea = $('linkDeactivateBtn');
+  if (clr) {
+    clr.disabled = !n || !S.linkSchemaReady;
+    clr.textContent = n ? `Clear ${n} selected` : 'Clear selected';
+    clr.title = S.linkSchemaReady ? 'Dismiss the finding; the program stays live in the catalog.'
+                                  : 'Run link_health_schema.sql first.';
+  }
+  if (dea) {
+    dea.disabled = !n;
+    dea.textContent = n ? `Deactivate ${n} selected` : 'Deactivate selected';
+  }
+  const rn = S.selectedRepaired.size;
+  const act = $('linkActivateBtn'), repDea = $('linkRepDeactivateBtn');
+  if (act) { act.disabled = !rn; act.textContent = rn ? `Activate ${rn} selected` : 'Activate selected'; }
+  if (repDea) { repDea.disabled = !rn; repDea.textContent = rn ? `Keep ${rn} off` : 'Keep off'; }
+}
+
+async function resolveLink(ids, action) {
+  ids = (ids || []).filter(Boolean);
+  if (!ids.length) return;
+  const many = ids.length === 1 ? 'this program' : `these ${ids.length} programs`;
+  if (action === 'deactivate' &&
+      !confirm(`Deactivate ${many}? They leave the catalog (is_active=false) and go into the `
+             + `review queue. The link checker never does this on its own — this is your call.`)) {
+    return;
+  }
+  try {
+    const r = await api('/api/agents/link-queue/resolve', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, action }),
+    });
+    const verb = action === 'clear' ? 'Cleared' : 'Deactivated';
+    toast(`${verb} ${r.updated} program${r.updated === 1 ? '' : 's'}.`);
+    if (r.errors) notice(`${r.errors} failed: ${(r.details || []).join(' | ')}`);
+    if (r.schema_ready === false) {
+      notice('Deactivated, but the review flag could not be written — run link_health_schema.sql.');
+    }
+    ids.forEach(id => S.selectedLinks.delete(id));
+    await loadLinkQueue();
+  } catch (e) {
+    notice(`Could not ${action} the selected rows: ` + e.message);
+  }
+}
+
+function resolveLinkSelected(action) {
+  resolveLink([...S.selectedLinks], action);
+}
+
+// The repaired list's own actions: Activate (put live with the repaired URL) or Keep off.
+async function resolveRepaired(ids, action) {
+  ids = (ids || []).filter(Boolean);
+  if (!ids.length) return;
+  const many = ids.length === 1 ? 'this program' : `these ${ids.length} programs`;
+  if (action === 'activate' &&
+      !confirm(`Activate ${many} with the repaired URL? They go LIVE in the catalog and are `
+             + `visible to students. Make sure you have opened each link and checked it first.`)) {
+    return;
+  }
+  try {
+    const r = await api('/api/agents/link-queue/resolve', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, action }),
+    });
+    const verb = action === 'activate' ? 'Activated' : 'Kept off';
+    toast(`${verb} ${r.updated} program${r.updated === 1 ? '' : 's'}.`);
+    if (r.errors) notice(`${r.errors} failed: ${(r.details || []).join(' | ')}`);
+    ids.forEach(id => S.selectedRepaired.delete(id));
+    await loadLinkQueue();
+    refreshDashboard();  // activation changed is_active — keep the rest of the console in step
+  } catch (e) {
+    notice(`Could not ${action} the selected rows: ` + e.message);
+  }
+}
+
+function resolveRepairedSelected(action) {
+  resolveRepaired([...S.selectedRepaired], action);
+}
+
 function updateReviewButtons() {
   const n = S.selectedPending.size;
   const rejected = S.pendingStatus === 'rejected';
@@ -3000,6 +3311,7 @@ const VIEW_SUBTITLE = {
   guide:   'A field guide to the discovery and maintenance pipeline',
   metrics: 'Who signs up, how far they get, and whether they convert',
   run:     'Run the agents and tools that build and maintain the opportunity catalog',
+  links:   'Check catalog URLs, then clear or deactivate what the checker queued for review',
   money:   'What everything costs — the agents you run and the app usage students trigger',
   comms:   'The three lifecycle emails — what they say, who is due one, and what went out',
   health:  'One read-only pass over the database — queues, coverage, freshness, and alerts',
@@ -3012,6 +3324,7 @@ function showView(view) {
   // per-workflow loads (aggregators, signups) fire from the Run sub-tab handlers instead.
   if (view === 'comms') loadEmails();
   if (view === 'health') loadHealth();
+  if (view === 'links') loadLinkQueue();
   document.querySelectorAll('#viewTabs .vtab').forEach(
     t => t.classList.toggle('active', t.dataset.view === view));
   document.querySelectorAll('.view').forEach(
@@ -3032,13 +3345,16 @@ const WORKFLOW_AGENTS = {
   'wf-core':   ['metadata'],
   'wf-upkeep': ['deadline', 'tasks', 'reviews'],
   'wf-lists':  ['mailinglist'],
-  'wf-utils':  ['links'],
+  // The link checker lives on its own Links tab now, next to the queue it fills.
+  'wf-links':  ['links'],
 };
 // Tool cards that share a grid with the agent above them, so they sit side by side rather
 // than dropping to their own row. Appended after the agent cards in the same container.
 const WORKFLOW_INLINE_TOOLS = {
   'wf-lists': ['mlgrader'],
-  'wf-utils': ['refind'],
+  // The URL-repair tool sits beside the link checker on the Links tab — it retries the rows
+  // that were deactivated for a dead link and restores the ones whose replacement verifies.
+  'wf-links': ['refind'],
 };
 
 function relocateConsole() {
@@ -4597,13 +4913,14 @@ const SCOPE_FIELDS = {
       <select id="cfgScope" onchange="onScopeChange()">
         <option value="all" selected>All active rows due for a check</option>
         <option value="sample">Random sample</option>
-        <option value="flagged">Retry rows already flagged as dead links</option>
+        <option value="flagged">Retry inactive rows flagged as broken (dead or unverifiable)</option>
       </select>
       <div class="help">Plain HTTP, no API calls &mdash; this agent is free, including a full pass over the
         whole catalog. Rows checked in the last 7 days are skipped.
-        <strong>Retry rows already flagged</strong> revisits only the rows a previous run deactivated,
-        tries to find each one&rsquo;s real URL, and puts back the ones whose replacement can be proven
-        &mdash; the only thing in this console that re-activates a row automatically.</div>
+        <strong>Retry inactive rows flagged as broken</strong> revisits the rows you deactivated over a link
+        (dead <em>or</em> unverifiable), tries to find each one&rsquo;s real URL, and for the ones it can prove,
+        writes the new URL and parks them in <strong>Repaired &mdash; awaiting activation</strong> below.
+        It never re-activates a row itself &mdash; you verify each repaired link and click Activate.</div>
     </div>
     <div class="field" id="sampleWrap">
       <label for="cfgSampleSize">Sample size</label>
@@ -4614,21 +4931,17 @@ const SCOPE_FIELDS = {
       <label for="cfgForce">Force recheck<div class="help">Ignores the 7-day staleness filter and rechecks every active row. Costs nothing.</div></label>
     </div>
     <div class="check">
-      <input type="checkbox" id="cfgFlagOnly">
-      <label for="cfgFlagOnly">Flag only, don&rsquo;t deactivate<div class="help">Records link health and writes review flags, but leaves every row active.
-        Use it for a first look at a catalog that has never been checked, so the scale is visible before anything moves.</div></label>
-    </div>
-    <div class="check">
       <input type="checkbox" id="cfgNoRepair">
-      <label for="cfgNoRepair">Skip the repair attempt<div class="help">By default a dead row is not condemned until the checker has looked for its real URL
+      <label for="cfgNoRepair">Skip the repair attempt<div class="help">By default a dead row is not queued until the checker has looked for its real URL
         on the same site and proven the replacement by its page title. Programs get reorganised far more often than they are cancelled,
         so leave this unticked unless you specifically want the raw link verdict.</div></label>
     </div>
     <div class="notice" style="margin-top:4px;font-size:12px">
-      Only a <strong>404</strong>, a <strong>410</strong>, a malformed URL or a hostname that no longer resolves deactivates a row.
-      A 403, a TLS failure or a timeout is flagged and left active &mdash; those sites are refusing this checker,
-      not reporting a missing page. Deactivated rows land in the <strong>Review queue</strong> with a flag saying why;
-      nothing here ever re-activates anything.
+      This run <strong>never deactivates anything</strong>. It <strong>queues</strong> findings for review on this
+      Links tab, where you clear or deactivate them yourself. A <strong>404</strong>, a <strong>410</strong>, a
+      malformed URL or a dead hostname is queued as a dead link; a 403, a TLS failure or a timeout is queued as a
+      softer &ldquo;unverifiable&rdquo; finding &mdash; those sites are refusing this checker, not reporting a
+      missing page. Nothing here ever re-activates anything except <strong>Retry rows already flagged</strong>.
       <br><br>This run also does a free <strong>discontinuation check</strong>: a row whose summary says the program is gone
       (&ldquo;ceased operations&rdquo;, &ldquo;discontinued its&hellip; camps&rdquo;, &ldquo;will not be offering&hellip;&rdquo;)
       is marked <strong>not-running</strong> so it drops out of Fresh Finds and matching &mdash; only when its status is still
@@ -4786,7 +5099,7 @@ function collectConfig() {
     // console posted it always, since the field is merely hidden with CSS.
     if (c.scope === 'sample') c.sampleSize = val('cfgSampleSize');
     if (key === 'reviews' || key === 'links') c.force = checked('cfgForce');
-    if (key === 'links') { c.flagOnly = checked('cfgFlagOnly'); c.noRepair = checked('cfgNoRepair'); }
+    if (key === 'links') { c.noRepair = checked('cfgNoRepair'); }
     if (key === 'metadata' && val('cfgExcludeSource')) c.excludeSource = val('cfgExcludeSource').trim();
   }
   c.minDelay = val('cfgMinDelay');
@@ -4839,14 +5152,14 @@ async function doRun(dryRun) {
   const cfg = S.config[S.modalAgent];
   const label = dryRun ? 'DRY RUN' : 'LIVE RUN';
   // A free agent gets its own wording. Telling an operator that a run "spends real money"
-  // when it provably cannot is how a confirm dialog becomes something people click past —
-  // and the one warning this agent DOES need (it takes rows away from students) is
-  // unrelated to cost, so it has to be said in its own words.
+  // when it provably cannot is how a confirm dialog becomes something people click past.
+  // As of 2026-09-02 the link checker also takes NO row away from students on its own — it
+  // only queues findings for review — so it no longer needs the old "removes rows" warning.
   let warn;
   if (cfg.free) {
     warn = dryRun
       ? 'This agent makes no API calls, so a dry run costs nothing and changes nothing — it only reports what it would do.'
-      : 'This agent costs nothing to run. What it DOES do is set is_active = false on rows whose URL is confirmed gone, which removes them from what students see until someone re-activates them from the Review queue.';
+      : 'This agent costs nothing to run and deactivates nothing on its own. It queues broken links for review on the Links tab, where you clear or deactivate them yourself.';
   } else {
     warn = dryRun
       ? `A dry run still calls the ${cfg.api} API at full cost — it only skips writing to the database.`
@@ -4959,6 +5272,22 @@ $('pendingSelectAll').onclick = () => {
   renderPending();
 };
 $('pendingClear').onclick = () => { S.selectedPending.clear(); renderPending(); };
+// Links tab — review queue controls.
+$('linkQueueRefresh').onclick = loadLinkQueue;
+$('linkSelectAll').onclick = () => {
+  (S.linkQueue || []).forEach(o => S.selectedLinks.add(o.id));
+  renderLinkQueue();
+};
+$('linkClearSel').onclick = () => { S.selectedLinks.clear(); renderLinkQueue(); };
+$('linkClearBtn').onclick = () => resolveLinkSelected('clear');
+$('linkDeactivateBtn').onclick = () => resolveLinkSelected('deactivate');
+$('linkRepSelectAll').onclick = () => {
+  (S.linkRepaired || []).forEach(o => S.selectedRepaired.add(o.id));
+  renderLinkQueue();
+};
+$('linkRepClearSel').onclick = () => { S.selectedRepaired.clear(); renderLinkQueue(); };
+$('linkActivateBtn').onclick = () => resolveRepairedSelected('activate');
+$('linkRepDeactivateBtn').onclick = () => resolveRepairedSelected('deactivate');
 $('modalClose').onclick = () => { $('runModal').classList.remove('open'); clearInterval(S.logTimer); };
 $('previewBtn').onclick = doPreview;
 $('dryRunBtn').onclick = () => doRun(true);
@@ -5266,7 +5595,7 @@ function renderHealth(h) {
     if (cov.dead_links_active) {
       html += `<div style="margin-top:10px">${healthPill('warn', 'anomaly')}
         <span style="margin-left:8px">${num(cov.dead_links_active)} active rows carry a dead link
-        (the link checker normally deactivates these).</span></div>`;
+        (the link checker queues these for review on the Links tab).</span></div>`;
     }
   } else {
     html += `<div class="notice info">Coverage gaps are unavailable — the review / link / task

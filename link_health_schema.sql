@@ -35,13 +35,29 @@ alter table opportunities
   -- March and one broken this morning look identical, and there is no way to tell a
   -- long-rotted row from a site that is mid-migration and will be back on Monday. Cleared
   -- when the URL is seen live again.
-  add column if not exists link_dead_since timestamptz;
+  add column if not exists link_dead_since timestamptz,
 
--- Finding rows the checker deactivated is the console's most common query against these
+  -- The review-queue state for a link finding (added 2026-09-02, when the agent stopped
+  -- deactivating on its own). NULL = no open finding; 'pending' = the agent found a problem
+  -- and a person needs to look; 'cleared' = a person reviewed it and left the row as-is;
+  -- 'deactivated' = a person reviewed it and took the row out of the catalog. The agent only
+  -- ever writes 'pending', and only over a NULL — it never overturns a human 'cleared' or
+  -- 'deactivated'. This is what the console's Links tab reads: the queue is exactly the rows
+  -- at 'pending'. Text, not a bool, precisely so a cleared finding is distinguishable from one
+  -- that was never raised.
+  add column if not exists link_review_status text;
+
+-- Finding rows with a link finding is the console's most common query against these
 -- columns, and it is always a small slice of a large table.
 create index if not exists opportunities_link_status_idx
   on opportunities (link_status)
   where link_status is not null;
+
+-- The Links tab's queue query is `link_review_status = 'pending'`, run on every load. A
+-- partial index keeps it a slice-of-a-slice, since almost every row is NULL here.
+create index if not exists opportunities_link_review_status_idx
+  on opportunities (link_review_status)
+  where link_review_status is not null;
 
 -- ---------------------------------------------------------------------------------------
 -- ALTER block. Re-runnable; add every new column here as well as above. See the header.
@@ -50,3 +66,4 @@ alter table opportunities add column if not exists link_status text;
 alter table opportunities add column if not exists link_status_code text;
 alter table opportunities add column if not exists link_checked_at timestamptz;
 alter table opportunities add column if not exists link_dead_since timestamptz;
+alter table opportunities add column if not exists link_review_status text;

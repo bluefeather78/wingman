@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
-"""Link-health checker: finds catalog rows whose URL is broken, deactivates the ones that
-are provably gone, and flags the rest for a person to look at.
+"""Link-health checker: finds catalog rows whose URL is broken and QUEUES every finding for a
+person to review. It never deactivates a row on its own (changed 2026-09-02).
+
+WHAT CHANGED (2026-09-02). This agent used to deactivate rows whose URL was provably gone. It
+no longer touches is_active or moderation_status at all. Every finding — a dead link, an
+unverifiable one, a soft-404, a summary that reads discontinued — is written to a review queue
+by setting `link_review_status = 'pending'`, and a person decides from the console's Links tab:
+select rows and either CLEAR them (leave the catalog untouched) or DEACTIVATE them (take them
+out). The two-pass confirmation, the repair-before-condemning step and the discontinuation
+content check are all unchanged; only the final act moved from the agent to a human. The
+classification below still names the *severity* of each finding ('dead' vs a softer flag) —
+that severity now decides how the queue row reads, not whether the agent pulls the row.
 
 THIS AGENT IS FREE. No Gemini, no Anthropic, no keys beyond Supabase — every check is an
 ordinary HTTP GET. It is the only one of the six that can be run without approval on cost
@@ -17,13 +27,15 @@ rows join had never been checked at all. Measured over all 1374 active rows that
 
 One row in ten sent a student to a page that is not there - `smysp.stanford.edu`,
 `jkcf.org/our-programs/young-artist-award/`, `training.nih.gov/.../aip_hs/`. These are real
-programs with rotted links, not junk rows, which is exactly why the answer is "deactivate
-and queue for review" rather than "delete".
+programs with rotted links, not junk rows, which is exactly why the answer is "queue for
+review" rather than "delete" — and, since 2026-09-02, not "deactivate" either.
 
-THE RULE, and it is the whole design: only EVIDENCE OF ABSENCE deactivates a row.
+THE RULE, and it is the whole design: EVIDENCE OF ABSENCE is queued as a dead link (the
+strongest finding); everything softer is queued as an unverified/flagged finding. Nothing
+here is a verdict — a person makes the call from the Links tab.
 
-    deactivate   404, 410, a malformed URL, or a hostname that does not resolve
-    flag only    403, 429, TLS failures, timeouts, connection resets, redirects off-site
+    dead-link finding   404, 410, a malformed URL, or a hostname that does not resolve
+    flagged finding     403, 429, TLS failures, timeouts, connection resets, redirects off-site
 
 403 alone is ~9% of this catalog (112 rows) and TLS failures another 41. Those sites are
 refusing OUR client, not reporting an absent page - a student's browser carries a different
@@ -46,17 +58,17 @@ failures that forced each one. Everything not repaired keeps its dead-link flag 
 a candidate was found but not proven, carries it as a suggestion so a reviewer opens the
 queue with a lead instead of a bare "dead link".
 
-THE ONE PLACE THIS REPO SETS is_active = true FROM CODE, and the limits on it.
---repair-flagged revisits rows THIS agent deactivated for a dead link and restores the ones
-whose replacement verifies. That is not the "never auto-activate" rule being bent: that rule
-is about promoting rows no person has ever vetted - a scraper's guess. These rows were in
-the live catalog because a person put them there, a machine removed them over a link, and
-the same machine has now proven the link. Restoring is putting back what the automated check
-took out. It is bounded to rows carrying this agent's own dead-link flag, never a row a
-person rejected and never one that was never active, and each restored row keeps a flag
-naming its old URL so the edit is auditable and reversible by hand. Nothing else here
-activates anything: a row whose original URL simply comes back to life on its own is
-reported, its link_status corrected, and it stays inactive for a person to decide.
+REPAIR NO LONGER ACTIVATES ANYTHING (changed 2026-09-02 by operator decision; see MARQUEE M2).
+This agent used to be the one place in the repo that set is_active = true from code:
+--repair-flagged restored a deactivated row when it proved a replacement URL. That path is
+gone. --repair-flagged still revisits inactive rows carrying a repairable link flag (dead
+link, unverifiable, unreachable, soft-404 — see _REPAIRABLE_PREFIXES), and it still attempts
+to prove a replacement URL by url_repair's three title tests. But a proven repair now WRITES
+the new URL onto the still-inactive row and parks it at link_review_status='repaired' — it
+does not flip is_active. A person verifies the new link on the Links tab and clicks Activate.
+So there is now NO code path anywhere in this repo that auto-activates a catalog row. A row
+whose original URL simply comes back to life on its own is likewise reported, its link_status
+corrected, and it stays inactive for a person to decide.
 
 DISCONTINUATION CONTENT CHECK (added 2026-09-01). The same "evidence of absence" idea, one
 level up from the URL: a row whose SUMMARY plainly says the program is gone ("has ceased all
@@ -80,18 +92,18 @@ This check is free (a regex over text we already fetched) and deliberately conse
 SETUP:
     .env needs SUPABASE_URL and SUPABASE_SERVICE_KEY. No model key.
     link_health_schema.sql is a one-time manual step in the Supabase SQL editor. Without
-    it this still runs and still deactivates - it drops the link_* columns from its writes
-    and loses only the staleness filter, so every run re-checks everything. Free, so that
-    degrades to "slower", not "broken".
+    it this still runs and still queues findings by writing link_review_status - EXCEPT when
+    that column is the one missing: then it drops the link_* columns from its writes (losing
+    the staleness filter, so every run re-checks everything, and losing the queue routing
+    until the migration runs). Free, so the staleness part degrades to "slower", not "broken".
 
 USAGE:
     python check_links.py --preview          # what it would check. Free (everything is).
     python check_links.py --dry-run          # check for real, write nothing, dump a snapshot
-    python check_links.py --all              # check, repair what can be repaired, deactivate the rest
+    python check_links.py --all              # check, repair what can be, queue the rest for review
     python check_links.py --sample 100       # a random slice, for a first look
-    python check_links.py --repair-flagged   # retry ONLY previously-deactivated rows; restore what verifies
+    python check_links.py --repair-flagged   # retry inactive flagged rows; queue proven repairs for manual activation
     python check_links.py --no-repair        # skip the repair attempt entirely
-    python check_links.py --flag-only        # never deactivate; only record + report
     python check_links.py --force            # ignore staleness, re-check every active row
 """
 import argparse
@@ -126,8 +138,11 @@ STALE_AFTER_DAYS = 7
 DEFAULT_WORKERS = 16
 
 # The link_* columns, kept in one place because they are written in two (the live PATCH and
-# the missing-column retry) and dropped as a set.
-LINK_COLUMNS = ("link_status", "link_status_code", "link_checked_at", "link_dead_since")
+# the missing-column retry) and dropped as a set. link_review_status rides with them: it is
+# this agent's telemetry about the row (which queue it sits in), not a content edit, so it is
+# selected, stripped, and excluded from the updated_at bump exactly like the others.
+LINK_COLUMNS = ("link_status", "link_status_code", "link_checked_at", "link_dead_since",
+                "link_review_status")
 
 # Review flags. Short on purpose: the admin console renders each as a pill truncated at 90
 # characters. They say what to go and CHECK, never what was decided.
@@ -152,6 +167,14 @@ FLAG_SUGGESTION = "possible replacement found but NOT verified: {url}"
 _OWNED_PREFIXES = ("dead link (", "link unverifiable (", "link unreachable (",
                    "link redirects to a site homepage", "URL was dead (",
                    "possible replacement found", "summary says program is discontinued")
+
+# The flags whose rows --repair-flagged revisits. Broadened 2026-09-02 from dead-link-only to
+# every link-health finding a person might have deactivated: an "unverifiable" (403/TLS/timeout)
+# or soft-404 row is often genuinely gone, and a repair attempt is free, so it is worth trying.
+# NOT included: "URL was dead (" (already repaired), "possible replacement" (a suggestion, not a
+# finding) or "summary says ... discontinued" (a content verdict, not a moved page).
+_REPAIRABLE_PREFIXES = ("dead link (", "link unverifiable (", "link unreachable (",
+                        "link redirects to a site homepage")
 
 # Discontinuation language for the content check. Deliberately narrow: each pattern asserts the
 # PROGRAM ITSELF is gone or paused, not merely that some part of a page mentions ending (an
@@ -227,30 +250,41 @@ def _is_missing_column(detail):
 def classify(row, result, repair=None):
     """(action, flags) for one checked row.
 
-    action is "repair" | "deactivate" | "flag" | "ok". Only evidence of absence
-    deactivates - see the module docstring. Everything else is a review hint attached to a
-    row that stays live.
+    action is "repair" | "queue" | "flag" | "ok". "queue" is the strongest finding — evidence
+    of absence, what used to auto-deactivate and now goes to the review queue as a dead link.
+    "flag" is a softer finding (also queued, but the row is not presented as gone). "ok" and
+    "repair" clear any open finding. See the module docstring.
 
-    `repair` is url_repair.repair_url()'s answer for a dead row, or None if repair was not
-    attempted. A VERIFIED repair outranks the death sentence: the page moved, it did not
-    go away. An unverified one still contributes its best candidate as a review hint, so a
-    reviewer opens the queue with a lead rather than a bare "dead link".
+    `repair` is url_repair.repair_url()'s answer, or None if repair was not attempted. A
+    VERIFIED repair outranks any death/unverifiable verdict: the page moved, it did not go
+    away — and since 2026-09-02 repair is attempted on unverifiable rows too (in
+    --repair-flagged), so a proven replacement can arrive on either status. An unverified
+    repair still contributes its best candidate as a review hint, so a reviewer opens the
+    queue with a lead rather than a bare "dead link".
     """
     status, code = result.get("status"), result.get("code")
     code_txt = str(code)
 
+    # A proven replacement wins over whatever the current URL's status was. Checked first so it
+    # applies to both DEAD and UNVERIFIED rows (repair is attempted on both in --repair-flagged).
+    if repair and repair.get("url"):
+        return "repair", [FLAG_REPAIRED.format(code=code_txt, old=row.get("url") or "?")]
+
     if status == uv.DEAD:
-        if repair and repair.get("url"):
-            return "repair", [FLAG_REPAIRED.format(code=code_txt, old=row.get("url") or "?")]
         flags = [FLAG_DEAD.format(code=code_txt)]
         if repair and repair.get("suggestion"):
             flags.append(FLAG_SUGGESTION.format(url=repair["suggestion"]["url"]))
-        return "deactivate", flags
+        return "queue", flags
 
     if status == uv.UNVERIFIED:
-        if isinstance(code, int) or code_txt.isdigit():
-            return "flag", [FLAG_BLOCKED.format(code=code_txt)]
-        return "flag", [FLAG_UNREACHABLE.format(code=code_txt)]
+        base = ([FLAG_BLOCKED.format(code=code_txt)]
+                if (isinstance(code, int) or code_txt.isdigit())
+                else [FLAG_UNREACHABLE.format(code=code_txt)])
+        # An unverified row that repair looked at but could not prove still gets its best
+        # candidate as a lead — same courtesy a dead row gets.
+        if repair and repair.get("suggestion"):
+            base.append(FLAG_SUGGESTION.format(url=repair["suggestion"]["url"]))
+        return "flag", base
 
     # Live. One check a 200 cannot make on its own, learned from the scraper audit: a page
     # that loads is not the same as the RIGHT page. It never deactivates - the link works,
@@ -318,14 +352,16 @@ def select_rows(supabase_url, service_key, args):
         }, service_key)
 
     if args.repair_flagged:
-        # Exactly the rows THIS agent deactivated for a dead link, identified by its own
-        # flag rather than by "everything inactive". That distinction is what keeps a
-        # restore from ever touching a row a person rejected, a scraper row awaiting its
-        # first review, or anything else that is inactive for a reason unrelated to links.
+        # Exactly the inactive rows carrying one of THIS agent's link-health flags, identified
+        # by its own flag rather than by "everything inactive". That distinction is what keeps
+        # a repair from ever touching a row a person rejected, a scraper row awaiting its first
+        # review, or anything else that is inactive for a reason unrelated to links. Broadened
+        # 2026-09-02 from dead-link-only to every repairable finding (see _REPAIRABLE_PREFIXES):
+        # an "unverifiable" or soft-404 row a person deactivated is often genuinely gone too.
         flagged = [r for r in rows
-                   if any(isinstance(f, str) and f.startswith("dead link (")
+                   if any(isinstance(f, str) and f.startswith(_REPAIRABLE_PREFIXES)
                           for f in (r.get("quality_flags") or []))]
-        print(f"[OK] {len(flagged)} inactive row(s) carry this agent's dead-link flag "
+        print(f"[OK] {len(flagged)} inactive row(s) carry a repairable link flag "
               f"(of {len(rows)} inactive rows).")
         return flagged, "flagged", schema_ready
 
@@ -401,12 +437,22 @@ def sweep(rows, timeout, workers):
 
 
 def build_update(row, action, flags, result, now_iso, schema_ready, repair=None,
-                 mark_not_running=False):
+                 mark_not_running=False, needs_review=False):
     """The PATCH body for one row, or None if nothing about it changed.
 
     `mark_not_running` is set when the row's summary announces the program is gone AND its
     `status` is still blank (see discontinued_phrase / _status_blank). It writes the catalog's
-    canonical discontinued value; the caller has already added FLAG_DISCONTINUED to `flags`."""
+    canonical discontinued value; the caller has already added FLAG_DISCONTINUED to `flags`.
+
+    `needs_review` is True when this pass found something a person should look at (a dead link,
+    an unverifiable one, a soft-404, or a just-marked discontinuation). It routes the row into
+    the Links-tab queue by setting link_review_status='pending' — but only over a NULL, so it
+    never overturns a human verdict. A proven repair on an INACTIVE row instead routes it to
+    link_review_status='repaired' (URL fixed, awaiting manual activation); when the finding is
+    resolved otherwise, link_review_status is cleared back to NULL. This is the ONLY thing this
+    agent does with a finding: it never touches is_active or moderation_status — as of
+    2026-09-02 NO code path in this repo sets is_active=true (see MARQUEE M2), so even a proven
+    repair parks the row for a person to activate rather than restoring it itself."""
     update = {}
     if mark_not_running:
         # A CONTENT change to the opportunity (unlike the link_* telemetry), so this correctly
@@ -435,37 +481,32 @@ def build_update(row, action, flags, result, now_iso, schema_ready, repair=None,
     if merged != (row.get("quality_flags") or []):
         update["quality_flags"] = merged
 
-    if action == "repair" and not row.get("is_active"):
-        # RESTORING a row this agent itself deactivated on an earlier pass, now that the
-        # reason no longer holds. Read carefully: this is the ONE place in this repo that
-        # sets is_active = true from code, and it is not a breach of "never auto-activate".
-        # That rule is about promoting rows a person has never vetted — a scraper's guess.
-        # This row was in the live catalog because a person put it there; a machine took it
-        # out over a link, and the same machine has now proven the link. Restoring is
-        # putting back what the automated check removed, not promoting anything new.
-        #
-        # It is bounded accordingly: it only ever fires on a row carrying THIS agent's own
-        # dead-link flag (see select_rows' `flagged` scope), never on a row a person
-        # rejected or one that was never active, and the flag it writes keeps the old URL
-        # so the change is auditable and reversible by hand.
-        update["is_active"] = True
-
-    if action == "deactivate" and row.get("is_active"):
-        # Guarded on is_active because --repair-flagged walks rows that are ALREADY
-        # inactive: re-asserting the same values there writes 130-odd rows to say nothing
-        # and bumps updated_at on every one, which makes them look freshly touched
-        # everywhere else in the console. Same reason the Edit modal sends only changed
-        # fields.
-        update["is_active"] = False
-        # Into the review queue, not out of the catalog. `pending_review` is what puts it in
-        # front of a person; nothing here ever writes `rejected`, because a rotted link is
-        # not a verdict on the opportunity.
-        update["moderation_status"] = "pending_review"
-        # reviewed_by / reviewed_at are deliberately LEFT ALONE. Most rows this touches were
-        # approved by a person at some point, and clearing the stamp would erase the only
-        # record of that. Kept, the queue can say something genuinely useful — "someone
-        # approved this on 08-23 and the link has died since" — which is a different
-        # situation from a row nobody has ever looked at, and they should not read alike.
+    # The review-queue routing — this agent's ONLY response to a finding. It NEVER sets
+    # is_active or moderation_status; a person does that from the Links tab. As of 2026-09-02
+    # this repo has NO code path that sets is_active = true (the old --repair-flagged
+    # auto-restore was removed by operator decision — see MARQUEE M2). A proven repair on an
+    # inactive row therefore does not restore it; it fixes the URL and parks the row in the
+    # 'repaired' review state, where a person verifies the new link and activates it by hand.
+    if schema_ready:
+        current = (row.get("link_review_status") or "").strip().lower()
+        if action == "repair" and not row.get("is_active"):
+            # Fixed a row a person had deactivated: the URL now holds the PROVEN replacement
+            # (url_repair's three title tests) and FLAG_REPAIRED records the old one. Route it
+            # to 'repaired' (awaiting manual activation) rather than flipping it live.
+            if current != "repaired":
+                update["link_review_status"] = "repaired"
+        elif needs_review:
+            # Only over a NULL: a human 'cleared'/'deactivated'/'repaired' verdict is never
+            # overturned by a re-run, even while the link stays dead. Re-asserting 'pending' on
+            # a row already pending is skipped so the pass writes nothing when nothing changed.
+            if not current:
+                update["link_review_status"] = "pending"
+        else:
+            # Finding resolved (link live again, or an active row's URL repaired in place).
+            # Drop it out of the queue. Clearing a human verdict here is intended: the row is
+            # healthy now, so the old verdict no longer describes it.
+            if current:
+                update["link_review_status"] = None
 
     if not update:
         return None
@@ -485,8 +526,11 @@ def apply_update(supabase_url, service_key, row_id, update, schema_ready):
     """PATCH one row, retrying without the link_* columns if that migration is pending.
 
     Returns the schema_ready flag, possibly flipped to False. Same ladder as insert_rows()
-    in scrape_opportunities.py: one unknown key 400s the entire PATCH, so without this a
-    missing migration means the deactivation silently does not happen either.
+    in scrape_opportunities.py: one unknown key 400s the entire PATCH. Since the queue routing
+    lives in link_review_status (a link_* column), a missing migration means the row cannot be
+    queued — the stripped retry still lands any non-link change (a repair's url, a
+    discontinuation's status), and the [WARN] tells the operator the queue is off until the
+    migration runs.
     """
     try:
         supabase_patch(supabase_url, "opportunities", {"id": f"eq.{row_id}"}, update, service_key)
@@ -496,7 +540,8 @@ def apply_update(supabase_url, service_key, row_id, update, schema_ready):
             raise
         stripped = {k: v for k, v in update.items() if k not in LINK_COLUMNS}
         print("[WARN] link_* columns rejected on write - run link_health_schema.sql. "
-              "Retrying without them so the deactivation still lands.")
+              "Retrying without them; the row cannot be queued for review until the migration "
+              "runs, but any repair/discontinuation change still lands.")
         if stripped:
             supabase_patch(supabase_url, "opportunities", {"id": f"eq.{row_id}"},
                            stripped, service_key)
@@ -515,20 +560,23 @@ def main():
                         help=f"Ignore the {STALE_AFTER_DAYS}-day staleness filter and "
                              f"re-check every active row.")
     parser.add_argument("--flag-only", action="store_true",
-                        help="Record and report, but never deactivate. Use this for the "
-                             "first run against a catalog that has never been checked, so "
-                             "the scale of the problem is visible before anything moves.")
+                        help="DEPRECATED no-op since 2026-09-02: this agent no longer "
+                             "deactivates anything, so there is nothing to opt out of. Still "
+                             "accepted (and ignored) so the console's argv builder need not "
+                             "special-case it.")
     parser.add_argument("--repair-flagged", action="store_true",
-                        help="Revisit ONLY the inactive rows this agent previously "
-                             "deactivated for a dead link, try to find each one's real "
-                             "URL, and RESTORE the rows whose replacement verifies. Implies "
-                             "--repair. Free, like everything else here.")
+                        help="Revisit the inactive rows carrying a repairable link flag (dead "
+                             "link, unverifiable, unreachable, soft-404), try to find each "
+                             "one's real URL, and for the ones whose replacement verifies, "
+                             "write the new URL and park them at link_review_status='repaired' "
+                             "for manual activation on the Links tab. Never re-activates a row "
+                             "itself. Implies --repair. Free.")
     parser.add_argument("--no-repair", dest="repair", action="store_false", default=True,
-                        help="Skip the repair attempt and deactivate a dead row outright. "
-                             "Repair is on by default: measured on the 2026-08-23 batch, "
-                             "9 of 9 dead rows that were re-found on the same site came "
-                             "back live, so condemning a row without looking throws away "
-                             "real opportunities over a moved page.")
+                        help="Skip the repair attempt and queue a dead row as-is. Repair is "
+                             "on by default: measured on the 2026-08-23 batch, 9 of 9 dead "
+                             "rows that were re-found on the same site came back live, so "
+                             "queuing a row without looking buries a reviewer in dead links "
+                             "that were only moved pages.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Check for real but write nothing; dump a JSON snapshot. "
                              "Unlike the other agents' --dry-run this really is free.")
@@ -574,25 +622,29 @@ def main():
     started = datetime.datetime.now(datetime.timezone.utc)
     results = sweep(rows, args.timeout, max(1, args.workers))
 
-    # Repair pass. Only dead rows are candidates, so this costs nothing on a healthy
-    # catalog — and it runs BEFORE anything is classified, so a row whose page merely moved
-    # is never condemned for it.
+    # Repair pass. It runs BEFORE anything is classified, so a row whose page merely moved is
+    # never queued for it. Candidates are rows that re-check as DEAD — plus, in --repair-flagged
+    # (the deliberate operator retry over rows a person already deactivated), rows that re-check
+    # as UNVERIFIED too: some of those are genuinely gone, the operator asked to retry them, and
+    # a repair attempt is free. In a normal --all pass an unverified row stays live and is left
+    # alone, so this only widens the deliberate retry, never the routine sweep.
     repairs = {}
     if args.repair:
-        dead_rows = [r for r in rows
-                     if (results.get(r.get("url")) or {}).get("status") == uv.DEAD]
-        if dead_rows:
-            print(f"[OK] {len(dead_rows)} dead row(s) — looking for the real URL on each "
+        repair_statuses = ((uv.DEAD, uv.UNVERIFIED) if args.repair_flagged else (uv.DEAD,))
+        candidates = [r for r in rows
+                      if (results.get(r.get("url")) or {}).get("status") in repair_statuses]
+        if candidates:
+            print(f"[OK] {len(candidates)} broken row(s) — looking for the real URL on each "
                   f"site before deciding...")
-            repairs = url_repair.repair_many(dead_rows, timeout=args.timeout,
+            repairs = url_repair.repair_many(candidates, timeout=args.timeout,
                                              workers=min(8, max(1, args.workers)))
 
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     counts = {"live": 0, "dead": 0, "unverified": 0}
-    deactivated = 0
-    flagged = 0
+    queued_dead = 0     # dead-link findings routed to the review queue (was "deactivated")
+    flagged = 0         # softer findings (unverifiable / soft-404) routed to the queue
     repaired = 0
-    restored = 0
+    repaired_queued = 0  # inactive rows repaired -> parked as 'repaired' for manual activation
     discontinued = 0
     written = 0
     errors = 0
@@ -603,8 +655,6 @@ def main():
         counts[result.get("status", uv.UNVERIFIED)] = counts.get(result.get("status"), 0) + 1
         repair = repairs.get(row["id"])
         action, flags = classify(row, result, repair)
-        if action == "deactivate" and args.flag_only:
-            action = "flag"
 
         # Content check (free, no HTTP): a summary that announces the program is gone. Adds a
         # review flag whenever the language is present, but only WRITES status=not_running when
@@ -617,23 +667,29 @@ def main():
             if mark_not_running:
                 discontinued += 1
 
+        # Whether this pass turned up something a person should look at. A live/ok or repaired
+        # row is not review-worthy on its link; a just-marked discontinuation is, so the person
+        # can confirm the program is really gone. This is what routes the row into the queue.
+        needs_review = action in ("queue", "flag") or mark_not_running
+
         name = (row.get("name") or "?")[:55].encode("utf-8", "ignore").decode("utf-8")
-        mark = {"repair": "REPAIRED", "deactivate": "DEACTIVATE",
-                "flag": "flag", "ok": "ok"}[action]
+        mark = {"repair": "REPAIRED", "queue": "QUEUE-DEAD",
+                "flag": "queue-flag", "ok": "ok"}[action]
         print(f"  [{mark:>10}] {result.get('status'):<10} {str(result.get('code')):<12} {name}")
 
         if action == "repair":
             repaired += 1
-            # "restored" counts only rows that were INACTIVE and are going back to active —
-            # the number the --repair-flagged pass exists to produce. A repair on a row
-            # that was still active fixed its URL without ever changing its visibility, and
-            # summing the two would overstate what came back to students.
+            # "repaired_queued" counts INACTIVE rows whose URL was fixed and which are now
+            # parked at link_review_status='repaired' for a person to verify and activate —
+            # the number the --repair-flagged pass exists to produce. A repair on a row that
+            # was still active fixed its URL in place without changing its visibility or
+            # queueing anything, and summing the two would overstate what awaits review.
             if not row.get("is_active"):
-                restored += 1
+                repaired_queued += 1
             print(f"               -> {repair['url']}")
             print(f"               proof: {(repair.get('title') or '')[:70]}")
-        elif action == "deactivate":
-            deactivated += 1
+        elif action == "queue":
+            queued_dead += 1
         elif action == "flag":
             flagged += 1
         if mark_not_running:
@@ -659,7 +715,7 @@ def main():
         if args.dry_run:
             continue
         update = build_update(row, action, flags, result, now_iso, schema_ready, repair,
-                              mark_not_running=mark_not_running)
+                              mark_not_running=mark_not_running, needs_review=needs_review)
         if not update:
             continue
         try:
@@ -674,33 +730,25 @@ def main():
     pct = (counts["dead"] / total * 100) if total else 0
     print(f"\n[SUMMARY] checked: {total} in {elapsed:.0f}s  |  live: {counts['live']}, "
           f"dead: {counts['dead']} ({pct:.1f}%), unverified: {counts['unverified']}")
-    # Wording is scope-aware. In --repair-flagged every row is ALREADY inactive, so
-    # "deactivated: 134" and "flagged (left active)" would both be false statements about
-    # what the run did — the honest verb there is "stayed".
+    # Wording is scope-aware. In --repair-flagged every row is ALREADY inactive (it was
+    # deactivated by a person, or by this agent before 2026-09-02), so the honest verb there
+    # is "stayed" — the run did not queue anything, it revisited old deactivations.
     if args.repair_flagged:
-        print(f"[SUMMARY] stayed deactivated: {deactivated + flagged}, "
+        print(f"[SUMMARY] stayed deactivated: {queued_dead + flagged}, "
               f"rows written: {written}, errors: {errors}, cost: $0.00 (no API calls)")
     else:
-        verb = "would deactivate" if args.dry_run else "deactivated"
-        print(f"[SUMMARY] {verb}: {deactivated}, flagged (left active): {flagged}, "
-              f"rows written: {written}, errors: {errors}, cost: $0.00 (no API calls)")
-        if deactivated and not args.dry_run:
-            print(f"[SUMMARY] {deactivated} row(s) are now is_active=false / pending_review. "
-                  f"They are in the admin console's Review queue with a flag saying why. "
-                  f"Nothing reactivates them but a person.")
-        elif deactivated:
-            print(f"[SUMMARY] {deactivated} row(s) WOULD be deactivated. Nothing was changed.")
-    if flagged and not args.repair_flagged:
-        # Worth saying plainly: a flag on a row that stays ACTIVE is written to
-        # quality_flags but has nowhere to show, because the console's Review queue lists
-        # is_active = false rows only. It is durable — it surfaces if the row ever does
-        # enter the queue — but today the run report below is the only place to read it.
-        print(f"[SUMMARY] The {flagged} flagged row(s) are still active and still visible "
-              f"to students. Their flags are stored, but the console's Review queue only "
-              f"shows deactivated rows — read the report below to see them.")
-    if args.flag_only and counts["dead"]:
-        print(f"[NOTE] --flag-only: {counts['dead']} dead row(s) were left ACTIVE. "
-              f"Re-run without it to deactivate them.")
+        verb = "would queue" if args.dry_run else "queued"
+        print(f"[SUMMARY] {verb} for review: {queued_dead} dead-link, {flagged} flagged "
+              f"(unverifiable/soft-404); rows written: {written}, errors: {errors}, "
+              f"cost: $0.00 (no API calls)")
+        total_queued = queued_dead + flagged
+        if total_queued and not args.dry_run:
+            print(f"[SUMMARY] {total_queued} row(s) now sit at link_review_status='pending'. "
+                  f"They are in the admin console's Links tab. NOTHING was deactivated — a "
+                  f"person clears or deactivates each one there.")
+        elif total_queued:
+            print(f"[SUMMARY] {total_queued} row(s) WOULD be queued for review. Nothing was "
+                  f"changed. No row is ever deactivated by this agent.")
     if discontinued:
         verb = "would mark" if args.dry_run else "marked"
         print(f"[SUMMARY] {verb} {discontinued} row(s) status=not_running from discontinuation "
@@ -712,15 +760,17 @@ def main():
         attempted = len(repairs)
         rate = f" ({repaired / attempted * 100:.0f}%)" if attempted else ""
         verb = "would repair" if args.dry_run else "repaired"
-        print(f"[SUMMARY] repair: {attempted} dead row(s) looked at, {verb} {repaired}{rate}"
-              f" — the rest kept their dead-link flag and, where one was found, a "
+        print(f"[SUMMARY] repair: {attempted} broken row(s) looked at, {verb} {repaired}{rate}"
+              f" — the rest kept their flag and, where one was found, a "
               f"suggested replacement for a reviewer.")
-        if restored:
-            print(f"[SUMMARY] *** {restored} row(s) {'would go' if args.dry_run else 'went'} "
-                  f"BACK TO ACTIVE *** — they were deactivated for a dead link, and the "
-                  f"replacement URL was proven to be the same program by its page title.")
+        if repaired_queued:
+            print(f"[SUMMARY] *** {repaired_queued} inactive row(s) "
+                  f"{'would be' if args.dry_run else 'were'} REPAIRED and parked for review "
+                  f"*** — their URL now holds a proven replacement and they sit at "
+                  f"link_review_status='repaired' on the Links tab. NOTHING was re-activated; "
+                  f"a person verifies each new link and clicks Activate.")
         elif args.repair_flagged:
-            print("[SUMMARY] No rows could be restored to active.")
+            print("[SUMMARY] No rows could be repaired.")
 
     if args.dry_run:
         stamp = snapshot_stamp()
@@ -735,7 +785,7 @@ def main():
     else:
         # A full report every run, dry or not. The console's log ring buffer holds 500 lines
         # and a full pass prints ~1400, so without this the head of the run - which is where
-        # the deactivations are - scrolls out of reach before anyone reads it.
+        # the queued findings are - scrolls out of reach before anyone reads it.
         log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_logs")
         os.makedirs(log_dir, exist_ok=True)
         path = os.path.join(log_dir, f"link_check_{snapshot_stamp()}.json")
@@ -747,7 +797,7 @@ def main():
         supabase_patch(supabase_url, "agent_runs", {"id": f"eq.{run_id}"}, {
             "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "items_processed": total,
-            "items_updated": deactivated + flagged + discontinued,
+            "items_updated": queued_dead + flagged + repaired + discontinued,
             "errors": errors,
             # Genuinely zero, not unknown. This is the one agent for which a 0 in the cost
             # column is a fact rather than a run that died before its closing PATCH.
@@ -755,9 +805,9 @@ def main():
             "total_web_searches": 0,
             "silent_search_count": 0,
             "notes": f"live={counts['live']}, dead={counts['dead']}, "
-                     f"unverified={counts['unverified']}, deactivated={deactivated}, "
-                     f"flagged={flagged}, repaired={repaired}, restored={restored}, "
-                     f"discontinued={discontinued}",
+                     f"unverified={counts['unverified']}, queued_dead={queued_dead}, "
+                     f"flagged={flagged}, repaired={repaired}, "
+                     f"repaired_queued={repaired_queued}, discontinued={discontinued}",
         }, service_key)
         print(f"[OK] Logged agent_runs id={run_id}.")
 

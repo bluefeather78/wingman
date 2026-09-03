@@ -167,19 +167,20 @@ AGENT_CONFIGS_SCHEMA = {
     },
     "links": {
         "name": "Link Checker",
-        "description": "Verify catalog URLs (deactivate the gone ones); also mark programs whose summary says they're discontinued",
+        "description": "Verify catalog URLs and queue the broken ones for review on the Links tab; also mark programs whose summary says they're discontinued",
         "script": "check_links.py",
         "db_agent": "link_checker",
         "unit": "rows",
-        # The only agent that DEACTIVATES rows. It never activates and never rejects — a
-        # dead link puts a row in the review queue, it is not a verdict on the program.
-        # It ALSO runs a free content check (added 2026-09-01): a row whose SUMMARY plainly
-        # says the program is gone ("ceased operations", "discontinued its ... camps", "will
-        # not be offering ...") gets status='not_running' — but only when that field is still
-        # blank, so it never overwrites the deadline checker's verdict. not_running hides the
-        # row from Fresh Finds and matching without deactivating it; a person confirms. This
+        # Since 2026-09-02 this agent DEACTIVATES NOTHING. It never activates, rejects, or
+        # deactivates — a broken link routes the row into the Links-tab review queue
+        # (link_review_status='pending'), where a person clears or deactivates it. It ALSO
+        # runs a free content check (added 2026-09-01): a row whose SUMMARY plainly says the
+        # program is gone ("ceased operations", "discontinued its ... camps", "will not be
+        # offering ...") gets status='not_running' — but only when that field is still blank,
+        # so it never overwrites the deadline checker's verdict. not_running hides the row
+        # from Fresh Finds and matching without deactivating it; a person confirms. This
         # closed a leak where discontinued-but-live-URL rows surfaced as matches.
-        "writes": "deactivates",
+        "writes": "queues for review",
         "uses_gemini_search": False,
         "api": "None — plain HTTP. This agent is free.",
         # `free` is read by estimate_agent_cost(): $0.00 here is a fact about the design,
@@ -1507,6 +1508,170 @@ def clear_dup_verdict(ids):
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "error": f"Could not clear {oid}: {e}", "cleared": cleared}
     return {"ok": True, "cleared": cleared}
+
+
+# The columns the Links-tab queue reads. link_review_status is the queue membership flag
+# (see link_health_schema.sql / check_links.py); the rest let the row explain itself without a
+# second lookup — the code and dead-since date say HOW dead and for HOW LONG, quality_flags
+# carries the reviewer hint (and any repair suggestion), and is_active/moderation_status let
+# the console show a row a person already deactivated differently from a still-live one.
+_LINK_QUEUE_SELECT = ("id,name,org,url,is_active,moderation_status,quality_flags,"
+                      "link_status,link_status_code,link_checked_at,link_dead_since,"
+                      "link_review_status")
+
+
+def list_link_queue(limit=1000):
+    """The link-review queue, in two lists the console renders separately:
+
+      opportunities — `link_review_status = 'pending'`: findings the checker raised that a
+                      person has not resolved (dead / unverifiable / soft-404 / discontinued).
+                      Ordered oldest-rot-first (link_dead_since), longest-broken at the top.
+      repaired      — `link_review_status = 'repaired'`: inactive rows whose URL the repair
+                      pass PROVED a replacement for. The URL is already fixed; they wait for a
+                      person to verify the new link and Activate. (Since 2026-09-02 nothing
+                      auto-activates — see MARQUEE M2.)
+
+    If link_health_schema.sql has not been run the column does not exist and the filtered read
+    400s; that is reported as ok:True with schema_ready:False and empty lists, so the tab
+    renders a one-time setup step rather than an error — the same shape list_pending uses for
+    its own missing migration.
+    """
+    params = {
+        "select": _LINK_QUEUE_SELECT,
+        "link_review_status": "in.(pending,repaired)",
+        "order": "link_dead_since.asc.nullslast,name.asc",
+        "limit": str(max(1, min(limit, 5000))),
+    }
+    rows = _supabase_request("opportunities", params=params)
+    if rows is None:
+        # Either the migration is missing (the common case) or Supabase is unreachable. Probe
+        # with a trivial read: if THAT works, the column is the problem and we say so; if it
+        # also fails, it is a real connection error.
+        probe = _supabase_request("opportunities", params={"select": "id", "limit": "1"})
+        if probe is not None:
+            return {"ok": True, "schema_ready": False, "total": 0, "opportunities": [],
+                    "repaired": [], "setup_sql": "link_health_schema.sql"}
+        return {"ok": False, "error": "Could not read opportunities from Supabase."}
+
+    pending = [r for r in rows if (r.get("link_review_status") or "") == "pending"]
+    repaired = [r for r in rows if (r.get("link_review_status") or "") == "repaired"]
+    # Split pending by severity so the console can group them: a dead link (page provably gone)
+    # is a different decision from an unverifiable one (site blocks our client).
+    dead = sum(1 for r in pending if (r.get("link_status") or "") == "dead")
+    return {
+        "ok": True,
+        "schema_ready": True,
+        "total": len(pending),
+        "dead": dead,
+        "other": len(pending) - dead,
+        "opportunities": pending,
+        "repaired": repaired,
+        "repaired_total": len(repaired),
+    }
+
+
+# The moderation state a link-deactivation lands a row in. Mirrors what the agent used to write
+# before 2026-09-02: OUT of the catalog (is_active=false) and INTO the newopp review queue
+# (pending_review), never `rejected` — a rotted link is not a verdict on the program.
+_LINK_DEACTIVATE_STATUS = "pending_review"
+
+
+def resolve_link_queue(ids, action, reviewed_by="admin-console"):
+    """Resolve link-queue rows a person selected, in one of three ways:
+
+      clear       — dismiss the finding, leave the catalog untouched. Sets ONLY
+                    link_review_status='cleared'. The row drops out of the queue and stays
+                    live; a later re-run will not re-queue it (check_links only writes 'pending'
+                    over a NULL), so this is a durable "I looked, it's fine".
+      deactivate  — take the row out of the catalog. Sets is_active=false,
+                    moderation_status='pending_review' and link_review_status='deactivated'.
+                    This is the deliberate human version of what the agent used to do on its
+                    own; --repair-flagged can still repair it later if the URL comes back.
+      activate    — the "Repaired — awaiting activation" action. The repair pass already wrote
+                    a PROVEN replacement URL onto the (inactive) row and parked it at
+                    link_review_status='repaired'; a person has now verified the new link. This
+                    routes through the SAME activation path as the Review queue
+                    (activate_opportunities: is_active=true, moderation approved, embeddings,
+                    cache bust — MARQUEE M9) and then clears the 'repaired' flag so it leaves
+                    the list. This is the only way a repaired row goes live — nothing auto-does
+                    it (MARQUEE M2).
+
+    All three are explicit multi-select actions from the Links tab — there is no "resolve all".
+    """
+    ids = [str(i).strip() for i in (ids or []) if str(i).strip()]
+    if not ids:
+        return {"ok": False, "error": "No opportunity ids given."}
+    if action not in ("clear", "deactivate", "activate"):
+        return {"ok": False,
+                "error": f"Unknown action: {action!r} (want 'clear', 'deactivate' or 'activate')."}
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
+
+    if action == "activate":
+        # Reuse the Review-queue activation wholesale so a repaired row goes live exactly like
+        # any other human-activated row (moderation stamp, dedupe + recall embeddings, cache
+        # bust). Then clear the 'repaired' flag so it drops off the Links tab.
+        res = activate_opportunities(ids, active=True)
+        cleared, schema_ready = 0, True
+        for opp_id in ids:
+            try:
+                _commit_patch(opp_id, {"link_review_status": None})
+                cleared += 1
+            except Exception as e:  # noqa: BLE001
+                if _is_missing_column_error(e):
+                    schema_ready = False
+                    break
+                # A row that failed to activate above may not exist; don't mask that.
+        return {"ok": res.get("ok", False) and res.get("errors", 0) == 0,
+                "action": "activate", "review_status": None,
+                "updated": res.get("activated", 0), "errors": res.get("errors", 0),
+                "details": res.get("error_details", []), "schema_ready": schema_ready}
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if action == "clear":
+        review_value = "cleared"
+        # Only the review flag changes — the opportunity itself is untouched, so no updated_at.
+        full = {"link_review_status": "cleared"}
+        # If the column is missing there is nothing left to write, so clearing simply cannot be
+        # done until the migration runs; surfaced as an error rather than a silent no-op.
+        fallback = None
+    else:
+        review_value = "deactivated"
+        full = {"is_active": False, "moderation_status": _LINK_DEACTIVATE_STATUS,
+                "link_review_status": "deactivated", "updated_at": now}
+        # Without the link_* migration we can still deactivate — the review flag is the only
+        # part that has to drop. A dead-linked row out of the catalog beats one left live.
+        fallback = {"is_active": False, "moderation_status": _LINK_DEACTIVATE_STATUS,
+                    "updated_at": now}
+
+    done, errors, details = 0, 0, []
+    schema_ready = True
+    for opp_id in ids:
+        try:
+            try:
+                _commit_patch(opp_id, full)
+            except Exception as e:  # noqa: BLE001
+                if not _is_missing_column_error(e):
+                    raise
+                schema_ready = False
+                if fallback is None:
+                    raise
+                _commit_patch(opp_id, fallback)
+            done += 1
+        except Exception as e:  # noqa: BLE001
+            errors += 1
+            if len(details) < 5:
+                details.append(f"{opp_id}: {str(e)[:160]}")
+
+    # Deactivating changes what students see, so drop the public catalog cache exactly as
+    # activate_opportunities does. Clearing does not change is_active, so it cannot.
+    if done and action == "deactivate":
+        with _opportunities_cache_lock:
+            _opportunities_cache["fetched_at"] = 0.0
+
+    return {"ok": errors == 0, "action": action, "review_status": review_value,
+            "updated": done, "errors": errors, "details": details,
+            "schema_ready": schema_ready}
 
 
 def _commit_insert(rows):
@@ -3358,9 +3523,9 @@ def build_agent_args(agent_name, config, preview=False):
             args.append("--force")
         if config.get("noRepair"):
             args.append("--no-repair")
-        # Off by default. Deactivating is this agent's whole point, and a flag that must be
-        # remembered to make it act is a flag that gets forgotten — the operator opts OUT
-        # of acting, having read the preview, rather than opting in.
+        # --flag-only is a no-op since 2026-09-02 (the agent no longer deactivates, so there
+        # is nothing to opt out of). Still forwarded when set, for argv-builder symmetry and
+        # so an old saved config does not error.
         if config.get("flagOnly"):
             args.append("--flag-only")
         workers = _int_or_none(config.get("workers"))

@@ -208,6 +208,26 @@ async def handle_clear_dup_verdict(request: Request):
     return json_response(200 if result.get("ok") else 400, result, default=str)
 
 
+@router.get("/api/agents/link-queue")
+def handle_link_queue(request: Request):
+    """The Links tab's review queue: rows the link checker flagged (link_review_status =
+    'pending'). Localhost-gated like the rest of /api/agents/*."""
+    limit = _qs_int(request, "limit", 1000) or 1000
+    result = core.list_link_queue(limit=max(1, min(limit, 5000)))
+    return json_response(200 if result.get("ok") else 502, result, default=str)
+
+
+@router.post("/api/agents/link-queue/resolve")
+async def handle_link_queue_resolve(request: Request):
+    """Resolve selected link-queue rows. Body: {ids: [...], action: "clear"|"deactivate"}.
+    'clear' dismisses the finding and leaves the row live; 'deactivate' takes it out of the
+    catalog. Nothing here is automatic — the agent never deactivates; a person does, here."""
+    body = await read_json_body(request)
+    result = core.resolve_link_queue(
+        body.get("ids") or [], (body.get("action") or "").strip())
+    return json_response(200 if result.get("ok") else 400, result, default=str)
+
+
 @router.get("/api/agents/metadata-refresh-queue")
 def handle_metadata_refresh_queue(request: Request):
     """Read-only: rows activated but not yet run through refresh_opportunities.py. Backs the

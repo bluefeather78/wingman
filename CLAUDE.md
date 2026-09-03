@@ -199,7 +199,7 @@ and is genuinely free; see its own section below for the one thing it *does* nee
 | `scraper` | `scrape_opportunities.py` | `scraper` | Find NEW opportunities (only agent that INSERTs) | Gemini |
 | `deadline` | `check_deadlines.py` | `deadline_checker` | Deadlines + running/not-running status | Claude |
 | `mailinglist` | `find_mailing_lists.py` | `mailing_list_finder` | Find each program's mailing-list signup form, store a replayable recipe | no |
-| `links` | `check_links.py` | `link_checker` | Verify every catalog URL; repair what moved, deactivate what is gone | no — **free, plain HTTP** |
+| `links` | `check_links.py` | `link_checker` | Verify every catalog URL; repair what moved, **queue the rest for human review** (never deactivates on its own, as of 2026-09-02) | no — **free, plain HTTP** |
 | `tasks` | `generate_action_items.py` | `action_item_generator` | The application checklist per program, verified against the program's own page | no — page fetched by us, no search |
 
 Watch out for two things that have caused real bugs here:
@@ -846,11 +846,20 @@ been checked. Measured over all 1374 active rows on 2026-08-23: **1029 live, 137
 they were real programs with rotted links (`smysp.stanford.edu`,
 `jkcf.org/our-programs/young-artist-award/`, `training.nih.gov/.../aip_hs/`), not junk.
 
-**Only evidence of absence deactivates a row.** This is the whole design, and the numbers
-force it:
+**As of 2026-09-02 the agent QUEUES findings for a person; it deactivates NOTHING on its
+own.** Every finding sets `link_review_status = 'pending'` (a new column in
+`link_health_schema.sql`) and shows up on the console's **Links** tab, where a person
+multi-selects rows and either **Clears** them (dismiss the finding, row stays live) or
+**Deactivates** them (`is_active=false` + `moderation_status='pending_review'`). The
+classification below still names the *severity* of each finding — it now decides how the
+queue row reads, not whether the agent pulls the row. See "The Links tab" below.
 
-- **deactivate** — 404, 410, a malformed URL, or a hostname that does not resolve.
-- **flag only, row stays live** — 403, 429, TLS failures, timeouts, connection resets.
+**Only evidence of absence is queued as a dead link.** This is the whole design, and the
+numbers force it:
+
+- **dead-link finding** (queued, strongest) — 404, 410, a malformed URL, or a hostname that
+  does not resolve.
+- **flagged finding** (queued, softer) — 403, 429, TLS failures, timeouts, connection resets.
 
 403 alone is ~9% of this catalog (112 rows) and TLS failures another 41. Those sites are
 refusing *our* client — a student's browser carries a different root store and loads them
@@ -860,19 +869,48 @@ is what separates a genuine NXDOMAIN (8 rows, all retired university subdomains)
 41 TLS/timeout failures wearing the same `URLError` class; **do not collapse them**.
 
 - **Two passes, always.** Anything that looks dead is re-checked before a write. Free, and
-  it is the only thing between a CDN hiccup and a deactivated row. Measured: 135 of 137 were
-  unchanged on the second pass and 2 rows moved *into* dead, so it corrects both ways.
-- **Repair before condemning** — [url_repair.py](url_repair.py), free, on by default
+  it is the only thing between a CDN hiccup and a queued dead-link finding. Measured: 135 of
+  137 were unchanged on the second pass and 2 rows moved *into* dead, so it corrects both ways.
+- **Repair before queuing** — [url_repair.py](url_repair.py), free, on by default
   (`--no-repair` opts out). Programs get reorganised far more often than they are cancelled:
   of the 30 dead rows in the 08-23 audit, 9 were re-found on the same site and 9 of 9 came
   back live. See the next section — the accuracy bar there is the whole feature.
-- A deactivated row goes to `is_active = false` + `moderation_status = 'pending_review'`
-  with a `quality_flags` entry naming the code. **`reviewed_by`/`reviewed_at` are left
-  alone** — most of these were approved by a person once, and the queue saying "approved
-  08-23, link has died since" is a different situation from a row nobody has ever seen.
-- **It never rejects.** A rotted link is not a verdict on the program.
+- A queued finding sets `link_review_status = 'pending'` (only over a NULL — a re-run never
+  overturns a human `'cleared'`/`'deactivated'`) plus a `quality_flags` entry naming the
+  code. It does **not** touch `is_active` or `moderation_status`. When a person then
+  **Deactivates** from the Links tab, that human action writes `is_active=false` +
+  `moderation_status='pending_review'` and `link_review_status='deactivated'`;
+  **`reviewed_by`/`reviewed_at` are left alone** — most of these were approved by a person
+  once, and "approved 08-23, link has died since" is a different situation from a row nobody
+  has ever seen.
+- **It never rejects, and never deactivates.** A rotted link is not a verdict on the program,
+  and the verdict is a person's to make.
 
-## URL repair — `url_repair.py`, and the one place `is_active = true` is written by code
+**The Links tab.** The console's `#view-links` view (top-level nav, between Run and Money)
+holds the Link Checker agent card, the Re-find (repair) tool, and the review queue.
+`GET /api/agents/link-queue` (`core.list_link_queue()`) returns TWO lists: `opportunities`
+(`link_review_status='pending'` — the checker's open findings) and `repaired`
+(`link_review_status='repaired'` — inactive rows the repair pass proved a new URL for, awaiting
+manual activation). `POST /api/agents/link-queue/resolve` (`core.resolve_link_queue(ids, action)`)
+applies `clear` / `deactivate` / `activate` to a multi-selected set — `activate` (the repaired
+list's action) routes through `activate_opportunities` (moderation stamp + embeddings + cache
+bust, MARQUEE M9) and then clears the `repaired` flag. Both localhost-gated like the rest of
+`/api/agents/*`. The tab degrades to a setup notice if `link_health_schema.sql`'s
+`link_review_status` column is absent (deactivate still works via a stripped write; clear
+needs the column). This replaced the old behaviour where a dead link surfaced only in the
+New-Opportunities review queue after the agent had already deactivated the row — and it
+fixes the old "known gap" where a flag on a still-active row had nowhere to show.
+
+**`--repair-flagged` scope (broadened 2026-09-02) and its NO-auto-activation rule.** It walks
+inactive rows carrying any repairable link flag — `dead link (`, `link unverifiable (`,
+`link unreachable (`, or the soft-404 flag (`_REPAIRABLE_PREFIXES` in `check_links.py`), not
+dead-link-only — and attempts a repair on any that re-check as dead **or** unverifiable (a
+403/timeout row is often genuinely gone; a repair attempt is free). A proven repair no longer
+sets `is_active=true`: it writes the new URL and parks the row at `link_review_status='repaired'`
+for a person to verify and Activate on the Links tab. See M2 — as of 2026-09-02 **no** code path
+in this repo auto-activates a catalog row.
+
+## URL repair — `url_repair.py` (proves a moved link; never activates, as of 2026-09-02)
 
 **Proposing a replacement URL is cheap and worthless on its own; accepting one is the
 feature.** Measured over the 148 rows the first pass deactivated, taking the best-scoring
@@ -909,18 +947,23 @@ they keep their dead-link flag plus, where a candidate was found, an explicit
 `possible replacement found but NOT verified` suggestion (47 rows got one), which is strictly
 more than a reviewer had before.
 
-**`--repair-flagged` is the only code path in this repo that sets `is_active = true`,** and
-that is not the "never auto-activate" rule being bent. That rule protects rows **no person
-has ever vetted** — a scraper's guess. These rows were in the live catalog because a person
-put them there; a machine removed them over a link, and the same machine has now proven the
-link. Restoring puts back what the automated check took out. It is bounded to rows carrying
-**this agent's own `dead link (` flag**, so it can never touch a row a person rejected or one
-that was never active, and each restored row keeps a flag naming its **old URL** so the edit
-is auditable and hand-reversible. A row whose original URL simply comes back to life on its
-own is still *not* restored — that is a person's call in the console.
+**`--repair-flagged` no longer activates anything (changed 2026-09-02 by operator decision;
+MARQUEE M2 was amended to match).** It used to be the one code path in the repo that set
+`is_active = true` — it restored a deactivated row when it proved a moved link. That path is
+gone: a proven repair now **writes the new URL onto the still-inactive row and parks it at
+`link_review_status='repaired'`** for a person to verify and Activate on the Links tab. So
+there is now **no** code path anywhere that auto-activates a catalog row. The repair is still
+bounded to rows carrying one of this agent's repairable link flags (`_REPAIRABLE_PREFIXES`:
+dead link / unverifiable / unreachable / soft-404 — broadened 2026-09-02 from dead-link-only,
+since some "unverifiable" rows are genuinely gone), never a row a person rejected or one that
+was never active, and each repaired row keeps a flag naming its **old URL** so the edit is
+auditable and hand-reversible. A row whose original URL simply comes back to life on its own is
+still *not* touched — that is a person's call in the console.
 
-Ran 2026-08-23 (`agent_runs` id=55): 148 flagged rows, **13 restored**, catalog 1226 → 1239
-active, queue 268 → 255, 47 rows gained a suggestion. $0.00.
+Ran 2026-08-23 (`agent_runs` id=55, under the old auto-restore behaviour): 148 flagged rows,
+**13 restored**, catalog 1226 → 1239 active, queue 268 → 255, 47 rows gained a suggestion.
+$0.00. (Post-2026-09-02 an equivalent run would leave those 13 at `link_review_status='repaired'`
+for manual activation rather than restoring them itself.)
 - **Two url_validate checks were tried here and rejected on measured noise**, and the
   reasoning is worth not re-deriving: `is_bare_domain()` fires on 16% of live rows and they
   are *correct* (`jshs.org`, `precollege.wisc.edu` — dedicated program sites whose homepage
@@ -931,24 +974,25 @@ active, queue 268 → 255, 47 rows gained a suggestion. $0.00.
   redirects to a bare homepage, i.e. the program page deleted behind a 200. It fires on 10
   rows (1.0%) at about one-in-two precision. Ten rows at one-in-two beats eighty-eight at
   one-in-seven.
-- **[link_health_schema.sql](link_health_schema.sql)** — **RUN 2026-08-23.** All four
-  columns (`link_status`, `link_status_code`, `link_checked_at`, `link_dead_since`) are live
-  and every active row is now recorded. It keeps the same ALTER block for the same reason as
-  `mailing_list_schema.sql`. Until it ran the agent still worked and still deactivated — it drops those columns from its writes and loses only
-  the 7-day staleness filter, so every run re-checks everything. That is free, so it
-  degrades to *slower*, not *broken*. `link_dead_since` is not derivable from
-  `link_checked_at` (which is stamped every pass): without it, a link broken in March and
-  one broken this morning look identical.
-- **Known gap:** a flag on a row that stays ACTIVE is written to `quality_flags` but has
-  nowhere to show, because the console's Review queue lists `is_active = false` rows only.
-  The run report in `agent_logs/link_check_<stamp>.json` is the only place to read those;
-  the run summary says so rather than leaving it a mystery.
+- **[link_health_schema.sql](link_health_schema.sql)** — **RUN 2026-08-23; re-run 2026-09-02**
+  to add `link_review_status`. Five columns now (`link_status`, `link_status_code`,
+  `link_checked_at`, `link_dead_since`, `link_review_status`), all live. It keeps the same
+  ALTER block for the same reason as `mailing_list_schema.sql` — **add a column to a CREATE
+  there and you must add it to the ALTER too**. Without the migration the agent still runs and
+  still records what it can: it drops those columns from its writes, losing the 7-day
+  staleness filter (every run re-checks everything — free, so *slower* not *broken*) and, when
+  it is specifically `link_review_status` that is missing, the queue routing. `link_dead_since`
+  is not derivable from `link_checked_at` (stamped every pass): without it, a link broken in
+  March and one broken this morning look identical.
+- **The old "known gap" is closed.** A flag on a still-active row used to have nowhere to show
+  (the Review queue lists `is_active=false` rows only), so the run report in
+  `agent_logs/link_check_<stamp>.json` was the only place to read it. Now every finding —
+  active or not — is queued via `link_review_status='pending'` and shows on the Links tab.
 - `AGENT_CONFIGS_SCHEMA["links"]["free"] = True` is read by `estimate_agent_cost()` and by
   the console. A free agent's `$0.00` is a fact about its design, not a "no history yet"
-  fallback, and the two must not render alike — nor may its confirm dialog say the run
-  "spends real money", which is how a warning becomes something people click past. Its real
-  warning is unrelated to cost and is stated in its own words: this run takes rows away from
-  students.
+  fallback, and the two must not render alike. Since 2026-09-02 the run no longer takes rows
+  away from students at all — it only queues findings — so its confirm dialog carries no
+  scary warning; deactivation is now a separate, deliberate human action on the Links tab.
 
 ## Action items — the Quest Log's checklist, and the one place a task may claim a fact
 

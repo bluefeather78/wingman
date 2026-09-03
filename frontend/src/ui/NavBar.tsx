@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { backendUrl, httpClient } from '@/api/httpClient';
+import { backendUrl } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
 import { Logo, RightDrawer, usePopInteraction } from './components';
 import { CalendarIcon, HomeIcon, PersonIcon, SearchIcon } from './icons';
@@ -12,8 +12,9 @@ import { APP_MAX_WIDTH, colors, fonts, navShadow, popShadow, radius, space } fro
 // The live app's floating pill navigation: sticky, centered in the max-w-4xl column with
 // 16px top inset, navy pill with a soft blue glow. Wordmark + BETA, four tabs (orange when
 // active, #B7D3E8 otherwise) with the app's own inline SVG icons, and the teal 👤 badge
-// opening the account drawer — a full port of #profilePanel (account + location,
-// subscription, beta notice, legal, contact, about), sliding in from the right.
+// opening the account drawer — a full port of #profilePanel (account, subscription, beta
+// notice, legal, contact, about), sliding in from the right. Location is no longer collected
+// here; it lives on the student profile and is captured once in Fresh Finds.
 // Logging out lands on the LANDING page, same as the old app's showLandingPage().
 type TabIcon = (props: { size?: number; color: string }) => React.JSX.Element;
 const TABS: { label: string; path: string; Icon: TabIcon }[] = [
@@ -50,8 +51,6 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [location, setLocation] = useState(user?.location ?? '');
-  const [locationStatus, setLocationStatus] = useState('');
 
   // The full pill (wordmark + BETA + four labelled tabs + avatar) has a fixed natural
   // width of ~791px — the tab labels alone are ~520px — so anywhere narrower it ran off
@@ -70,18 +69,6 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
     // on the landing page (showLandingPage()).
     router.replace('/landing');
     await logout();
-  }
-
-  async function saveLocation() {
-    const value = location.trim();
-    if (!value) return;
-    setLocationStatus('');
-    try {
-      await httpClient.saveLocation(value);
-      setLocationStatus('Saved ✓');
-    } catch (e) {
-      setLocationStatus((e as Error).message || 'Could not save.');
-    }
   }
 
   const subLabel = subscriptionLabel(user?.subscription);
@@ -117,7 +104,7 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
             })}
           </View>
 
-          <Pressable style={styles.avatar} onPress={() => { setLocation(user?.location ?? ''); setDrawerOpen(true); }}>
+          <Pressable style={styles.avatar} onPress={() => setDrawerOpen(true)}>
             <Text style={styles.avatarEmoji}>👤</Text>
           </Pressable>
         </View>
@@ -136,7 +123,7 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
                 </Pressable>
               </View>
 
-              {/* Account: name, email, log out, location */}
+              {/* Account: name, email, log out */}
               <View style={styles.accountBox}>
                 <View style={styles.accountRow}>
                   <View style={styles.flex1}>
@@ -148,20 +135,6 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
                   <Pressable onPress={handleLogout}>
                     <Text style={styles.logout}>Log out</Text>
                   </Pressable>
-                </View>
-                <View style={styles.locationBlock}>
-                  <Text style={styles.tinyLabel}>LOCATION</Text>
-                  <View style={styles.locationRow}>
-                    <TextInput
-                      style={styles.locationInput}
-                      value={location}
-                      onChangeText={setLocation}
-                      placeholder="e.g. Seattle, WA"
-                      placeholderTextColor={colors.slate400}
-                    />
-                    <SmallBtn label="Save" onPress={saveLocation} />
-                  </View>
-                  {!!locationStatus && <Text style={styles.locationStatus}>{locationStatus}</Text>}
                 </View>
               </View>
 
@@ -280,22 +253,6 @@ const styles = StyleSheet.create({
   accountName: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 20, color: colors.slate900 },
   accountEmail: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 16, color: colors.slate500 },
   logout: { fontFamily: fonts.bodyBold, fontSize: 12, lineHeight: 16, color: colors.rose600 },
-  locationBlock: { borderTopWidth: 1, borderTopColor: colors.slate200, paddingTop: 8, gap: 4 },
-  tinyLabel: { fontFamily: fonts.bodyBold, fontSize: 10, lineHeight: 14, color: colors.slate500, letterSpacing: 0.5, textTransform: 'uppercase' },
-  locationRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  locationInput: {
-    flex: 1,
-    borderWidth: 2,
-    borderColor: '#CBD5E1',
-    borderRadius: radius.sm,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    fontFamily: fonts.bodyMed,
-    fontSize: 12,
-    color: colors.slate900,
-    backgroundColor: colors.white,
-  },
-  locationStatus: { fontFamily: fonts.bodyBold, fontSize: 10, lineHeight: 14, color: '#059669', minHeight: 14 },
 
   subBox: { backgroundColor: '#EFF6FF', borderWidth: 2, borderColor: '#BFDBFE', borderRadius: radius.lg, padding: 12, gap: 8 },
   subTitle: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 20, color: '#1E3A8A' },

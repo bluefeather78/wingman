@@ -150,6 +150,9 @@ export function mergeActionItems(
 export interface TrackerItem {
   id: string;
   name: string;
+  // The hosting organization, shown under the name on the Quest Log card. Populated at add
+  // time from the catalog row's `org`; absent on items added before this field existed.
+  org?: string | null;
   url?: string | null;
   type?: string | null;
   bucket: Bucket;

@@ -401,14 +401,17 @@ export default function Tracker() {
     return { ids, urls };
   }, [data]);
 
-  // Case-insensitive substring match on the opportunity NAME, capped so a broad query does
-  // not render the whole catalog. An empty query shows nothing (the panel is a search box,
-  // not a browser — Fresh Finds is the browse surface).
+  // Case-insensitive substring match on the opportunity NAME or its ORG (organization) name,
+  // capped so a broad query does not render the whole catalog. Matched per-field (not on a
+  // concatenation) so a query never spans the name/org boundary. An empty query shows nothing
+  // (the panel is a search box, not a browser — Fresh Finds is the browse surface).
   const SEARCH_LIMIT = 25;
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q || !catalog) return [] as Opportunity[];
-    return catalog.filter((o) => (o.name ?? '').toLowerCase().includes(q)).slice(0, SEARCH_LIMIT);
+    return catalog
+      .filter((o) => (o.name ?? '').toLowerCase().includes(q) || (o.org ?? '').toLowerCase().includes(q))
+      .slice(0, SEARCH_LIMIT);
   }, [searchQuery, catalog]);
 
   // Add every checked result in one shot. Mirrors Fresh Finds' addSelectedToTracker: each
@@ -615,7 +618,7 @@ export default function Tracker() {
           <View style={styles.drawerHead}>
             <View style={styles.drawerHeadText}>
               <Text style={styles.drawerTitle}>Add opportunities</Text>
-              <Text style={styles.drawerSub}>Search the catalog by name, pick any you want, and add them all at once.</Text>
+              <Text style={styles.drawerSub}>Search the catalog by name or organization, pick any you want, and add them all at once.</Text>
             </View>
             <Pressable onPress={closeSearch} hitSlop={10}>
               <Text style={styles.drawerClose}>✕</Text>
@@ -628,7 +631,7 @@ export default function Tracker() {
               style={styles.searchBarInput}
               value={searchQuery}
               onChangeText={setSearchQuery}
-              placeholder="Search by name…"
+              placeholder="Search by name or organization…"
               placeholderTextColor={colors.slate400}
               autoCapitalize="none"
               autoCorrect={false}
@@ -644,7 +647,7 @@ export default function Tracker() {
               </View>
             )}
             {!catalogLoading && !catalogError && !searchQuery.trim() && (
-              <Text style={styles.searchHint}>Start typing a program name to see matches.</Text>
+              <Text style={styles.searchHint}>Start typing a program or organization name to see matches.</Text>
             )}
             {!catalogLoading && !catalogError && !!searchQuery.trim() && searchResults.length === 0 && (
               <Text style={styles.searchHint}>No opportunities match “{searchQuery.trim()}”.</Text>
@@ -975,6 +978,7 @@ function ListCard({
         <Pressable onPress={() => item.url && Linking.openURL(item.url)}>
           <Text style={styles.cardName}>{item.name}</Text>
         </Pressable>
+        {!!item.org && <Text style={styles.cardOrg} numberOfLines={1}>{item.org}</Text>}
         {!!item.meta && <Text style={styles.cardMeta} numberOfLines={1}>{item.meta}</Text>}
       </View>
 
@@ -1139,7 +1143,10 @@ const styles = StyleSheet.create({
   badgeRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', flex: 1, zIndex: 1 },
   iconRow: { flexDirection: 'row', gap: 6 },
   cardName: { fontFamily: fonts.display, fontSize: 30, lineHeight: 34, color: colors.slate900 },
-  cardMeta: { fontFamily: fonts.bodyMed, fontSize: 14, color: colors.slate500, marginTop: 4 },
+  // The organization name, sat directly under the opportunity name in a smaller grey — the
+  // same treatment Fresh Finds gives it (resultOrg).
+  cardOrg: { fontFamily: fonts.bodyMed, fontSize: 14, color: colors.slate500, marginTop: 4 },
+  cardMeta: { fontFamily: fonts.bodyMed, fontSize: 14, color: colors.slate500, marginTop: 2 },
   estimatedNote: { backgroundColor: '#FEF08A', borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, paddingHorizontal: 16, paddingVertical: 10 },
   estimatedText: { fontFamily: fonts.bodyBold, fontSize: 12, color: '#92400E' },
   staleBad: { backgroundColor: '#FFE4E6' },

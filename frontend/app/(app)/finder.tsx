@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
+import { useAuth } from '@/auth/AuthContext';
 import { addTrackerItemChecked, flattenItems, loadTrackerData } from '@/api/trackerStore';
 import type { MatchRequest, Opportunity } from '@/api/types';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
@@ -205,6 +206,7 @@ function tagKeywordMatch(opp: Opportunity, tag: string): boolean {
 
 export default function Finder() {
   const router = useRouter();
+  const { user } = useAuth();
   const [opps, setOpps] = useState<Opportunity[] | null>(null);
   const [oppsError, setOppsError] = useState<string | null>(null);
   const [oppsLoading, setOppsLoading] = useState(true);
@@ -232,6 +234,13 @@ export default function Finder() {
   const [quizBranch, setQuizBranch] = useState<string | null>(null);
   const [kind, setKind] = useState<string>(() => sessionSearch?.kind ?? ACTIVE_KINDS[0]);
   const [suggestMode, setSuggestMode] = useState(() => sessionSearch?.suggestMode ?? false);
+  // One-time location capture (asked after theme selection when we don't already know where
+  // the student is based). Location is stored on the shared student-profile record and fed
+  // into POST /api/match so the server's eligibility gate can drop opportunities open only to
+  // a specific place (e.g. "Boston Public Schools students"). Once recorded we never ask again.
+  const [askLocation, setAskLocation] = useState(false);
+  const [locationInput, setLocationInput] = useState('');
+  const [savingLocation, setSavingLocation] = useState(false);
 
   const [description, setDescription] = useState('');
   const [grade, setGrade] = useState('');
@@ -545,10 +554,13 @@ export default function Finder() {
   }
 
   function buildMatchBlob(themeTags: EnrichedTag[], gradeNum: number | null): MatchRequest {
-    const state = homeState.trim();
+    // The form's HOME STATE field wins when set; otherwise the location the student gave once
+    // (profile, or account at sign-up). Fed to the server eligibility gate so place-restricted
+    // opportunities the student can't apply to are dropped.
+    const loc = homeState.trim() || knownLocation();
     return {
       grade: gradeNum,
-      ...(state ? { location: { state } } : {}),
+      ...(loc ? { location: { state: loc } } : {}),
       profile_themes: themeTags.map((t) => ({
         theme: t.tag,
         intent: t.intent ?? null,
@@ -811,6 +823,49 @@ export default function Finder() {
     };
   }
 
+  // The student's location, if we already have it: the profile record's own `location` field
+  // (captured by the one-time question below), falling back to the account location collected
+  // at sign-up. Either one means we never ask again.
+  function knownLocation(): string {
+    const fromProfile = profileRecord.current?.location;
+    return (typeof fromProfile === 'string' && fromProfile.trim() ? fromProfile : user?.location ?? '').trim();
+  }
+
+  // The theme-picker "Find my matches" entry point. If we don't yet know where the student is
+  // based, ask once (mandatory) BEFORE searching; otherwise go straight to the suggest search.
+  function startSuggestFlow() {
+    if (!knownLocation()) {
+      setLocationInput('');
+      setAskLocation(true);
+      return;
+    }
+    void suggestForMe();
+  }
+
+  // Persist the answer onto the shared student-profile record (merge — never clobber the
+  // derived slots stored alongside it), then run the search. A save failure must not block the
+  // search: the location still rides into this request via `locationInput` on the next call.
+  async function submitLocationAndSearch() {
+    const value = locationInput.trim();
+    if (!value || savingLocation) return;
+    setSavingLocation(true);
+    try {
+      // Re-read the freshest record so a slot the background refresh warmed since this screen
+      // loaded isn't clobbered by writing back the in-memory copy — the same load-then-save
+      // discipline the slot writers use.
+      const rec = (await profileStore.load()) ?? profileRecord.current ?? {};
+      const next: ProfileRecord = { ...rec, location: value };
+      await profileStore.save(next);
+      profileRecord.current = next;
+    } catch (e) {
+      console.warn('Could not save location to profile:', (e as Error).message);
+    } finally {
+      setSavingLocation(false);
+      setAskLocation(false);
+    }
+    await suggestForMe();
+  }
+
   async function suggestForMe() {
     setSuggestMode(true);
     await search(profileText, null, buildPrefs());
@@ -879,6 +934,7 @@ export default function Finder() {
     const res = await addTrackerItemChecked(bucket, {
       id: opp.id,
       name: opp.name,
+      org: (opp.org as string) ?? null,
       url,
       type,
       bucket,
@@ -1097,6 +1153,36 @@ export default function Finder() {
                 </Pressable>
               </View>
             </>
+          ) : askLocation ? (
+            /* One-time, mandatory location question — shown AFTER the student has picked a
+               theme, the first time we search for someone whose location we don't know. What
+               they enter is saved to their profile and used to hide place-restricted
+               opportunities; we never ask again. */
+            <>
+              <Text style={styles.heroTitle}>Where are you based?</Text>
+              <Text style={[styles.heroSub, styles.heroSubItalic]}>
+                We use this once to hide opportunities you can’t apply to — some are open only to
+                students in a specific city, district, or state. We won’t ask again.
+              </Text>
+              <View style={{ maxWidth: 360, marginTop: 8, alignSelf: 'stretch' }}>
+                <SoftInput
+                  value={locationInput}
+                  onChangeText={setLocationInput}
+                  placeholder="e.g. Seattle, WA"
+                />
+              </View>
+              <View style={styles.heroActions}>
+                <PopButton
+                  label={savingLocation ? 'Saving…' : 'Continue →'}
+                  loading={savingLocation}
+                  disabled={!locationInput.trim() || savingLocation}
+                  onPress={() => void submitLocationAndSearch()}
+                />
+                <Pressable onPress={() => setAskLocation(false)}>
+                  <Text style={styles.link}>Back</Text>
+                </Pressable>
+              </View>
+            </>
           ) : (
             /* PR4 theme picker: the student deliberately chooses where to start. Themes are
                UNSELECTED by default; at least one theme (or an "explore something new"
@@ -1136,7 +1222,7 @@ export default function Finder() {
               />
               <PopButton
                 label="Find my matches →"
-                onPress={() => void suggestForMe()}
+                onPress={() => startSuggestFlow()}
                 disabled={!selectedThemes.size && !exploreText.trim()}
                 style={styles.selfStart}
               />
@@ -1470,7 +1556,8 @@ export default function Finder() {
             ? (KIND_CONFIG[kindForOpp(opp)]?.name ?? 'Opportunity')
             : KIND_CONFIG[kind].name;
         const reviewOpen = openReviewId === opp.id;
-        const metaPills = [opp.org, opp.type, opp.price, opp.location, opp.state && opp.state !== 'All States' ? opp.state : null, opp.season]
+        // org is no longer a pill — it now sits under the opportunity name (see resultOrg below).
+        const metaPills = [opp.type, opp.price, opp.location, opp.state && opp.state !== 'All States' ? opp.state : null, opp.season]
           .filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
         const cardHovered = hoveredCardId === opp.id;
         const card = (
@@ -1528,9 +1615,14 @@ export default function Finder() {
               )}
             </View>
 
-            <Pressable onPress={() => opp.url && Linking.openURL(opp.url as string)}>
-              <Text style={styles.resultName}>{opp.name}</Text>
-            </Pressable>
+            <View>
+              <Pressable onPress={() => opp.url && Linking.openURL(opp.url as string)}>
+                <Text style={styles.resultName}>{opp.name}</Text>
+              </Pressable>
+              {!!opp.org && typeof opp.org === 'string' && (
+                <Text style={styles.resultOrg}>{opp.org}</Text>
+              )}
+            </View>
 
             {aiReasoning ? (
               <View style={styles.whyRow}>
@@ -1795,6 +1887,9 @@ const styles = StyleSheet.create({
   saveBtnSelected: { backgroundColor: '#A3E635' },
   saveBtnText: { fontFamily: fonts.bodyXBold, fontSize: 12, color: colors.slate900 },
   resultName: { fontFamily: fonts.display, fontSize: 30, lineHeight: 36, color: colors.slate900 },
+  // The organization name, directly under the opportunity name in a smaller grey. Replaces the
+  // former org pill in the meta row.
+  resultOrg: { fontFamily: fonts.bodyMed, fontSize: 14, color: colors.slate500, marginTop: 4 },
   whyRow: { flexDirection: 'row', gap: 12 },
   // reason (keyword/rank fit) gets the yellow bar; AI profile-tag reasoning gets indigo
   // (resultCardHTML: bg-yellow-400 vs bg-indigo-400).

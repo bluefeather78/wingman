@@ -77,6 +77,7 @@ export async function addCatalogOpportunity(
   const res = await addTrackerItemChecked(bucket, {
     id: opp.id,
     name: opp.name,
+    org: (opp.org as string) ?? null,
     url,
     type,
     bucket,

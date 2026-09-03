@@ -1,0 +1,200 @@
+[
+  {
+    "scenario": "root_json_no_db",
+    "concurrency": 1,
+    "requests": 8777,
+    "rps": 731.4,
+    "p50_ms": 1.3,
+    "p95_ms": 2.1,
+    "p99_ms": 2.6,
+    "max_ms": 20.2,
+    "errors": {}
+  },
+  {
+    "scenario": "root_json_no_db",
+    "concurrency": 8,
+    "requests": 11303,
+    "rps": 941.6,
+    "p50_ms": 5.4,
+    "p95_ms": 24.0,
+    "p99_ms": 68.9,
+    "max_ms": 201.5,
+    "errors": {}
+  },
+  {
+    "scenario": "root_json_no_db",
+    "concurrency": 32,
+    "requests": 6034,
+    "rps": 501.6,
+    "p50_ms": 38.1,
+    "p95_ms": 197.8,
+    "p99_ms": 329.3,
+    "max_ms": 782.8,
+    "errors": {}
+  },
+  {
+    "scenario": "catalog_cached",
+    "concurrency": 1,
+    "requests": 555,
+    "rps": 46.2,
+    "p50_ms": 19.7,
+    "p95_ms": 32.8,
+    "p99_ms": 45.4,
+    "max_ms": 53.6,
+    "errors": {}
+  },
+  {
+    "scenario": "catalog_cached",
+    "concurrency": 8,
+    "requests": 842,
+    "rps": 69.9,
+    "p50_ms": 112.7,
+    "p95_ms": 154.3,
+    "p99_ms": 170.9,
+    "max_ms": 205.0,
+    "errors": {}
+  },
+  {
+    "scenario": "catalog_cached",
+    "concurrency": 32,
+    "requests": 855,
+    "rps": 69.2,
+    "p50_ms": 455.1,
+    "p95_ms": 650.1,
+    "p99_ms": 762.3,
+    "max_ms": 891.1,
+    "errors": {}
+  },
+  {
+    "scenario": "catalog_cached_authed",
+    "concurrency": 1,
+    "requests": 66,
+    "rps": 5.4,
+    "p50_ms": 166.9,
+    "p95_ms": 273.3,
+    "p99_ms": 419.1,
+    "max_ms": 425.7,
+    "errors": {}
+  },
+  {
+    "scenario": "catalog_cached_authed",
+    "concurrency": 8,
+    "requests": 429,
+    "rps": 35.1,
+    "p50_ms": 210.9,
+    "p95_ms": 340.2,
+    "p99_ms": 442.6,
+    "max_ms": 1373.1,
+    "errors": {}
+  },
+  {
+    "scenario": "catalog_cached_authed",
+    "concurrency": 32,
+    "requests": 714,
+    "rps": 46.5,
+    "p50_ms": 532.6,
+    "p95_ms": 764.6,
+    "p99_ms": 1187.1,
+    "max_ms": 4611.9,
+    "errors": {}
+  },
+  {
+    "scenario": "data_load_authed",
+    "concurrency": 1,
+    "requests": 38,
+    "rps": 3.2,
+    "p50_ms": 279.7,
+    "p95_ms": 347.4,
+    "p99_ms": 1258.1,
+    "max_ms": 1258.1,
+    "errors": {}
+  },
+  {
+    "scenario": "data_load_authed",
+    "concurrency": 8,
+    "requests": 329,
+    "rps": 26.9,
+    "p50_ms": 285.8,
+    "p95_ms": 366.9,
+    "p99_ms": 435.5,
+    "max_ms": 1327.4,
+    "errors": {}
+  },
+  {
+    "scenario": "data_load_authed",
+    "concurrency": 32,
+    "requests": 1213,
+    "rps": 95.2,
+    "p50_ms": 304.1,
+    "p95_ms": 394.4,
+    "p99_ms": 670.0,
+    "max_ms": 2726.4,
+    "errors": {}
+  },
+  {
+    "scenario": "ai_messages_mock",
+    "concurrency": 1,
+    "requests": 85,
+    "rps": 7.1,
+    "p50_ms": 131.0,
+    "p95_ms": 186.3,
+    "p99_ms": 387.8,
+    "max_ms": 461.1,
+    "errors": {}
+  },
+  {
+    "scenario": "ai_messages_mock",
+    "concurrency": 8,
+    "requests": 646,
+    "rps": 53.2,
+    "p50_ms": 135.8,
+    "p95_ms": 192.0,
+    "p99_ms": 477.8,
+    "max_ms": 1905.7,
+    "errors": {}
+  },
+  {
+    "scenario": "ai_messages_mock",
+    "concurrency": 32,
+    "requests": 2485,
+    "rps": 199.3,
+    "p50_ms": 141.0,
+    "p95_ms": 200.9,
+    "p99_ms": 333.7,
+    "max_ms": 5422.6,
+    "errors": {}
+  },
+  {
+    "scenario": "ai_claude_mock",
+    "concurrency": 1,
+    "requests": 86,
+    "rps": 7.1,
+    "p50_ms": 138.3,
+    "p95_ms": 179.5,
+    "p99_ms": 215.1,
+    "max_ms": 257.0,
+    "errors": {}
+  },
+  {
+    "scenario": "ai_claude_mock",
+    "concurrency": 8,
+    "requests": 626,
+    "rps": 51.5,
+    "p50_ms": 140.1,
+    "p95_ms": 191.0,
+    "p99_ms": 256.9,
+    "max_ms": 2591.2,
+    "errors": {}
+  },
+  {
+    "scenario": "ai_claude_mock",
+    "concurrency": 32,
+    "requests": 2539,
+    "rps": 171.3,
+    "p50_ms": 140.1,
+    "p95_ms": 208.3,
+    "p99_ms": 343.1,
+    "max_ms": 4753.5,
+    "errors": {}
+  }
+]

@@ -3307,6 +3307,73 @@ def get_logic_map_html():
     <p>logic_map.html is missing from the repo root.</p></body></html>"""
 
 
+# ---------------- Evals hub ----------------
+
+EVAL_DIR = os.path.join(REPO_ROOT, "eval")
+
+
+def _read_eval_json(name):
+    """Read one of the eval JSON registries (registry.json / runs.json), fresh from disk so
+    edits show up on reload. Returns {} on any error so the hub degrades instead of 500ing."""
+    path = os.path.join(EVAL_DIR, name)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"[WARN] could not read eval/{name}: {e}")
+        return {}
+
+
+def get_evals_payload():
+    """The data the /evals hub renders: the eval definitions plus every recorded run. Read
+    fresh each request from eval/registry.json and eval/runs.json — the single source of truth
+    for what evals exist and how each metric has moved. Add a run by appending to runs.json."""
+    registry = _read_eval_json("registry.json")
+    runs = _read_eval_json("runs.json")
+    return {
+        "evals": registry.get("evals", []),
+        "runs": runs.get("runs", []),
+    }
+
+
+def get_evals_hub_html():
+    """The /evals landing page: eval cards + per-metric trend graphs across runs. The design
+    lives in eval/evals_hub.html (read fresh so edits show on reload); the run data is injected
+    into its __PAYLOAD__ placeholder from get_evals_payload()."""
+    tmpl_path = os.path.join(EVAL_DIR, "evals_hub.html")
+    if not os.path.exists(tmpl_path):
+        return """<!doctype html><html><head><meta charset="utf-8"><title>Evals</title></head>
+        <body style="font-family:system-ui;padding:40px"><h1>Evals hub not found</h1>
+        <p>eval/evals_hub.html is missing.</p></body></html>"""
+    with open(tmpl_path, "r", encoding="utf-8") as f:
+        tmpl = f.read()
+    payload = json.dumps(get_evals_payload(), ensure_ascii=False)
+    return tmpl.replace("__PAYLOAD__", payload)
+
+
+def get_scorecard_html(run_id=None):
+    """The Match Quality Scorecard, read fresh from disk. Produced by eval/gen_scorecard.py
+    from the golden CSVs; served at /evals/scorecard so it lives with the code instead of an
+    external artifact link. With no `run_id` it serves the canonical golden_scorecard.html
+    (the latest run); with one it serves that run's dated page golden_scorecard_<run_id>.html,
+    so every recorded run stays reachable from the hub, not just the most recent.
+
+    `run_id` is filename-constrained (a date-like token) before it touches the path — this
+    route is localhost-only, but a `?run=` that reaches the filesystem must never be able to
+    escape EVAL_DIR."""
+    if run_id and re.fullmatch(r"[0-9A-Za-z._-]{1,64}", run_id):
+        name = f"golden_scorecard_{run_id}.html"
+    else:
+        name = "golden_scorecard.html"
+    path = os.path.join(EVAL_DIR, name)
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>Scorecard</title></head>
+    <body style="font-family:system-ui;padding:40px"><h1>Scorecard not found</h1>
+    <p>eval/{name} is missing. Run <code>python eval/gen_scorecard.py --run &lt;id&gt;</code>.</p></body></html>"""
+
+
 def mark_agent_running(agent_name):
     with _agent_runs_lock:
         _agent_runs[agent_name] = {

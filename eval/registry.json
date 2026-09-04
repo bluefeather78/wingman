@@ -1,0 +1,62 @@
+{
+  "_comment": "The eval registry: one entry per eval we maintain. Runs live in runs.json and reference an eval by `id`. The /evals hub reads both to render the eval cards and the metric-trend graphs. `direction` on each metric says which way is better, so the trends page can color a run-over-run delta green or red. Add a new eval by appending a definition here, then append its run(s) to runs.json.",
+  "evals": [
+    {
+      "id": "match-quality",
+      "name": "Match Quality Scorecard",
+      "summary": "Golden-set student profiles run through the live suggest pipeline — semantic recall then the production rankCandidates reasoner — graded for match relevance, reason quality, and fabrication against each opportunity's own text.",
+      "source": "eval/gen_scorecard.py",
+      "runner": "eval/run_golden_matching.mjs + eval/score_golden_matches.mjs",
+      "scorecard": "/evals/scorecard",
+      "metrics": [
+        {"key": "good_match_rate", "label": "Good match rate", "unit": "pct", "direction": "up", "desc": "Share of ranked results the judge calls squarely on-theme."},
+        {"key": "loose_match_rate", "label": "Loose match rate", "unit": "pct", "direction": "down", "desc": "Adjacent-but-not-quite matches."},
+        {"key": "wrong_match_rate", "label": "Wrong match rate", "unit": "pct", "direction": "down", "desc": "Off-theme matches that should not have surfaced."},
+        {"key": "strong_tier_rate", "label": "Strong-tier rate", "unit": "pct", "direction": "up", "desc": "Share of results the ranker reasoned as a strong fit."},
+        {"key": "high_reason_rate", "label": "High-quality reasons", "unit": "pct", "direction": "up", "desc": "Of the rows the ranker chose to reason, share judged high quality."},
+        {"key": "fabricated", "label": "Fabricated reasons", "unit": "count", "direction": "down", "desc": "Reasons asserting a fit the opportunity text does not support."},
+        {"key": "minor_embellishment", "label": "Minor embellishments", "unit": "count", "direction": "down", "desc": "Reasons that overstate but do not invent."}
+      ]
+    },
+    {
+      "id": "eligibility-reasoning",
+      "name": "Eligibility Reasoning",
+      "summary": "Curation-call eligibility verdicts graded in both error directions: over-exclusion (an open program hidden) and the worse, unguarded under-exclusion (a hard-scope program shown to an ineligible student).",
+      "source": "matching_eval.py",
+      "runner": "python matching_eval.py --run",
+      "scorecard": null,
+      "metrics": [
+        {"key": "correct_rate", "label": "Correct verdicts", "unit": "pct", "direction": "up", "desc": "Share of cases with the gold eligibility verdict."},
+        {"key": "under_exclusions", "label": "Under-exclusions", "unit": "count", "direction": "down", "desc": "Ineligible student shown a hard-scope program — the worse harm, no code guard."},
+        {"key": "over_exclusions", "label": "Over-exclusions", "unit": "count", "direction": "down", "desc": "Eligible student had an open program hidden."},
+        {"key": "exclusion_precision", "label": "Exclusion precision", "unit": "pct", "direction": "up", "desc": "Of what we hid, how much deserved it."},
+        {"key": "exclusion_recall", "label": "Exclusion recall", "unit": "pct", "direction": "up", "desc": "Of what should be hidden, how much we caught."}
+      ]
+    },
+    {
+      "id": "theme-extraction",
+      "name": "Theme Extraction",
+      "summary": "The theme-extraction prompt must keep distinct interests in separate themes and never collapse must-separate concepts. Measured as a pass rate over repeated runs per case.",
+      "source": "eval/theme_extraction_eval.py",
+      "runner": "python eval/theme_extraction_eval.py --runs N",
+      "scorecard": null,
+      "metrics": [
+        {"key": "pass_rate", "label": "Case pass rate", "unit": "pct", "direction": "up", "desc": "Share of case runs whose themes satisfy every separation and presence assertion."}
+      ]
+    },
+    {
+      "id": "dedupe-separation",
+      "name": "Dedupe Separation",
+      "summary": "How cleanly the dedupe score separates true aliases from distinct opportunities — the gap between the two score bands, and the precision/recall at the best threshold.",
+      "source": "dedupe_eval.py",
+      "runner": "python dedupe_eval.py",
+      "scorecard": null,
+      "metrics": [
+        {"key": "clean_gap", "label": "Clean gap", "unit": "num", "direction": "up", "desc": "Min alias score minus max distinct score; positive means a clean separation."},
+        {"key": "precision", "label": "Precision @ best", "unit": "pct", "direction": "up", "desc": "At the Youden-J threshold."},
+        {"key": "recall", "label": "Recall @ best", "unit": "pct", "direction": "up", "desc": "At the Youden-J threshold."},
+        {"key": "youden_j", "label": "Youden's J", "unit": "num", "direction": "up", "desc": "Best sensitivity + specificity - 1."}
+      ]
+    }
+  ]
+}

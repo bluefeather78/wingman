@@ -1,0 +1,55 @@
+{
+  "_comment": "One object per eval run, newest last. Each references an eval in registry.json by `eval`. `metrics` keys must match that eval's metric keys. `date` is the run date (YYYY-MM-DD); `run_id` is unique within an eval. The /evals hub plots each metric across the runs of its eval, so appending a run here is all it takes to extend the trend graphs. Keep `counts` for the raw numbers behind rate metrics. Optional `scorecard` links this run's own report page (e.g. /evals/scorecard?run=<run_id>, served from eval/golden_scorecard_<run_id>.html); the hub lists one link per run, falling back to the eval's scorecard path + ?run= when absent.",
+  "runs": [
+    {
+      "eval": "match-quality",
+      "run_id": "2026-09-02",
+      "date": "2026-09-02",
+      "label": "Golden set v1",
+      "scorecard": "/evals/scorecard?run=2026-09-02",
+      "profiles": 50,
+      "results": 500,
+      "metrics": {
+        "good_match_rate": 0.71,
+        "loose_match_rate": 0.188,
+        "wrong_match_rate": 0.102,
+        "strong_tier_rate": 0.47,
+        "high_reason_rate": 0.96,
+        "fabricated": 2,
+        "minor_embellishment": 18
+      },
+      "counts": {
+        "good": 355, "loose": 94, "wrong": 51,
+        "strong_tier": 235, "reasoned": 326, "blank": 174,
+        "reason_high": 313, "reason_medium": 13, "reason_none": 174,
+        "supported": 306, "fabricated": 2, "minor_embellishment": 18
+      },
+      "notes": "First full golden run: 50 personas, top-10 ranked each. Scored by the LLM-judge pre-labels in golden_matches_scored.csv. See the full scorecard for per-row verdicts."
+    },
+    {
+      "eval": "match-quality",
+      "run_id": "2026-09-03",
+      "date": "2026-09-03",
+      "label": "Golden set v1",
+      "scorecard": "/evals/scorecard?run=2026-09-03",
+      "profiles": 50,
+      "results": 500,
+      "metrics": {
+        "good_match_rate": 0.684,
+        "loose_match_rate": 0.204,
+        "wrong_match_rate": 0.112,
+        "strong_tier_rate": 0.444,
+        "high_reason_rate": 0.984,
+        "fabricated": 5,
+        "minor_embellishment": 30
+      },
+      "counts": {
+        "good": 342, "loose": 102, "wrong": 56,
+        "strong_tier": 222, "reasoned": 317, "blank": 183,
+        "reason_high": 312, "reason_medium": 5, "reason_none": 183,
+        "supported": 282, "fabricated": 5, "minor_embellishment": 30
+      },
+      "notes": "Second full golden run (same 50 personas, top-10 ranked each), scored by the LLM-judge pre-labels. Re-run of the live suggest pipeline; verdicts are model pre-labels, not ground truth. See the full scorecard for per-row verdicts."
+    }
+  ]
+}

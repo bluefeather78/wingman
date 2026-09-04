@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wingman Evals</title>
+<meta name="description" content="Eval hub: every eval we maintain, each run, and how each metric moved run over run.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Public+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f6; --line:#dde2ea;
+  --ink:#161a22; --muted:#5c6472; --faint:#8a93a2;
+  --accent:#3b5bdb; --accent-soft:#e7ecfd;
+  --good:#1f9d55; --good-bg:#e5f5ec;
+  --warn:#b9770f; --warn-bg:#faf0dc;
+  --crit:#d1435b; --crit-bg:#fbe6ea;
+  --neutral:#8a93a2; --neutral-bg:#eceff3;
+  --shadow:0 1px 2px rgba(20,26,34,.04),0 4px 16px rgba(20,26,34,.06);
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --disp:"Archivo","Public Sans",system-ui,sans-serif;
+  --body:"Public Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#0f1218; --surface:#171b23; --surface-2:#1e232d; --line:#2a303c;
+  --ink:#e8ebf0; --muted:#9aa3b2; --faint:#6b7482;
+  --accent:#6b8afd; --accent-soft:#1c2540;
+  --good:#4cc98a; --good-bg:#12291d;
+  --warn:#e0a542; --warn-bg:#2e2412;
+  --crit:#f0748c; --crit-bg:#301820;
+  --neutral:#8a93a2; --neutral-bg:#232833;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}}
+:root[data-theme="dark"]{
+  --ground:#0f1218; --surface:#171b23; --surface-2:#1e232d; --line:#2a303c;
+  --ink:#e8ebf0; --muted:#9aa3b2; --faint:#6b7482;
+  --accent:#6b8afd; --accent-soft:#1c2540;
+  --good:#4cc98a; --good-bg:#12291d;
+  --warn:#e0a542; --warn-bg:#2e2412;
+  --crit:#f0748c; --crit-bg:#301820;
+  --neutral:#8a93a2; --neutral-bg:#232833;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:var(--body);line-height:1.5;
+  font-size:15px;-webkit-font-smoothing:antialiased;margin:0}
+.wrap{max-width:1120px;margin:0 auto;padding:34px 22px 80px}
+a{color:var(--accent)}
+h1,h2,h3{font-family:var(--disp);margin:0}
+.eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--faint);font-weight:600}
+h1{font-size:32px;font-weight:800;letter-spacing:-.02em;margin:6px 0 8px;text-wrap:balance}
+.lede{color:var(--muted);max-width:70ch;font-size:15.5px}
+.meta-line{font-family:var(--mono);font-size:12px;color:var(--faint);margin-top:14px;
+  display:flex;flex-wrap:wrap;gap:6px 18px}
+.rule{height:1px;background:var(--line);border:0;margin:26px 0}
+.backlink{font-family:var(--mono);font-size:12px}
+
+/* eval cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:10px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 18px 16px;
+  box-shadow:var(--shadow);display:flex;flex-direction:column}
+.card h3{font-size:17px;font-weight:700;letter-spacing:-.01em}
+.card .sum{color:var(--muted);font-size:13px;margin-top:6px;flex:1}
+.card .foot{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-top:14px;
+  font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+.card .foot .runs{color:var(--muted)}
+.card a.scorecard{margin-left:auto;font-family:var(--mono);font-size:12px;font-weight:600;
+  text-decoration:none;padding:5px 11px;border-radius:8px;background:var(--accent-soft);color:var(--accent)}
+.card a.scorecard:hover{filter:brightness(.97)}
+.pending{font-family:var(--mono);font-size:11px;color:var(--faint);
+  border:1px dashed var(--line);border-radius:8px;padding:4px 9px}
+
+/* trend sections */
+.evalsec{margin-top:34px}
+.evalsec .head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+.evalsec h2{font-size:22px;font-weight:800;letter-spacing:-.02em}
+.evalsec .head .rc{font-family:var(--mono);font-size:12px;color:var(--faint)}
+.evalsec .desc{color:var(--muted);font-size:13.5px;max-width:74ch;margin-bottom:16px}
+.runlist{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+.runlink{font-family:var(--mono);font-size:11.5px;text-decoration:none;padding:5px 11px;border-radius:8px;
+  background:var(--surface);border:1px solid var(--line);color:var(--muted)}
+.runlink:hover{border-color:var(--accent);color:var(--accent)}
+.runlink.latest{background:var(--accent-soft);border-color:transparent;color:var(--accent);font-weight:600}
+.charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.chart{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 15px 12px;
+  box-shadow:var(--shadow)}
+.chart .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.chart .lab{font-size:13px;font-weight:600;color:var(--muted)}
+.chart .val{font-family:var(--disp);font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;
+  letter-spacing:-.02em;line-height:1}
+.chart .delta{font-family:var(--mono);font-size:11px;font-weight:600;margin-top:3px}
+.chart .delta.up{color:var(--good)} .chart .delta.down{color:var(--crit)} .chart .delta.flat{color:var(--faint)}
+.chart .desc{font-size:11.5px;color:var(--faint);margin-top:4px;min-height:2.4em}
+.chart svg{display:block;width:100%;height:56px;margin-top:8px;overflow:visible}
+.chart .dir{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--faint)}
+.norun{font-family:var(--mono);font-size:12px;color:var(--faint);background:var(--surface-2);
+  border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--line);
+  font-size:12.5px;color:var(--faint);max-width:80ch}
+footer code{font-family:var(--mono);background:var(--surface-2);padding:1px 5px;border-radius:4px}
+@media (max-width:640px){h1{font-size:26px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Highschool Wingman · Ops</div>
+    <h1>Evals</h1>
+    <p class="lede">Every eval we maintain, each recorded run, and how each metric moved
+      run over run. Add a run by appending to <code style="font-family:var(--mono)">eval/runs.json</code> —
+      the graphs below extend on their own.</p>
+    <div class="meta-line">
+      <span id="mEvals"></span><span id="mRuns"></span>
+      <span><a class="backlink" href="/admin">← Agent Ops console</a></span>
+    </div>
+  </header>
+  <hr class="rule">
+  <div class="cards" id="cards"></div>
+  <div id="sections"></div>
+  <footer>
+    <b>How this works.</b> <code>eval/registry.json</code> defines each eval and its metrics
+    (with a <code>direction</code> saying which way is better). <code>eval/runs.json</code> holds
+    one row per run. This page joins them: a card per eval up top, then a trend section per eval
+    plotting every metric across its runs. A run-over-run delta is colored green when it moved the
+    good way and red when it moved the wrong way. With a single datapoint there is no delta yet —
+    the line begins as the next run lands.
+  </footer>
+</div>
+
+<script>
+const PAYLOAD = __PAYLOAD__;
+const {evals, runs} = PAYLOAD;
+
+const runsByEval = {};
+runs.forEach(r=>{ (runsByEval[r.eval] = runsByEval[r.eval] || []).push(r); });
+Object.values(runsByEval).forEach(list => list.sort((a,b)=> (a.date+a.run_id).localeCompare(b.date+b.run_id)));
+
+function fmt(v, unit){
+  if(v===null||v===undefined||v==='') return '—';
+  if(unit==='pct') return (v*100).toFixed(1)+'%';
+  if(unit==='count') return String(v);
+  return (+v).toFixed(3);
+}
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+
+// ---- eval cards ----
+document.getElementById('cards').innerHTML = evals.map(ev=>{
+  const list = runsByEval[ev.id] || [];
+  const latest = list[list.length-1];
+  const sc = ev.scorecard ? `<a class="scorecard" href="${esc(ev.scorecard)}">Scorecard →</a>` : '';
+  const runInfo = latest
+    ? `<span class="runs">${list.length} run${list.length>1?'s':''}</span><span>latest ${esc(latest.date)}</span>`
+    : `<span class="pending">no runs recorded yet</span>`;
+  return `<div class="card">
+    <h3>${esc(ev.name)}</h3>
+    <div class="sum">${esc(ev.summary)}</div>
+    <div class="foot">${runInfo}${sc}</div>
+  </div>`;
+}).join('');
+
+// ---- trend section per eval ----
+function sparkline(series, direction, unit){
+  // series: array of {x, y} with numeric y; nulls filtered by caller
+  const W=220, H=56, pad=6;
+  if(series.length===0) return '';
+  const ys = series.map(p=>p.y);
+  let lo=Math.min(...ys), hi=Math.max(...ys);
+  if(lo===hi){ const b=Math.abs(lo)||1; lo-=b*0.15; hi+=b*0.15; }
+  const n = series.length;
+  const X = i => n===1 ? W/2 : pad + (W-2*pad)*i/(n-1);
+  const Y = y => H-pad - (H-2*pad)*(y-lo)/(hi-lo);
+  const pts = series.map((p,i)=>[X(i), Y(p.y)]);
+  const line = pts.length>1
+    ? `<polyline fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="${pts.map(p=>p.join(',')).join(' ')}"/>`
+    : '';
+  const dots = pts.map((p,i)=>{
+    const last = i===pts.length-1;
+    return `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${last?4:3}" fill="${last?'var(--accent)':'var(--surface)'}" stroke="var(--accent)" stroke-width="1.6"/>`;
+  }).join('');
+  const base = `<line x1="0" y1="${H-1}" x2="${W}" y2="${H-1}" stroke="var(--line)" stroke-width="1"/>`;
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">${base}${line}${dots}</svg>`;
+}
+
+document.getElementById('sections').innerHTML = evals.map(ev=>{
+  const list = runsByEval[ev.id] || [];
+  if(list.length===0){
+    return `<section class="evalsec"><div class="head"><h2>${esc(ev.name)}</h2>
+      <span class="rc">no runs yet</span></div>
+      <div class="desc">${esc(ev.summary)}</div>
+      <div class="norun">No runs recorded. Run <code>${esc(ev.runner||ev.source)}</code>, then append the result to <code>eval/runs.json</code> to start its trend.</div>
+    </section>`;
+  }
+  const charts = ev.metrics.map(m=>{
+    const series = list.map(r=>({x:r.date, y:r.metrics[m.key]})).filter(p=>p.y!==null&&p.y!==undefined&&p.y!=='');
+    const latest = series.length ? series[series.length-1].y : null;
+    let delta='';
+    if(series.length>=2){
+      const prev = series[series.length-2].y, d = latest-prev;
+      if(d===0){ delta = `<div class="delta flat">no change</div>`; }
+      else {
+        const better = (m.direction==='up' && d>0) || (m.direction==='down' && d<0);
+        const arrow = d>0?'▲':'▼';
+        const dstr = m.unit==='pct' ? (Math.abs(d)*100).toFixed(1)+' pt' : (m.unit==='count'? Math.abs(d) : Math.abs(d).toFixed(3));
+        delta = `<div class="delta ${better?'up':'down'}">${arrow} ${dstr} vs prev</div>`;
+      }
+    } else {
+      delta = `<div class="delta flat">first datapoint</div>`;
+    }
+    return `<div class="chart">
+      <div class="top"><span class="lab">${esc(m.label)}</span>
+        <span class="dir">${m.direction==='up'?'↑ better':'↓ better'}</span></div>
+      <div class="val">${fmt(latest,m.unit)}</div>
+      ${delta}
+      <div class="desc">${esc(m.desc||'')}</div>
+      ${sparkline(series, m.direction, m.unit)}
+    </div>`;
+  }).join('');
+  // Per-run scorecard links (newest first) so every recorded run stays reachable, not just
+  // the latest. A run's own `scorecard` field wins; otherwise fall back to the eval-level
+  // scorecard path with a ?run= for that run's dated page.
+  const runsHtml = ev.scorecard ? `<div class="runlist">${list.slice().reverse().map((r,i)=>{
+    const href = r.scorecard || `${ev.scorecard}?run=${encodeURIComponent(r.run_id)}`;
+    return `<a class="runlink ${i===0?'latest':''}" href="${esc(href)}">${esc(r.date)}${r.label?` · ${esc(r.label)}`:''} →</a>`;
+  }).join('')}</div>` : '';
+  return `<section class="evalsec">
+    <div class="head"><h2>${esc(ev.name)}</h2>
+      <span class="rc">${list.length} run${list.length>1?'s':''} · latest ${esc(list[list.length-1].date)}</span>
+      ${ev.scorecard?`<a class="backlink" href="${esc(ev.scorecard)}" style="margin-left:auto">Latest scorecard →</a>`:''}</div>
+    <div class="desc">${esc(ev.summary)}</div>
+    ${runsHtml}
+    <div class="charts">${charts}</div>
+  </section>`;
+}).join('');
+
+document.getElementById('mEvals').textContent = evals.length + ' evals';
+document.getElementById('mRuns').textContent = runs.length + ' recorded run' + (runs.length===1?'':'s');
+</script>
+</body>
+</html>

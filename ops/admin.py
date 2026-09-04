@@ -63,6 +63,33 @@ def handle_logic_map():
     return Response(content=html.encode(), media_type="text/html; charset=utf-8")
 
 
+# ---------------- Evals hub ----------------
+
+@router.get("/evals")
+def handle_evals_hub():
+    """The eval hub: a card per eval we maintain, plus a trend graph per metric across every
+    recorded run (eval/registry.json + eval/runs.json). Localhost-only like the rest of the
+    console; the admin topbar links here in place of the old external scorecard artifact."""
+    html = core.get_evals_hub_html()
+    return Response(content=html.encode(), media_type="text/html; charset=utf-8")
+
+
+@router.get("/evals/data")
+def handle_evals_data():
+    """The eval registry + runs as JSON — the same payload the hub embeds, exposed for tooling
+    or a future dashboard that wants the raw numbers."""
+    return json_response(200, core.get_evals_payload(), default=str)
+
+
+@router.get("/evals/scorecard")
+def handle_evals_scorecard(request: Request):
+    """The Match Quality Scorecard. `?run=<id>` serves that run's dated page so every recorded
+    run is reachable from the hub; no param serves the canonical latest. Moved off the external
+    Claude artifact link so it lives with the code and is served from the ops console."""
+    html = core.get_scorecard_html(request.query_params.get("run"))
+    return Response(content=html.encode(), media_type="text/html; charset=utf-8")
+
+
 # ---------------- Agents: read ----------------
 
 @router.get("/api/agents/status")

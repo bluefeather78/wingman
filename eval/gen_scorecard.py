@@ -1,14 +1,32 @@
-import csv, json, os
+import argparse, csv, datetime, json, os
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 def read(name):
-    with open(os.path.join(ROOT, name), encoding="utf-8") as f:
+    path = name if os.path.isabs(name) else os.path.join(ROOT, name)
+    with open(path, encoding="utf-8") as f:
         return list(csv.DictReader(f))
 
+# A scorecard is built for ONE run. `--run` is the run id (a date) that names the dated
+# output page /evals serves per run; the canonical golden_scorecard.html is also refreshed
+# so the eval-level "latest" link keeps working. Per-run input CSVs let us rebuild an older
+# run's page from its backed-up files (golden_*_<run>.csv).
+_ap = argparse.ArgumentParser(description="Build the Match Quality Scorecard for one run.")
+_ap.add_argument("--run", default=datetime.date.today().isoformat(),
+                 help="Run id / date (YYYY-MM-DD). Names the dated output page. Default: today.")
+_ap.add_argument("--label", default="", help="Optional short run label shown in the header badge.")
+_ap.add_argument("--scored", default="golden_matches_scored.csv",
+                 help="Scored matches CSV for this run.")
+_ap.add_argument("--summary", default="golden_run_summary.csv",
+                 help="Run summary CSV for this run.")
+_ap.add_argument("--no-canonical", action="store_true",
+                 help="Write only the dated page, not golden_scorecard.html (use when rebuilding an OLD run).")
+_args = _ap.parse_args()
+RUN_ID = _args.run
+
 profiles = read("golden_profiles.csv")
-summary = {r["profile_id"]: r for r in read("golden_run_summary.csv")}
-matches = read("golden_matches_scored.csv")
+summary = {r["profile_id"]: r for r in read(_args.summary)}
+matches = read(_args.scored)
 
 by_pid = {}
 for m in matches:
@@ -201,8 +219,10 @@ footer code{font-family:var(--mono);background:var(--surface-2);padding:1px 5px;
       then the production <b>rankCandidates</b> reasoner — graded for match relevance, reason
       quality, and fabrication against each opportunity's own text.</p>
     <div class="meta-line">
+      <span style="color:var(--accent);font-weight:600">Run __RUNBADGE__</span>
       <span id="mProfiles"></span><span id="mResults"></span>
       <span>LLM-judge pre-labels · human-overridable</span>
+      <span><a href="/evals" style="font-family:var(--mono)">← Evals hub</a></span>
     </div>
   </header>
   <hr class="rule">
@@ -365,8 +385,18 @@ document.getElementById('mResults').textContent = n + ' ranked results';
 </script>
 """
 
-out = HTML.replace("__PAYLOAD__", payload)
-dest = os.path.join(ROOT, "golden_scorecard.html")
-with open(dest, "w", encoding="utf-8") as f:
+badge = RUN_ID + (f" · {_args.label}" if _args.label else "")
+out = HTML.replace("__PAYLOAD__", payload).replace("__RUNBADGE__", badge)
+
+written = []
+dated = os.path.join(ROOT, f"golden_scorecard_{RUN_ID}.html")
+with open(dated, "w", encoding="utf-8") as f:
     f.write(out)
-print("wrote", dest, "bytes", len(out))
+written.append(dated)
+if not _args.no_canonical:
+    canonical = os.path.join(ROOT, "golden_scorecard.html")
+    with open(canonical, "w", encoding="utf-8") as f:
+        f.write(out)
+    written.append(canonical)
+for p in written:
+    print("wrote", p, "bytes", len(out))

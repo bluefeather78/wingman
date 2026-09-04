@@ -146,6 +146,32 @@ agent.
 - **Not gated:** a change that only *reduces* spend and cannot change correctness (e.g. tightening a
   cache) is still worth flagging in the commit, but does not need pre-approval. When unsure, ask.
 
+### M10 — The Match Scorecard harness mirrors production match quality; any shipped match-quality change is replicated in it
+*Ratified 2026-09-04 by Shama.*
+
+The golden Match Quality eval only means something if it measures **what students actually see**.
+So whenever a change that affects match quality lands on `main` — the recall stage, the reranker,
+the curation/ordering that decides which results are shown, or the prompts behind any of them —
+the eval harness (`eval/run_golden_matching.mjs` + `eval/score_golden_matches.mjs`) **must be
+updated in the same change to replicate it**, so the scorecard never drifts from production.
+
+- **Why:** the finder started dropping blank-blurb (un-vouched) rows in commit `6e49034`, but the
+  harness kept padding the grid to 10 with them — so two recorded runs (2026-09-02, 2026-09-03)
+  measured an un-curated result set no user ever saw, and reported blank-reason rows as a "problem"
+  that production had already fixed. An eval that silently diverges from the app is worse than no
+  eval: it launders stale behaviour as a current metric.
+- **What "affects match quality" covers:** `app/routes/matching.py` and `matching.py` (recall,
+  eligibility drop, scoring), `frontend/src/lib/ranking.ts` (`rankCandidates`), and
+  `frontend/app/(app)/finder.tsx` `callMatchMapped` (curation to vouched rows, tier sort, the
+  top-N shown). If you change any of these in a way that changes which rows a student sees or in
+  what order, mirror it in the harness in the same PR/commit.
+- **Protected sites:** `eval/run_golden_matching.mjs` (carries the `MARQUEE M10` sentinel at the
+  curation step) and `eval/score_golden_matches.mjs`. Keep the curation/sort/slice byte-aligned
+  with `finder.tsx callMatchMapped`.
+- **Note:** this is the one marquee whose obligation is *"keep two things in sync"* rather than
+  *"don't change this."* Editing the harness to track a real production change is not just allowed,
+  it is required; letting it fall behind is the violation.
+
 ---
 
 ## Proposed — awaiting Shama's ratification

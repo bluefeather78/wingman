@@ -49,7 +49,32 @@
         "reason_high": 312, "reason_medium": 5, "reason_none": 183,
         "supported": 282, "fabricated": 5, "minor_embellishment": 30
       },
-      "notes": "Second full golden run (same 50 personas, top-10 ranked each), scored by the LLM-judge pre-labels. Re-run of the live suggest pipeline; verdicts are model pre-labels, not ground truth. See the full scorecard for per-row verdicts."
+      "notes": "Second full golden run (same 50 personas, top-10 ranked each), scored by the LLM-judge pre-labels. Re-run of the live suggest pipeline; verdicts are model pre-labels, not ground truth. See the full scorecard for per-row verdicts. METHODOLOGY NOTE: this and the 2026-09-02 run are UN-CURATED — the harness padded each profile to 10 with blank-blurb rows the app actually drops (finder curation, commit 6e49034). Not directly comparable to 2026-09-04+, which curate to reranker-vouched rows (MARQUEE M10)."
+    },
+    {
+      "eval": "match-quality",
+      "run_id": "2026-09-04",
+      "date": "2026-09-04",
+      "label": "Curated (M10)",
+      "scorecard": "/evals/scorecard?run=2026-09-04",
+      "profiles": 50,
+      "results": 342,
+      "metrics": {
+        "good_match_rate": 0.924,
+        "loose_match_rate": 0.076,
+        "wrong_match_rate": 0.0,
+        "strong_tier_rate": 0.675,
+        "high_reason_rate": 0.947,
+        "fabricated": 3,
+        "minor_embellishment": 32
+      },
+      "counts": {
+        "good": 316, "loose": 26, "wrong": 0,
+        "strong_tier": 231, "reasoned": 342, "blank": 0,
+        "reason_high": 324, "reason_medium": 18, "reason_none": 0,
+        "supported": 307, "fabricated": 3, "minor_embellishment": 32
+      },
+      "notes": "First PRODUCTION-ACCURATE run: the harness now curates to reranker-vouched rows exactly as the finder does (MARQUEE M10), so results = what students actually see. 158 blank-blurb padding rows the app drops are gone (500 -> 342 shown), which is why good-match rate rises sharply and blank/wrong fall to ~0 vs the un-curated 09-02/09-03 runs — a measurement-method correction, not a same-basis quality jump. Verdicts are LLM-judge pre-labels, not ground truth."
     }
   ]
 }

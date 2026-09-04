@@ -7,7 +7,10 @@
 //   2. rankCandidates() — the REAL frontend function (src/lib/ranking.ts), imported here
 //      so the "why it fits" prompt is byte-identical to production — over the top 12 rows,
 //      producing the second-person reason + strong/look tier. (finder.tsx callMatchMapped)
-//   3. Sort strong-before-look (finder.tsx sortedResults), take the top 10.
+//   3. CURATE to reranker-vouched rows: keep ONLY rows the reranker wrote a blurb for, exactly
+//      as finder.tsx callMatchMapped does (commit 6e49034) — with the same guard that falls back
+//      to the full pool if NOTHING got a reason. (MARQUEE M10.)
+//   4. Sort strong-before-look (finder.tsx sortedResults), take the top 10.
 //
 // "Assume a value at the profile theme selections stage": each profile carries one chosen
 // theme {theme,intent,nextSteps} — the value the theme picker would have produced/selected.
@@ -124,9 +127,16 @@ async function runProfile(p) {
     return { opp: row, reason: rz?.reason ?? '', tier: rz ? rz.tier : 'look',
              score: row.score ?? null, strong: rz ? rz.tier === 'strong' : false };
   });
+  // MARQUEE M10: CURATION — mirror finder.tsx callMatchMapped (commit 6e49034). The reranker
+  // writes a "why it fits" ONLY for rows it genuinely vouches for; every blank-blurb row is
+  // padding pulled up from cosine recall to fill the grid, and the app DROPS those. Keep this
+  // byte-aligned with the finder so the scorecard measures what students actually see. Same
+  // guard: if NOTHING got a reason, fall back to the full pool rather than emptying the page.
+  const vouched = mapped.filter((m) => m.reason.trim());
+  const curated = vouched.length ? vouched : mapped;
   // finder.tsx sortedResults: (tracked, none here) then tier strong(0) before look(1); stable.
   const tierOrder = { strong: 0, look: 1 };
-  const sorted = [...mapped].sort((a, b) => tierOrder[a.tier] - tierOrder[b.tier]);
+  const sorted = [...curated].sort((a, b) => tierOrder[a.tier] - tierOrder[b.tier]);
   const top10 = sorted.slice(0, 10);
   return { resp, top10, themeDesc };
 }

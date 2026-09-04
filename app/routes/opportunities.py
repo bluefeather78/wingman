@@ -13,7 +13,7 @@ from app.config import (
     SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
     OPPORTUNITIES_CLIENT_STRIP_FIELDS,
 )
-from app.core import touch_user_activity, record_user_cost_async
+from app.core import touch_user_activity, record_user_cost_async, record_api_error
 from app.deps import (json_response, json_error, require_subscription,
                       optional_subscribed_user)
 from app.auth import AuthedUser
@@ -169,7 +169,12 @@ def handle_deadline_check(opp_id: str, request: Request,
         return json_response(200, response)
     except Exception as e:
         # Claude API error / network hiccup: degrade to whatever was cached, even if stale.
+        # The client gets a 200 (a cached answer, not a failure), so this never becomes a 5xx
+        # the capture middleware would see — record it here so the dashboard still shows that the
+        # deadline check's Anthropic call failed and why. status=0: the client saw no error code.
         print(f"[WARN] Deadline check failed for {opp_id}: {e}")
+        record_api_error("GET", "/api/opportunities/{id}/deadline", 0,
+                         "deadline_degraded", f"deadline check degraded to cached: {e}")
         payload = deadlines.cached_deadline_payload(opp, "stale-fallback")
         deadlines.log_deadline_check(opp_id, "stale-fallback", opp.get("status"), None, None,
                                      opp.get("was_estimated"), f"Error: {str(e)[:100]}")

@@ -192,3 +192,74 @@ def test_get_api_errors_can_omit_rows_for_the_health_card(monkeypatch):
     r = opscore.get_api_errors(days=7, limit=10, include_rows=False)
     assert r["errors"] == []                        # summary only, no row payload
     assert r["summary"]["total"] == 1               # but the rollup is still computed
+
+
+# ---------- error classification: server / provider / degraded ----------
+
+@pytest.mark.parametrize("error_type,expected", [
+    ("server_error", "server"),          # a returned 5xx — must NOT read as provider
+    ("KeyError", "server"),              # an unhandled exception class
+    ("TimeoutError", "server"),
+    ("gemini_http_429", "provider"),
+    ("anthropic_http_529", "provider"),
+    ("gemini_error", "provider"),
+    ("anthropic_error", "provider"),
+    ("deadline_degraded", "degraded"),
+    (None, "server"),
+])
+def test_api_error_class(error_type, expected):
+    assert opscore._api_error_class(error_type) == expected
+
+
+def test_summary_has_by_class_with_all_three_keys():
+    rows = [
+        {"ts": _iso(hours=-1), "status": 500, "error_type": "KeyError"},
+        {"ts": _iso(hours=-1), "status": 429, "error_type": "gemini_http_429"},
+        {"ts": _iso(hours=-1), "status": 0,   "error_type": "deadline_degraded"},
+        {"ts": _iso(hours=-1), "status": 429, "error_type": "anthropic_http_429"},
+    ]
+    bc = opscore._summarize_api_errors(rows)["by_class"]
+    assert bc == {"server": 1, "provider": 2, "degraded": 1}
+
+
+def test_empty_summary_still_lists_all_class_keys():
+    assert opscore._summarize_api_errors([])["by_class"] == {
+        "server": 0, "provider": 0, "degraded": 0}
+
+
+def test_get_api_errors_annotates_each_row_with_its_class(monkeypatch):
+    rows = [{"id": 1, "ts": _iso(hours=-1), "status": 429, "error_type": "gemini_http_429"}]
+    monkeypatch.setattr(opscore, "_supabase_request_strict", lambda *a, **k: rows)
+    r = opscore.get_api_errors(days=7, limit=10)
+    assert r["errors"][0]["error_class"] == "provider"
+
+
+# ---------- AI proxy provider-failure recording ----------
+
+def test_provider_detail_extracts_the_provider_message():
+    import app.routes.ai as ai
+    body = json.dumps({"error": {"type": "rate_limit_error",
+                                 "message": "Number of requests has exceeded"}}).encode()
+    assert ai._provider_detail(body) == "Number of requests has exceeded"
+
+
+def test_provider_detail_falls_back_to_raw_body_on_non_json():
+    import app.routes.ai as ai
+    assert "gateway" in ai._provider_detail(b"502 Bad gateway").lower()
+
+
+def test_record_provider_failure_buffers_a_labeled_row():
+    import app.routes.ai as ai
+    ai._record_provider_failure("gemini", "/api/messages", 429, "quota exceeded")
+    row = core._api_errors_buffer[-1]
+    assert row["error_type"] == "gemini_http_429"
+    assert row["status"] == 429
+    assert "quota exceeded" in row["message"]
+    assert opscore._api_error_class(row["error_type"]) == "provider"
+
+
+def test_record_provider_failure_network_error_is_502():
+    import app.routes.ai as ai
+    ai._record_provider_failure("anthropic", "/api/messages-claude", 0, "Connection reset")
+    row = core._api_errors_buffer[-1]
+    assert row["error_type"] == "anthropic_error" and row["status"] == 502

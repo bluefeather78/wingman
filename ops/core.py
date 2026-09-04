@@ -4442,6 +4442,23 @@ def list_recent_merges(limit=50):
 _API_ERRORS_SELECT = "id,ts,method,path,status,error_type,message,traceback"
 
 
+def _api_error_class(error_type):
+    """Which bucket a row belongs to on the dashboard, derived from its error_type:
+      * 'provider' — an AI provider (Gemini/Anthropic) returned or raised an error on a
+        /api/messages* call: gemini_http_429, anthropic_http_529, gemini_error, …
+      * 'degraded' — a call that failed upstream but was served to the client as a cached/
+        fallback 200 (the on-demand deadline check's Anthropic fallback): deadline_degraded.
+      * 'server'   — everything else: an unhandled exception or a 5xx a route returned.
+    Kept as a derived label, not a stored column, so no migration is needed and old rows
+    classify correctly the moment this ships."""
+    et = (error_type or "").lower()
+    if "degraded" in et:
+        return "degraded"
+    if et.startswith(("gemini", "anthropic")):   # gemini_http_429 / anthropic_error / …
+        return "provider"
+    return "server"                               # server_error, unhandled exception classes
+
+
 def get_api_errors(days=7, limit=500, include_rows=True):
     """The admin console's API Errors tab: recent 5xx / unhandled exceptions the FastAPI service
     recorded, newest first, plus a rollup for the tab header and the Health summary card.
@@ -4482,6 +4499,8 @@ def get_api_errors(days=7, limit=500, include_rows=True):
                 "error": f"Could not read api_errors: {str(e)[:200]}"}
     if not rows:
         return empty
+    for r in rows:                                # annotate so the tab can badge each row's source
+        r["error_class"] = _api_error_class(r.get("error_type"))
     return {"ok": True, "available": True, "error": None, "days": days,
             "generated_at": generated_at, "capped": len(rows) >= limit,
             "summary": _summarize_api_errors(rows),
@@ -4498,13 +4517,15 @@ def _summarize_api_errors(rows):
     rows = rows or []
     cutoff = (datetime.datetime.now(datetime.timezone.utc)
               - datetime.timedelta(hours=24)).isoformat()
-    by_status, by_type, by_path, path_last = {}, {}, {}, {}
+    by_status, by_type, by_path, path_last, by_class = {}, {}, {}, {}, {}
     last_24h, most_recent = 0, None
     for r in rows:
         st = r.get("status")
         by_status[st] = by_status.get(st, 0) + 1
         et = r.get("error_type") or "unknown"
         by_type[et] = by_type.get(et, 0) + 1
+        cls = _api_error_class(et)
+        by_class[cls] = by_class.get(cls, 0) + 1
         p = r.get("path") or "(unknown)"
         by_path[p] = by_path.get(p, 0) + 1
         ts = r.get("ts")
@@ -4525,6 +4546,9 @@ def _summarize_api_errors(rows):
         "total": len(rows),
         "last_24h": last_24h,
         "most_recent": most_recent,
+        # Server vs provider (Gemini/Anthropic) vs degraded (failed upstream, served as cached
+        # 200). Always all three keys, 0 included, so the dashboard tiles never vanish.
+        "by_class": {c: by_class.get(c, 0) for c in ("server", "provider", "degraded")},
         "by_status": [{"status": k, "count": v} for k, v in
                       sorted(by_status.items(), key=lambda kv: kv[1], reverse=True)],
         "by_type": _top(by_type, 8, key="type"),

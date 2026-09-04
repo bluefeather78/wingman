@@ -117,7 +117,12 @@ async def capture_api_errors(request: Request, call_next):
                          traceback_text=_tb.format_exc())
         return JSONResponse(status_code=500, content={"error": "Internal server error."},
                             headers={"Cache-Control": "no-store"})
-    if response.status_code >= 500:
+    # A route that already recorded its own failure (the AI proxies, with the provider's real
+    # status and error message) tags the response so it is not ALSO logged generically here.
+    already_logged = "x-wingman-error-logged" in response.headers
+    if already_logged:
+        del response.headers["x-wingman-error-logged"]        # internal marker, never shipped
+    if response.status_code >= 500 and not already_logged:
         record_api_error(method, path, response.status_code, "server_error")
     return response
 

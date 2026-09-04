@@ -19,6 +19,7 @@ from app.config import (
 )
 from app.core import (
     touch_user_activity, record_interactive_cost_async, log_conversation_async,
+    record_api_error,
 )
 from app.deps import (json_response, json_error, subscription_block_reason, client_ip,
                       raw_body as raw_body_dep)
@@ -27,6 +28,50 @@ from app.services.ai import generate_mock_text
 from gemini_common import call_gemini
 
 router = APIRouter()
+
+# A response header the capture middleware (app/main.py) skips over, so a provider failure
+# recorded HERE with its real upstream status + error message is not ALSO recorded generically
+# as a 5xx server_error. The header never reaches the client — the middleware strips it.
+_ERROR_LOGGED_HEADER = "x-wingman-error-logged"
+
+
+def _mark_logged(resp):
+    """Tag a response as already recorded to api_errors, so the middleware doesn't double-log it."""
+    try:
+        resp.headers[_ERROR_LOGGED_HEADER] = "1"
+    except Exception:                                              # noqa: BLE001
+        pass
+    return resp
+
+
+def _provider_detail(body):
+    """The provider's OWN error message out of its JSON body ("rate_limit_error",
+    "Resource has been exhausted", …) — the thing you actually want on the dashboard —
+    falling back to the raw body. Truncated; record_api_error truncates again as a backstop."""
+    try:
+        d = json.loads(body)
+        err = d.get("error") if isinstance(d, dict) else None
+        if isinstance(err, dict) and err.get("message"):
+            return str(err["message"])[:500]
+        return json.dumps(d)[:500]
+    except Exception:                                              # noqa: BLE001
+        try:
+            return body.decode("utf-8", "replace")[:500]
+        except Exception:                                          # noqa: BLE001
+            return str(body)[:500]
+
+
+def _record_provider_failure(provider, path, status, detail):
+    """One api_errors row for an AI provider failure. `error_type` embeds the provider and the
+    upstream status (gemini_http_429, anthropic_http_529, gemini_error for a network/timeout),
+    so the dashboard groups them apart from ordinary 5xx and shows exactly what failed and why.
+    Records a provider 429 too — passed straight through to the client, it is under 500 and the
+    middleware never sees it, yet a rate-limit wall is the single most common real AI failure."""
+    kind = f"{provider}_http_{status}" if status else f"{provider}_error"
+    msg = f"{provider} API {('returned ' + str(status)) if status else 'call failed'}"
+    if detail:
+        msg += f": {detail}"
+    record_api_error("POST", path, status or 502, kind, message=msg)
 
 
 def _clamped_max_tokens(requested):
@@ -81,9 +126,13 @@ def _proxy_to_gemini(raw_body, ip, userid):
             model=MESSAGES_MODEL,
         )
     except urllib.error.HTTPError as e:
-        return Response(content=e.read(), status_code=e.code, media_type="application/json")
+        body = e.read()
+        _record_provider_failure("gemini", "/api/messages", e.code, _provider_detail(body))
+        return _mark_logged(Response(content=body, status_code=e.code,
+                                     media_type="application/json"))
     except Exception as e:
-        return json_error(502, str(e))
+        _record_provider_failure("gemini", "/api/messages", 0, str(e))
+        return _mark_logged(json_error(502, str(e)))
     resp = json_response(200, {"content": [{"type": "text", "text": text}]})
     log_conversation_async(userid, ip, "live", system, user_content, text)
     record_interactive_cost_async("interactive_gemini", usage, MESSAGES_MODEL,
@@ -124,9 +173,14 @@ def _proxy_to_anthropic(raw_body, ip, userid):
             resp = Response(content=data, status_code=upstream.status,
                             media_type="application/json")
     except urllib.error.HTTPError as e:
-        return Response(content=e.read(), status_code=e.code, media_type="application/json")
+        body = e.read()
+        _record_provider_failure("anthropic", "/api/messages-claude", e.code,
+                                 _provider_detail(body))
+        return _mark_logged(Response(content=body, status_code=e.code,
+                                     media_type="application/json"))
     except Exception as e:
-        return json_error(502, str(e))
+        _record_provider_failure("anthropic", "/api/messages-claude", 0, str(e))
+        return _mark_logged(json_error(502, str(e)))
     # Best-effort logging + cost, after the response body is captured.
     try:
         resp_json = json.loads(data)

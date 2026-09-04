@@ -485,7 +485,6 @@ tr.disabled-seed { opacity: .48; }
     <button class="vtab" data-view="guide">Catalog Control Room</button>
     <button class="vtab active" data-view="metrics">Dashboard<span class="count" id="metricsTabCount"></span></button>
     <button class="vtab" data-view="run">Run</button>
-    <button class="vtab" data-view="links">Links<span class="count" id="linkQueueTabCount"></span></button>
     <button class="vtab" data-view="money">Money<span class="count" id="userTabCount"></span></button>
     <button class="vtab" data-view="comms">Comms<span class="count" id="emailTabCount"></span></button>
     <button class="vtab" data-view="health">Health<span class="count" id="healthTabCount"></span></button>
@@ -531,9 +530,11 @@ tr.disabled-seed { opacity: .48; }
     <div class="subtabs" id="runSubtabs">
       <button class="stab active" data-sub="inspect">Inspect</button>
       <button class="stab" data-sub="searchangles">Search Angles</button>
-      <button class="stab" data-sub="newopp">New Opportunities<span class="count" id="reviewTabCount"></span></button>
+      <button class="stab" data-sub="scout">New Opportunity Scout<span class="count" id="reviewTabCount"></span></button>
+      <button class="stab" data-sub="hubs">Hub Miner</button>
+      <button class="stab" data-sub="refresh">Refresh Opportunities</button>
+      <button class="stab" data-sub="links">Links<span class="count" id="linkQueueTabCount"></span></button>
       <button class="stab" data-sub="dupes">Duplicates<span class="count" id="dupeTabCount"></span></button>
-      <button class="stab" data-sub="upkeep">Keep Details Current</button>
       <button class="stab" data-sub="lists">Mailing Lists<span class="count" id="signupTabCount"></span></button>
       <button class="stab" data-sub="utils">Utilities</button>
       <button class="stab" data-sub="log">Run Log &amp; Timing</button>
@@ -559,30 +560,25 @@ tr.disabled-seed { opacity: .48; }
       <div id="slot-anglequeries"></div>
     </div>
 
-    <div class="subview" id="rsub-newopp">
-      <div class="flowhead"><h2>New Opportunities</h2><span class="step">discover &rarr; review &rarr; admit</span>
-        <p>Find programs missing from the catalog, decide what the scout may search and trust,
-        and admit the good finds.</p></div>
-      <div class="tabs" id="newoppTabs">
-        <button class="tab active" data-newopp="scout">New Opportunity Scout</button>
-        <button class="tab" data-newopp="hubs">Mine Hub Pages</button>
-      </div>
+    <div class="subview" id="rsub-scout">
+      <div class="flowhead"><h2>New Opportunity Scout</h2><span class="step">discover &rarr; review &rarr; admit</span>
+        <p>Find programs missing from the catalog, then review and admit the good finds. The
+        queue tools that process what lands here (classify, dedupe, triage, embeddings) live on
+        the <strong>Utilities</strong> tab.</p></div>
+      <div class="section-label">Run the scout</div>
+      <div class="agents" id="wf-newopp"></div>
+      <div class="section-label">Review &amp; admit</div>
+      <div id="slot-newopp-review"></div>
+    </div>
 
-      <div id="newopp-scout">
-        <div class="section-label">New opportunity scout</div>
-        <div class="agents" id="wf-newopp"></div>
-        <div class="section-label">Queue tools <span style="font-weight:400;opacity:.7">classify &rarr; dedupe &rarr; triage &rarr; refresh embeddings</span></div>
-        <div class="agents" id="tools-newopp-queue"></div>
-        <div class="section-label">Review &amp; admit</div>
-        <div id="slot-newopp-review"></div>
-      </div>
-
-      <div id="newopp-hubs" class="hidden">
-        <div class="section-label">Mine hub pages</div>
-        <div class="agents" id="tools-newopp-minehub"></div>
-        <div class="section-label">Discovery leads</div>
-        <div id="slot-newopp-angles"></div>
-      </div>
+    <div class="subview" id="rsub-hubs">
+      <div class="flowhead"><h2>Hub Miner</h2><span class="step">mine hub pages &rarr; leads</span>
+        <p>Mine institutional hub and round-up pages for programs, and work the discovery leads
+        they produce.</p></div>
+      <div class="section-label">Mine hub pages</div>
+      <div class="agents" id="tools-newopp-minehub"></div>
+      <div class="section-label">Discovery leads</div>
+      <div id="slot-newopp-angles"></div>
     </div>
 
     <div class="subview" id="rsub-dupes">
@@ -609,15 +605,11 @@ tr.disabled-seed { opacity: .48; }
       </div>
     </div>
 
-    <div class="subview" id="rsub-upkeep">
-      <div class="flowhead"><h2>Keep Details Current</h2><span class="step">facts &middot; deadlines &middot; steps &middot; reputation</span>
-        <p>Per-program enrichment: the core catalog facts, when the deadlines are, what the
-        application steps are, and whether the org is legitimate.</p></div>
-      <div class="section-label">Agents</div>
-      <div class="agents" id="wf-upkeep"></div>
-      <div class="section-label">Tools</div>
-      <div class="agents" id="tools-upkeep"></div>
-
+    <div class="subview" id="rsub-refresh">
+      <div class="flowhead"><h2>Refresh Opportunities</h2><span class="step">re-check core catalog facts</span>
+        <p>Re-check the core facts of rows already in the catalog &mdash; name, org, eligibility,
+        pricing &mdash; and drain the queue of newly-activated rows still carrying scraper
+        metadata.</p></div>
       <div class="section-label">Metadata refresh <span style="font-weight:400;opacity:.7">name &middot; org &middot; eligibility &middot; pricing</span></div>
       <div class="hint" style="margin:0 0 14px;line-height:1.55;max-width:78ch">
         New rows from the New Opportunity Scout already arrive pre-filled with this same
@@ -641,15 +633,6 @@ tr.disabled-seed { opacity: .48; }
           <div id="mrqBody" class="hint" style="padding:10px 14px">Loading&hellip;</div>
         </div>
       </div>
-
-      <div class="section-label">Trusted sources <span class="count hidden" id="sourcesTabCount"></span></div>
-      <div class="hint" style="margin:0 0 14px;line-height:1.55;max-width:78ch">
-        Defaults to pending until marked Trust or Block. Read-only for two agents above:
-        <strong>Deadline Checker</strong>&rsquo;s last-resort off-site search (dates from a
-        Trusted site are always flagged estimated), and <strong>Task Generator</strong>&rsquo;s
-        eligibility-claim check (kept only from the program&rsquo;s own Official page).
-      </div>
-      <div id="slot-newopp-allowlist"></div>
     </div>
 
     <div class="subview" id="rsub-lists">
@@ -663,16 +646,41 @@ tr.disabled-seed { opacity: .48; }
     </div>
 
     <div class="subview" id="rsub-utils">
-      <div class="flowhead"><h2>Utilities</h2><span class="step">catalog hygiene &amp; maintenance</span>
-        <p>Cross-cutting maintenance that isn&rsquo;t part of one pipeline &mdash; backfills and
-        backups. (Link checking and its review queue moved to the <strong>Links</strong> tab.)</p></div>
-      <!-- Kept as the home for any agent not mapped to a workflow (see renderCards' extras
-           fallback), so a newly added agent can never silently vanish. Empty in normal use. -->
-      <div class="agents" id="wf-utils"></div>
+      <div class="flowhead"><h2>Utilities</h2><span class="step">queue tools &middot; keep details current &middot; hygiene</span>
+        <p>Cross-cutting work that isn&rsquo;t one pipeline: the tools that process the review
+        queue, the per-program upkeep agents (deadlines, application steps, reputation), trusted
+        sources, backfills and backups.</p></div>
+
+      <div class="section-label">Queue tools <span style="font-weight:400;opacity:.7">classify &rarr; dedupe &rarr; triage &rarr; refresh embeddings</span></div>
+      <div class="agents" id="tools-newopp-queue"></div>
+
+      <div class="section-label">Keep details current <span style="font-weight:400;opacity:.7">deadlines &middot; steps &middot; reputation</span></div>
+      <div class="agents" id="wf-upkeep"></div>
+      <div class="agents" id="tools-upkeep"></div>
+
+      <div class="section-label">Trusted sources <span class="count hidden" id="sourcesTabCount"></span></div>
+      <div class="hint" style="margin:0 0 14px;line-height:1.55;max-width:78ch">
+        Defaults to pending until marked Trust or Block. Read-only for two upkeep agents:
+        <strong>Deadline Checker</strong>&rsquo;s last-resort off-site search (dates from a
+        Trusted site are always flagged estimated), and <strong>Task Generator</strong>&rsquo;s
+        eligibility-claim check (kept only from the program&rsquo;s own Official page).
+      </div>
+      <div id="slot-newopp-allowlist"></div>
+
       <div class="section-label">Backfills</div>
       <div class="agents" id="tools-utils-backfill"></div>
       <div class="section-label">Files &amp; backups</div>
       <div class="agents" id="tools-utils-files"></div>
+      <!-- Kept as the home for any agent not mapped to a workflow (see renderCards' extras
+           fallback), so a newly added agent can never silently vanish. Empty in normal use. -->
+      <div class="agents" id="wf-utils"></div>
+    </div>
+
+    <!-- Links: filled at load time by relocateConsole, which moves the whole body of the old
+         top-level #view-links (lead, flowhead, the Link Checker + Re-find cards, the review
+         queue and the repaired list) into this slot. -->
+    <div class="subview" id="rsub-links">
+      <div id="slot-links"></div>
     </div>
 
     <div class="subview" id="rsub-log">
@@ -3323,7 +3331,6 @@ const VIEW_SUBTITLE = {
   guide:   'A field guide to the discovery and maintenance pipeline',
   metrics: 'Who signs up, how far they get, and whether they convert',
   run:     'Run the agents and tools that build and maintain the opportunity catalog',
-  links:   'Check catalog URLs, then clear or deactivate what the checker queued for review',
   money:   'What everything costs — the agents you run and the app usage students trigger',
   comms:   'The three lifecycle emails — what they say, who is due one, and what went out',
   health:  'One read-only pass over the database — queues, coverage, freshness, and alerts',
@@ -3336,7 +3343,6 @@ function showView(view) {
   // per-workflow loads (aggregators, signups) fire from the Run sub-tab handlers instead.
   if (view === 'comms') loadEmails();
   if (view === 'health') loadHealth();
-  if (view === 'links') loadLinkQueue();
   document.querySelectorAll('#viewTabs .vtab').forEach(
     t => t.classList.toggle('active', t.dataset.view === view));
   document.querySelectorAll('.view').forEach(
@@ -3398,6 +3404,11 @@ function relocateConsole() {
   // Emails: move the whole view body (lead, setup hint, KPIs, all three cards).
   const em = $('view-emails'), comms = $('slot-comms');
   if (em && comms) { while (em.firstChild) comms.appendChild(em.firstChild); }
+  // Links: the checker + queue moved from a top-level view into a Run subtab. Move the whole
+  // old #view-links body (lead, flowhead, wf-links agent grid, queue card, repaired card) into
+  // the rsub-links slot, same wholesale move the emails view uses.
+  const lv = $('view-links'), lslot = $('slot-links');
+  if (lv && lslot) { while (lv.firstChild) lslot.appendChild(lv.firstChild); }
 }
 
 function initSubtabs() {
@@ -3408,8 +3419,10 @@ function initSubtabs() {
         const sub = btn.dataset.sub;
         document.querySelectorAll('#view-run .subview').forEach(
           v => v.classList.toggle('active', v.id === 'rsub-' + sub));
-        if (sub === 'newopp') loadLeads();
-        if (sub === 'upkeep') { loadAggregators(); loadMetadataRefreshQueue(); }
+        if (sub === 'hubs') loadLeads();
+        if (sub === 'refresh') loadMetadataRefreshQueue();
+        if (sub === 'utils') loadAggregators();
+        if (sub === 'links') loadLinkQueue();
         if (sub === 'dupes') renderDupes();
         if (sub === 'lists') loadSignups();
       };
@@ -5683,13 +5696,6 @@ $('aggAddBlocked').onclick = () => addAggregator('blocked');
 document.querySelectorAll('#seedTabs .tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('#seedTabs .tab').forEach(x => x.classList.remove('active'));
   t.classList.add('active'); S.seedMode = t.dataset.mode; renderSeeds();
-});
-document.querySelectorAll('#newoppTabs .tab').forEach(t => t.onclick = () => {
-  document.querySelectorAll('#newoppTabs .tab').forEach(x => x.classList.remove('active'));
-  t.classList.add('active');
-  const name = t.dataset.newopp;
-  $('newopp-scout').classList.toggle('hidden', name !== 'scout');
-  $('newopp-hubs').classList.toggle('hidden', name !== 'hubs');
 });
 document.querySelectorAll('th.sortable').forEach(th => {
   th.style.cursor = 'pointer';

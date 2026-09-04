@@ -15,7 +15,7 @@ The five specialist reports it summarises, with file:line for every finding, are
 
 | | |
 |---|---|
-| Critical | 2 — open, unmetered AI proxy (`app/routes/ai.py`); `numpy` missing from `requirements.txt` (prod survives on Render's build cache) |
+| Critical | 2 — open, unmetered AI proxy (`app/routes/ai.py`) — **live-verified 2026-09-03, see below**; `numpy` missing from `requirements.txt` (prod survives on Render's build cache) |
 | High | 9 — Google link without `email_verified`; prefix-match open redirect leaks the login token; login limiter is one global bucket behind Render's proxy; no per-user spend cap; catch-all static route serves the repo; AI calls stall the shared 40-thread pool; `opportunity-matching` would silently land unapproved M8/M9 changes; insert ladder strips review data on any error; snapshot commit uses a weaker dedupe key and re-stamps dates |
 | Capacity today | ~10–15 mixed rps on Render free (0.1 CPU, sleeps). Laptop measurement: catalog 70 rps ceiling, authed data 27–95 rps, ~150 ms Supabase gate read per signed-in request |
 | Tests | backend suite green, `tsc --noEmit` clean, zero frontend tests |
@@ -58,6 +58,57 @@ Supabase: HTTP Error 500*"), investigated live. Full detail in
   primary feature, and the cache amortizes the load across all searches, so cost does not scale
   with popularity). **Paused** because it touches `ops/core.py` + the tested cache contract that a
   concurrent workstream is editing; it also makes Phase-2 Fix 6/7 (gzip+ETag catalog) simplest.
+
+## Live verification (2026-09-03): AI proxy exposure red-teamed
+
+Critical #1 ("open, unmetered AI proxy") was **reproduced live** against the running dev service
+with the real Anthropic key configured — the D-series (infra) of a red-team of the
+profile-gatherer chat. Worksheet + full A–F suite:
+https://claude.ai/code/artifact/5ef2ad4a-6c14-4e7e-948e-f2f760601fb3
+Spend for this verification: **~$0.024** (12,125 input + 433 output tokens + 1 web search; keys
+were live, so these were real calls). Findings sit in
+[app/routes/ai.py](app/routes/ai.py) and apply to **both** `/api/messages-claude` and
+`/api/messages` — one shared handler shape.
+
+| Probe | Sent | Observed | Meaning |
+|---|---|---|---|
+| D5 no auth | POST, no bearer | `200` (not `401`), real billed call | `subscription_block_reason(None)` fails open — anonymous callers reach the live model |
+| D1 flood | 12 rapid POSTs | `200×12`, **0× 429** | no rate limit on the route |
+| D4 oversized | 41,040-byte body | `200` (not `413`), **9,703 input tokens billed** | no request-size guard; input billed in full |
+| D3 search flip | client `useWebSearch:true` | **`web_search_requests=1`**, +2,240 billed input tok | client controls tool use; the profile chat never sets it |
+| D2 clamp | `maxTokens` `999999` / `500` | `→8000` / `→1000` | clamp works, one-directional; only note is the 8000 ceiling is always reachable |
+
+**The risk is the composition, not any single probe:** the endpoint is unauthenticated (D5) +
+unthrottled (D1) + unbounded-input (D4) + web-search-capable on the client's say-so (D3), all
+against the live key with spend attributed to nobody. A loop of oversized, search-enabled
+anonymous POSTs is a direct, unmetered drain on the Anthropic/Gemini keys. D2 is the one clean
+result.
+
+### Remediation (three fixes)
+
+All three are **proxy-layer** changes in `app/routes/ai.py` — no prompt text moves, so **not
+M8**; they gate the paid path, so they land under the **M9** approval Phase 0 already carries.
+
+1. **Gate the live path (D5).** When a real key is configured, require an authenticated,
+   subscribed caller → `401` anon / `402` lapsed. Keep the **mock** path (no key) reachable
+   signed-out so offline dev still works (CLAUDE.md's standing constraint). Already named in
+   Phase 0 ("proxy requires subscribed caller on live path"); this confirms it is load-bearing,
+   not theoretical.
+2. **Throttle + size-cap both routes (D1, D4).** A per-IP *and* per-user limiter → `429` +
+   `Retry-After`, and a max body / `userContent` length → `413` **before** the upstream call.
+   The per-user budget/circuit-breaker is already in Phase 0; the **body cap currently sits only
+   in Phase 2 — pull it forward to Phase 0**, since D4 is a direct billing lever with no auth in
+   front of it today.
+3. **Pin tool use server-side (D3) — new item, add to Phase 0.** Stop honoring the client
+   `useWebSearch` on the Claude route: hard-pin it `false` for the profile chat (no interactive
+   Claude feature uses search). On the Gemini route `useWebSearch` *is* used by real features, so
+   there it must be **feature-gated server-side** (derived from the request's feature id, not the
+   client flag), never blanket-off.
+
+D2 needs no fix; optionally feature-gate the reachable 8000 `maxTokens` ceiling later (low
+priority). Suggested additions to the Phase 0 exit test: a signed-out live POST → `401`; a
+`useWebSearch:true` body on `/api/messages-claude` performs **0** web searches; an over-limit
+body → `413`.
 
 ## Phase plan (one engineer, AI-assisted; ~31 engineer-days over ~8 weeks)
 

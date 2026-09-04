@@ -1625,7 +1625,14 @@ def resolve_link_queue(ids, action, reviewed_by="admin-console"):
         return {"ok": res.get("ok", False) and res.get("errors", 0) == 0,
                 "action": "activate", "review_status": None,
                 "updated": res.get("activated", 0), "errors": res.get("errors", 0),
-                "details": res.get("error_details", []), "schema_ready": schema_ready}
+                "details": res.get("error_details", []), "schema_ready": schema_ready,
+                # Surfaced so the console can report what activation actually did downstream:
+                # how many rows got a dedupe-index embedding and a recall match_vector, and the
+                # tiny embedding cost that implied (all 0 in a mock/no-key env). Passed straight
+                # through from activate_opportunities.
+                "indexed": res.get("indexed", 0), "embedded": res.get("embedded", 0),
+                "embed_cost_usd": res.get("embed_cost_usd", 0.0),
+                "queue_ready": res.get("queue_ready", True)}
 
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     if action == "clear":

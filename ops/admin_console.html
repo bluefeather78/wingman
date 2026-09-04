@@ -2730,6 +2730,18 @@ async function resolveRepaired(ids, action) {
     });
     const verb = action === 'activate' ? 'Activated' : 'Kept off';
     toast(`${verb} ${r.updated} program${r.updated === 1 ? '' : 's'}.`);
+    if (action === 'activate' && r.updated) {
+      // Report what activation did downstream. Embeddings are 0 in a mock/no-key env, so say
+      // so rather than implying they silently ran; enrichment is queued, not done here.
+      const bits = [];
+      bits.push(`embedded ${r.embedded || 0}/${r.updated} for matching, indexed ${r.indexed || 0} for dedupe`);
+      if (r.embed_cost_usd) bits.push(`embed cost ${money(r.embed_cost_usd)}`);
+      if (!r.embedded && !r.indexed) bits.push('(no embeddings — mock/no-key env or already indexed)');
+      bits.push(r.queue_ready === false
+        ? 'not queued for a metadata refresh (activation_refresh_schema.sql not run)'
+        : 'queued for a metadata refresh — run the Core Details refresher to enrich them');
+      notice(`Activated ${r.updated}: ${bits.join('; ')}.`);
+    }
     if (r.errors) notice(`${r.errors} failed: ${(r.details || []).join(' | ')}`);
     ids.forEach(id => S.selectedRepaired.delete(id));
     await loadLinkQueue();

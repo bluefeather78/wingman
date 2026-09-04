@@ -212,17 +212,21 @@ Two rules govern the grouping:
 
 MUTUALLY EXCLUSIVE - every item belongs to exactly ONE theme. When an item could sit in two, put it where the opportunities that would help with it live: a chatbot built to learn AI belongs with studying AI, a chatbot being sold to users belongs with building products; a physics olympiad score belongs with competitions, not with physics as a subject. If two themes would surface the same programs, they are one theme - merge them.
 
-COLLECTIVELY EXHAUSTIVE - everything in the profile lands somewhere. Nothing is dropped for being small, old or unimpressive. A single passing mention joins the nearest theme; it does not get a theme of its own and it is not deleted.
+COLLECTIVELY EXHAUSTIVE - everything in the profile lands somewhere, and nothing is dropped for being small, old or unimpressive. A single passing mention joins the nearest theme ONLY when it genuinely fits that direction; if nothing related exists, it becomes its own theme rather than being fused onto an unrelated one.
+
+ONE DIRECTION PER THEME - a theme covers a single searchable direction. Never join two unrelated areas with "and" or a comma just to place a stray item (WRONG: "Community service and baking" - volunteering and baking are searched for in completely different places). A conjunction is allowed only when both halves serve the SAME catalog search (OK: "Cooking and baking from scratch", where both are culinary).
 
 Get the altitude right. A theme names a DIRECTION the student is pursuing, pitched at the level a program is described:
 - TOO SPECIFIC - one project, club, role, event, organization or achievement. Never emit these: "Founded Linguistics Club", "Organized school Trivia Night", "Volunteering with Kids Coming Together", "Improving USAPhO score", "Making fresh pasta from scratch".
 - RIGHT - "Organizing student clubs and enrichment events", "Volunteering with organizations that serve children", "Competing in STEM olympiads and contests", "Cooking and baking from scratch".
 - TOO BROAD - a whole field of human activity: "STEM", "Science", "The arts", "Community service", "Leadership". If a theme would match most of a catalog of extracurriculars, split it.
-Test each theme: it should either cover TWO OR MORE things in the profile, or be a standing interest broad enough that several different programs could serve it. If it covers exactly one line and nothing else would fit it, you are too specific - widen it until a sibling fits.
+Test each theme: it should either cover TWO OR MORE things in the profile, or be a standing interest broad enough that several different programs could serve it. If a theme covers only one line BECAUSE it is a single project, club, role, event or achievement, widen it to the area it belongs to. But if that one line is itself a distinct, searchable interest with no related sibling in the profile (e.g. baking, when nothing else culinary appears), let it stand as its own theme - do NOT fuse it onto an unrelated area just to avoid a one-line theme.
 
 Past and present merge. Something done last year and something happening now belong to the same theme when they point the same way. Write every theme in the present, as an ongoing direction, never as a past accomplishment.
 
-A rich profile usually reduces to 6-12 themes and a thin one to 3-5. Never return one theme per profile line, and never invent a theme for something the profile does not say. Order them most important first: the themes carrying the most of the profile, and the ones the student says they want to go further in.
+Use as many themes as there are genuinely distinct, searchable directions - a rich profile often lands around 6-12 and a thin one around 3-5, but that is a rough guide, not a target to hit: never merge distinct areas, and never split one area, just to reach a number. Never return one theme per profile line, and never invent a theme for something the profile does not say. Order them most important first: the themes carrying the most of the profile, and the ones the student says they want to go further in.
+
+Before returning, re-check every theme that joins two things with "and" or a comma: if a single catalog search would not serve both halves, split them into separate themes.
 
 Each entry is an object:
 {

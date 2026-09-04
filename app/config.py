@@ -229,6 +229,12 @@ USER_METRICS_SETUP_SQL = "user_metrics_daily_schema.sql"
 # ships early (unlogged clicks are unrecoverable); the consumer comes later. Until this runs,
 # record_user_events() latches off after one warning and the UI is unaffected (fail-open).
 USER_EVENTS_SETUP_SQL = "user_events_schema.sql"
+# The append-only log of 5xx responses / unhandled exceptions the FastAPI service produces,
+# read by the admin console's API Errors tab. Capture ships with the recorder (an unlogged
+# failure is unrecoverable); until this runs, record_api_error() latches off after one warning
+# and no request is affected (fail-open). Lives in Supabase, not memory, because the console
+# runs on a different machine from the shipped API — see api_errors_schema.sql.
+API_ERRORS_SETUP_SQL = "api_errors_schema.sql"
 
 
 # ---------- Lifecycle email (Resend) ----------

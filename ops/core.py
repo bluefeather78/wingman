@@ -4437,6 +4437,101 @@ def list_recent_merges(limit=50):
     return {"ok": True, "merges": out}
 
 
+# ---------- API errors: the live server-error log ----------
+
+_API_ERRORS_SELECT = "id,ts,method,path,status,error_type,message,traceback"
+
+
+def get_api_errors(days=7, limit=500, include_rows=True):
+    """The admin console's API Errors tab: recent 5xx / unhandled exceptions the FastAPI service
+    recorded, newest first, plus a rollup for the tab header and the Health summary card.
+
+    Reads the shared `api_errors` table the shipped web service writes (app.core.record_api_error)
+    — so this shows what PRODUCTION is failing on, not just this local process. FREE: one windowed
+    read, no model call, no writes. Localhost-gated at the router like every /api/agents/* route
+    (tracebacks can carry request context).
+
+    `days` bounds the window; `limit` caps the rows scanned (newest first). `capped` is True when
+    the window held more than `limit` errors, in which case the rollup is computed over the newest
+    `limit` and undercounts the tail — surfaced so the tab can say so rather than quietly lie.
+    Set `include_rows=False` (the Health card) to get the rollup without shipping every row.
+    """
+    generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    limit = max(1, min(int(limit or 500), 5000))
+    days = max(1, min(int(days or 7), 365))
+    since = (datetime.datetime.now(datetime.timezone.utc)
+             - datetime.timedelta(days=days)).isoformat()
+    empty = {"ok": True, "available": True, "error": None, "days": days,
+             "generated_at": generated_at, "capped": False,
+             "summary": _summarize_api_errors([]), "errors": []}
+    try:
+        rows = _supabase_request_strict("api_errors", params={
+            "select": _API_ERRORS_SELECT,
+            "ts": f"gte.{since}",
+            "order": "ts.desc",
+            "limit": str(limit)}) or []
+    except Exception as e:                                          # noqa: BLE001
+        if _missing_table_error(e) or _is_missing_column_error(e):
+            # Not an outage — the migration has not been run. The tab shows a setup step.
+            return {"ok": True, "available": False, "days": days, "generated_at": generated_at,
+                    "capped": False, "summary": _summarize_api_errors([]), "errors": [],
+                    "error": f"The api_errors table does not exist yet. Run "
+                             f"{API_ERRORS_SETUP_SQL} in the Supabase SQL editor."}
+        return {"ok": False, "available": True, "days": days, "generated_at": generated_at,
+                "capped": False, "summary": _summarize_api_errors([]), "errors": [],
+                "error": f"Could not read api_errors: {str(e)[:200]}"}
+    if not rows:
+        return empty
+    return {"ok": True, "available": True, "error": None, "days": days,
+            "generated_at": generated_at, "capped": len(rows) >= limit,
+            "summary": _summarize_api_errors(rows),
+            "errors": rows if include_rows else []}
+
+
+def _summarize_api_errors(rows):
+    """Roll a list of api_errors rows into the counts the tab header and Health card show.
+
+    Rates are plain counts, not averages: this is a failure log, and "how many, on what, when"
+    is the whole question. `last_24h` is computed here rather than with a second query so the
+    Health card and the tab never disagree about the recent number.
+    """
+    rows = rows or []
+    cutoff = (datetime.datetime.now(datetime.timezone.utc)
+              - datetime.timedelta(hours=24)).isoformat()
+    by_status, by_type, by_path, path_last = {}, {}, {}, {}
+    last_24h, most_recent = 0, None
+    for r in rows:
+        st = r.get("status")
+        by_status[st] = by_status.get(st, 0) + 1
+        et = r.get("error_type") or "unknown"
+        by_type[et] = by_type.get(et, 0) + 1
+        p = r.get("path") or "(unknown)"
+        by_path[p] = by_path.get(p, 0) + 1
+        ts = r.get("ts")
+        if ts:
+            if most_recent is None or ts > most_recent:
+                most_recent = ts
+            if ts >= cutoff:
+                last_24h += 1
+            if p not in path_last or ts > path_last[p]:
+                path_last[p] = ts
+
+    def _top(d, n, key="value"):
+        return [{key: k, "count": v} for k, v in
+                sorted(d.items(), key=lambda kv: kv[1], reverse=True)[:n]]
+
+    top_paths = sorted(by_path.items(), key=lambda kv: kv[1], reverse=True)[:10]
+    return {
+        "total": len(rows),
+        "last_24h": last_24h,
+        "most_recent": most_recent,
+        "by_status": [{"status": k, "count": v} for k, v in
+                      sorted(by_status.items(), key=lambda kv: kv[1], reverse=True)],
+        "by_type": _top(by_type, 8, key="type"),
+        "by_path": [{"path": p, "count": c, "last_ts": path_last.get(p)} for p, c in top_paths],
+    }
+
+
 def seed_yield_state(rows):
     """Why the yield columns are empty, when they are.
 

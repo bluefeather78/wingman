@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import GEMINI_API_KEY, ANTHROPIC_API_KEY
+from app.core import record_api_error
 from app.routes import (
     ai, opportunities, account, user_data, google_oauth, mailing_list,
     subscription, resume, auth, email, events, matching,
@@ -84,6 +85,40 @@ async def no_cache(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    return response
+
+
+@app.middleware("http")
+async def capture_api_errors(request: Request, call_next):
+    """Record server-side failures to api_errors so the admin console's API Errors tab can show
+    what the live service is breaking on — see app.core.record_api_error / api_errors_schema.sql.
+
+    Two things are captured, and nothing else (a 4xx is a client mistake, not a service fault):
+      * an UNHANDLED exception — recorded with its type and full traceback, which is what makes
+        a crash actionable, then turned into the app's {"error": ...} 5xx shape instead of the
+        framework's bare "Internal Server Error" text;
+      * any 5xx RESPONSE a route returned deliberately (json_error(502) when Supabase is down,
+        a raised HTTPException(503) the exception handler below already converted to a response)
+        — recorded with method/path/status. Its body is not read back: reading a streamed
+        response body in middleware is fragile, and for these the endpoint + status is the
+        signal. Handled 5xx keep their normal flow (and their CORS headers); only the recorder
+        is added.
+
+    Recording is fail-open: record_api_error never raises, so a wedged log can never be the
+    reason a request fails. This middleware is registered last, so it is OUTERMOST and sees
+    exceptions from every inner layer."""
+    method = request.method
+    path = request.url.path  # query string dropped on purpose: it can carry PII
+    try:
+        response = await call_next(request)
+    except Exception as exc:  # noqa: BLE001 - truly unhandled: log it, don't let it escape silently
+        import traceback as _tb
+        record_api_error(method, path, 500, type(exc).__name__, str(exc),
+                         traceback_text=_tb.format_exc())
+        return JSONResponse(status_code=500, content={"error": "Internal server error."},
+                            headers={"Cache-Control": "no-store"})
+    if response.status_code >= 500:
+        record_api_error(method, path, response.status_code, "server_error")
     return response
 
 

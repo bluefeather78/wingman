@@ -273,6 +273,22 @@ def handle_db_health():
     return json_response(200, core.get_db_health(), default=str)
 
 
+@router.get("/api/agents/api-errors")
+def handle_api_errors(request: Request):
+    """The API Errors tab: recent 5xx / unhandled exceptions the shipped service recorded, newest
+    first, plus a rollup for the tab header and the Health summary card. Read-only, FREE — one
+    windowed read of the shared api_errors table, no model call, no writes. Localhost-gated like
+    the rest of /api/agents/* (tracebacks can carry request context). `summary=1` returns the
+    rollup without the row list (the Health card uses this)."""
+    days = _qs_int(request, "days", 7) or 7
+    limit = _qs_int(request, "limit", 500) or 500
+    include_rows = (request.query_params.get("summary") or "").strip() not in ("1", "true")
+    result = core.get_api_errors(days=max(1, min(days, 365)),
+                                 limit=max(1, min(limit, 5000)),
+                                 include_rows=include_rows)
+    return json_response(200 if result.get("ok") else 502, result, default=str)
+
+
 @router.post("/api/agents/duplicate-scan")
 async def handle_duplicate_scan(request: Request):
     """Phase 3: run the unified ad-hoc duplicate detector over ACTIVE rows and stamp one

@@ -470,7 +470,7 @@ tr.disabled-seed { opacity: .48; }
       <div class="sub" id="viewSubtitle">Background agents that maintain the Wingman opportunity catalog</div>
     </div>
     <div class="spacer"></div>
-    <a class="btn" style="text-decoration:none" href="https://claude.ai/code/artifact/233e609c-93c6-4cae-aeb7-1f77db1396c1" target="_blank" rel="noopener" title="Golden-set matching quality review: 10 profiles, 100 ranked results">Match Scorecard ↗</a>
+    <a class="btn" style="text-decoration:none" href="/evals" title="Eval hub: every eval, each run, and how each metric moved run over run">Evals</a>
     <label class="sub" for="timeRange">Range</label>
     <select id="timeRange">
       <option value="7">Last 7 days</option>
@@ -488,6 +488,7 @@ tr.disabled-seed { opacity: .48; }
     <button class="vtab" data-view="money">Money<span class="count" id="userTabCount"></span></button>
     <button class="vtab" data-view="comms">Comms<span class="count" id="emailTabCount"></span></button>
     <button class="vtab" data-view="health">Health<span class="count" id="healthTabCount"></span></button>
+    <button class="vtab" data-view="apierrors">API Errors<span class="count" id="apiErrorsTabCount"></span></button>
   </div>
 
   <div id="globalNotice" class="notice err hidden" style="margin-bottom:24px"></div>
@@ -809,7 +810,37 @@ tr.disabled-seed { opacity: .48; }
     </div>
     <div style="margin:8px 0 20px"><button class="btn" id="healthRefresh">Refresh</button>
       <span id="healthStamp" style="margin-left:12px;color:var(--text-3);font-size:12px"></span></div>
+    <!-- API-error summary card, filled by loadHealth() from GET /api/agents/api-errors?summary=1.
+         The full breakdown + tracebacks live on the API Errors tab; this is the at-a-glance count. -->
+    <div id="healthApiErrors"></div>
     <div id="healthBody"><div class="empty">Loading&hellip;</div></div>
+  </div>
+
+  <!-- ==========================================================================
+       API Errors — a live view of the 5xx responses and unhandled exceptions the
+       shipped web service recorded, read from the shared api_errors table by
+       loadApiErrors() from GET /api/agents/api-errors. FREE: read-only, no model
+       call, no writes. Captures PRODUCTION failures, not just this local process.
+  =========================================================================== -->
+  <div class="view hidden" id="view-apierrors">
+    <div class="view-lead">
+      Every 5xx the API returned and every unhandled exception it hit, newest first &mdash; read
+      live from the shared <span class="mono">api_errors</span> log the shipped service writes, so
+      this is what <strong>production</strong> is failing on, not just this machine. A 4xx is a
+      client mistake and is deliberately not logged here. Nothing on this tab spends money or
+      changes anything.
+    </div>
+    <div style="margin:8px 0 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <button class="btn" id="apiErrorsRefresh">Refresh</button>
+      <select id="apiErrorsRange">
+        <option value="1">Last 24 hours</option>
+        <option value="7" selected>Last 7 days</option>
+        <option value="30">Last 30 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
+      <span id="apiErrorsStamp" style="color:var(--text-3);font-size:12px"></span>
+    </div>
+    <div id="apiErrorsBody"><div class="empty">Loading&hellip;</div></div>
   </div>
 
   <div class="view" id="view-metrics">
@@ -3334,6 +3365,7 @@ const VIEW_SUBTITLE = {
   money:   'What everything costs — the agents you run and the app usage students trigger',
   comms:   'The three lifecycle emails — what they say, who is due one, and what went out',
   health:  'One read-only pass over the database — queues, coverage, freshness, and alerts',
+  apierrors: 'Live 5xx responses and unhandled exceptions the API service recorded',
 };
 
 function showView(view) {
@@ -3343,6 +3375,7 @@ function showView(view) {
   // per-workflow loads (aggregators, signups) fire from the Run sub-tab handlers instead.
   if (view === 'comms') loadEmails();
   if (view === 'health') loadHealth();
+  if (view === 'apierrors') loadApiErrors();
   document.querySelectorAll('#viewTabs .vtab').forEach(
     t => t.classList.toggle('active', t.dataset.view === view));
   document.querySelectorAll('.view').forEach(
@@ -5528,11 +5561,26 @@ function healthPill(sev, text) {
 async function loadHealth() {
   const body = $('healthBody');
   body.innerHTML = '<div class="empty">Running the health check&hellip;</div>';
+  // The API-error summary rides alongside the health check but is its own read, so a slow or
+  // failed api_errors read never holds up (or takes down) the catalog health snapshot.
+  loadHealthApiErrors();
   try {
     const h = await api('/api/agents/health');
     renderHealth(h);
   } catch (e) {
     body.innerHTML = `<div class="notice err">Could not run the health check: ${esc(e.message)}</div>`;
+  }
+}
+
+async function loadHealthApiErrors() {
+  const el = $('healthApiErrors');
+  if (!el) return;
+  try {
+    const d = await api('/api/agents/api-errors?summary=1&days=7');
+    el.innerHTML = renderApiErrorSummaryCard(d, { compact: true });
+  } catch (e) {
+    el.innerHTML = `<div class="card"><div class="card-body">
+      <div class="notice err">Could not read API errors: ${esc(e.message)}</div></div></div>`;
   }
 }
 
@@ -5673,6 +5721,161 @@ function renderHealth(h) {
 }
 
 $('healthRefresh').onclick = () => loadHealth();
+
+/* ---------------------------------------------------------------------------
+   API Errors tab — a live view of the 5xx / unhandled exceptions the shipped
+   service recorded, from GET /api/agents/api-errors. FREE: read-only. The same
+   summary card is reused (compact) on the Health tab, so the two never disagree
+   about the recent count.
+--------------------------------------------------------------------------- */
+// A 500 is our own crash (red); a 502/503/504 is a dependency failing under us (amber).
+// Everything else in the 5xx range is treated as a crash. 4xx is never logged here.
+function apiErrorStatusPill(status) {
+  const s = Number(status) || 0;
+  const cls = (s === 502 || s === 503 || s === 504) ? 'warn' : 'danger';
+  return `<span class="pill ${cls}">${esc(String(status || '?'))}</span>`;
+}
+
+// The tab badge shows the last-24h count so a fresh failure is visible without opening the tab.
+function setApiErrorsBadge(summary) {
+  const badge = $('apiErrorsTabCount');
+  if (!badge) return;
+  const n = (summary && summary.last_24h) || 0;
+  badge.textContent = n ? String(n) : '';
+}
+
+function renderApiErrorSummaryCard(d, opts) {
+  opts = opts || {};
+  if (!d) return '';
+  if (d.available === false) {
+    return `<div class="card"><div class="card-head"><h2>API errors</h2></div>
+      <div class="card-body"><div class="notice info">${esc(d.error
+        || 'API error capture is not set up yet.')}</div></div></div>`;
+  }
+  if (d.ok === false) {
+    return `<div class="card"><div class="card-head"><h2>API errors</h2></div>
+      <div class="card-body"><div class="notice err">${esc(d.error
+        || 'Could not read API errors.')}</div></div></div>`;
+  }
+  const s = d.summary || {};
+  setApiErrorsBadge(s);
+  const windowLabel = d.days === 1 ? 'last 24h' : `last ${d.days}d`;
+  const head = opts.compact
+    ? `<div class="card-head"><h2>API errors</h2>
+        <span class="hint">5xx &amp; unhandled exceptions the API recorded &mdash; see the API Errors tab for the full log</span></div>`
+    : `<div class="card-head"><h2>Summary</h2>
+        <span class="hint">Grouped over the ${esc(windowLabel)}${d.capped ? ' (newest ' + num(s.total) + ' shown — older errors in this window are not counted)' : ''}</span></div>`;
+
+  const okState = !s.total;
+  let inner = `<div class="kpis" style="margin-bottom:${opts.compact ? '0' : '16px'}">
+    <div class="kpi"><div class="label">Last 24h</div>
+      <div class="value"${s.last_24h ? ' style="color:var(--danger)"' : ''}>${num(s.last_24h)}</div></div>
+    <div class="kpi"><div class="label">In ${esc(windowLabel)}</div>
+      <div class="value"${s.total ? ' style="color:var(--danger)"' : ''}>${num(s.total)}</div></div>
+    <div class="kpi"><div class="label">Most recent</div>
+      <div class="value" style="font-size:15px">${s.most_recent ? esc(ago(s.most_recent)) : '—'}</div></div>
+  </div>`;
+
+  if (okState) {
+    inner += `<div class="empty" style="margin-top:${opts.compact ? '10px' : '0'}">No API errors in the ${esc(windowLabel)}. 🎉</div>`;
+  } else if (!opts.compact) {
+    // Full breakdown only on the tab; the Health card stays a glance.
+    const byStatus = (s.by_status || []).map(x =>
+      `${apiErrorStatusPill(x.status)} <span class="mono">${num(x.count)}</span>`).join('&nbsp;&nbsp;');
+    const byType = (s.by_type || []).map(x =>
+      `<tr><td class="mono">${esc(x.type)}</td><td style="text-align:right" class="mono">${num(x.count)}</td></tr>`).join('');
+    const byPath = (s.by_path || []).map(x =>
+      `<tr><td class="mono" style="word-break:break-all">${esc(x.path)}</td>
+        <td style="text-align:right" class="mono">${num(x.count)}</td>
+        <td style="font-size:12px;color:var(--text-3)" title="${esc(x.last_ts || '')}">${x.last_ts ? esc(ago(x.last_ts)) : '—'}</td></tr>`).join('');
+    inner += `<div style="margin:6px 0 16px">${byStatus}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+        <div><div class="hint" style="margin-bottom:6px">Top endpoints</div>
+          <div class="tbl-wrap"><table><thead><tr><th>Path</th>
+            <th style="text-align:right">Errors</th><th>Latest</th></tr></thead>
+            <tbody>${byPath || '<tr><td colspan="3" class="empty">—</td></tr>'}</tbody></table></div></div>
+        <div><div class="hint" style="margin-bottom:6px">By error type</div>
+          <div class="tbl-wrap"><table><thead><tr><th>Type</th>
+            <th style="text-align:right">Count</th></tr></thead>
+            <tbody>${byType || '<tr><td colspan="2" class="empty">—</td></tr>'}</tbody></table></div></div>
+      </div>`;
+  } else {
+    // Compact (Health) card: one line naming the worst endpoint, then a link-like nudge.
+    const worst = (s.by_path || [])[0];
+    inner += `<div style="margin-top:8px;font-size:13px;color:var(--text-2)">
+      Most-affected: <span class="mono">${worst ? esc(worst.path) : '—'}</span>${worst
+        ? ` (${num(worst.count)})` : ''}. Open the <strong>API Errors</strong> tab for tracebacks.</div>`;
+  }
+  return `<div class="card">${head}<div class="card-body">${inner}</div></div>`;
+}
+
+async function loadApiErrors() {
+  const body = $('apiErrorsBody');
+  const days = ($('apiErrorsRange') && $('apiErrorsRange').value) || '7';
+  body.innerHTML = '<div class="empty">Loading&hellip;</div>';
+  try {
+    const d = await api(`/api/agents/api-errors?days=${encodeURIComponent(days)}&limit=1000`);
+    renderApiErrors(d);
+  } catch (e) {
+    body.innerHTML = `<div class="notice err">Could not read API errors: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderApiErrors(d) {
+  const body = $('apiErrorsBody');
+  if (!d) { body.innerHTML = '<div class="empty">No data.</div>'; return; }
+  $('apiErrorsStamp').textContent = d.generated_at
+    ? 'as of ' + new Date(d.generated_at).toLocaleString() : '';
+
+  if (d.available === false) {
+    setApiErrorsBadge(null);
+    body.innerHTML = `<div class="notice info">${esc(d.error
+      || 'API error capture is not set up yet.')} Once the migration runs, the shipped service
+      starts recording here automatically.</div>`;
+    return;
+  }
+  if (d.ok === false) {
+    body.innerHTML = `<div class="notice err">${esc(d.error || 'Could not read API errors.')}</div>`;
+    return;
+  }
+
+  let html = renderApiErrorSummaryCard(d, { compact: false });
+
+  const rows = d.errors || [];
+  html += `<div class="card"><div class="card-head"><h2>Recent errors</h2>
+    <span class="hint">Newest first${d.capped ? ' — capped at 1,000' : ''}. Click a row with a traceback to expand it.</span></div>
+    <div class="tbl-wrap"><table><thead><tr>
+      <th style="width:130px">When</th><th style="width:70px">Status</th>
+      <th style="width:64px">Method</th><th>Path</th><th>Type</th><th>Message</th>
+    </tr></thead><tbody>`;
+  if (!rows.length) {
+    html += `<tr><td colspan="6" class="empty">No errors in this window.</td></tr>`;
+  } else {
+    rows.forEach(r => {
+      const msg = r.message ? esc(r.message) : '<span style="color:var(--text-3)">—</span>';
+      html += `<tr>
+        <td style="font-size:12px" title="${esc(r.ts || '')}">${esc(ago(r.ts))}</td>
+        <td>${apiErrorStatusPill(r.status)}</td>
+        <td class="mono" style="font-size:12px">${esc(r.method || '')}</td>
+        <td class="mono" style="font-size:12px;word-break:break-all">${esc(r.path || '')}</td>
+        <td class="mono" style="font-size:12px">${esc(r.error_type || '')}</td>
+        <td style="font-size:12px">${msg}</td></tr>`;
+      if (r.traceback) {
+        html += `<tr><td colspan="6" style="padding:0 0 8px">
+          <details><summary style="cursor:pointer;font-size:12px;color:var(--accent);padding:2px 0">
+            Traceback</summary>
+          <pre style="white-space:pre-wrap;word-break:break-word;font-size:11.5px;
+            background:var(--muted-soft,#f5f5f5);padding:10px;border-radius:6px;margin:6px 0 0;
+            max-height:340px;overflow:auto">${esc(r.traceback)}</pre></details></td></tr>`;
+      }
+    });
+  }
+  html += `</tbody></table></div></div>`;
+  body.innerHTML = html;
+}
+
+$('apiErrorsRefresh').onclick = () => loadApiErrors();
+$('apiErrorsRange').onchange = () => loadApiErrors();
 
 document.querySelectorAll('#viewTabs .vtab').forEach(t => t.onclick = () => showView(t.dataset.view));
 document.querySelectorAll('#metricTabs .tab').forEach(t => t.onclick = () => showMetricPanel(t.dataset.panel));

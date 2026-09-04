@@ -1166,6 +1166,102 @@ def flush_user_events():
         print(f"[WARN] Could not record {len(pending)} events: {e}")
 
 
+# ---------- api_errors: the append-only server-error log ----------
+# One row per 5xx response or unhandled exception the FastAPI service produced, read by the
+# admin console's API Errors tab. Same three postures as user_events, for the same reasons:
+# buffered + background flush (a burst of failures must not turn one outage into a second one
+# by hammering Supabase on the request path); latch off on a missing table/column so an un-run
+# migration is a quiet no-op; and fail-open — recording an error must NEVER itself raise or
+# block the response that is already on its way back to the client. Lives in Supabase, not
+# memory, because the console runs on a different machine from the shipped API (see
+# api_errors_schema.sql).
+_api_errors_lock = threading.Lock()
+_api_errors_buffer = []          # list of ready-to-insert row dicts
+_api_errors_available = True     # latched off if the table/columns aren't there
+_api_errors_flusher = None
+API_ERRORS_FLUSH_SECONDS = 15.0
+API_ERRORS_MAX_BUFFER = 2000     # backstop: a wedged flush can't grow memory without bound
+_API_ERROR_MSG_MAX = 2000        # message/traceback are truncated so one crash can't bloat a row
+_API_ERROR_TRACE_MAX = 8000
+
+
+def record_api_error(method, path, status, error_type, message=None, traceback_text=None):
+    """Buffer one server-side API error for the admin dashboard. Never raises, never blocks.
+
+    Called from the capture middleware (app/main.py) for every unhandled exception (with a
+    traceback) and every 5xx response (status only). Returns True if buffered, False if capture
+    is off. The path has its query string stripped by the caller — it can carry PII and is not
+    needed to group by endpoint.
+    """
+    if not _api_errors_available:
+        return False
+    try:
+        row = {
+            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "method": str(method or "")[:16],
+            "path": str(path or "")[:400],
+            "status": int(status) if str(status).isdigit() else 0,
+            "error_type": str(error_type or "")[:120],
+            "message": (str(message)[:_API_ERROR_MSG_MAX] if message not in (None, "") else None),
+            "traceback": (str(traceback_text)[:_API_ERROR_TRACE_MAX]
+                          if traceback_text not in (None, "") else None),
+        }
+        with _api_errors_lock:
+            overflow = len(_api_errors_buffer) + 1 - API_ERRORS_MAX_BUFFER
+            if overflow > 0:
+                # Drop the OLDEST to bound memory when a flush is wedged. Read only in aggregate
+                # on a dashboard, so a dropped interval is a gap, never a correctness bug.
+                del _api_errors_buffer[:overflow]
+            _api_errors_buffer.append(row)
+        _start_api_errors_flusher()
+        return True
+    except Exception as e:
+        # A recorder that raised while recording an error would turn one failure into two.
+        print(f"[WARN] Could not buffer api error: {e}")
+        return False
+
+
+def _start_api_errors_flusher():
+    global _api_errors_flusher
+    if _api_errors_flusher is not None:
+        return
+    with _api_errors_lock:
+        if _api_errors_flusher is not None:
+            return
+        _api_errors_flusher = threading.Thread(target=_api_errors_flush_loop, daemon=True)
+        _api_errors_flusher.start()
+
+
+def _api_errors_flush_loop():
+    while True:
+        time.sleep(API_ERRORS_FLUSH_SECONDS)
+        if not _api_errors_available:
+            return
+        flush_api_errors()
+
+
+def flush_api_errors():
+    """Drain the error buffer into api_errors in one batch INSERT. Called on a timer."""
+    global _api_errors_available
+    with _api_errors_lock:
+        pending = list(_api_errors_buffer)
+        _api_errors_buffer.clear()
+    if not pending:
+        return
+    try:
+        _supabase_request_strict("api_errors", method="POST", data=pending,
+                                 extra_headers={"Prefer": "return=minimal"})
+    except Exception as e:
+        if _missing_table_error(e) or _is_missing_column_error(e):
+            _api_errors_available = False
+            print(f"[WARN] api_errors table unavailable - API error capture is off. "
+                  f"Run {API_ERRORS_SETUP_SQL} in the Supabase SQL editor.")
+            return
+        # Transient failure (often the same outage that produced these errors): drop this batch
+        # rather than re-buffering it, so one poisoned batch can't grow the buffer without bound.
+        print(f"[WARN] Could not record {len(pending)} api errors: {e}")
+
+
 def _is_missing_column_error(exc):
     """True when PostgREST rejected a call because a migration has not been run.
 

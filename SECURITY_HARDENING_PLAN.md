@@ -44,20 +44,24 @@ new cases in `test_subscription_gate.py` (S0-1).
 | S0-6 static allow-list `[H5]` | **already done** before this pass | `25de538` |
 | S0-7 forwarded IPs + login key `[H3]` | done | `S0-7:` |
 | S0-8 `email_verified` `[H1]` | done | `S0-8 + S0-9:` |
-| S0-9 exact-origin redirects `[H2]` | done, **minus the fragment move** | `S0-8 + S0-9:` |
+| S0-9 exact-origin redirects `[H2]` | done; fragment move closed later | `S0-8 + S0-9:`, `S0-9 (second half)` |
 | S0-10 repo hygiene | **already done**; no PAT in the remote | — |
 | S0-11 deploy prerequisites | done, **minus the free tier** | `S0-11:` |
 | S1-8 ops token + Render refusal | done, ahead of S0-7 per H3 | `S1-8:` |
 
-**Three things S0 deliberately did NOT close, each flagged in its commit:**
+**Three things S0 deliberately did NOT close.** Two of them have since been closed (S1-1
+and the `S0-9 (second half)` commit); only the free tier is still open.
 
 1. ~~**Deleting `intakeExtractAndClassify`**~~ — **CLOSED by S1-1**, which deleted it along
    with the other two genuinely-dead prompts.
-2. **Moving the Google token into the URL fragment** (the second half of S0-9). The takeover
-   is closed by the exact-origin check; the fragment move is the plan's "better, and cheap"
-   hardening that keeps the token out of access logs and `Referer`. It needs matching changes
-   in `frontend/app/google-auth.tsx` and `frontend/src/auth/googleSignIn.ts` across web, iOS
-   and Android — untestable without a device, and a mistake breaks sign-in outright.
+2. ~~**Moving the Google token into the URL fragment**~~ — **CLOSED**, commit
+   `S0-9 (second half)`. The fragment is used for http(s) destinations (where the redirect
+   hits our own origin and a query string is an access-log entry) and the query string is
+   kept for custom schemes (`wingman://`, `exp://`), where the OS resolves the redirect and
+   no HTTP server ever sees it — so the change is applied exactly where the leak exists,
+   rather than gambling on fragment handling across a custom-scheme redirect. The same
+   commit moved `/api/auth/google/session` from a GET with the token in the query string to
+   a POST with it in the body.
 3. **Moving off the Render free tier** (part of S0-11). A billing decision, not a code change;
    `render.yaml` still says `plan: free`.
 
@@ -117,8 +121,8 @@ cheapest-first order §0b previously recommended. S1-8 was already done in the S
 
 | | |
 |---|---|
-| Commits | `4c0b866..0c032a1` on `codecleanup`, 14 commits |
-| Tests | 11 new test files, ~230 new test functions; suite green at **2331 passing** |
+| Commits | `4c0b866..HEAD` on `codecleanup`, 15 commits (14 S1 items + the S0-9 leftover) |
+| Tests | 12 new test files, ~247 new test functions; suite green at **2348 passing** |
 | Migrations to run | `db/auth_schema.sql` (S1-2), `db/promo_codes_schema.sql` (S1-10), `db/conversations_schema.sql` + `db/agent_runs_schema.sql` + `db/deadline_check_log_schema.sql` (S1-9) |
 
 | Item | State | Commit |
@@ -175,9 +179,12 @@ for byte, as do both conditional branches and every user-content template.
 
 ### What still needs a human
 
-- **Run the five SQL files** listed above in the Supabase SQL editor. Everything degrades
-  rather than breaking until they run — rotation is simply off, promo codes fall back to the
-  built-in table — but nothing is actually fixed until they do.
+- **Run [db/RUN_ME_S1.sql](db/RUN_ME_S1.sql)** in the Supabase SQL editor — one paste
+  covering all five files, idempotent, with a verification query at the end that should
+  return `rls = true` for all five tables. (The individual files stay the source of record
+  and the place to read why each statement exists; that one is a convenience copy.)
+  Everything degrades rather than breaking until it runs — rotation is simply off, promo
+  codes fall back to the built-in table — but nothing is actually fixed until it does.
 - **Confirm RLS in the Supabase dashboard** for `conversations`, `agent_runs` and
   `deadline_check_log`. A schema file cannot retroactively secure a table somebody created
   by hand from a code comment; that confirmation IS the fix for S1-9.
@@ -194,16 +201,12 @@ for byte, as do both conditional branches and every user-content template.
 
 ### Deliberately NOT done, with reasons
 
-- **Moving the Google sign-in token into the URL fragment** (the S0-9 leftover). H2 itself is
-  closed by the exact-origin check, and the token in that URL is already a single-use
-  60-second nonce rather than a bearer — so this is log hygiene, not an open exploit. Doing
-  it means changing the server redirect, `globalThis.location.hash` parsing on web, and
-  `Linking.parse` handling on native, on the ONLY sign-in path, with no way to run any of it
-  in this environment. The same reasoning the S0 pass gave still holds. Related and cheaper
-  if it is picked up: `GET /api/auth/google/session?token=` puts that same one-time token in
-  a query string on an API request, which is the identical leak S1-3 just closed for the
-  calendar flow — moving it to a POST body is a two-line change and does not touch the
-  redirect mechanics.
+**Nothing in the plan is left undone.** The Google-token fragment move — deferred by the S0
+pass and again at the end of the S1 pass, both times on "untestable without a device" — was
+closed on Shama's instruction in the `S0-9 (second half)` commit, which records how the risk
+was contained rather than accepted. What remains below is only what the plan itself scopes
+out of S0/S1.
+
 - **M5** (the process-wide 5s Gemini sleep) and the argon2 parameters stay in Phase 2, and
   L9 in Phase 4, exactly as §1 says. Finishing S1 means no High or Medium open EXCEPT M5 —
   that is now true.

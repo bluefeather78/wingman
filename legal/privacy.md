@@ -1,6 +1,6 @@
 # Wingman Privacy Policy
 
-**Effective Date:** August 22, 2026
+**Effective Date:** September 5, 2026
 
 This Privacy Policy explains how **Shama Bildikar**, the operator of Wingman ("Wingman," "we," "us," or "our"), collects, uses, processes, and protects information in connection with the Wingman beta.
 
@@ -151,6 +151,8 @@ We cannot see whether you completed the organization's confirmation step, and we
 ## 7. Analytics and Cookies
 
 Wingman may use cookies, analytics tools, and similar technologies to understand how users interact with the Service, maintain functionality, improve performance, and diagnose problems.
+
+These technologies may include session-replay and heatmap tools, which record interactions such as page views, clicks, scrolling, and navigation so we can see how the Service is used and identify problems. These tools are configured to mask the content you type into fields.
 
 The specific analytics and technology providers used by Wingman may change over time.
 

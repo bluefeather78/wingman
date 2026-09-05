@@ -259,13 +259,79 @@ async function errorMessage(res: Response): Promise<string> {
   return `API error ${res.status}`;
 }
 
+// MARQUEE M9 (Phase 5, frontend_report finding 5): every request is bounded.
+//
+// Approved by Shama on 2026-09-05 (decision 13). It edits paid call paths; no prompt text
+// moves, so it is not M8.
+//
+// The finding: "No request timeouts / AbortController anywhere; a hung fetch hangs the
+// deadline-refresh loop forever." `fetch` has no default timeout in any of the three runtimes
+// this app ships to. A connection that opens and then goes silent — a captive portal, a proxy
+// that holds the socket, a Render instance that accepted the request and died — never settles,
+// so the promise never resolves and never rejects. The Quest Log's refresh loop awaits each
+// item in turn, so ONE such request stops the whole pass forever, with the spinner still
+// turning. There is nothing for the student to do but force-quit.
+//
+// Two ceilings, because the two kinds of request are genuinely different:
+//
+//   REQUEST_TIMEOUT_MS   ordinary API calls. Generous rather than tight — Render Free sleeps
+//                        after 15 idle minutes and the first request pays a ~30s cold start,
+//                        so anything under that would make the FIRST call of a session fail
+//                        every time.
+//   AI_TIMEOUT_MS        anything that waits on a model. A deadline check runs several
+//                        upstream searches and is genuinely a minutes-scale request; the
+//                        server's own paid lane sheds at its limit rather than queueing, so
+//                        this only has to outlast a legitimate slow answer.
+//
+// HONEST LIMIT: aborting stops the CLIENT waiting. It does not un-bill an upstream call the
+// server has already made — the provider charged for it the moment it was issued. This turns
+// "the app is stuck" into "that took too long, try again"; it is not a spend control. The
+// spend controls are server-side (the per-user daily budget and the circuit breaker, S0-5).
+export const REQUEST_TIMEOUT_MS = 45_000;
+export const AI_TIMEOUT_MS = 180_000;
+
+/** Paths whose answer waits on a model, and so get the longer ceiling. */
+function timeoutFor(path: string): number {
+  return /^\/api\/(ai|match|deadline|action-items|extract-from-resume|tracker\/sync)/.test(path)
+    ? AI_TIMEOUT_MS
+    : REQUEST_TIMEOUT_MS;
+}
+
+/**
+ * fetch with an abort timer.
+ *
+ * The caller's own `signal`, if any, is honoured alongside the timer — a screen that unmounts
+ * mid-request must still be able to cancel it, and replacing its signal with ours would
+ * silently take that away.
+ */
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  const callerSignal = init.signal;
+  const onCallerAbort = () => controller.abort();
+  callerSignal?.addEventListener('abort', onCallerAbort);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (e) {
+    // A timeout and a user-cancelled request both surface as an AbortError, and they mean
+    // very different things to a caller. Only ours becomes a message a student reads.
+    if ((e as Error)?.name === 'AbortError' && !callerSignal?.aborted) {
+      throw new HttpError(0, 'That took too long. Check your connection and try again.');
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', onCallerAbort);
+  }
+}
+
 async function rawFetch(path: string, init?: RequestInit, withAuth = true): Promise<Response> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...((init?.headers as Record<string, string>) ?? {}),
   };
   if (withAuth && _access) headers.Authorization = `Bearer ${_access}`;
-  return fetch(`${API_BASE}${path}`, { ...init, headers });
+  return fetchWithTimeout(`${API_BASE}${path}`, { ...init, headers }, timeoutFor(path));
 }
 
 // One refresh attempt against POST /api/auth/refresh, shared across concurrent callers.
@@ -525,17 +591,17 @@ export const httpClient: ApiClient = {
   async extractFromResume(file: Blob, filename: string): Promise<string> {
     const form = new FormData();
     form.append('file', file, filename);
-    let res = await fetch(`${API_BASE}/api/extract-from-resume`, {
+    // Not rawFetch: this posts multipart FormData, so it must not carry the JSON
+    // Content-Type header rawFetch sets. It does get the same abort timer — a resume upload
+    // that stalls used to leave the screen spinning with no way out (finding 5).
+    const upload = () => fetchWithTimeout(`${API_BASE}/api/extract-from-resume`, {
       method: 'POST',
       headers: _access ? { Authorization: `Bearer ${_access}` } : undefined,
       body: form,
-    });
+    }, AI_TIMEOUT_MS);
+    let res = await upload();
     if (res.status === 401 && (await refreshOnce()) === 'ok') {
-      res = await fetch(`${API_BASE}/api/extract-from-resume`, {
-        method: 'POST',
-        headers: _access ? { Authorization: `Bearer ${_access}` } : undefined,
-        body: form,
-      });
+      res = await upload();
     }
     if (!res.ok) throw new Error(await errorMessage(res));
     const data = (await res.json()) as { extracted_text?: string };

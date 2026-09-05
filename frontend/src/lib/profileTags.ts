@@ -52,11 +52,19 @@ export interface EnrichedTag {
 // to app/services/prompts.py with the prompts they belong to (S1-1). The enrichment one is a
 // function of the tag count, and the server has the same tag count this file did.
 
-// A non-termination guard, NOT a size limit — it bounds retries, not tags. Every round asks
+// A non-termination guard, NOT a size limit — it bounds re-asks, not tags. Every round asks
 // for every tag still missing, so the shortfall shrinks fast (a round that fits most of a
 // long list leaves only a short one behind). A round that adds nothing stops the loop
 // immediately, so this is only reached when rounds keep making partial progress.
-export const ENRICH_MAX_ROUNDS = 4;
+//
+// MARQUEE M9 (Phase 5, finding 7): FOUR, and each round now costs up to two billed calls
+// through callFeatureJSON's retry, so the worst case was eight paid calls to enrich one
+// profile's tags. Two is the honest bound: the second round asks for whatever the first left
+// behind, and every un-enriched tag SURVIVES regardless — enrichment only sharpens the
+// scoring prompt, which the scorer already substitutes for (see the return statement below).
+// So the cost of the lower cap is a slightly weaker facet in a rare case, against halving the
+// ceiling on a path a student triggers by opening a screen.
+export const ENRICH_MAX_ROUNDS = 2;
 
 // Deduped case-insensitively, and never truncated. Duplicates matter here because
 // `enrichProfileTags` keys its results by tag string and the facet renders one row per tag
@@ -115,7 +123,7 @@ async function enrichRequest(
 // Enrich every tag: ALL of them in one request, then re-ask for whatever did not come back.
 // The top-up is what lets the tag count be unbounded without a per-request size limit — a
 // response that could not fit the whole list is a shortfall to repair, not a cap to accept.
-async function enrichProfileTags(
+export async function enrichProfileTags(
   callFeature: FeatureCall,
   tags: string[],
   // Enrichments already in hand. The merged extraction pass returns tags WITH their intent

@@ -46,12 +46,11 @@ export async function addCatalogOpportunity(
 
   let slim: { meta?: string; fit?: string } = {};
   try {
-    try {
-      slim = await extractTrackerInfo(callFeature, opp);
-    } catch (firstErr) {
-      console.warn(`Retrying ${opp.name} after error:`, (firstErr as Error).message);
-      slim = await extractTrackerInfo(callFeature, opp);
-    }
+    // No retry here: extractTrackerInfo goes through callFeatureJSON, which already retries
+    // once and covers a transient network error as well as a parse failure (MARQUEE M9,
+    // Phase 5, finding 7). Retrying again made adding ONE opportunity cost up to four billed
+    // extraction calls, and the finder adds a whole selection at once.
+    slim = await extractTrackerInfo(callFeature, opp);
   } catch (err) {
     console.warn(`meta/fit extraction failed for ${opp.name}:`, (err as Error).message);
   }

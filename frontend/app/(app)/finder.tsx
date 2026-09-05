@@ -615,19 +615,16 @@ export default function Finder() {
     const top = rows.slice(0, REASON_TOP_N) as unknown as Opportunity[];
     if (top.length) {
       // One reasoning call produces every card's "why it fits", so a single failure wipes them
-      // ALL — retry once after a short backoff before degrading to no reasons. callFeatureJSON
-      // already retries a parse failure internally; this covers a transient network/API error.
+      // ALL — but the retry lives in callFeatureJSON, which rankCandidates goes through
+      // (MARQUEE M9, Phase 5, finding 7). This used to retry here TOO, and since that inner
+      // retry already covers a transient network error as well as a parse failure, one press
+      // of "Find my matches" could bill four reasoning calls. A failure after the one retry
+      // degrades to no reasons, exactly as before.
       let ranked: RankedPick[] = [];
       try {
         ranked = await rankCandidates(callFeature, reasonDesc, top, buildPrefs() || null, false);
-      } catch (e1) {
-        console.warn('why-it-fits reasoning failed once, retrying:', (e1 as Error).message);
-        try {
-          await new Promise((r) => setTimeout(r, 1200));
-          ranked = await rankCandidates(callFeature, reasonDesc, top, buildPrefs() || null, false);
-        } catch (e2) {
-          console.warn('why-it-fits reasoning failed after retry, showing matches without reasons:', (e2 as Error).message);
-        }
+      } catch (e) {
+        console.warn('why-it-fits reasoning failed, showing matches without reasons:', (e as Error).message);
       }
       ranked.forEach((p) => {
         if (p && p.id) reasons[p.id] = { reason: p.reason || '', tier: p.tier === 'strong' ? 'strong' : 'look' };
@@ -776,17 +773,13 @@ export default function Finder() {
         : null;
       const byId = new Map(pool.map((o) => [o.id, o]));
       try {
-        // rankCandidates already retries one parse failure internally; add one more full
-        // attempt after a short backoff so a transient rate-limit/truncation doesn't drop
-        // the student to the keyword fallback.
-        let ranked: RankedPick[];
-        try {
-          ranked = await rankCandidates(callFeature, desc, pool, prefs || null, strict);
-        } catch (err) {
-          console.warn('rankCandidates failed once, retrying after backoff:', (err as Error).message);
-          await new Promise((r) => setTimeout(r, 1500));
-          ranked = await rankCandidates(callFeature, desc, pool, prefs || null, strict);
-        }
+        // ONE ranking attempt here. rankCandidates goes through callFeatureJSON, which
+        // already retries once and covers a transient rate-limit or truncation as well as a
+        // parse failure (MARQUEE M9, Phase 5, finding 7) — so the second attempt this used to
+        // make was a fourth billed call for one search. Failing after that drops to the
+        // keyword fallback below, exactly as before.
+        const ranked: RankedPick[] =
+          await rankCandidates(callFeature, desc, pool, prefs || null, strict);
         const mapped = ranked
           .map((r) => (byId.get(r.id) ? { opp: byId.get(r.id) as Opportunity, reason: r.reason, tier: r.tier } : null))
           .filter((x): x is Result => x !== null);

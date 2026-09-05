@@ -1,4 +1,0 @@
-body{font-family:var(--font-body);font-weight:400;background-color:var(--surface-page);color:var(--text-brand);margin:0}
-.font-heading{font-family:var(--font-display);font-weight:700}
-a{color:var(--accent-info)}
-a:hover{color:var(--indigo);opacity:.85}

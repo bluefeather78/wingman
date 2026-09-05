@@ -1,1 +1,0 @@
-Serving http://localhost:8000  [messages: LIVE (using GEMINI_API_KEY)] [messages-claude: LIVE (using ANTHROPIC_API_KEY)]

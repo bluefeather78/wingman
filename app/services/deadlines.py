@@ -11,6 +11,7 @@ import urllib.request
 from app.config import *  # noqa: F401,F403
 from app.core import _supabase_request
 from app.services.ai import mock_deadline_iso
+from app.http_pool import pooled_urlopen
 
 DEADLINE_STALE_DAYS = 7
 # NOTE the column is dates_last_checked_at, NOT last_checked_at (that name only ever
@@ -25,7 +26,7 @@ def get_opportunity_for_deadline_check(opp_id):
         f"{SUPABASE_URL}/rest/v1/opportunities?{query}",
         headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with pooled_urlopen(req, timeout=10) as resp:
         rows = json.loads(resp.read())
     return rows[0] if rows else None
 
@@ -73,7 +74,7 @@ def get_cached_tracker_data(ids):
         f"{SUPABASE_URL}/rest/v1/opportunities?{query}",
         headers={"apikey": SUPABASE_SERVICE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with pooled_urlopen(req, timeout=10) as resp:
         rows = json.loads(resp.read())
     out = {}
     for r in rows:
@@ -104,7 +105,7 @@ def patch_opportunity_deadline(opp_id, patch):
             "Prefer": "return=minimal",
         },
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with pooled_urlopen(req, timeout=10) as resp:
         resp.read()
 
 
@@ -133,7 +134,7 @@ def log_deadline_check(opp_id, source, status, web_searches, cost_usd, was_estim
                 "Content-Type": "application/json",
             },
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with pooled_urlopen(req, timeout=5) as resp:
             resp.read()
     except Exception as e:
         # Logging failure should not break the main request

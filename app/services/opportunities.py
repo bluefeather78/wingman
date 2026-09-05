@@ -11,6 +11,7 @@ import urllib.request
 
 from app.config import *  # noqa: F401,F403
 from app.core import _supabase_request
+from app.http_pool import pooled_urlopen
 
 _opportunities_cache = {"data": None, "fetched_at": 0.0}
 _opportunities_cache_lock = threading.Lock()
@@ -66,7 +67,7 @@ def _fetch_catalog_page(select_fields, offset, page_size):
             "Range": f"{offset}-{offset + page_size - 1}",
         },
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with pooled_urlopen(req, timeout=15) as resp:
         return json.loads(resp.read())
 
 

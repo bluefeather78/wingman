@@ -63,7 +63,7 @@ def test_the_insert_carries_no_client_ip(monkeypatch):
 
     monkeypatch.setattr(core, "SUPABASE_URL", "https://db.example")
     monkeypatch.setattr(core, "SUPABASE_SERVICE_KEY", "svc")
-    monkeypatch.setattr(core.urllib.request, "urlopen",
+    monkeypatch.setattr(core, "pooled_urlopen",
                         lambda req, timeout=None: sent.update(
                             body=json.loads(req.data)) or _Resp())
     core.log_conversation("alice", "live", "What do you like?", "Robotics.")

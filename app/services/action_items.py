@@ -27,6 +27,7 @@ from agents.generate_action_items import (
     generic_items,
     process_one,
 )
+from app.http_pool import pooled_urlopen
 
 # On-demand staleness window. Deliberately SHORTER than the batch agent's 90-day
 # STALE_AFTER_DAYS: the batch is a bulk-coverage knob over the whole catalog, this is the
@@ -53,7 +54,7 @@ def _get(query):
         headers={"apikey": SUPABASE_SERVICE_KEY,
                  "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}"},
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with pooled_urlopen(req, timeout=10) as resp:
         return json.loads(resp.read())
 
 
@@ -89,7 +90,7 @@ def patch_action_items(opp_id, patch):
             "Prefer": "return=minimal",
         },
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with pooled_urlopen(req, timeout=10) as resp:
         resp.read()
 
 

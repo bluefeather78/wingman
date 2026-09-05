@@ -22,6 +22,7 @@ from app.config import *  # noqa: F401,F403 -- shared constants by bare name (as
 from wingman.subscription_common import (
     is_trial_expired, days_until_trial_end, trial_ends_at_iso,
 )
+from app.http_pool import pooled_urlopen
 
 
 # ---------- Subscription access gate ----------
@@ -558,7 +559,7 @@ def log_conversation(userid, mode, system_question, user_response):
                 "Prefer": "return=minimal",
             },
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with pooled_urlopen(req, timeout=10) as resp:
             resp.read()
         print(f"[INFO] Logged conversation for user {pseudonym(userid)}")
     except Exception as e:
@@ -642,7 +643,7 @@ def _users_request(method, query="", data=None, prefer=None):
         method=method,
         headers=headers,
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with pooled_urlopen(req, timeout=10) as resp:
         raw = resp.read()
         return json.loads(raw) if raw else None
 
@@ -1273,7 +1274,7 @@ def _supabase_request(table, method="GET", params=None, data=None, extra_headers
     body = json.dumps(data).encode("utf-8") if data is not None else None
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with pooled_urlopen(req, timeout=15) as resp:
             raw = resp.read()
             return json.loads(raw) if raw else []
     except Exception as e:
@@ -1679,6 +1680,6 @@ def _supabase_request_strict(table, method="GET", params=None, data=None, extra_
         headers.update(extra_headers)
     body = json.dumps(data).encode("utf-8") if data is not None else None
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with pooled_urlopen(req, timeout=15) as resp:
         raw = resp.read()
         return json.loads(raw) if raw else []

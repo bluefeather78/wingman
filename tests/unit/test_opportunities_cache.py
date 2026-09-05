@@ -1,4 +1,4 @@
-"""fetch_opportunities' degrade-until-migrated behavior for match_vector. urllib.request.urlopen
+"""fetch_opportunities' degrade-until-migrated behavior for match_vector. pooled_urlopen (Phase 2 item 4's seam)
 is monkeypatched so no real network is touched (the conftest guard would block it anyway) —
 what's pinned is that a 400 naming match_vector drops the column and refetches, keeping the
 catalog endpoint alive, and that a genuine failure with no cache still raises.
@@ -56,7 +56,7 @@ def test_degrades_when_match_vector_missing(monkeypatch):
         # the retry select (no match_vector) succeeds with one short page
         return _FakeResp(json.dumps([{"id": "a", "name": "N"}]).encode())
 
-    monkeypatch.setattr(opp.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(opp, "pooled_urlopen", fake_urlopen)
     data = opp.fetch_opportunities()
     assert data == [{"id": "a", "name": "N"}]
     assert opp._match_vector_available is False          # latched off
@@ -72,7 +72,7 @@ def test_latched_off_skips_the_vector_select(monkeypatch):
         seen.append(req.full_url)
         return _FakeResp(json.dumps([{"id": "a"}]).encode())
 
-    monkeypatch.setattr(opp.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(opp, "pooled_urlopen", fake_urlopen)
     opp.fetch_opportunities()
     assert all("match_vector" not in u for u in seen)     # never even attempts it
 
@@ -82,7 +82,7 @@ def test_full_select_when_column_present(monkeypatch):
         assert "match_vector" in req.full_url                # includes the vector
         return _FakeResp(json.dumps([{"id": "a", "match_vector": [0.1]}]).encode())
 
-    monkeypatch.setattr(opp.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(opp, "pooled_urlopen", fake_urlopen)
     data = opp.fetch_opportunities()
     assert data[0]["match_vector"] == [0.1]
     assert opp._match_vector_available is True
@@ -92,7 +92,7 @@ def test_non_column_failure_with_no_cache_raises(monkeypatch):
     def fake_urlopen(req, timeout=10):
         raise urllib.error.URLError("connection refused")
 
-    monkeypatch.setattr(opp.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(opp, "pooled_urlopen", fake_urlopen)
     with pytest.raises(Exception):
         opp.fetch_opportunities()
 
@@ -110,7 +110,7 @@ def test_statement_timeout_page_is_retried(monkeypatch):
             raise _http_500(_STATEMENT_TIMEOUT)
         return _FakeResp(json.dumps([{"id": "a", "match_vector": [0.1]}]).encode())
 
-    monkeypatch.setattr(opp.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(opp, "pooled_urlopen", fake_urlopen)
     data = opp.fetch_opportunities()
     assert data == [{"id": "a", "match_vector": [0.1]}]
     assert len(attempts) == 2  # retried once past the timeout
@@ -126,7 +126,7 @@ def test_non_timeout_500_is_not_retried(monkeypatch):
         attempts.append(req.full_url)
         raise _http_500({"code": "42P01", "message": "some other server error"})
 
-    monkeypatch.setattr(opp.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(opp, "pooled_urlopen", fake_urlopen)
     with pytest.raises(urllib.error.HTTPError):
         opp.fetch_opportunities()
     assert len(attempts) == 1  # no retry
@@ -138,5 +138,5 @@ def test_transient_failure_serves_stale_cache(monkeypatch):
     def fake_urlopen(req, timeout=10):
         raise urllib.error.URLError("temporary")
 
-    monkeypatch.setattr(opp.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(opp, "pooled_urlopen", fake_urlopen)
     assert opp.fetch_opportunities() == [{"id": "cached"}]

@@ -58,6 +58,11 @@ export interface ProfileRecord {
   synthesized?: string;
   updatedAt?: string | null;
   chatRounds?: number;
+  // The grade the student EXPLICITLY told us (via the finder's one-time grade question) — the
+  // authoritative source for the grade hard-filter, mirroring how `location` rides on this
+  // record. Distinct from `filterValues.grade`, which is only INFERRED from the profile prose
+  // and used as the fallback when this is unset.
+  grade?: number | null;
   filterValues?: FilterValuesSlot;
   filterTags?: FilterTagsSlot;
   basics?: BasicsSlot;

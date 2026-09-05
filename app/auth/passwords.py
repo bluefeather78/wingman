@@ -53,7 +53,9 @@ def verify_password(stored, client_hash):
 
     if is_legacy_hash(stored):
         # Constant-time compare so a legacy row can't be probed by timing. Match ⇒ upgrade.
-        ok = hmac.compare_digest(stored, client_hash)
+        # Bytes, not str: a non-ASCII `passwordHash` raises TypeError out of compare_digest,
+        # which would 500 the login route rather than answering "incorrect".
+        ok = hmac.compare_digest(stored.encode("utf-8"), client_hash.encode("utf-8"))
         return ok, ok
 
     try:

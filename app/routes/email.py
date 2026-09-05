@@ -46,7 +46,10 @@ def handle_email_sweep(request: Request, body: dict = Depends(json_body)):
         return json_error(503, "Email sweep is not configured: set EMAIL_CRON_SECRET.")
 
     supplied = request.headers.get("X-Cron-Secret") or ""
-    if not hmac.compare_digest(supplied, EMAIL_CRON_SECRET):
+    # Compare BYTES, not str. hmac.compare_digest raises TypeError the moment either operand
+    # holds a non-ASCII codepoint, so `X-Cron-Secret: \xe9` used to answer an unhandled 500
+    # instead of 403 — a 500 on a credential check is both a wrong answer and a signal.
+    if not hmac.compare_digest(supplied.encode("utf-8"), EMAIL_CRON_SECRET.encode("utf-8")):
         return json_error(403, "Forbidden.")
 
     kind = (body.get("kind") or "all").lower()

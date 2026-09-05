@@ -231,7 +231,7 @@ def verify_stripe_webhook_signature(payload, signature):
             signed_content.encode(),
             hashlib.sha256
         ).hexdigest()
-        return hmac.compare_digest(expected_sig, v1)
+        return hmac.compare_digest(expected_sig.encode("utf-8"), v1.encode("utf-8"))
     except Exception:
         return False
 

@@ -106,7 +106,9 @@ def verify_unsubscribe_token(userid, token):
     expected = unsubscribe_token(userid)
     if not expected or not token:
         return False
-    return hmac.compare_digest(expected, str(token))
+    # Bytes, not str — `?t=\xe9` would otherwise raise TypeError out of compare_digest and
+    # 500 the unsubscribe page. A mangled opt-out link must answer "that link isn't valid".
+    return hmac.compare_digest(expected.encode("utf-8"), str(token).encode("utf-8"))
 
 
 def unsubscribe_url(userid):

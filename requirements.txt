@@ -1,17 +1,23 @@
 # Web service (app/) — shipped to Render.
 #
+# EVERY REQUIREMENT IS PINNED EXACTLY (S0-11). They were all `>=`, so a deploy picked up
+# whatever was newest that day and two builds of the same commit could install different
+# code — which makes a production break impossible to attribute and impossible to roll back
+# by reverting. The pinned values are what this repo is actually developed and tested
+# against; bump them deliberately, in their own commit, having run the suite.
+#
 # The offline agent toolkit at the repo root is still stdlib-only (http.server was
 # dropped from the *web* layer only); those scripts add no third-party deps here.
 # Phase 1 of the rearchitecture (docs/archive/PLAN_1_decompose.md) moved the public web layer from
 # a hand-rolled http.server monolith to FastAPI + uvicorn.
-fastapi>=0.115
-uvicorn[standard]>=0.30
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
 
 # Session auth (Phase 2, docs/archive/PLAN_2_auth.md): PyJWT signs/verifies the access+refresh tokens;
 # argon2-cffi hashes the (already client-SHA-256'd) password server-side. Both ship Linux
 # wheels, so Render installs them without a compiler.
-PyJWT>=2.8
-argon2-cffi>=23.1
+PyJWT==2.13.0
+argon2-cffi==25.1.0
 
 # PyPDF2: the resume/LinkedIn import endpoint AND the action-item substrate's capture layer
 # (wingman/source_capture.py — decodes the base64 PDF bytes Claude web_fetch returns, so a program's
@@ -19,6 +25,12 @@ argon2-cffi>=23.1
 # falls back to plain text; capture yields no text for a PDF, so that source backs nothing),
 # so it is not a hard dep — but the Render service should install it so PDFs parse.
 # python-docx is resume-only.
-PyPDF2>=3.0
-python-docx>=1.1
-numpy
+PyPDF2==3.0.1
+python-docx==1.2.0
+
+# numpy is a HARD dependency, not an optional one: app/services/matching.py:34 and
+# app/services/recall_query.py:259 import it at module top, and app/main.py mounts the
+# matching router unconditionally. None of the deps above pull it transitively, so before it
+# was listed (S0-11) production survived only on Render's build cache — the next cache miss
+# would have been a ModuleNotFoundError at import and a hard outage.
+numpy==2.5.2

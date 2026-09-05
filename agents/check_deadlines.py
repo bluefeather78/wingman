@@ -408,16 +408,26 @@ the single most decision-relevant date a student has: the app marks a program HA
 moment its first date has passed, so a program carrying only a deadline reads as "not started yet" \
 right up until the day it closes. If the current cycle's opening is not posted, project the prior \
 cycle's (was_estimated=true). Omit it only if no cycle you found ever published one.
+- If the opening has ALREADY happened and registration is open right now, report that real PAST \
+opening date AS THE PAST DATE IT IS — do NOT roll it forward to next year and do NOT drop it. A \
+past opening is the ONE past date that is good news: it is exactly what tells the app the program \
+is open today, so the card reads HAPPENING NOW instead of "not started yet". Example: the page \
+says "Registration opened September 2, 2026" and today is later — report opens 2026-09-02, not a \
+2027 estimate and not a note-only mention. This is the sole exception to the on-or-after-today \
+self-check below; it applies ONLY to "opens", never to a deadline or event (a past deadline really \
+has been missed and a past event really is over).
 - Every date you reason about must appear as a structured entry in "important_dates" — never leave a date \
 mentioned only in prose in important_date_note. If you have enough basis to write a date into the note, \
 you have enough basis to add the matching structured entry.
 - Only omit a date category if you found no information for it AND no prior-cycle basis to estimate it.
 
 SELF-CHECK before you finish:
-- Every date you report must be on or after {today}. If one is in the past, roll it forward to \
+- Every date you report must be on or after {today}, WITH ONE EXCEPTION: a currently-open \
+registration's already-passed "opens" date, which you report as its real past date (see the opens \
+rule above). For every other date type, if one is in the past, roll it forward to \
 its next real occurrence and say it is estimated. Drop it ONLY if the program is discontinued or \
-the event was genuinely a one-off — never report a past date, and never let a past date be the \
-reason you report no date at all.
+the event was genuinely a one-off — never report a past deadline or event date, and never let a \
+past date be the reason you report no date at all.
 - If every date you found belongs to a cycle that has already ended, and nothing says the program \
 is discontinued, you MUST write the rolled-forward estimates out explicitly, date by date \
 ("Application deadline: estimated 2027-04-19, from 2026-04-20 rolled forward one year"). \
@@ -476,12 +486,15 @@ window or range, round toward the EARLIER edge, never the later one: a date show
 true deadline is fail-safe — a student who acts on it finishes in time — while a date shown \
 after it causes the exact miss this app exists to prevent. Bias every uncertain deadline \
 estimate early. This does NOT license inventing dates: an estimate must still (a) be on or \
-after {today}, (b) stay inside the window the notes actually support — the near edge of the \
+after {today} — EXCEPT a currently-open registration's already-passed "opens" date, which is kept \
+as its real past date (see the opens rule below), (b) stay inside the window the notes actually \
+support — the near edge of the \
 stated range, not a date conjured months before it — and (c) be marked "estimated": true with \
 the real window kept in the note, so the student is prompted to confirm rather than trust a \
-placeholder. A past-dated or visibly-wrong estimate is worse than an empty field: the first \
-reads as "you already missed it" and makes a student abandon a program still open to them, the \
-second teaches them to ignore every date the app shows.
+placeholder. A past-dated DEADLINE or EVENT estimate is worse than an empty field: it \
+reads as "you already missed it" and makes a student abandon a program still open to them (a past \
+"opens" date is the opposite — it correctly says the program is open now); and a visibly-wrong \
+estimate teaches a student to ignore every date the app shows.
 
 RULES, in order:
 - Every date the notes reason about must become a structured entry in "important_dates" — \
@@ -503,12 +516,22 @@ finished CYCLE is not that case and does not suspend this rule. A well-founded e
 an empty field, but a FABRICATED deadline for a program that is not accepting anyone is worse \
 than either — it tells a student to prepare for something that will not happen.
 - A window whose early edge is already in the PAST (today falls inside or after the window's \
-start) is the dangerous case: do NOT roll the whole window a full year forward — that hides a \
-deadline still imminent THIS cycle, which is the exact miss this app prevents. For a "deadline", \
-use the EARLIEST day of the window that is still on or after {today}. For an "opens" date whose \
-day has already passed, OMIT the structured entry rather than anchoring it to {today}, and say \
-in the note that registration has likely already opened. Only roll a window forward a year when \
-it lies ENTIRELY in the past.
+start) is the dangerous case, and "opens" and "deadline" are handled OPPOSITELY here. For a \
+"deadline", use the EARLIEST day of the window that is still on or after {today} — do NOT roll the \
+whole window a full year forward, which hides a cutoff still imminent THIS cycle. For an "opens" \
+date whose day has already passed, the split is: \
+  (i) if the notes KNOW that day — it was posted, or it computes from a prior cycle's basis — KEEP \
+  a structured "opens" entry with its REAL PAST date (estimated=false if posted, true if computed). \
+  A registration that has already opened is a program that SHOULD read HAPPENING NOW, and this \
+  past-dated opens entry is the only thing that tells the app so; dropping it leaves the earliest \
+  date a future deadline, so an open program wrongly reads "not started yet". Example: notes say \
+  "registration opened September 2, 2026" with an October deadline and today is later — emit \
+  {{"type":"opens","date_iso":"2026-09-02","estimated":false}}, NOT a note-only mention and NOT a \
+  2027 date. \
+  (ii) ONLY when the notes know THAT it opened but not WHEN (no posted day and no prior-cycle \
+  basis), omit the structured entry rather than anchoring it to {today} (a fabricated date), and \
+  say in the note that registration has likely already opened. \
+Only roll a window forward a year when it lies ENTIRELY in the past AND is not case (i).
 - A window may stay prose-only ONLY when the note explains why there is genuinely no date to \
 give at all (e.g. "rolling admissions, no published open date"). A merely typical or historical \
 pattern ("deadlines are usually in the fall", "historically October-December") is NOT such a \
@@ -517,7 +540,10 @@ case — that is exactly the situation you must materialise into a dated entry, 
 range — must have a matching entry in "important_dates", and vice versa — the two must agree. A \
 vague summary that names no window ("dates vary by cycle") does not satisfy this: if the notes \
 give any window at all, name it and date it.
-- Every date must be on or after {today}, and a past date is never reported as-is. If the \
+- Every date must be on or after {today}, and a past date is never reported as-is — WITH THE ONE \
+EXCEPTION of a currently-open registration's already-passed "opens" date, which is reported as its \
+real past date per the opens rule above (that past date is the HAPPENING NOW signal, not a miss). \
+For every other date type: if the \
 notes give the dates of a cycle that has already ended and do NOT say the program is \
 discontinued, project each one onto its next annual occurrence — same month and day, plus the \
 smallest whole number of years that lands on or after {today} — set "was_estimated": true, and \

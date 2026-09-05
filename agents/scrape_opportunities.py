@@ -867,6 +867,31 @@ def extract_candidates(notes, resolved_urls, gemini_key, args):
 
 ATTRIBUTION_KEYS = ("seed_id", "found_via")
 
+# PostgREST reports an unknown column as 42703 on a read and PGRST204 on a write; an unknown
+# TABLE reports 42P01/PGRST205. All four mean "a migration has not been run" and NOTHING else.
+# Same list agents/check_links.py and app/core.py already use — kept spelled out here rather
+# than imported so this agent stays runnable on its own.
+_SCHEMA_ERROR_CODES = ("42703", "PGRST204", "PGRST205", "42P01")
+
+
+def _http_detail(exc):
+    """The JSON body of a PostgREST error, or {}. The body reads only once."""
+    if not isinstance(exc, urllib.error.HTTPError):
+        return {}
+    try:
+        return json.loads(exc.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return {}
+
+
+def _is_missing_column(exc):
+    """True ONLY when PostgREST rejected the write because a migration is pending.
+
+    Load-bearing: it is what stops the insert ladder from treating a statement timeout, a
+    5xx, a PK collision or a malformed jsonb value as "that column does not exist yet".
+    """
+    return _http_detail(exc).get("code") in _SCHEMA_ERROR_CODES
+
 
 def _without(rows, keys):
     drop = set(keys)
@@ -898,6 +923,15 @@ def insert_rows(supabase_url, service_key, rows, review_by_id):
             supabase_post(supabase_url, "opportunities", payload, service_key)
             return tier
         except Exception as e:
+            # ONLY a pending migration may narrow the column set. Anything else — a statement
+            # timeout, a 5xx, a PK collision, a malformed jsonb value — is a real failure and
+            # must surface. It used to degrade on ANY exception, and the damage was silent
+            # twice over: a transient error inserted the batch stripped of moderation_status /
+            # dup_candidates / quality_flags / seed_id (the whole review-queue payload, so the
+            # rows landed invisible to the console), and because supabase_post batches at 500 a
+            # half-written batch was re-POSTed with duplicate ids at every tier below.
+            if not _is_missing_column(e):
+                raise
             if i == len(attempts) - 1:
                 raise  # the minimal write is base columns only — a failure here is real
             print(f"[WARN] Insert tier '{tier}' failed ({e}); trying a narrower column set. "

@@ -1,8 +1,26 @@
 """Insert-degrade tiers and the run-end auto-disable sweep in scrape_opportunities.
 
 Both talk to Supabase through module-level helpers, monkeypatched here — no sockets.
+
+The fake post raises a REAL urllib HTTPError carrying a PostgREST JSON body, because that is
+what supabase_post raises and the ladder now reads the body's `code` to decide whether it may
+narrow the column set. A bare RuntimeError (what this fixture used to raise) would have made
+every "degrades on a real failure" test pass vacuously.
 """
+import io
+import json
+import urllib.error
+
+import pytest
+
 from agents import scrape_opportunities as so
+
+
+def _pgrst_error(code, message, status=400):
+    """An HTTPError shaped exactly like PostgREST's, body readable once (as urllib's is)."""
+    body = json.dumps({"code": code, "message": message}).encode("utf-8")
+    return urllib.error.HTTPError("http://x/rest/v1/opportunities", status, message,
+                                  {}, io.BytesIO(body))
 
 
 def _rows():
@@ -15,7 +33,7 @@ def _review():
 
 
 def _fake_post(forbidden):
-    """A supabase_post that 400s if any inserted row carries a 'missing' column."""
+    """A supabase_post that 400s (PGRST204) if any inserted row carries a 'missing' column."""
     calls = []
 
     def post(url, table, rows, key, **kw):
@@ -23,8 +41,20 @@ def _fake_post(forbidden):
         for r in rows:
             for k in forbidden:
                 if k in r:
-                    raise RuntimeError(f"PGRST204: Could not find the '{k}' column")
+                    raise _pgrst_error(
+                        "PGRST204", f"Could not find the '{k}' column of 'opportunities'")
         return None
+
+    return post, calls
+
+
+def _failing_post(exc):
+    """A supabase_post that always fails the same way, recording every attempt."""
+    calls = []
+
+    def post(url, table, rows, key, **kw):
+        calls.append([dict(r) for r in rows])
+        raise exc
 
     return post, calls
 
@@ -150,3 +180,61 @@ def test_auto_disable_falls_back_when_reason_columns_missing(monkeypatch):
 def test_auto_disable_noop_without_ids(monkeypatch):
     # Fallback angles have no id; nothing to attribute, nothing to disable.
     assert so.auto_disable_mined_seeds("u", "k", [{"id": None}]) == []
+
+
+# --- the ladder may narrow ONLY for a pending migration -------------------------------------
+# Before this guard insert_rows degraded on ANY exception. A statement timeout therefore wrote
+# the batch stripped of moderation_status/dup_candidates/quality_flags/seed_id — rows that are
+# invisible in the review console — and, since supabase_post batches at 500, re-POSTed a
+# half-written batch with duplicate ids once per tier. The run still reported success.
+
+def test_statement_timeout_raises_and_never_narrows(monkeypatch):
+    """The exit-test case: a simulated insert timeout must fail loudly, on the first attempt."""
+    post, calls = _failing_post(_pgrst_error(
+        "57014", "canceling statement due to statement timeout", status=500))
+    monkeypatch.setattr(so, "supabase_post", post)
+    with pytest.raises(urllib.error.HTTPError):
+        so.insert_rows("u", "k", _rows(), _review())
+    assert len(calls) == 1, "a timeout must not be retried at a narrower tier"
+    assert calls[0][0]["moderation_status"] == "pending_review"
+
+
+def test_pk_collision_raises_and_never_narrows(monkeypatch):
+    post, calls = _failing_post(_pgrst_error(
+        "23505", 'duplicate key value violates unique constraint "opportunities_pkey"',
+        status=409))
+    monkeypatch.setattr(so, "supabase_post", post)
+    with pytest.raises(urllib.error.HTTPError):
+        so.insert_rows("u", "k", _rows(), _review())
+    assert len(calls) == 1
+
+
+def test_non_http_failure_raises_and_never_narrows(monkeypatch):
+    """A socket timeout carries no PostgREST body at all — it is not a pending migration."""
+    post, calls = _failing_post(TimeoutError("read timed out"))
+    monkeypatch.setattr(so, "supabase_post", post)
+    with pytest.raises(TimeoutError):
+        so.insert_rows("u", "k", _rows(), _review())
+    assert len(calls) == 1
+
+
+def test_missing_column_on_a_read_code_still_narrows(monkeypatch):
+    """42703 is what Postgres itself reports; PGRST204 is the schema cache. Both must narrow."""
+    calls = []
+
+    def post(url, table, rows, key, **kw):
+        calls.append([dict(r) for r in rows])
+        if any("seed_id" in r for r in rows):
+            raise _pgrst_error("42703", 'column "seed_id" does not exist')
+        return None
+
+    monkeypatch.setattr(so, "supabase_post", post)
+    assert so.insert_rows("u", "k", _rows(), _review()) == "no-attribution"
+    assert "seed_id" not in calls[-1][0]
+
+
+def test_is_missing_column_reads_the_body_once(monkeypatch):
+    """urllib bodies are single-read; a second _is_missing_column call must not crash."""
+    exc = _pgrst_error("PGRST204", "Could not find the 'seed_id' column")
+    assert so._is_missing_column(exc) is True
+    assert so._is_missing_column(exc) is False   # body consumed -> {} -> not a migration

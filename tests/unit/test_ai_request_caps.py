@@ -227,3 +227,73 @@ def test_anthropic_attaches_no_search_tool_while_search_is_off(monkeypatch):
     ai._proxy_to_anthropic(json.dumps({"system": "s", "userContent": "u",
                                        "useWebSearch": True}).encode(), "1.2.3.4", "alice")
     assert "tools" not in sent["body"]
+
+
+# ---------- S0-4 / findings C1.4, M4: bounded upstream calls ----------
+
+def test_anthropic_urlopen_is_given_an_explicit_timeout(monkeypatch):
+    """It had none. FastAPI runs these plain-`def` handlers in the anyio threadpool, so a hung
+    socket permanently consumed one of its 40 slots — capacity that never returned until a
+    restart."""
+    import urllib.request
+    from app.config import AI_UPSTREAM_TIMEOUT_SECONDS
+
+    seen = {}
+
+    class FakeUpstream:
+        status = 200
+
+        def read(self):
+            return b'{"content":[],"usage":{}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, *a, **kwargs):
+        seen["timeout"] = kwargs.get("timeout", a[0] if a else None)
+        return FakeUpstream()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(ai, "record_interactive_cost_async", lambda *a, **k: None)
+    monkeypatch.setattr(ai, "log_conversation_async", lambda *a, **k: None)
+
+    ai._proxy_to_anthropic(json.dumps({"system": "s", "userContent": "u"}).encode(),
+                           "1.2.3.4", "alice")
+    assert seen["timeout"] == AI_UPSTREAM_TIMEOUT_SECONDS
+
+
+def test_gemini_call_passes_an_explicit_timeout(monkeypatch):
+    """Explicit rather than inherited from gemini_common's 120s default — that default is
+    sized for a batch agent, not for a student watching a spinner."""
+    from app.config import AI_UPSTREAM_TIMEOUT_SECONDS
+
+    seen = {}
+
+    def fake_call_gemini(system, user_content, api_key, **kwargs):
+        seen.update(kwargs)
+        return "text", {}
+
+    monkeypatch.setattr(ai, "call_gemini", fake_call_gemini)
+    monkeypatch.setattr(ai, "record_interactive_cost_async", lambda *a, **k: None)
+    monkeypatch.setattr(ai, "log_conversation_async", lambda *a, **k: None)
+
+    ai._proxy_to_gemini(json.dumps({"system": "s", "userContent": "u"}).encode(),
+                        "1.2.3.4", "alice")
+    assert seen["timeout"] == AI_UPSTREAM_TIMEOUT_SECONDS
+    assert seen["use_web_search"] is False
+
+
+def test_the_search_tool_carries_a_hard_max_uses():
+    """Read the tool block directly: it is unreachable while the pin holds, so no request-level
+    test can cover it — and it exists precisely for the case where the pin is lifted."""
+    import inspect
+    from app.config import ANTHROPIC_MAX_WEB_SEARCH_USES
+
+    src = inspect.getsource(ai._proxy_to_anthropic)
+    assert "max_uses" in src and "ANTHROPIC_MAX_WEB_SEARCH_USES" in src
+    # Anthropic enforces max_uses server-side, so a generous number is a real bill. The
+    # defence-in-depth layer should stay minimal.
+    assert 1 <= ANTHROPIC_MAX_WEB_SEARCH_USES <= 3

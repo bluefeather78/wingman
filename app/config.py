@@ -114,6 +114,24 @@ AI_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("AI_RATE_LIMIT_WINDOW_SECONDS"
 AI_RATE_LIMIT_PER_USER = int(os.environ.get("AI_RATE_LIMIT_PER_USER", "") or 30)
 AI_RATE_LIMIT_PER_IP = int(os.environ.get("AI_RATE_LIMIT_PER_IP", "") or 120)
 
+# ---------- Upstream call limits on the AI proxies (S0-4; findings C1.4, M4) ----------
+# The Anthropic proxy called urllib.request.urlopen(req) with NO timeout at all. FastAPI runs
+# these plain-`def` handlers in the anyio threadpool, so a hung socket permanently consumes
+# one of its 40 slots — capacity that never comes back until a restart. An explicit ceiling
+# on both paths is what bounds that. 60s rather than the 120s that wingman/{gemini,claude}
+# _common default to: those are batch agents that can afford to wait, this is a student
+# watching a spinner, and a client-side timeout does not stop or refund server-side work
+# already in flight — so waiting longer only costs more.
+AI_UPSTREAM_TIMEOUT_SECONDS = float(os.environ.get("AI_UPSTREAM_TIMEOUT_SECONDS", "") or 60)
+
+# Ceiling on web searches per Anthropic call. Unlike Gemini's max_searches — a number folded
+# into the prompt and nothing more — Anthropic ENFORCES max_uses server-side, so this is a
+# real cost ceiling ($0.01/search). It is moot while _USE_WEB_SEARCH pins search off; it
+# exists as the defence-in-depth layer, so 1 is the right number: if the pin is ever lifted
+# by accident, the blast radius is one search. agents/check_deadlines.py sets 1 deliberately
+# for the same reason.
+ANTHROPIC_MAX_WEB_SEARCH_USES = int(os.environ.get("ANTHROPIC_MAX_WEB_SEARCH_USES", "") or 1)
+
 # ---------- Opportunities catalog (Supabase-backed) ----------
 # The opportunity catalog lives in a Supabase (hosted Postgres) table rather than
 # the old static opportunities.json — see scripts/one-off/migrate_to_supabase.py for the one-time

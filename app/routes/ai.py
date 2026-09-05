@@ -19,6 +19,7 @@ from app.config import (
     GEMINI_API_KEY, MESSAGES_MODEL, MESSAGES_MAX_TOKENS, MESSAGES_MAX_TOKENS_CEILING,
     ANTHROPIC_API_KEY, ANTHROPIC_URL, CLAUDE_MODEL,
     CLAUDE_MAX_TOKENS, CLAUDE_MAX_TOKENS_CEILING, AI_MAX_BODY_BYTES,
+    AI_UPSTREAM_TIMEOUT_SECONDS, ANTHROPIC_MAX_WEB_SEARCH_USES,
 )
 from app.core import (
     touch_user_activity, record_interactive_cost_async, log_conversation_async,
@@ -147,6 +148,10 @@ def _proxy_to_gemini(raw_body, ip, userid):
             use_web_search=_USE_WEB_SEARCH,
             max_tokens=_clamped_gemini_max_tokens(payload.get("maxTokens")),
             model=MESSAGES_MODEL,
+            # Explicit, not inherited from gemini_common's 120s default: this is an
+            # interactive request holding an anyio threadpool slot, not a batch agent that
+            # can afford to wait (M9 / S0-4).
+            timeout=AI_UPSTREAM_TIMEOUT_SECONDS,
         )
     except urllib.error.HTTPError as e:
         body = e.read()
@@ -178,7 +183,12 @@ def _proxy_to_anthropic(raw_body, ip, userid):
         "messages": [{"role": "user", "content": user_content}],
     }
     if _USE_WEB_SEARCH:
-        body["tools"] = [{"type": "web_search_20250305", "name": "web_search"}]
+        # max_uses is the defence-in-depth layer under the _USE_WEB_SEARCH pin, and unlike
+        # Gemini's prompt-level max_searches it is a REAL ceiling — Anthropic enforces it
+        # server-side. The tool was attached with no cap at all, so a single request could
+        # run unbounded $0.01 searches (M9 / S0-4, finding C1.4).
+        body["tools"] = [{"type": "web_search_20250305", "name": "web_search",
+                          "max_uses": ANTHROPIC_MAX_WEB_SEARCH_USES}]
     req = urllib.request.Request(
         ANTHROPIC_URL,
         data=json.dumps(body).encode("utf-8"),
@@ -190,7 +200,9 @@ def _proxy_to_anthropic(raw_body, ip, userid):
         },
     )
     try:
-        with urllib.request.urlopen(req) as upstream:
+        # No timeout here at all until S0-4: a hung socket permanently consumed one of the
+        # anyio threadpool's 40 slots, capacity that never returned until a restart.
+        with urllib.request.urlopen(req, timeout=AI_UPSTREAM_TIMEOUT_SECONDS) as upstream:
             data = upstream.read()
             resp = Response(content=data, status_code=upstream.status,
                             media_type="application/json")

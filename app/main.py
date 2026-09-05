@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import GEMINI_API_KEY, ANTHROPIC_API_KEY
+from wingman import gemini_common
 from app.core import record_api_error
 from app.routes import (
     ai, opportunities, account, user_data, google_oauth, mailing_list,
@@ -26,6 +27,18 @@ from app.routes import (
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# MARQUEE M9 (Phase 2 item 1, finding M5): this process serves students, not batches, so it
+# takes no batch throttle. wingman/gemini_common._enforce_rate_limit() sleeps up to 5s between
+# calls against a MODULE GLOBAL — inside an anyio threadpool slot, with a student waiting, and
+# serialised across every concurrent caller. /api/match paid it twice per request (embed, then
+# eligibility gate), so ~10s of a match was pure sleep.
+#
+# Safe here because the agents that throttle exists for run as SUBPROCESSES (ops/core.py
+# spawns `python -m agents.<name>`) and never share this module's state, and because no
+# interactive path uses the googleSearch quota it protects. This must stay the only caller —
+# see set_interactive_process's docstring.
+gemini_common.set_interactive_process(True)
 
 app = FastAPI(title="Highschool Wingman", docs_url=None, redoc_url=None, openapi_url=None)
 

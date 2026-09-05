@@ -261,11 +261,9 @@ this list is for.
 
 Kept in one place so none of it scrolls out of sight. None of it blocks starting Phase 3.
 
-1. **Anthropic/Gemini provider tiers are still unconfirmed** — the last live item from the
-   Method section's "assumptions to confirm". `AI_MAX_CONCURRENCY` shipped at **12** as a
-   defensible guess; the tier is what tells you whether that number is right. Letting more
-   requests through than the org's tier allows just relocates the queue to the provider's door
-   and turns a wait into a 429.
+1. ~~Anthropic/Gemini provider tiers are still unconfirmed.~~ **CLOSED (Shama, 2026-09-05).**
+   `AI_MAX_CONCURRENCY` stays at **12** and the tier question is settled — do not re-open it,
+   do not re-raise it in a status section, and do not propose confirming it as follow-up work.
 2. ~~Decision 4 below (retire `opportunity-matching` as a branch) is still unanswered.~~
    **ANSWERED yes and DONE in Phase 3** — archived as the tag `archive/opportunity-matching`,
    then deleted from `origin`.
@@ -415,8 +413,8 @@ running the real thing did.
 
 ### Still open going into Phase 4
 
-1. **Anthropic/Gemini provider tiers are STILL unconfirmed** — carried from Phase 2 and still
-   the live assumption that matters most. `AI_MAX_CONCURRENCY` remains 12 as a guess.
+1. ~~Anthropic/Gemini provider tiers are still unconfirmed.~~ **CLOSED (Shama, 2026-09-05) —
+   settled, not outstanding.** `AI_MAX_CONCURRENCY` stays at 12. This is not to be re-raised.
 2. **Render stays `plan: free` and `USER_DAILY_BUDGET_USD` stays $0.50 until launch** —
    decisions 3 and 2. A Phase 4 session must not "helpfully" bump either.
 3. **`docs/review-2026-09-02/load_probe.py` is still stale** and must be fixed before it is next
@@ -648,6 +646,13 @@ the failure this list exists to prevent. Nothing here is waiting on Shama.*
     `docs/ollama-local-analysis-plan` all stay on `origin` untouched. Only fully-merged branches
     were deleted. Do not revisit this.
 
+12. ~~Confirm the Anthropic/Gemini org tiers behind `AI_MAX_CONCURRENCY`?~~ **ANSWERED
+    (Shama, 2026-09-05): closed. `AI_MAX_CONCURRENCY` stays at 12.** It was the last surviving
+    entry in the Method section's "assumptions to confirm" and had been carried forward through
+    Phases 2 and 3. It is now retired from that list and from every "still open" section.
+    **A future session must not re-raise it** — not as an open question, not as a risk note, and
+    not as suggested follow-up work.
+
 ## Live finding (2026-09-02): catalog fetch statement-timeout + cache decoupling
 
 Surfaced by a real user report ("search a profile theme → *Search failed: Could not reach
@@ -772,8 +777,8 @@ worktrees and stashes. Production was only pinged read-only (root + catalog head
 
 Assumptions to confirm: ~~Render plan actually in use~~ — **RESOLVED 2026-09-05**: `plan: free`,
 and that is the deliberate intended state until launch (decision 3). Supabase region vs Render;
-**Anthropic/Gemini org tiers — STILL OPEN, and now the one that matters most**, because
-`AI_MAX_CONCURRENCY` shipped at 12 as a guess against it. ~~RLS state of `conversations`,
+~~Anthropic/Gemini org tiers.~~ **CLOSED (Shama, 2026-09-05):** `AI_MAX_CONCURRENCY` stays at
+12 and this assumption is retired from the list. Not to be re-raised. ~~RLS state of `conversations`,
 `agent_runs`, `deadline_check_log` (no schema file in the tree)~~ — **RESOLVED 2026-09-04**: all
 three now have schema files, RLS is enabled, and it was confirmed against the live database
 rather than assumed (all report `rls = true`).

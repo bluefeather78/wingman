@@ -179,23 +179,21 @@ for byte, as do both conditional branches and every user-content template.
 
 ### What still needs a human
 
-- ~~**Run [db/RUN_ME_S1.sql](db/RUN_ME_S1.sql)**~~ — **RUN 2026-09-04**, reported successful.
-  The columns and tables exist ahead of the deploy, which is the right order: the code that
-  uses them is still on `codecleanup` and unpushed, so until it ships the new columns simply
-  sit unused. **Still outstanding: read the verification query's output** — it returns five
-  rows and every one must say `rls = true`. For `conversations`, `agent_runs` and
-  `deadline_check_log` that confirmation IS the fix, not the file. Original instructions kept
-  below for the record.
+- ~~**Run [db/RUN_ME_S1.sql](db/RUN_ME_S1.sql)**~~ — **DONE 2026-09-04, and VERIFIED.** The
+  verification query returned `rls = true` for `conversations`, `agent_runs`,
+  `deadline_check_log`, `promo_codes` and `users`. That confirmation is what actually closes
+  S1-9: the schema files could only make the ALTER available to run, and could not
+  retroactively secure tables created by hand from a code comment. The columns and tables
+  exist ahead of the deploy, which is the right order — the code that uses them is still on
+  `codecleanup`, so until it ships they sit unused. Original instructions kept below.
 - ~~Run it~~ in the Supabase SQL editor — one paste
   covering all five files, idempotent, with a verification query at the end that should
   return `rls = true` for all five tables. (The individual files stay the source of record
   and the place to read why each statement exists; that one is a convenience copy.)
   Everything degrades rather than breaking until it runs — rotation is simply off, promo
   codes fall back to the built-in table — but nothing is actually fixed until it does.
-- **Confirm RLS** for `conversations`, `agent_runs` and `deadline_check_log` — either from
-  the verification query at the end of `db/RUN_ME_S1.sql` or in the dashboard (Table Editor
-  > table > RLS). A schema file cannot retroactively secure a table somebody created by hand
-  from a code comment; that confirmation IS the fix for S1-9.
+- ~~**Confirm RLS**~~ — **DONE 2026-09-04**, see above. All five tables report
+  `rls = true`. S1-9 is closed in fact, not just in a file.
 
 - **Watch the first sign-ins after the deploy.** S1-2's rotation goes live the moment the
   code ships against the migrated database. Every refresh token minted before it carries no

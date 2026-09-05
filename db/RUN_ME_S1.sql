@@ -166,9 +166,20 @@ alter table deadline_check_log enable row level security;
 
 -- ============================================================================
 -- VERIFY. Run this after the above; all five rows should read rls = true.
+--
+-- Schema-qualified to 'public' on purpose. An earlier version of this query
+-- read pg_class without joining pg_namespace, so it matched relations of the
+-- same name in EVERY schema and returned "users" twice: once for public.users
+-- (this app's) and once for auth.users (Supabase's own). Both happened to be
+-- true, so the answer was right, but a verification query that cannot tell you
+-- WHICH table it just cleared is not a verification query.
 -- ============================================================================
-select relname as table_name, relrowsecurity as rls
-from pg_class
-where relname in ('conversations', 'agent_runs', 'deadline_check_log',
-                  'promo_codes', 'users')
-order by relname;
+select n.nspname            as schema,
+       c.relname            as table_name,
+       c.relrowsecurity     as rls
+from pg_class c
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public'
+  and c.relname in ('conversations', 'agent_runs', 'deadline_check_log',
+                    'promo_codes', 'users')
+order by c.relname;

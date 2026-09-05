@@ -489,6 +489,118 @@ is rebuilding one, or adding a second thing that does the same job badly.
    gate in chat. Phase 4's scheduled paid runs are M3 territory (approval moves from per-run to
    per-schedule) and the toggle + dollar ceiling the phase row asks for is what makes that safe.
 
+## STATUS: Phase 4 is DONE on branch `phase4-shared-state` (2026-09-05)
+
+Shared state. Five items, built as five commits plus one marquee commit. **Pushed but not
+merged — Shama is reviewing.** Phase 5 picks up from here.
+
+| | |
+|---|---|
+| Exit test | **the testable half is met.** *A second machine sees the same lead queue* is pinned by `test_a_second_machine_sees_the_same_queue` and `test_marking_processed_on_one_machine_stops_the_other_re_paying`. *Two instances pass the 50 rps test* is **deferred with every other throughput bar** (decisions 3 and 8) — Render Free cannot reach 50 rps and that is a choice, not an oversight |
+| Tests | **2706 → 2724**, exit 0. 5 new test files, 89 new tests |
+| Verified how | unit suite **plus a live smoke test against the real Supabase** — see below. Phase 3's lesson was that green units did not mean working software, and it held again |
+| Marquee | **one dedicated M9 commit**, approved in advance (decision 13). No prompt text moved, so no M8 |
+| Migrations | **four new .sql files, none of them run yet.** See "Needs a human at the database" below |
+
+| Item | State |
+|---|---|
+| handoff tokens survive a second worker | **DONE** — `app/services/handoff_store.py`, `db/auth_handoffs_schema.sql` |
+| lock file batch-only | **DONE** — `MARQUEE M9 (Phase 4)` |
+| idempotent rollups via RPC | **DONE** — `db/cost_rollup_rpc.sql` |
+| `jsonb_set` RPC for saves (finding **L9**) | **DONE** — `db/user_data_rpc.sql` |
+| leads + snapshots in tables | **DONE** — `db/discovered_leads_schema.sql`, `db/agent_snapshots_schema.sql` |
+| scheduled worker | **DROPPED** (decision 14) |
+| optional direct Postgres | **SKIPPED** (decision 15) |
+
+### The pattern every one of these follows, and why
+
+**Two backends, DB preferred, local fallback, warned once, naming the `.sql` file.** It is
+`wingman/run_lock.py`'s shape from Phase 3, reused four more times rather than reinvented, and
+it exists because of Phase 3's own lesson: *every unit test mocked the table as present, so the
+entire class of "the migration has not been run yet" was untested — which is the state of every
+checkout.* The fallback is not politeness; it is the only reason a fresh clone still works.
+
+A **real** failure raises instead of falling back, everywhere. That distinction is the one worth
+holding onto: an outage answered with a local file reads as success and quietly does the wrong
+thing — re-mining a hub the shared queue had already processed, or committing a stale snapshot.
+
+### What the live smoke test found
+
+The unit suite was green before the service was ever started. Booting it and driving the real
+routes against the real (un-migrated) Supabase then confirmed all four fallbacks — and produced
+the four warnings verbatim, each naming its `.sql` file:
+
+- `GET /api/agents/leads` → `200`, `"backend": "file"`, warning names `db/discovered_leads_schema.sql`
+- `GET /api/agents/snapshots` → `200`, `"backend": "local"`, warning names `db/agent_snapshots_schema.sql`
+- `GET /api/auth/google/start` → `302` to Google with a state cookie, warning names `db/auth_handoffs_schema.sql`
+- `update_user_data()` on a non-existent account → `False`, warning names `db/user_data_rpc.sql`
+
+One thing it showed that no test could: **this checkout has no `discovered_leads.jsonl` and no
+snapshot files at all.** The 208 KB queue finding 4.20 is about lives on a different machine.
+That is the finding, demonstrated rather than argued.
+
+### Needs a human at the database — FOUR migrations, none run
+
+None of these blocks anything: every code path falls back and warns. But until they are run,
+**Phase 4 has changed nothing about the actual behaviour** — it has only made the shared
+version available.
+
+1. **`db/auth_handoffs_schema.sql`** — until this runs, Google sign-in nonces stay in process
+   memory, so this service must keep running ONE worker. This is the migration that unblocks
+   `--workers > 1`.
+2. **`db/user_data_rpc.sql`** — until this runs, `/api/data/save` keeps the read-modify-write
+   that loses concurrent updates (**L9**, open since Phase 1). This is the one with a
+   user-visible failure today: two tabs, or a phone and a laptop, silently drop one save.
+3. **`db/cost_rollup_rpc.sql`** — until this runs, cost accounting keeps its read-then-PATCH.
+   Note this file also MERGES pre-existing duplicate rollup rows before creating its partial
+   index; it prints a `notice` for each. Read those.
+4. **`db/discovered_leads_schema.sql`** and **`db/agent_snapshots_schema.sql`** — until these
+   run, the lead queue and the dry-run snapshots stay on whichever laptop produced them.
+
+Run them in that order (they are independent, but 1 and 2 are the ones with live impact).
+**Then re-run the smoke test**: each of the four warnings above should stop appearing, and
+`/api/agents/leads` should report `"backend": "supabase"`.
+
+### Deliberate departures from the phase row — three
+
+- **The handoff tokens are a TABLE, not the HMAC-signed token the phase row and perf_report
+  name.** A signed token needs no storage but is **replayable until it expires**, and single-use
+  is the entire point of these nonces — S1-3 made the calendar handoff single-use precisely so a
+  URL sitting in browser history or leaking through a `Referer` is inert on the second click.
+  Consumption is now one `DELETE ... Prefer: return=representation`, so Postgres serialises two
+  concurrent spenders and exactly one gets the payload. The nonce is stored as a **sha256**,
+  never in the clear. A future session must not "simplify" this into a JWT.
+- **`||`, not `jsonb_set`.** For one key they are equivalent, but `jsonb_set` takes a single
+  path, so a multi-key save would need one call per key and be back to N statements. `||` merges
+  every top-level key in one go, which is what makes `/api/data/save`'s new `{values: {...}}`
+  form worth having.
+- **The `agent_runs` unique index is PARTIAL.** That table is an append-only history — an agent
+  has run many times — so a plain unique index on `(agent, mode)` would break every real agent
+  immediately. Only `interactive_gemini` and `interactive_claude` genuinely have one row per
+  `(agent, day)`, and the index says exactly that. `bump_interactive_run` refuses any other
+  agent by name, because outside the partial index the `ON CONFLICT` never fires and every call
+  would append a row to somebody's audit log.
+
+### What changed that Phase 5 has to know about
+
+Phase 5 is almost entirely frontend, so most of this does not touch it. Three things do.
+
+1. **`/api/data/save` now accepts `{values: {key: value}}`** as well as `{key, value}`, and the
+   multi-key form is ATOMIC. The client still sends one key at a time; wiring `saveData` to
+   batch is a natural Phase 5 job (the profile synthesis writes four keys serially). The M4
+   per-value size cap is checked per value, not on the batch — do not "simplify" it into one
+   check on the whole body.
+2. **The M9 approval Phase 5 carries (decision 13) covers the retry caps and the client
+   timeouts, and nothing else.** If a Phase 5 change turns out to need a prompt edit, that is a
+   fresh approval — and there is no dead prompt text left in the bundle to delete, which was
+   checked.
+3. **The paid golden run is deferred (decision 16), but M10 is not relaxed.**
+   `eval/run_golden_matching.mjs` imports `frontend/src/lib/ranking.ts` directly, so it inherits
+   a ranking change rather than drifting from it. A change to `finder.tsx`'s `callMatchMapped`
+   curation/sort/slice still has to be mirrored in the harness in the same commit.
+
+---
+
 ### Phase 4 approvals and scope (logged 2026-09-05, before any Phase 4 code was written)
 
 Recorded **before** implementation, so the phase is executed against the scope that was actually
@@ -812,7 +924,7 @@ departures section for why `agent_runs` cannot hold a lock**; bank cost before p
 ~~merge `local-discovery-engine`~~ **NOT merged — it is behind main on every shared file and a
 merge would revert the `wingman/` reorg; its plan doc was ported and the prototype is parked as
 an M8+M9 item**; CI marquee-tag check; ~~move one-offs/eval out of root~~ **already done — `scripts/one-off/` and `eval/` exist and `server.py` is the only `.py` left at the root (verified 2026-09-05)**; `scrape_common.py` **(now `wingman/scrape_common.py`)**; tests for untested paid paths | Wk 3–5 | 6 d | **none taken — no prompt text moved and no paid call changed**; decision 4 answered yes | **ALL THREE MET**, each pinned by a named test, and the lock verified live against the real `agent_locks` table |
-| **4 IN PROGRESS** Shared state — handoff tokens survive a second worker; lock file batch-only; idempotent rollups via RPC; `jsonb_set` RPC for saves; leads + snapshots in tables; ~~scheduled worker (free agents first, paid behind toggle + dollar ceiling)~~ **DROPPED 2026-09-05 (decision 14 — Shama has dropped the idea; do not build it)**; ~~optional direct Postgres for hot queries~~ **SKIPPED 2026-09-05 (decision 15 — deferred to the launch gate)** | Wk 5–7 | 6 d | ~~M3 per scheduled paid run~~ **not needed — no scheduler.** M9 granted for the Gemini lock change (decision 13) | ~~two instances pass the 50 rps test~~ **deferred with every other throughput bar (decisions 3 and 8)**; second machine sees same lead queue |
+| **4 DONE** Shared state — handoff tokens survive a second worker; lock file batch-only; idempotent rollups via RPC; `jsonb_set` RPC for saves; leads + snapshots in tables; ~~scheduled worker (free agents first, paid behind toggle + dollar ceiling)~~ **DROPPED 2026-09-05 (decision 14 — Shama has dropped the idea; do not build it)**; ~~optional direct Postgres for hot queries~~ **SKIPPED 2026-09-05 (decision 15 — deferred to the launch gate)** | Wk 5–7 | 6 d | ~~M3 per scheduled paid run~~ **not needed — no scheduler.** M9 granted for the Gemini lock change (decision 13) | ~~two instances pass the 50 rps test~~ **deferred with every other throughput bar (decisions 3 and 8)**; second machine sees same lead queue |
 | 5 NEXT Product accuracy — grade parser context; date validation; sort-on-refresh + calendar ids by label; synthesis failure keeps transcript; unreachable ≠ revoked; reset singletons on logout; one retry per action; client timeouts; drop icon fonts + dead ~~prompts/~~code (**no dead prompt text is left in the bundle — S1-1 removed it; verified 2026-09-05, so this is NOT an M8 item**); Vitest ~40 cases; a11y labels; split big screens | Wk 6–8 | 5 d | ~~none~~ **M9 granted for the retry caps + client timeouts (decision 13)** | frontend tests in CI; ~~golden-set score holds~~ **the paid golden run is DEFERRED (decision 16); the M10 harness is still kept in sync**; bundle −300 KB |
 | 6 Operate — dashboards, dependency bumps, key rotation, runbook, Stripe webhook route, re-arm trial cron | Wk 8+ | ongoing | none | "is it up / fast / what did it cost" on one screen |
 

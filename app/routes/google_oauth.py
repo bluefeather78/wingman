@@ -395,8 +395,8 @@ def handle_google_finish(request: Request, body: dict = Depends(json_body)):
                                "signing in with Google again.")
 
     # Location is no longer collected at sign-up — it is captured in-app on the student
-    # profile. Still read from the body (older clients may send it) and default to empty.
-    location = (body.get("location") or "").strip()
+    # profile. The body field (if an older client still sends it) is ignored, and the
+    # account's location column is left empty by create_user's default.
     is_adult = bool(body.get("isAdult"))
     parental_consent = bool(body.get("parentalConsent"))
     accepted_terms = bool(body.get("acceptedTerms"))
@@ -414,7 +414,7 @@ def handle_google_finish(request: Request, body: dict = Depends(json_body)):
     userid = _unique_userid_from_email(entry["email"])
     try:
         create_user(userid, entry["first_name"], entry["last_name"], entry["email"],
-                    None, location, is_adult=is_adult,
+                    None, is_adult=is_adult,
                     parental_consent=parental_consent, google_id=entry["google_id"])
     except MissingUserColumns:
         return json_error(503, "Accounts are temporarily unavailable: the "

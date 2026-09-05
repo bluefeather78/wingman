@@ -44,8 +44,8 @@ def handle_register(request: Request, body: dict = Depends(json_body)):
     userid = (body.get("userid") or "").strip()
     password_hash = body.get("passwordHash") or ""
     # Location is no longer collected at sign-up — it is captured in-app on the student
-    # profile. Still read from the body (older clients may send it) and default to empty.
-    location = (body.get("location") or "").strip()
+    # profile. The body field (if an older client still sends it) is ignored, and the
+    # account's location column is left empty by create_user's default.
     if not all([first_name, last_name, email, userid, password_hash]):
         return json_error(400, "Missing required fields.")
 
@@ -95,7 +95,7 @@ def handle_register(request: Request, body: dict = Depends(json_body)):
     # password-equivalent. See app/auth/passwords.py.
     stored_hash = hash_password(password_hash)
     try:
-        create_user(key, first_name, last_name, email, stored_hash, location,
+        create_user(key, first_name, last_name, email, stored_hash,
                     is_adult=is_adult, parental_consent=parental_consent)
     except MissingUserColumns:
         return json_error(503, "Accounts are temporarily unavailable: the "

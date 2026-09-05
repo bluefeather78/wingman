@@ -17,7 +17,8 @@ The five specialist reports it summarises, with file:line for every finding, are
 
 **All security work in this plan is complete.** Phase 0 (stop the bleeding) and Phase 1
 (security hardening) shipped as 31 commits on `codecleanup`, one per finding, and are pushed.
-Phase 2 (capacity) is the next unstarted phase and is where this document picks up again.
+**Phase 2 (capacity) is also complete now** — see the second STATUS section below; Phase 3
+(pipeline + repo) is where this document picks up.
 
 The blow-by-blow — every finding, what was done, what was deliberately not done, and the
 three places this plan's own text turned out to be wrong — is in
@@ -30,8 +31,8 @@ summary.
 | Phase 0 | complete, tag `phase-S0` |
 | Phase 1 | complete, 15 items (14 + the S0-9 leftover) |
 | Findings closed | C1, C2, H1–H5, M1–M4, M6–M11, L1, L2, L3, L5, L6, L10 |
-| Still open by design | **M5** (process-wide 5 s Gemini sleep) → Phase 2; argon2 parameters → Phase 2; L9 (lost updates on `users.data`) → Phase 4; L4 (Stripe webhook) → Phase 6; L8 (PyPDF2 → pypdf) → Phase 6 |
-| Tests | 2349 passing (was 2080 at the end of Phase 0); 12 new test files |
+| Still open by design | ~~**M5** (process-wide 5 s Gemini sleep) → Phase 2; argon2 parameters → Phase 2~~ **both CLOSED in Phase 2** (items 1 and 7); L9 (lost updates on `users.data`) → Phase 4; L4 (Stripe webhook) → Phase 6; L8 (PyPDF2 → pypdf) → Phase 6 |
+| Tests | 2349 passing (was 2080 at the end of Phase 0); 12 new test files. **Now 2447** after Phase 2 |
 | Verified against a real production build | `tsc --noEmit` exit 0 · `expo export -p web` succeeds · **no prompt text left in the shipped bundle**, checked with the same grep the security report used to prove the vulnerability |
 | Database | all migrations run and RLS confirmed live — `conversations`, `agent_runs`, `deadline_check_log`, `promo_codes`, `users` all report `rls = true` |
 
@@ -62,7 +63,7 @@ summary.
   catalog/user-supplied URL must go through `safe_urlopen`, not `urllib.request.urlopen`.
   A test asserts the five existing sinks still do.
 
-### Still needs a human (none of it blocks Phase 2)
+### Still needs a human (blocks neither Phase 2 nor Phase 3 — but all four are STILL OPEN as of 2026-09-05)
 
 1. **Read the `[client-ip]` line off the Render log** after this deploy. `app/main.py` prints
    it once, on the first request. A resolved address still in `10.x` means
@@ -85,7 +86,7 @@ summary.
 
 ### Phase 2 approvals and scope (logged 2026-09-05, before any Phase 2 code was written)
 
-Shama reviewed the ten Phase 2 items and gave three rulings. They are recorded here **before**
+Shama reviewed the ten Phase 2 items and gave the five rulings below. They are recorded here **before**
 implementation so the phase is executed against the scope that was actually approved, not the
 scope this document originally proposed.
 
@@ -126,10 +127,22 @@ scope this document originally proposed.
 **Net effect on the ten items: NINE get built, not ten.** Item 9 is out. Only how the rest are
 *verified* changed.
 
-### Phase 2 progress (branch `phase2-capacity`, as of 2026-09-05)
+---
 
-**All nine buildable items are done, committed and green.** Item 9 was dropped (decision 7).
-Each marquee item is its own dedicated commit naming M9, per MARQUEE_DECISIONS.md.
+## STATUS: Phase 2 is DONE on branch `phase2-capacity` (2026-09-05)
+
+**All nine buildable items are built, committed and green.** Item 9 was dropped (decision 7)
+and item 10 is deferred (decision 8), so the phase is closed on its unit tests plus per-change
+measurements. The branch is **pushed but NOT merged to `main`** — Shama is testing it. Phase 3
+must not assume `main` contains any of this yet.
+
+| | |
+|---|---|
+| Branch | `phase2-capacity` — pushed, **not merged**, twelve commits including this documentation one |
+| Items | 1–8 built; **9 DROPPED** (decision 7); **10 DEFERRED** (decision 8) |
+| Marquee | three dedicated M9 commits, each naming the entry: `MARQUEE M9 (Phase 2 item 1)`, `(item 2)`, `(item 8)`. **No prompt text moved, so no M8 was needed or taken** |
+| Tests | **2349 → 2447**, exit 0; every item added its own tests |
+| Measurement | per-change only. **This phase has no system-level before/after number** — see decision 8 |
 
 | Item | State |
 |---|---|
@@ -142,13 +155,7 @@ Each marquee item is its own dedicated commit naming M9, per MARQUEE_DECISIONS.m
 | 7 OWASP argon2 | **DONE** |
 | 8 paid deadline/checklist lane | **DONE** — `MARQUEE M9 (Phase 2 item 8)` |
 | 9 observability | **DROPPED** (decision 7 — Datadog free tier later) |
-| 10 laptop probe | **NOT RUN.** Provider tiers still unconfirmed |
-
-Tests went **2349 -> 2447**, exit 0 at every step; every item added its own tests.
-
-**The one thing left in Phase 2 is item 10's laptop probe.** The code is in and unit-tested;
-what has not happened is the end-to-end before/after measurement the revised exit test asks
-for. Until it runs, the numbers quoted below are per-change measurements, not a system result.
+| 10 laptop probe | **DEFERRED** (decision 8 — "we'll come to perf tests later") |
 
 **Five things measured or found while building this, worth keeping:**
 
@@ -165,18 +172,141 @@ for. Until it runs, the numbers quoted below are per-change measurements, not a 
    starvation it is meant to prevent.
 4. **httpx was imported but never declared.** It was reachable only as a transitive dependency
    of the test client — the identical shape to this plan's Critical #2 (numpy missing from
-   `requirements.txt` while the code imported it). Now pinned.
+   `requirements.txt` while the code imported it). Now pinned at `httpx==0.28.1`.
 5. **Cost accounting was serialising every paid call.** Attribution spawned a thread per call
    and held one global lock across three or four Supabase round trips inside it, so concurrent
    AI calls queued behind each other's bookkeeping. Item 6 removed both.
 
-**Item 4 was scoped to Supabase only** (Shama, 2026-09-05): the Anthropic call is a 10-30
-second request, so a reused handshake saves under 1% of it and would have cost an M9 approval
-to buy that. A test pins that it stays on `urlopen`.
-
 **Pre-warming the catalog at startup was deliberately not done.** Render Free sleeps when
 idle, so it would add ~10s to every cold start — paid often to help rarely. It belongs with
-the paid-tier move.
+the paid-tier move, not here.
+
+### What changed that Phase 3 has to know about
+
+Phase 2 left eight seams — seven in `app/`, one in `wingman/`. Each exists to remove a specific
+trap, and each has a way of being re-introduced by a well-meaning later change, which is what
+this list is for.
+
+- **Two concurrency primitives on purpose, not one.** `app/services/lanes.py` defines
+  `PaidLane`, a non-blocking `threading.BoundedSemaphore` that bounds the paid
+  deadline/checklist branch (used from `app/routes/opportunities.py`, where those two handlers
+  live); `app/routes/ai.py` defines a separate `_AiLane`, a **plain int with no lock**. They are not duplicates. `_AiLane` is safe unlocked *only* because it is
+  touched from the single-threaded event loop, where nothing can interleave between reading
+  `in_flight` and incrementing it; `PaidLane` is touched from N anyio worker threads at once
+  and needs a real semaphore. **Use `PaidLane` for anything reached from a `def` handler; use
+  the `_AiLane` shape only on the loop.** Merging them would give the loop-side lane a lock it
+  can never contend and would leave one comment explaining when the other applies. Both
+  acquire non-blocking and **shed** (`503` + `Retry-After`) — waiting is the behaviour being
+  removed, since a queued caller still holds its connection.
+- **`app/routes/ai.py` is split, and the split is load-bearing.** `handle_ai` is now
+  `async def` and **must stay `async def` and must stay non-blocking**. Being on the event
+  loop is what makes a shed free: the lane is full, the caller gets a 503, and no threadpool
+  slot is ever taken. Were it plain `def` again, every request would have to win a threadpool
+  slot just to learn it should be shed — the flood would drain the pool it is meant to be kept
+  out of. All blocking work (both limiters, the subscription read, the budget lookups, the
+  provider call) lives in `_serve_ai`, behind `to_thread.run_sync`. Adding one blocking call to
+  `handle_ai` stalls the whole process.
+- **`wingman/gemini_common.set_interactive_process()` has exactly one permitted caller:
+  `app/main.py`.** It is a process-level switch that turns off the 5-second batch throttle.
+  `tests/unit/test_gemini_interactive_throttle.py::test_only_the_web_app_flips_the_switch`
+  greps `app/ agents/ ops/ wingman/ scripts/ eval/` and asserts the caller list is exactly
+  `["app/main.py"]`. An **agent** calling it would lose the delay that keeps a long paid run
+  under Gemini's rate limit. Every batch agent still measures 5.0s between calls; item 1
+  turned the sleep off in the web process only, under the M9 approval logged above, and that
+  is safe precisely because the web process runs no agent in-process. If that ever changes,
+  this is the decision that has to change with it — and **M6 in MARQUEE_DECISIONS.md is the
+  entry to read first**.
+- **`app/http_pool.pooled_urlopen` is how this service talks to Supabase.** It is a shim, not
+  a rewrite: it takes the same `urllib.request.Request` the eleven call sites already build
+  and raises the same `urllib.error.HTTPError` they already catch, so the catalog's `57014`
+  retry and the two `SELECT *` degrades keep working. **The Anthropic call in `app/routes/ai.py`
+  deliberately does NOT use it** (Shama, 2026-09-05 — a reused handshake saves under 1% of a
+  10-30s request and pooling it would be an M9 change);
+  `test_http_pool.py::test_the_anthropic_call_is_not_pooled` pins that `_anthropic_call` still
+  says `urllib.request.urlopen`. `httpx` is now a declared dependency in `requirements.txt`.
+- **The subscription gate reads `app.core.get_user_subscription()`, not `get_user_account`.**
+  It caches five narrow columns per userid for `IDENTITY_CACHE_TTL_SECONDS`; caching the wide
+  row instead would hold every account's `password_hash` and calendar refresh token in process
+  memory. Staleness is one-directional — a lapse can enforce up to a minute late, a payment
+  never can — because **invalidation sits at the `_users_request` choke point** in
+  `app/core.py`, not at the ~14 call sites. That placement is the reason it can be trusted: a
+  new write path cannot forget to invalidate, because it cannot reach the `users` table
+  without going through there. Keep new writes on that seam.
+- **Cost accounting is batched; the spend caps are not.** `record_user_cost` buffers a delta
+  under the rollup key, `flush_user_costs()` drains it on an interval (and via an `atexit`
+  hook), and `record_user_cost_async` no longer spawns a thread — it is now a thin alias kept
+  for its callers. **`budget.note_spend()` still fires SYNCHRONOUSLY, first, ahead of any
+  buffering**, so the per-user daily budget and the global circuit breaker see every dollar the
+  instant it is spent. Only the console's Cost-per-user view lags, by at most
+  `COST_FLUSH_INTERVAL_SECONDS`. Moving `note_spend` behind the buffer would turn a latency fix
+  into a hole in the spend caps.
+- **`app/services/opportunities.py` now has five entry points, and browsing no longer pays for
+  vectors.** `fetch_opportunities()` is the vector-free catalog on the short TTL;
+  `fetch_vectors()` is `{id: match_vector}` on the 24 h backstop; `fetch_opportunities_with_vectors()`
+  joins them for `/api/match`; `catalog_payload()` returns the pre-serialised `(body, gzip, etag)`
+  for `/api/opportunities`; **`bust_catalog_cache()` clears BOTH caches.** `ops/core.py` calls
+  `bust_catalog_cache()` at four sites and **must never reach into a cache dict again** —
+  busting only the catalog would leave a newly-activated listing looking perfectly fine in the
+  browser while being **un-matchable for a day**. That is the failure this API shape exists to
+  make impossible; a third cache added later is covered for free.
+- **Eight new env knobs, all in `app/config.py` with the reasoning above each.** Defaults:
+  `AI_MAX_CONCURRENCY` **12**, `AI_SHED_RETRY_AFTER_SECONDS` **5**,
+  `PAID_CHECK_MAX_CONCURRENCY` **4**, `PAID_CHECK_SHED_RETRY_AFTER_SECONDS` **10**,
+  `IDENTITY_CACHE_TTL_SECONDS` **60**, `COST_FLUSH_INTERVAL_SECONDS` **5**,
+  `COST_FLUSH_MAX_KEYS` **200**, `CATALOG_VECTOR_CACHE_TTL` **86400**. None of the eight appears
+  in `render.yaml`, so unless one has been set in the Render dashboard, production runs these
+  defaults. Tune from the dashboard, not by editing the code.
+
+### Still open going into Phase 3
+
+Kept in one place so none of it scrolls out of sight. None of it blocks starting Phase 3.
+
+1. **Anthropic/Gemini provider tiers are still unconfirmed** — the last live item from the
+   Method section's "assumptions to confirm". `AI_MAX_CONCURRENCY` shipped at **12** as a
+   defensible guess; the tier is what tells you whether that number is right. Letting more
+   requests through than the org's tier allows just relocates the queue to the provider's door
+   and turns a wait into a 429.
+2. **Decision 4 below (retire `opportunity-matching` as a branch) is still unanswered** — and
+   it is a Phase 3 input, not a Phase 2 leftover. Note that the branch now exists **only on
+   `origin`**; there is no local copy left to archive from.
+3. **The `cleanup_subject_tags.py` rescue in the Headline is dead, found 2026-09-05.** The
+   fb6134 worktree is gone (`git worktree list` shows one worktree), commit `fb6134` is no
+   longer a valid object in this repo, and no commit reachable from any local or remote ref
+   ever added a file by that name. The most likely cause is the history rewrite + `gc` in
+   9ead8270 (scrubbing `frontend/node_modules`), which would have pruned an orphaned worktree
+   commit. **Phase 3 should treat that file as lost and rewrite it if it is still wanted**,
+   rather than spending time hunting for it.
+4. **The four deploy-time items in "Still needs a human" above are still outstanding**, carried
+   forward verbatim: read the `[client-ip]` line off the Render log; watch `/api/auth/refresh`
+   for a burst of 401s; set `EMAIL_POSTAL_ADDRESS`; leave `CSP_ENFORCE` unset until the
+   report-only violations have been read.
+5. **Render stays `plan: free` and `USER_DAILY_BUDGET_USD` stays $0.50 until launch** —
+   decisions 3 and 2, both answered, both deliberate. A Phase 3 session must not "helpfully"
+   bump either.
+6. **`docs/review-2026-09-02/load_probe.py` is stale and must be fixed before it is next run** —
+   see decision 8.
+
+### Picking Phase 3 up cold
+
+Phase 3 is **pipeline + repo** — the agents, `agent_runs`, the review queue, the URL rules and
+the branch cleanup. Its row in the phase plan below carries the full item list, its approvals
+(**M8 if any prompt text moves** — approval first, then its own dedicated commit; plus
+**decision 4**, still unanswered, which gates the branch work) and its exit test (*two agents at
+once refuse to overlap; a simulated insert timeout fails loudly; a snapshot commit inserts 0
+dupes*).
+
+Two orientation notes for that reader. First, **read [docs/CLAUDE-ops.md](docs/CLAUDE-ops.md)
+before editing anything under `agents/`, `wingman/` or `ops/`** — that is where the seven agents,
+what each costs, and the dry-run/preview/commit tiers are written down, and most of it is a
+record of something that already went wrong once. Second, **`ops/core.py` is the one file where
+Phase 2 and Phase 3 collide, and the collision is invisible until merge time.** On `main` it
+still imports `_opportunities_cache` / `_opportunities_cache_lock` from
+`app/services/opportunities.py` and sets `["fetched_at"] = 0.0` at four sites; on
+`phase2-capacity` those four sites are `bust_catalog_cache()` calls and the two module-level
+names no longer exist under those spellings. **Branch Phase 3 off `phase2-capacity`, or expect
+to resolve `ops/core.py` by hand** — and resolve it toward `bust_catalog_cache()`, because the
+old spelling clears only the catalog and would leave a newly-activated listing un-matchable for
+a day.
 
 ---
 
@@ -185,10 +315,10 @@ the paid-tier move.
 | | |
 |---|---|
 | Critical | 2 — **both CLOSED** (Phase 0). Open, unmetered AI proxy (`app/routes/ai.py`) — live-verified 2026-09-03, see below; `numpy` missing from `requirements.txt` |
-| High | 9 — **7 CLOSED** (Phases 0–1): `email_verified`, the prefix-match open redirect, the global login bucket, the per-user spend cap, the catch-all static route, and both pipeline items are done. **2 remain**, and neither is security: AI calls stalling the shared 40-thread pool is M5/Phase 2; `opportunity-matching` is Phase 3 (never merge it) |
-| Capacity today | ~10–15 mixed rps on Render free (0.1 CPU, sleeps). Laptop measurement: catalog 70 rps ceiling, authed data 27–95 rps, ~150 ms Supabase gate read per signed-in request |
-| Tests | backend suite green at **2349** (was 2080 after Phase 0, ~1900 at review time), `tsc --noEmit` clean, still zero frontend tests (Phase 5) |
-| Branches | 34 local; 29 fully merged; merge only `local-discovery-engine`; never merge `opportunity-matching`; rescue `cleanup_subject_tags.py` from the fb6134 worktree |
+| High | 9 — **8 CLOSED** (Phases 0–2): `email_verified`, the prefix-match open redirect, the global login bucket, the per-user spend cap, the catch-all static route, both pipeline items, and — in Phase 2 — AI calls stalling the shared 40-thread pool (M5, items 1 and 2). **1 remains** and it is not security: `opportunity-matching` is Phase 3 (never merge it) |
+| Capacity today | ~10–15 mixed rps on Render free (0.1 CPU, sleeps). Laptop measurement: catalog 70 rps ceiling, authed data 27–95 rps, ~150 ms Supabase gate read per signed-in request. **Phase 2's per-change fixes are not reflected in these numbers** — they are the pre-Phase-2 probe, and no post-Phase-2 probe was run (decision 8) |
+| Tests | backend suite green at **2447** (2349 after Phase 1, 2080 after Phase 0, ~1900 at review time), `tsc --noEmit` clean, still zero frontend tests (Phase 5) |
+| Branches | at review time: 34 local, 29 fully merged. **Re-checked 2026-09-05: only 4 local remain** (`main`, `codecleanup`, `phase2-capacity`, `backup/codecleanup-pre-scrub`) — the rest survive on `origin` only, so most of Phase 3's branch cleanup is already accounted for. Still true: merge only `local-discovery-engine`; **never** merge `opportunity-matching`. **The `cleanup_subject_tags.py` rescue is no longer possible** — see "Still open going into Phase 3" |
 | Spend by this review | $0 — no paid agent was run; the load probe ran with AI keys withheld |
 
 ## Decisions needed from Shama
@@ -220,6 +350,28 @@ the paid-tier move.
    future session must not add a health endpoint, a logging framework, or an alert integration
    under the banner of "finishing Phase 2" — Phase 2 is complete without it. Revisit when
    traffic justifies it, alongside the paid Render tier (decision 3).
+8. ~~Run Phase 2's laptop before/after load probe (item 10)?~~ **ANSWERED (Shama, 2026-09-05):
+   DEFERRED — "we'll come to perf tests later."** Phase 2 is closed on its unit tests plus the
+   per-change measurements recorded above, and **that means the phase has no system-level
+   before/after number**: nothing measured the service end to end with items 1, 2, 3, 4, 5, 6,
+   7 and 8 all in at once. The per-item figures (5.0s → 0.000s on the Gemini throttle, ~2x
+   faster sign-in, one buffered write instead of three round trips per paid call) are real but
+   they are measurements of parts. This is a known, accepted gap, not an oversight — and it
+   compounds decision 3's already-deferred *50 rps on staging* bar. Both come due at the same
+   moment: bump Render off free, then measure, before students get access.
+
+   **Prerequisite for whenever perf testing resumes:
+   [`docs/review-2026-09-02/load_probe.py`](docs/review-2026-09-02/load_probe.py) is STALE and
+   must be fixed before it is run again.** Two of its six scenarios (`ai_messages_mock`,
+   `ai_claude_mock`) POST to `/api/messages` and `/api/messages-claude` with a client-supplied
+   `system`/`userContent`/`useWebSearch` body. **Those routes were deleted in Phase 1** and
+   replaced by the single `POST /api/ai` taking `{feature, inputs}`, so both scenarios now
+   record nothing but 404s. It also has **no `/api/match` scenario at all** — which is where
+   Phase 2's largest measured win is (that route was paying ~10s of Gemini sleep per request).
+   The danger is not that it fails; it is that it *succeeds*: anyone running it unmodified gets
+   a confident-looking latency table that says nothing whatsoever about items 1, 2 or 8. Port
+   the two AI scenarios onto `/api/ai` and add an `/api/match` one **before** trusting a single
+   number out of it.
 
 ## Live finding (2026-09-02): catalog fetch statement-timeout + cache decoupling
 
@@ -236,7 +388,12 @@ Supabase: HTTP Error 500*"), investigated live. Full detail in
   transient `57014` with backoff, in `app/services/opportunities.py`. 4/4 cold fetches now succeed;
   regression tests added. Latency unchanged (~10 s cold), but reliable. Removes the user-facing
   failure now.
-- **Planned cleanup (Phase 2, greenlight-when-ready).** `/api/opportunities` (browsing) loads the
+- **Planned cleanup — SHIPPED as Phase 2 item 5 (2026-09-05), except (d).** (a), (b) and (c) are
+  in `app/services/opportunities.py`: the caches are split, the vector cache sits on
+  `CATALOG_VECTOR_CACHE_TTL` (24 h), and `bust_catalog_cache()` clears **both**, which is what
+  keeps an activation instantly matchable. **(d) pre-warm on startup was deliberately not
+  done** — Render Free sleeps when idle, so it would add ~10 s to every cold start; it belongs
+  with the paid-tier move. The original text follows unchanged. `/api/opportunities` (browsing) loads the
   vector only to strip it; only `/api/match` uses it, and vectors change only on a re-embed. So:
   (a) split into a light vector-free catalog cache (keep short TTL — admin edits still appear fast)
   and a vector cache used only by matching; (b) refresh the vector cache on a **24 h backstop**
@@ -305,8 +462,8 @@ body → `413`.
 |---|---|---|---|---|
 | **0 DONE** Stop the bleeding — numpy + exact pins; proxy requires subscribed caller on live path; Anthropic timeout + `max_uses`; per-user daily budget + forced-recheck cooldown + circuit breaker; static allow-list; `FORWARDED_ALLOW_IPS` + login key (ip,user); `email_verified` + exact redirect host; paid tier; delete tracked logs/dumps/stray Render CLI README+CHANGELOG; rotate the PAT in the git remote | Days 1–3 | 2 d | M9 (proxy) | signed-out proxy POST → 401; clean Render build passes; `/ops/admin_console.html` → 404 |
 | **1 DONE** Security — prompts server-side by feature id; refresh-token rotation; calendar handoff nonce; `url_is_public()` + auth on submissions; body limits + security headers (CSP report-only) + Secure cookies; conditional promo PATCH; single login-failure message; ops token; `conversations` RLS or stop; promo table; argon2-wrap legacy rows | Wk 1–2 | 5 d | M8 | no High/Medium open; replayed refresh token revokes lineage |
-| **2 NEXT** Capacity — no Gemini sleep on web path; async AI lane (httpx, semaphore 30, timeouts, 503+Retry-After); 60 s identity cache; pooled HTTP; pre-serialized gzip+ETag catalog with background refresh + client cache; batched cost accounting; OWASP argon2; semaphore 4 on fresh deadline/checklist; ~~`/healthz` + structured logs + alerts~~ **DROPPED 2026-09-05 (Datadog free tier later, decision 7)**; ~~k6 load test on staging~~ laptop probe; confirm provider tiers | Wk 2–4 | 7 d | **M9 granted 2026-09-05** | **REVISED 2026-09-05** (see "Phase 2 approvals and scope"): laptop before/after probe, p95 < 1 s data routes, AI sheds not stalls. The absolute *50 rps on staging* bar is **deferred to launch** — Render Free cannot reach it and that is a deliberate choice |
-| 3 Pipeline + repo — insert ladder degrades only on missing column; one URL key, no re-stamp on commit, all snapshot families committable; DB-sequence ids + run lock in `agent_runs`; bank cost before parse; merges → review queue; discontinued needs page evidence; reject unsourced URLs; ordered pagination; service key required; branch cleanup + merge `local-discovery-engine`; CI marquee-tag check; move one-offs/eval out of root; `scrape_common.py`; tests for untested paid paths | Wk 3–5 | 6 d | M8 if prompt text moves; decision 4 | two agents at once refuse to overlap; simulated insert timeout fails loudly; snapshot commit inserts 0 dupes |
+| **2 DONE** Capacity — no Gemini sleep on web path; async AI lane (semaphore 12, timeouts, 503+Retry-After); 60 s identity cache; pooled HTTP (Supabase only); pre-serialized gzip+ETag catalog + split vector cache on a 24 h backstop; batched cost accounting; OWASP argon2; semaphore 4 on fresh deadline/checklist; ~~`/healthz` + structured logs + alerts~~ **DROPPED 2026-09-05 (Datadog free tier later, decision 7)**; ~~k6 load test on staging~~ ~~laptop probe~~ **DEFERRED 2026-09-05 (decision 8)**; confirm provider tiers — **still open** | Wk 2–4 | 7 d | **M9 granted 2026-09-05**; three dedicated commits | **CLOSED on unit tests + per-change measurements** (2349 → 2447, exit 0). Both throughput bars — laptop before/after (decision 8) and *50 rps on staging* (decision 3) — are **deferred to launch**, so the phase shipped with **no system-level number** |
+| **3 NEXT** Pipeline + repo — insert ladder degrades only on missing column; one URL key, no re-stamp on commit, all snapshot families committable; DB-sequence ids + run lock in `agent_runs`; bank cost before parse; merges → review queue; discontinued needs page evidence; reject unsourced URLs; ordered pagination; service key required; branch cleanup + merge `local-discovery-engine`; CI marquee-tag check; ~~move one-offs/eval out of root~~ **already done — `scripts/one-off/` and `eval/` exist and `server.py` is the only `.py` left at the root (verified 2026-09-05)**; `scrape_common.py` (does not exist yet); tests for untested paid paths | Wk 3–5 | 6 d | **M8 if prompt text moves** (approval first, dedicated commit); **decision 4 is still unanswered** and gates the branch cleanup | two agents at once refuse to overlap; simulated insert timeout fails loudly; snapshot commit inserts 0 dupes |
 | 4 Shared state — shared cache or signed handoff tokens; lock file batch-only; idempotent rollups via RPC; `jsonb_set` RPC for saves; leads + snapshots in tables; scheduled worker (free agents first, paid behind toggle + dollar ceiling); optional direct Postgres for hot queries | Wk 5–7 | 6 d | M3 per scheduled paid run | two instances pass the 50 rps test; second machine sees same lead queue |
 | 5 Product accuracy — grade parser context; date validation; sort-on-refresh + calendar ids by label; synthesis failure keeps transcript; unreachable ≠ revoked; reset singletons on logout; one retry per action; client timeouts; drop icon fonts + dead prompts/code; Vitest ~40 cases; a11y labels; split big screens | Wk 6–8 | 5 d | none | frontend tests in CI; golden-set score holds; bundle −300 KB |
 | 6 Operate — dashboards, dependency bumps, key rotation, runbook, Stripe webhook route, re-arm trial cron | Wk 8+ | ongoing | none | "is it up / fast / what did it cost" on one screen |
@@ -333,7 +490,14 @@ with only Supabase creds + JWT secret (no AI/email keys → mock mode) and load-
 concurrency 1/8/32 for 12 s each; stopped it afterwards. Read-only git analysis of all branches,
 worktrees and stashes. Production was only pinged read-only (root + catalog headers).
 
-Assumptions to confirm: Render plan actually in use; Supabase region vs Render; Anthropic/Gemini org
-tiers. ~~RLS state of `conversations`, `agent_runs`, `deadline_check_log` (no schema file in the
-tree)~~ — **RESOLVED 2026-09-04**: all three now have schema files, RLS is enabled, and it was
-confirmed against the live database rather than assumed (all report `rls = true`).
+Assumptions to confirm: ~~Render plan actually in use~~ — **RESOLVED 2026-09-05**: `plan: free`,
+and that is the deliberate intended state until launch (decision 3). Supabase region vs Render;
+**Anthropic/Gemini org tiers — STILL OPEN, and now the one that matters most**, because
+`AI_MAX_CONCURRENCY` shipped at 12 as a guess against it. ~~RLS state of `conversations`,
+`agent_runs`, `deadline_check_log` (no schema file in the tree)~~ — **RESOLVED 2026-09-04**: all
+three now have schema files, RLS is enabled, and it was confirmed against the live database
+rather than assumed (all report `rls = true`).
+
+**The load probe described above is no longer runnable as written** — two of its six scenarios
+target routes Phase 1 deleted, and it has no `/api/match` scenario. See decision 8 before
+reusing this method.

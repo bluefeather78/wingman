@@ -387,6 +387,16 @@ running the real thing did.
 
 ### Deliberate departures from the phase row, both recorded where they bite
 
+- **The run lock lives in a new `agent_locks` table, not in `agent_runs`** as the phase row
+  says. `agent_runs` is an append-only history: one row per run, no uniqueness on `agent`, and
+  a run row is written some way INTO the run (after the catalog fetch and the embedding index
+  load) rather than before it. A lock built on it could only be "select rows where finished_at
+  is null, and if none, insert" — a read-then-write with a window between the two, which is
+  precisely the race being closed. `agent_locks` makes `name` the primary key, so acquisition
+  is a single INSERT and the loser is rejected by Postgres with no window at all. Adding a
+  unique constraint to `agent_runs` instead would have broken its history (an agent has run
+  many times) and coupled the mutex to the audit log. Same file, one extra table.
+
 - **`merges → review queue` — STRUCK.** Decision 9 (Shama, 2026-09-05): do not touch the merge
   logic at all, neither the approval queue nor the page-verification alternative. The
   measurement it was decided on is in that decision.

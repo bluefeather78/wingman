@@ -13,7 +13,6 @@ import {
   restoreRemovedTasks,
   saveTrackerData,
   syncTrackerFromCatalog,
-  isSetAsideTask,
   taskTrustTier,
   type ActionItem,
   type SavedState,
@@ -66,7 +65,7 @@ function TaskRow({ ai, onPress, onDelete }: {
   return (
     <View style={styles.taskRow}>
       <View style={styles.taskLeft}>
-        <Text style={[styles.taskText, (ai.state === 'completed' || isSetAsideTask(ai)) && styles.taskDone]}>
+        <Text style={[styles.taskText, ai.state === 'completed' && styles.taskDone]}>
           {ai.text}
           {!!linkUrl && (
             <Text style={styles.taskStepLink} onPress={() => Linking.openURL(linkUrl)}>
@@ -75,8 +74,7 @@ function TaskRow({ ai, onPress, onDelete }: {
           )}
         </Text>
       </View>
-      {/* Tapping cycles the state, and "Not Needed" is the last stop before it wraps back
-          round — a step that does not apply to THIS student, set aside rather than deleted.
+      {/* Tapping cycles the state (not_started → in_progress → completed → not_started).
           The delete ✕ beside it is the P10 remove: for a catalog task it writes a per-user
           tombstone (the shared list regenerates, so a plain splice would come straight
           back), for the student's own task it deletes outright. Reversible via the Restore
@@ -124,7 +122,7 @@ export default function Home() {
 
   // Cycle an action item's status (not_started → in_progress → completed → …), persisting
   // to the shared tracker data — ported from cycleActionItemState().
-  const NEXT_STATE: Record<string, TaskStatus> = { not_started: 'in_progress', in_progress: 'completed', completed: 'not_needed', not_needed: 'not_started' };
+  const NEXT_STATE: Record<string, TaskStatus> = { not_started: 'in_progress', in_progress: 'completed', completed: 'not_started' };
   async function cycleActionItem(itemId: string, actionId: string) {
     if (!data) return;
     const next: TrackerData = { ...data };
@@ -317,12 +315,7 @@ export default function Home() {
         <View style={styles.rowBetween}>
           <Txt variant="h2" style={styles.cardTitle}>Your Next Moves</Txt>
           <View style={styles.pillRow}>
-            {/* 'not_needed' joins the row only when something is in it: it is an exception
-                state, and a permanent "0 Not Needed" pill would read as a fourth stage of
-                the workflow rather than an escape hatch. */}
-            {(['not_started', 'in_progress', 'completed', 'not_needed'] as TaskStatus[])
-              .filter((k) => k !== 'not_needed' || taskCounts.not_needed > 0)
-              .map((k) => (
+            {(['not_started', 'in_progress', 'completed'] as TaskStatus[]).map((k) => (
               <StatusPill key={k} status={k} kind="task" label={`${taskCounts[k]} ${ACTION_ITEM_STATUS_LABEL[k]}`} />
             ))}
           </View>

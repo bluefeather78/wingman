@@ -1076,14 +1076,21 @@ export default function Finder() {
   // Tier section split. The reranker grades every vouched card 'strong' or 'look' (strong is
   // 97% good on the golden set, look 81%), so lead with the strong picks and mark where the
   // "worth a look" tier begins with a section header — recovering the good mid-pack look-tier
-  // matches instead of dropping them. `sortedResults` already orders strong-before-look, so
-  // the boundary is just the first look card. Suggest path only, and suppressed while a
-  // profile-tag filter is active: that path re-sorts by aiRank, so tier order no longer holds.
+  // matches instead of dropping them. Suggest path only, and suppressed while a profile-tag
+  // filter is active: that path re-sorts by aiRank, so tier order no longer holds.
+  //
+  // The divider anchors to the first look card STILL IN ITS TIER POSITION — not tracked, not
+  // saved. Saving a look card floats it to the top with the tracked/saved cards (rank 0/1 in
+  // sortedResults), and anchoring to the plain "first look card" dragged the header up there
+  // with it. Anchoring past the floated cards keeps the header at the strong→look boundary,
+  // and it disappears once the last unsaved look card is saved.
+  const isFloated = (r: Result) => trackedIds.has(r.opp.id) || selected.has(r.opp.id);
+  const firstUnfloatedLook = visibleResults.find((r) => r.tier === 'look' && !isFloated(r));
   const tierSplitId =
     suggestMode && !selectedTag &&
     visibleResults.some((r) => r.tier === 'strong') &&
-    visibleResults.some((r) => r.tier === 'look')
-      ? visibleResults.find((r) => r.tier === 'look')?.opp.id ?? null
+    firstUnfloatedLook
+      ? firstUnfloatedLook.opp.id
       : null;
 
   // ---------- Home stage ----------

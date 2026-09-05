@@ -61,9 +61,9 @@ export interface ActionItem {
   sourceUrl?: string | null;
   sourceDomain?: string | null;
   // LEGACY. Tasks a student dismissed before 2026-08-24, when dismissing hid a task
-  // outright. That is now the 'not_needed' STATE instead — visible, reversible, and
-  // countable — and parseTrackerData migrates this flag into it on load. Nothing writes
-  // it any more; it stays declared so the migration has a typed field to read.
+  // outright. This briefly became the 'not_needed' state; both were retired 2026-09-05, and
+  // parseTrackerData now normalizes either back to 'not_started' on load (normalizeTaskState).
+  // Nothing writes it any more; it stays declared so the normalizer has a typed field to read.
   dismissed?: boolean;
   // P10: where this task came from. Absent ⇒ 'catalog' (everything written before user
   // tasks existed). A 'user' task is the student's own: never page-backed by construction
@@ -187,10 +187,17 @@ export interface TrackerItem {
 
 export type TrackerData = Record<Bucket, TrackerItem[]>;
 
-function migrateDismissed(ai: ActionItem): ActionItem {
-  if (!ai?.dismissed) return ai;
-  const { dismissed: _dropped, ...rest } = ai;
-  return { ...rest, state: 'not_needed' };
+// The 'not_needed' task state (and the older `dismissed` flag before it) was removed
+// 2026-09-05. Any task still carrying either is normalized back to 'not_started' on read, so
+// no "Not Needed" pill lingers on data written before the state was removed. Idempotent, and
+// done on the read path so it applies to existing accounts without a one-off migration pass.
+function normalizeTaskState(ai: ActionItem): ActionItem {
+  if (!ai) return ai;
+  if (ai.dismissed || ai.state === 'not_needed') {
+    const { dismissed: _dropped, ...rest } = ai;
+    return { ...rest, state: 'not_started' };
+  }
+  return ai;
 }
 
 function emptyData(): TrackerData {
@@ -235,10 +242,9 @@ function parseTrackerData(raw: string | Record<string, unknown> | null): { data:
         ...it,
         bucket: b,
         importantDates: Array.isArray(it.importantDates) ? it.importantDates : [],
-        // Migrate the retired `dismissed` flag into the 'not_needed' state. Idempotent, and
-        // done on the read path so it applies to data written before the state existed
-        // without needing a one-off pass over every account.
-        actionItems: Array.isArray(it.actionItems) ? it.actionItems.map(migrateDismissed) : [],
+        // Normalize the retired `dismissed` flag / 'not_needed' state back to 'not_started'
+        // (see normalizeTaskState). Runs on read so existing accounts need no migration pass.
+        actionItems: Array.isArray(it.actionItems) ? it.actionItems.map(normalizeTaskState) : [],
       }));
     }
   });

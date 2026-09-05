@@ -123,7 +123,7 @@ cheapest-first order §0b previously recommended. S1-8 was already done in the S
 |---|---|
 | Commits | `4c0b866..HEAD` on `codecleanup`, 15 commits (14 S1 items + the S0-9 leftover) |
 | Tests | 12 new test files, ~247 new test functions; suite green at **2348 passing** |
-| Migrations to run | `db/auth_schema.sql` (S1-2), `db/promo_codes_schema.sql` (S1-10), `db/conversations_schema.sql` + `db/agent_runs_schema.sql` + `db/deadline_check_log_schema.sql` (S1-9) |
+| Migrations to run | `db/auth_schema.sql` (S1-2), `db/promo_codes_schema.sql` (S1-10), `db/agent_runs_schema.sql` + `db/deadline_check_log_schema.sql` (S1-9). **`db/conversations_schema.sql` is gone — S1-9 superseded 2026-09-05, run `db/drop_conversations.sql` to drop the table instead.** |
 
 | Item | State | Commit |
 |---|---|---|
@@ -153,7 +153,8 @@ for byte, as do both conditional branches and every user-content template.
 ### Two decisions taken during the pass, recorded because they differ from the text above
 
 1. **`conversations`: Shama chose "keep writing it, drop `client_ip` outright"** (§6 q3),
-   rather than hashing the IP. `db/conversations_schema.sql` drops the column.
+   rather than hashing the IP. *(Superseded 2026-09-05: the table was removed entirely — see
+   the SUPERSEDED note on S1-9. Verbatim conversations are no longer stored at all.)*
 2. **S1-7's preferred fix could not ship as written.** The plan asks register to answer the
    success shape for a taken email and mail the existing account. `/api/register` hands
    back tokens inline (the client goes straight to `showApp()`), so there is no 200 to
@@ -873,6 +874,15 @@ arbitrary addresses (`/api/agents/emails/test`).
 ---
 
 ### S1-9 — `conversations`: RLS, or stop writing it  `[M9-finding]`
+
+> **SUPERSEDED (2026-09-05): the table was REMOVED, not secured.** Wingman no longer stores
+> verbatim user conversations at all — the strongest possible resolution of this finding. The
+> `log_conversation` helpers and `extract_qa_pair` were deleted from `app/core.py`, the three
+> call sites in `app/routes/ai.py` are gone, `db/conversations_schema.sql` was deleted, and
+> `db/RUN_ME_S1.sql` now drops the table instead of creating it. Run `db/drop_conversations.sql`
+> once in the Supabase SQL editor to drop the live table and every row in it. The stdout /
+> pseudonym half of this finding (below) still stands and was addressed separately. The
+> original text is kept for history.
 
 **Files:** `app/core.py:129-151` (the schema-as-a-comment), `:545-571` (`log_conversation`),
 `:573-584`; `app/services/email.py:382,398,612,659`; `app/services/mailing_list.py:160`;

@@ -1,14 +1,12 @@
-"""conversations gets a schema file, loses client_ip, and stdout stops being a roster —
-S1-9, the report's M9 finding.
+"""Verbatim user conversations are no longer stored at all, and stdout stops being a roster.
 
-Two halves. The table's only definition was a COMMENT in app/core.py with no
-`enable row level security` line, while every other user table in this repo has one — and
-it holds the most sensitive free text in the product, a minor describing themselves,
-duplicated outside the RLS-protected `users` row. And userids and full email addresses were
-printed to stdout in five places; Render retains stdout, so anyone with log access got a
-timeline of which minors did what and from where.
+The `conversations` table (profile-chat <question, answer> turns) was removed outright as a
+privacy improvement — it held the most sensitive free text in the product, a minor
+describing themselves in their own words, duplicated outside the RLS-protected `users` row.
+Rather than merely securing it, we stopped keeping it. Separately, userids and full email
+addresses were printed to stdout in five places; Render retains stdout, so anyone with log
+access got a timeline of which minors did what and from where.
 """
-import json
 import pathlib
 import re
 
@@ -19,17 +17,16 @@ import app.services.email as es
 import app.services.mailing_list as mls
 
 
-# ---------------- the schema files ----------------
+# ---------------- the remaining flagged tables still enable RLS ----------------
 
-@pytest.mark.parametrize("path", ["db/conversations_schema.sql",
-                                  "db/agent_runs_schema.sql",
+@pytest.mark.parametrize("path", ["db/agent_runs_schema.sql",
                                   "db/deadline_check_log_schema.sql"])
 def test_every_flagged_table_now_enables_rls(path):
     sql = pathlib.Path(path).read_text().lower()
     assert "enable row level security" in sql
 
 
-@pytest.mark.parametrize("path", ["db/conversations_schema.sql", "db/agent_runs_schema.sql"])
+@pytest.mark.parametrize("path", ["db/agent_runs_schema.sql"])
 def test_the_new_files_say_a_file_does_not_secure_a_live_table(path):
     """The instruction IS the fix. Running this repo's SQL cannot retroactively secure a
     table somebody created by hand from a code comment."""
@@ -37,52 +34,38 @@ def test_the_new_files_say_a_file_does_not_secure_a_live_table(path):
     assert "dashboard" in text
 
 
-def test_the_conversations_file_drops_client_ip():
-    sql = pathlib.Path("db/conversations_schema.sql").read_text().lower()
-    assert "drop column if exists client_ip" in sql
-    # And does not re-create it.
-    assert not re.search(r"client_ip\s+text", sql)
+# ---------------- conversation storage is gone entirely ----------------
+
+def test_the_conversations_schema_file_is_gone():
+    """The table is removed, not re-created. Its old schema file must not linger."""
+    assert not pathlib.Path("db/conversations_schema.sql").exists()
 
 
-def test_the_schema_is_no_longer_a_comment_in_core():
-    """The comment was the definition, and it is what shipped a table with no RLS."""
+def test_a_drop_migration_exists():
+    sql = pathlib.Path("db/drop_conversations.sql").read_text().lower()
+    assert "drop table if exists conversations" in sql
+
+
+def test_run_me_s1_no_longer_recreates_the_table():
+    sql = pathlib.Path("db/RUN_ME_S1.sql").read_text().lower()
+    assert "create table if not exists conversations" not in sql
+    assert "drop table if exists conversations" in sql
+
+
+def test_core_no_longer_logs_conversations():
+    """No writer, no helpers — a re-added log_conversation fails here, not in production."""
     src = pathlib.Path("app/core.py").read_text()
     assert "create table conversations" not in src
-    assert "db/conversations_schema.sql" in src
+    assert "def log_conversation" not in src
+    assert "def extract_qa_pair" not in src
+    assert not hasattr(core, "log_conversation")
+    assert not hasattr(core, "log_conversation_async")
+    assert not hasattr(core, "extract_qa_pair")
 
 
-# ---------------- client_ip is not written ----------------
-
-def test_the_insert_carries_no_client_ip(monkeypatch):
-    sent = {}
-
-    class _Resp:
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def read(self): return b""
-
-    monkeypatch.setattr(core, "SUPABASE_URL", "https://db.example")
-    monkeypatch.setattr(core, "SUPABASE_SERVICE_KEY", "svc")
-    monkeypatch.setattr(core, "pooled_urlopen",
-                        lambda req, timeout=None: sent.update(
-                            body=json.loads(req.data)) or _Resp())
-    core.log_conversation("alice", "live", "What do you like?", "Robotics.")
-    row = sent["body"][0]
-    assert "client_ip" not in row
-    assert row["userid"] == "alice"
-    assert row["user_content"] == "Robotics."
-
-
-def test_the_logging_signatures_no_longer_take_an_ip():
-    """A parameter that is accepted but ignored is how a dropped field comes back."""
-    import inspect
-    assert "client_ip" not in inspect.signature(core.log_conversation).parameters
-    assert "client_ip" not in inspect.signature(core.log_conversation_async).parameters
-
-
-def test_no_caller_still_passes_an_ip_to_the_conversation_log():
+def test_the_ai_route_no_longer_calls_the_conversation_log():
     src = pathlib.Path("app/routes/ai.py").read_text()
-    assert "log_conversation_async(userid, ip," not in src
+    assert "log_conversation" not in src
 
 
 # ---------------- the pseudonym ----------------

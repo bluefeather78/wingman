@@ -5,7 +5,7 @@ All pure functions — no seams to mock.
 import pytest
 
 from app.core import (
-    _check_signup_consent, normalize_email, _is_email_conflict, extract_qa_pair,
+    _check_signup_consent, normalize_email, _is_email_conflict,
 )
 from app.config import EMAIL_RE
 
@@ -76,51 +76,6 @@ def test_is_email_conflict_pk_collision_is_false():
     detail = {"code": "23505", "message": "users_pkey duplicate",
               "details": "Key (userid)=(bob) already exists.", "hint": None}
     assert _is_email_conflict(detail) is False
-
-
-# ---------- extract_qa_pair ----------
-
-def _content(convo):
-    return f"stuff\nCONVERSATION SO FAR:\n{convo}\nRespond with the next question."
-
-
-def test_qa_no_conversation_marker():
-    assert extract_qa_pair("no marker here at all") == (None, None)
-
-
-def test_qa_empty_conversation():
-    assert extract_qa_pair(_content("")) == (None, None)
-
-
-def test_qa_nothing_yet():
-    assert extract_qa_pair(_content("(nothing yet)")) == (None, None)
-
-
-def test_qa_question_and_answer():
-    q, a = extract_qa_pair(_content("You: What clubs are you in?\nStudent: Robotics club"))
-    assert q == "What clubs are you in?"
-    assert a == "Robotics club"
-
-
-def test_qa_answer_only_no_prior_you_line():
-    # Last line is a student answer but the preceding line isn't a "You:" question.
-    q, a = extract_qa_pair(_content("Student: Robotics club"))
-    assert q is None
-    assert a == "Robotics club"
-
-
-def test_qa_last_line_not_student():
-    assert extract_qa_pair(_content("You: q\nBot: not a student line")) == (None, None)
-
-
-def test_qa_empty_answer_rejected():
-    assert extract_qa_pair(_content("You: q?\nStudent:    ")) == (None, None)
-
-
-def test_qa_case_insensitive_labels():
-    q, a = extract_qa_pair(_content("you: hey?\nSTUDENT: yes"))
-    assert q == "hey?"
-    assert a == "yes"
 
 
 # ---------- EMAIL_RE (config) ----------

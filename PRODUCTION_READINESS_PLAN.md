@@ -373,6 +373,29 @@ a day.
    the two AI scenarios onto `/api/ai` and add an `/api/match` one **before** trusting a single
    number out of it.
 
+9. Route the scraper's auto-merges through the review queue (Phase 3, from finding 4.6)?
+   **ANSWERED (Shama, 2026-09-05): NO — leave the merge logic exactly as it is.** Not the
+   approval queue the phase row asked for, and not the page-verification alternative offered
+   alongside it: **do not touch `classify_same_url`, `merge_row` or `apply_merge` at all.**
+
+   The measurement behind the ruling, taken live on 2026-09-05 before it was made: across the
+   whole catalog only **22 rows carry a merge, 59 merge events**, from two scraper runs
+   (8 on 2026-08-26, 51 on 2026-08-28). **Every one of the 59 is a `filled <field>` note** —
+   a merge has never yet overwritten anything, only populated a field that was empty on the
+   survivor. Finding 4.6's "no visible record" premise is also **out of date**: the console
+   already carries a *Recent merges* panel over `GET /api/agents/merges`
+   (`ops/core.list_recent_merges`), added after the audit was written, and every merge stays
+   hand-reversible from the survivor's `quality_flags`.
+
+   Two things a future session must NOT do under the banner of finishing Phase 3: add an
+   approval gate in front of merges, or "harden" them by putting merged fields through the
+   page-metadata overlay that inserted rows get. The second one is a real and still-true
+   observation — merged fields come from phase-2 search notes rather than the page — and it
+   was put to Shama with that caveat stated. The answer was still no. Log it here and leave
+   it; do not re-raise it as a new finding.
+
+   **Phase 3's `merges → review queue` item is therefore struck from the phase row below.**
+
 ## Live finding (2026-09-02): catalog fetch statement-timeout + cache decoupling
 
 Surfaced by a real user report ("search a profile theme → *Search failed: Could not reach
@@ -463,7 +486,7 @@ body → `413`.
 | **0 DONE** Stop the bleeding — numpy + exact pins; proxy requires subscribed caller on live path; Anthropic timeout + `max_uses`; per-user daily budget + forced-recheck cooldown + circuit breaker; static allow-list; `FORWARDED_ALLOW_IPS` + login key (ip,user); `email_verified` + exact redirect host; paid tier; delete tracked logs/dumps/stray Render CLI README+CHANGELOG; rotate the PAT in the git remote | Days 1–3 | 2 d | M9 (proxy) | signed-out proxy POST → 401; clean Render build passes; `/ops/admin_console.html` → 404 |
 | **1 DONE** Security — prompts server-side by feature id; refresh-token rotation; calendar handoff nonce; `url_is_public()` + auth on submissions; body limits + security headers (CSP report-only) + Secure cookies; conditional promo PATCH; single login-failure message; ops token; `conversations` RLS or stop; promo table; argon2-wrap legacy rows | Wk 1–2 | 5 d | M8 | no High/Medium open; replayed refresh token revokes lineage |
 | **2 DONE** Capacity — no Gemini sleep on web path; async AI lane (semaphore 12, timeouts, 503+Retry-After); 60 s identity cache; pooled HTTP (Supabase only); pre-serialized gzip+ETag catalog + split vector cache on a 24 h backstop; batched cost accounting; OWASP argon2; semaphore 4 on fresh deadline/checklist; ~~`/healthz` + structured logs + alerts~~ **DROPPED 2026-09-05 (Datadog free tier later, decision 7)**; ~~k6 load test on staging~~ ~~laptop probe~~ **DEFERRED 2026-09-05 (decision 8)**; confirm provider tiers — **still open** | Wk 2–4 | 7 d | **M9 granted 2026-09-05**; three dedicated commits | **CLOSED on unit tests + per-change measurements** (2349 → 2447, exit 0). Both throughput bars — laptop before/after (decision 8) and *50 rps on staging* (decision 3) — are **deferred to launch**, so the phase shipped with **no system-level number** |
-| **3 NEXT** Pipeline + repo — insert ladder degrades only on missing column; one URL key, no re-stamp on commit, all snapshot families committable; DB-sequence ids + run lock in `agent_runs`; bank cost before parse; merges → review queue; discontinued needs page evidence; reject unsourced URLs; ordered pagination; service key required; branch cleanup + merge `local-discovery-engine`; CI marquee-tag check; ~~move one-offs/eval out of root~~ **already done — `scripts/one-off/` and `eval/` exist and `server.py` is the only `.py` left at the root (verified 2026-09-05)**; `scrape_common.py` (does not exist yet); tests for untested paid paths | Wk 3–5 | 6 d | **M8 if prompt text moves** (approval first, dedicated commit); **decision 4 is still unanswered** and gates the branch cleanup | two agents at once refuse to overlap; simulated insert timeout fails loudly; snapshot commit inserts 0 dupes |
+| **3 NEXT** Pipeline + repo — insert ladder degrades only on missing column; one URL key, no re-stamp on commit, all snapshot families committable; DB-sequence ids + run lock in `agent_runs`; bank cost before parse; ~~merges → review queue~~ **STRUCK — decision 9 (Shama, 2026-09-05): do not touch the merge logic at all**; discontinued needs page evidence; reject unsourced URLs; ordered pagination; service key required; branch cleanup + merge `local-discovery-engine`; CI marquee-tag check; ~~move one-offs/eval out of root~~ **already done — `scripts/one-off/` and `eval/` exist and `server.py` is the only `.py` left at the root (verified 2026-09-05)**; `scrape_common.py` (does not exist yet); tests for untested paid paths | Wk 3–5 | 6 d | **M8 if prompt text moves** (approval first, dedicated commit); **decision 4 is still unanswered** and gates the branch cleanup | two agents at once refuse to overlap; simulated insert timeout fails loudly; snapshot commit inserts 0 dupes |
 | 4 Shared state — shared cache or signed handoff tokens; lock file batch-only; idempotent rollups via RPC; `jsonb_set` RPC for saves; leads + snapshots in tables; scheduled worker (free agents first, paid behind toggle + dollar ceiling); optional direct Postgres for hot queries | Wk 5–7 | 6 d | M3 per scheduled paid run | two instances pass the 50 rps test; second machine sees same lead queue |
 | 5 Product accuracy — grade parser context; date validation; sort-on-refresh + calendar ids by label; synthesis failure keeps transcript; unreachable ≠ revoked; reset singletons on logout; one retry per action; client timeouts; drop icon fonts + dead prompts/code; Vitest ~40 cases; a11y labels; split big screens | Wk 6–8 | 5 d | none | frontend tests in CI; golden-set score holds; bundle −300 KB |
 | 6 Operate — dashboards, dependency bumps, key rotation, runbook, Stripe webhook route, re-arm trial cron | Wk 8+ | ongoing | none | "is it up / fast / what did it cost" on one screen |

@@ -166,12 +166,84 @@ def test_route_is_not_gated(method, path):
 
 
 def test_ai_routes_gate_by_hand():
-    """The two AI proxies keep their inline subscription_block_reason call rather than the
-    dependency: they must stay reachable signed-out for mock mode, and they return their
-    402 as a json_error body built in the handler. Assert the call is still there."""
+    """The two AI proxies gate by hand rather than with the dependency: the MOCK branch must
+    stay reachable signed-out, and they return their 401/402 as a json_error body built in
+    the handler. Both route through ai._ai_access_error — assert the wiring is still there."""
     import app.routes.ai as ai
     for fn in (ai.handle_messages, ai.handle_messages_claude):
-        assert "subscription_block_reason" in inspect.getsource(fn)
+        assert "_ai_access_error" in inspect.getsource(fn)
+    assert "subscription_block_reason" in inspect.getsource(ai._ai_access_error)
+
+
+# ---------- S0-1 / finding C1: the live AI branch requires a signed-in, subscribed caller ----------
+#
+# The bug this pins: get_optional_user never 401s and subscription_block_reason(None) returns
+# None, so an anonymous POST reached the provider and billed a real call (verified live
+# 2026-09-03). The fix keys on whether a KEY IS CONFIGURED, not on the route, so mock mode
+# stays reachable signed-out — these three cases are exactly that distinction.
+
+def test_ai_live_branch_401s_a_signed_out_caller(monkeypatch):
+    import app.routes.ai as ai
+
+    def unexpected(_uid):
+        raise AssertionError("must not look up an account before the 401")
+    monkeypatch.setattr(deps, "get_user_account", unexpected)
+    denied = ai._ai_access_error(None, key_configured=True)
+    assert denied is not None and denied.status_code == 401
+
+
+def test_ai_live_branch_402s_a_lapsed_caller(monkeypatch):
+    import app.routes.ai as ai
+
+    monkeypatch.setattr(deps, "get_user_account", _account(EXPIRED_TRIAL))
+    denied = ai._ai_access_error("alice", key_configured=True)
+    assert denied is not None and denied.status_code == 402
+
+
+def test_ai_live_branch_allows_a_current_caller(monkeypatch):
+    import app.routes.ai as ai
+
+    monkeypatch.setattr(deps, "get_user_account", _account(LIVE_TRIAL))
+    assert ai._ai_access_error("alice", key_configured=True) is None
+
+
+def test_ai_mock_branch_stays_reachable_signed_out(monkeypatch):
+    """CLAUDE.md's standing constraint: no API keys -> the app is still fully
+    click-through-able. With no key configured there is nothing to spend, so a signed-out
+    caller must NOT be 401'd."""
+    import app.routes.ai as ai
+
+    def unexpected(_uid):
+        raise AssertionError("must not look up an account for a signed-out caller")
+    monkeypatch.setattr(deps, "get_user_account", unexpected)
+    assert ai._ai_access_error(None, key_configured=False) is None
+
+
+def test_ai_mock_branch_still_402s_a_lapsed_caller(monkeypatch):
+    """Unchanged from before the gate: an identified lapsed account is blocked on either
+    branch. Only the signed-out case differs between them."""
+    import app.routes.ai as ai
+
+    monkeypatch.setattr(deps, "get_user_account", _account(EXPIRED_TRIAL))
+    denied = ai._ai_access_error("alice", key_configured=False)
+    assert denied is not None and denied.status_code == 402
+
+
+def test_ai_handlers_consult_the_gate_before_spending(monkeypatch):
+    """End-to-end through the handler: a signed-out call to a key-configured instance must
+    return 401 without touching activity, the provider, or the mock generator."""
+    import app.routes.ai as ai
+
+    for attr in ("touch_user_activity", "_proxy_to_gemini", "_proxy_to_anthropic",
+                 "_mock_response"):
+        monkeypatch.setattr(ai, attr,
+                            lambda *a, **k: pytest.fail("reached past the gate"))
+    monkeypatch.setattr(ai, "GEMINI_API_KEY", "live-key")
+    monkeypatch.setattr(ai, "ANTHROPIC_API_KEY", "live-key")
+
+    for handler in (ai.handle_messages, ai.handle_messages_claude):
+        resp = handler(request=None, raw_body=b"{}", user=None)
+        assert resp.status_code == 401
 
 
 def test_resume_routes_gate_by_hand():

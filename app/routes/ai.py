@@ -199,15 +199,41 @@ def _proxy_to_anthropic(raw_body, ip, userid):
     return resp
 
 
-@router.post("/api/messages")
-def handle_messages(request: Request, raw_body: bytes = Depends(raw_body_dep),
-                    user: AuthedUser = Depends(get_optional_user)):
-    # Attribution-only: identity comes from the token if present, else None (signed-out /
-    # mock mode still work — never a 401 here). subscription_block_reason(None) fails open.
-    userid = user.id if user else None
+# MARQUEE M9: this is the auth gate in front of the two paid AI proxies. See S0-1 in
+# SECURITY_HARDENING_PLAN.md and finding C1 in docs/review-2026-09-02/security_report.md.
+#
+# get_optional_user never 401s, and subscription_block_reason(None) returns None for an
+# unidentified caller — so before this gate existed a POST with NO Authorization header at
+# all fell straight through to the provider. Verified live 2026-09-03: anonymous POST -> 200,
+# a real billed call, spend attributed to nobody.
+#
+# The gate keys on WHETHER A LIVE KEY IS CONFIGURED, not on the route. That distinction is
+# load-bearing: CLAUDE.md's standing constraint is that the app stays fully
+# click-through-able with no API keys, so the mock branch must remain reachable signed-out.
+# Gating the whole route would break offline development and the signed-out demo path.
+#
+#   live branch (key set)  -> 401 without a valid token, 402 for a lapsed account
+#   mock branch (no key)   -> reachable signed-out; a caller who DOES identify as a lapsed
+#                             account still gets its 402, exactly as before.
+def _ai_access_error(userid, key_configured):
+    """The error response this caller should get instead of an AI call, or None to proceed."""
+    if key_configured and not userid:
+        return json_error(401, "Please sign in to continue.")
     reason = subscription_block_reason(userid)
     if reason:
         return json_error(402, reason)
+    return None
+
+
+@router.post("/api/messages")
+def handle_messages(request: Request, raw_body: bytes = Depends(raw_body_dep),
+                    user: AuthedUser = Depends(get_optional_user)):
+    # Identity comes from the token if present, else None. Signed-out is allowed only on the
+    # mock branch — see _ai_access_error (M9 / S0-1).
+    userid = user.id if user else None
+    denied = _ai_access_error(userid, bool(GEMINI_API_KEY))
+    if denied:
+        return denied
     touch_user_activity(userid, "ai_gemini")
     ip = client_ip(request)
     if GEMINI_API_KEY:
@@ -219,9 +245,9 @@ def handle_messages(request: Request, raw_body: bytes = Depends(raw_body_dep),
 def handle_messages_claude(request: Request, raw_body: bytes = Depends(raw_body_dep),
                            user: AuthedUser = Depends(get_optional_user)):
     userid = user.id if user else None
-    reason = subscription_block_reason(userid)
-    if reason:
-        return json_error(402, reason)
+    denied = _ai_access_error(userid, bool(ANTHROPIC_API_KEY))
+    if denied:
+        return denied
     touch_user_activity(userid, "ai_claude")
     ip = client_ip(request)
     if ANTHROPIC_API_KEY:

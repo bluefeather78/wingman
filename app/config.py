@@ -307,6 +307,17 @@ OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject_tags,type,price,state,lo
 OPPORTUNITIES_CLIENT_STRIP_FIELDS = ("match_vector",)
 OPPORTUNITIES_CACHE_TTL = 300  # seconds
 
+# ---------- The vector cache's 24h backstop (Phase 2 item 5, decision 6) ----------
+# Embeddings change only when something is re-embedded offline, so refreshing them on the
+# catalog's 5-minute cadence pulled ~20MB from Supabase every five minutes to serve a column
+# the browser never receives. Decided by Shama 2026-09-02.
+#
+# The 24h is a BACKSTOP, not the freshness guarantee: the ops console calls
+# bust_catalog_cache() on activate/moderate, which drops this cache too, so an activation is
+# matchable immediately. What lags up to a day is an OFFLINE re-embed on production with
+# nothing to nudge the instance afterwards.
+CATALOG_VECTOR_CACHE_TTL = float(os.environ.get("CATALOG_VECTOR_CACHE_TTL", "") or 86400)
+
 
 # ---------- Signup consent & eligibility policy ----------
 # The Terms of Use (legal/terms.md §2) restrict Wingman to users 13 or older, and

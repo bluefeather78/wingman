@@ -7,11 +7,11 @@ Translated from server.py's handle_opportunities / handle_deadline_check
 import datetime
 import json
 
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Response, Depends
 
 from app.config import (
     SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
-    OPPORTUNITIES_CLIENT_STRIP_FIELDS,
+    OPPORTUNITIES_CACHE_TTL,
     PAID_CHECK_MAX_CONCURRENCY, PAID_CHECK_SHED_RETRY_AFTER_SECONDS,
 )
 from app.core import touch_user_activity, record_user_cost_async, record_api_error
@@ -19,7 +19,7 @@ from app.deps import (json_response, json_error, require_subscription,
                       optional_subscribed_user,
                       opaque_error, DB_UNAVAILABLE)
 from app.auth import AuthedUser
-from app.services.opportunities import fetch_opportunities
+from app.services.opportunities import catalog_payload
 from app.services import action_items as action_items_service
 from app.services import deadlines
 from app.services import budget
@@ -73,23 +73,62 @@ def _paid_lane_busy_response():
     return resp
 
 
+def _etag_matches(if_none_match, etag):
+    """True if the client already holds these exact bytes.
+
+    If-None-Match is a LIST — a browser may send several, and a revalidating one sends `W/`
+    prefixed entries. Comparing the raw header to the ETag would miss both and silently turn
+    every conditional request back into a full catalog download, which is the whole saving.
+    """
+    if not if_none_match:
+        return False
+    for candidate in if_none_match.split(","):
+        candidate = candidate.strip()
+        if candidate == "*" or candidate.removeprefix("W/") == etag:
+            return True
+    return False
+
+
 @router.get("/api/opportunities")
-def handle_opportunities(user: AuthedUser = Depends(optional_subscribed_user)):
+def handle_opportunities(request: Request,
+                         user: AuthedUser = Depends(optional_subscribed_user)):
     """The catalog. Soft auth (it is public, read-only data and the signed-out landing
     flow reaches it), but a caller who identifies as a lapsed account gets the 402 — the
-    catalog is what the app is for, so an expired trial does not keep browsing it."""
+    catalog is what the app is for, so an expired trial does not keep browsing it.
+
+    Phase 2 item 5. The body, its gzip and its ETag are computed ONCE per catalog refresh
+    (app/services/opportunities.catalog_payload) instead of once per request: serialising
+    ~1,700 rows and gzipping them is real CPU, and on 0.1 of a core it was being paid on every
+    call for bytes that are identical between refreshes. The per-row strip of `match_vector`
+    that used to happen here is gone too — the catalog cache no longer holds the column at all,
+    so there is nothing left to strip.
+    """
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
         return json_error(500, "SUPABASE_URL/SUPABASE_ANON_KEY not configured.")
     try:
-        data = fetch_opportunities()
+        body, gzipped, etag = catalog_payload()
     except Exception as e:
         return opaque_error(502, DB_UNAVAILABLE, e, op="opportunities.db")
-    # Strip the server-only match_vector (~9MB across the catalog, no display value) before it
-    # reaches the client — recall scores it server-side; the browser never needs it.
-    strip = OPPORTUNITIES_CLIENT_STRIP_FIELDS
-    if strip:
-        data = [{k: v for k, v in row.items() if k not in strip} for row in data]
-    return json_response(200, data)
+
+    # max-age matches the server TTL, so the staleness a client can see is the staleness the
+    # server already had — an activation shows up to OPPORTUNITIES_CACHE_TTL late either way.
+    # `private` because the 402 above makes this response depend on who is asking; a shared
+    # proxy must not hand one student's 200 to a lapsed account.
+    headers = {
+        "ETag": etag,
+        "Cache-Control": f"private, max-age={int(OPPORTUNITIES_CACHE_TTL)}",
+        "Vary": "Accept-Encoding",
+    }
+    # A conditional request that already has these bytes costs a 304 and no body at all. This
+    # is the single biggest win on a returning student's app open: the catalog is by far the
+    # largest thing they download.
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=headers)
+
+    if "gzip" in (request.headers.get("accept-encoding") or "").lower():
+        headers["Content-Encoding"] = "gzip"
+        return Response(content=gzipped, media_type="application/json", headers=headers)
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 @router.get("/api/opportunities/{opp_id}/deadline")

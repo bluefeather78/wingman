@@ -18,7 +18,7 @@ from app.core import touch_user_activity, record_interactive_cost_async
 from app.deps import (json_body, json_response, json_error, require_subscription,
                       opaque_error, DB_UNAVAILABLE)
 from app.auth import AuthedUser
-from app.services.opportunities import fetch_opportunities
+from app.services.opportunities import fetch_opportunities_with_vectors
 from app.services.embeddings import embed_student_themes
 from app.services.recall_query import recall_pool, attach_display, student_embed_texts
 from app.services.pool_eligibility import gate_pool_eligibility, ELIGIBILITY_ONLY_SYSTEM
@@ -85,7 +85,9 @@ def handle_match(body: dict = Depends(json_body),
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
         return json_error(500, "SUPABASE_URL/SUPABASE_ANON_KEY not configured.")
     try:
-        rows = fetch_opportunities()
+        # Phase 2 item 5: the ONLY caller that needs embeddings, and now the only one that
+        # pays for them. Browsing reads the vector-free catalog cache.
+        rows = fetch_opportunities_with_vectors()
     except Exception as e:
         return opaque_error(502, DB_UNAVAILABLE, e, op="matching.db")
 

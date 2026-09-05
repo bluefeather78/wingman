@@ -66,8 +66,16 @@ htmlcov/
 
 # Expo web build output and cache. `expo export -p web` writes frontend/dist (a ~1.9MB
 # bundle) and frontend/.expo; Render regenerates both on every deploy from its own build
-# command, so a committed copy is dead weight that also churns on every build. node_modules
-# was already covered; these two were not, and a local `expo export` run leaves them
-# staged-able.
+# command, so a committed copy is dead weight that also churns on every build, and a local
+# `expo export` run leaves them staged-able.
 frontend/dist/
 frontend/.expo/
+
+# The dependency tree, restored by `npm ci` from package-lock.json. NOT optional and NOT
+# "already covered" — the comment above used to say node_modules was, and it never had a
+# rule in any version of this file. It had simply never existed here, because the frontend
+# was built on another machine. The first `npm ci` run on this one (needed to get
+# `npx tsc --noEmit` working) put 439MB / 35,087 files in the tree, and a blanket `git add`
+# swept every one of them into what was meant to be a 1-file doc commit. They were scrubbed
+# back out of the branch history; this line is what stops it happening again.
+frontend/node_modules/

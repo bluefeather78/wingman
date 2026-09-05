@@ -4,6 +4,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
+import {
+  SpeechRecognitionCtor, cancelSpeech, createRecognizer, speakText, ttsAvailable,
+  type SpeechRecognitionLike,
+} from '@/lib/speech';
 import { PROFILE_STALE_DAYS, countProfileWords, profileHasTruncatedTail, repairProfileText, synthesizeProfile, transcriptStudentLines } from '@/lib/profile';
 import { diffNewProfileSentences, PROFILE_HIGHLIGHT_MS, profileSentenceKey, splitProfileSentences } from '@/lib/profileHighlight';
 import { beginProfileWrite, endProfileWrite } from '@/lib/profileWrites';
@@ -72,21 +76,6 @@ function splitProfile(text: string) {
   });
   return { general, passion, research };
 }
-
-// Web Speech API feature detection (web only; each control hides independently, like the
-// live app's initProfileChatVoiceUI).
-type SpeechRecognitionLike = {
-  lang: string; interimResults: boolean; maxAlternatives: number;
-  onresult: ((e: { results: { 0: { transcript: string } }[] }) => void) | null;
-  onend: (() => void) | null; onerror: ((e: unknown) => void) | null;
-  start: () => void; stop: () => void;
-};
-const SpeechRecognitionCtor: (new () => SpeechRecognitionLike) | null =
-  Platform.OS === 'web'
-    ? (((globalThis as Record<string, unknown>).SpeechRecognition ??
-        (globalThis as Record<string, unknown>).webkitSpeechRecognition) as (new () => SpeechRecognitionLike) | null) ?? null
-    : null;
-const ttsAvailable = Platform.OS === 'web' && typeof globalThis !== 'undefined' && 'speechSynthesis' in globalThis;
 
 // My Vibe — ported from the live app's #page-profile: gradient CTA banner, the "Your Story
 // So Far" card (updated pill, quick-add + deepen buttons, basics grid, vibe-field sections
@@ -341,12 +330,11 @@ export default function Profile() {
     setStarters(null);
     speak(q);
   }
+  // The voice toggle is read through a ref as well as state because `speak` is called from
+  // async continuations that closed over an older render.
   function speak(text: string) {
-    if (!voiceOnRef.current || !ttsAvailable || !text) return;
-    const synth = (globalThis as { speechSynthesis?: { cancel: () => void; speak: (u: unknown) => void } }).speechSynthesis;
-    synth?.cancel();
-    const Utter = (globalThis as Record<string, unknown>).SpeechSynthesisUtterance as new (t: string) => unknown;
-    if (Utter) synth?.speak(new Utter(text));
+    if (!voiceOnRef.current) return;
+    speakText(text);
   }
   function toggleVoiceOutput() {
     const next = !voiceOn;
@@ -355,8 +343,8 @@ export default function Profile() {
     if (next) {
       const lastBot = [...history].reverse().find((m) => m.role === 'bot');
       if (lastBot) speak(lastBot.text);
-    } else if (ttsAvailable) {
-      (globalThis as { speechSynthesis?: { cancel: () => void } }).speechSynthesis?.cancel();
+    } else {
+      cancelSpeech();
     }
   }
   function toggleVoiceInput() {
@@ -366,27 +354,20 @@ export default function Profile() {
       return;
     }
     if (!recognition.current) {
-      const rec = new SpeechRecognitionCtor();
-      rec.lang = 'en-US';
-      rec.interimResults = true;
-      rec.maxAlternatives = 1;
-      rec.onresult = (e) => {
-        let transcript = '';
-        for (let i = 0; i < (e.results as unknown as { length: number }).length; i++) transcript += e.results[i][0].transcript;
-        setDraft(transcript);
-      };
-      rec.onend = () => {
-        setListening(false);
-        // draftRef, not a setDraft updater: dictating one sentence used to be able to send it
-        // twice, and each send is a paid call (finding 16).
-        const current = draftRef.current.trim();
-        if (current) void sendText(current);
-      };
-      rec.onerror = () => setListening(false);
-      recognition.current = rec;
+      recognition.current = createRecognizer({
+        onTranscript: setDraft,
+        onEnd: () => {
+          setListening(false);
+          // draftRef, not a setDraft updater: dictating one sentence used to be able to send
+          // it twice, and each send is a paid call (finding 16).
+          const current = draftRef.current.trim();
+          if (current) void sendText(current);
+        },
+        onError: () => setListening(false),
+      });
     }
     try {
-      recognition.current.start();
+      recognition.current?.start();
       setListening(true);
     } catch { /* already started */ }
   }

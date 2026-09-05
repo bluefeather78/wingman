@@ -45,7 +45,10 @@ function labelCount(src: string): number {
 
 describe('every icon-only control the audit named now has a label', () => {
   it.each([
-    ['app/(app)/tracker.tsx', 7],
+    ['app/(app)/tracker.tsx', 5],
+    // The per-row star and remove buttons moved here with the card itself (Phase 5, the
+    // screen split); the labels moved with them.
+    ['src/ui/tracker/ListCard.tsx', 2],
     ['app/(app)/profile.tsx', 5],
     ['app/(app)/index.tsx', 2],
     ['src/ui/NavBar.tsx', 2],
@@ -56,17 +59,19 @@ describe('every icon-only control the audit named now has a label', () => {
   it('every IconBtn in the app names what it does', () => {
     // The compiler already enforces this; the test states the count so a future IconBtn
     // added without one is a red test rather than only a red build.
-    const src = read('app/(app)/tracker.tsx');
-    const buttons = (src.match(/<IconBtn\b/g) ?? []).length;
+    const sources = ['app/(app)/tracker.tsx', 'src/ui/tracker/ListCard.tsx'].map(read);
+    const buttons = sources.reduce((n, s) => n + (s.match(/<IconBtn\b/g) ?? []).length, 0);
     expect(buttons).toBe(5);
-    for (const block of src.split('<IconBtn').slice(1)) {
-      expect(block.slice(0, 400)).toMatch(/label=/);
+    for (const src of sources) {
+      for (const block of src.split('<IconBtn').slice(1)) {
+        expect(block.slice(0, 400)).toMatch(/label=/);
+      }
     }
   });
 
   it('names the ITEM, not just the action, on per-row controls', () => {
     // A dozen cards each announcing "Save for later" gives no way to tell which one.
-    const src = read('app/(app)/tracker.tsx');
+    const src = read('src/ui/tracker/ListCard.tsx');
     expect(src).toMatch(/Save \$\{item\.name\} for later/);
     expect(src).toMatch(/Remove \$\{item\.name\} from your Quest Log/);
     expect(read('app/(app)/index.tsx')).toMatch(/Delete task: \$\{ai\.text\}/);
@@ -95,7 +100,7 @@ describe('the whole app, counted', () => {
     const files = [
       'app/(app)/tracker.tsx', 'app/(app)/profile.tsx', 'app/(app)/index.tsx',
       'app/(app)/finder.tsx', 'app/landing.tsx', 'src/ui/NavBar.tsx',
-      'src/ui/components.tsx',
+      'src/ui/components.tsx', 'src/ui/tracker/ListCard.tsx',
     ];
     const total = files.reduce((n, f) => n + labelCount(read(f)), 0);
     expect(total).toBeGreaterThanOrEqual(20);

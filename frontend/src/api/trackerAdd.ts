@@ -10,7 +10,7 @@ import {
   staticGenericChecklist,
   type TrackerInfo,
 } from '@/lib/tracker';
-import { isValidDateISO } from '@/lib/status';
+import { isValidDateISO } from '@/lib/dateISO';
 
 const callFeature = httpClient.callFeature.bind(httpClient);
 

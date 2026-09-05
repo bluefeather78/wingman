@@ -22,6 +22,10 @@ import {
 } from '@/lib/profileDerived';
 import { parseGradeFromText, parseGradeLevel } from '@/lib/grade';
 import { onSessionReset } from '@/lib/sessionScope';
+import {
+  BLANK_FACET, BLANK_FACET_LABEL, FILTER_FIELDS, QUIZ_ROOT, QUIZ_SUB, REASON_TOP_N,
+  facetValue, type FilterKey,
+} from '@/lib/finderSearch';
 import { extractJSON } from '@/lib/extractJSON';
 import { inferSubjects, preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
 import { markNewlyAdded } from '@/lib/newlyAdded';
@@ -30,6 +34,9 @@ import { awaitProfileWrites } from '@/lib/profileWrites';
 import {
   extractTrackerInfo,
   findBucketForKind,
+  // ONE definition, shared with the Quest Log's catalog search. There used to be a verbatim
+  // copy here too; see the note in src/lib/finderSearch.ts.
+  kindForOpp,
   normalizeVerifiedActionItems,
   staticGenericChecklist,
   type TrackerInfo,
@@ -67,60 +74,6 @@ type Stage = 'home' | 'quiz' | 'form' | 'results';
 const CATALOG_RETRIES = 2;
 const CATALOG_RETRY_DELAY_MS = 800;
 
-// Map a catalog opportunity's `type` to a kind key (used when adding from a mixed suggest list).
-// Every type the catalog actually carries must appear here: an unmapped type falls through
-// to 'summer' and files the opportunity in the Quest Log as a summer program, which is how
-// volunteer roles and the lone `Academic` row ended up labelled camps.
-function kindForOpp(opp: Opportunity): string {
-  const map: Record<string, string> = {
-    Program: 'summer', Internship: 'internship', Conference: 'conference',
-    Journal: 'journal', Research: 'research-competition', Competition: 'pure-competition',
-    Volunteer: 'volunteer', Academic: 'pure-competition',
-  };
-  return map[(opp.type as string) ?? ''] ?? 'summer';
-}
-
-// Quiz: root → sub-branch → kind (from script.js QUIZ_BRANCHES + the live quiz screen).
-const QUIZ_ROOT = [
-  { label: 'I already have a research paper or project', desc: 'In progress or already completed', branch: 'project' },
-  { label: "I'm looking for something to do when school is out", desc: 'Camps, programs, or work experience', branch: 'timeoff' },
-  { label: 'I enjoy competing directly with my peers', desc: 'Tests, exams, head-to-head challenges', kind: 'pure-competition' },
-] as const;
-const QUIZ_SUB: Record<string, { label: string; desc: string; kind: string }[]> = {
-  project: [
-    { label: 'Enter it in a competition', desc: 'Science fairs, app challenges, project contests', kind: 'research-competition' },
-    { label: 'Present it at a conference', desc: 'Submit a paper to a workshop or conference', kind: 'conference' },
-    { label: 'Get it published', desc: 'Submit to an academic or student journal', kind: 'journal' },
-  ],
-  timeoff: [
-    { label: 'Hands-on work experience', desc: 'Work with a lab, company, or organization', kind: 'internship' },
-    { label: 'A summer program', desc: 'Camps, pre-college programs, academies', kind: 'summer' },
-    { label: 'Volunteering or service', desc: 'Give time to a cause or community organization', kind: 'volunteer' },
-  ],
-};
-
-// How many of the recall pool's best rows get a "why it fits" reason. Matches rankCandidates'
-// own 10-12 cap; these are the rows above the fold that the student actually reads.
-const REASON_TOP_N = 12;
-
-const FILTER_FIELDS = [
-  { key: 'type', label: 'Type' },
-  { key: 'price', label: 'Cost' },
-  { key: 'season', label: 'Season' },
-  { key: 'location', label: 'Format' },
-] as const;
-type FilterKey = (typeof FILTER_FIELDS)[number]['key'];
-
-// Plenty of catalog rows carry no cost, season or format. The facet list was built from
-// non-empty values only, so those rows could not satisfy ANY checked option and silently
-// disappeared the moment a student touched a filter. They now get an explicit option they
-// can see and choose, rather than being quietly excluded.
-const BLANK_FACET = '__unspecified__';
-const BLANK_FACET_LABEL = 'Not specified';
-function facetValue(opp: Opportunity, key: FilterKey): string {
-  const v = opp[key];
-  return typeof v === 'string' && v.trim() ? v : BLANK_FACET;
-}
 
 // The "Your Profile" facet's enriched tags, stored on the shared student-profile record
 // (PROFILE_DERIVED_SLOTS.filterTags). EnrichedTag and the generator now live in

@@ -1,5 +1,8 @@
 import { isSetAsideTask, type TrackerData, type TrackerItem } from '@/api/trackerStore';
 import { ALL_BUCKETS, type Bucket } from './constants';
+// Re-exported below as well as used here: every existing importer of status.ts expects these
+// two to be on it, and a leaf module is where they have to LIVE (see dateISO.ts).
+import { isValidDateISO, storedDateISO } from './dateISO';
 
 // Ported verbatim from script.js — the single source of truth for opportunity event-timing
 // status, display milestones, and the calendar's color assignment. Both frontends must
@@ -20,48 +23,7 @@ export const BUCKET_LABELS: Record<Bucket, string> = {
   journals: 'Research Journal',
 };
 
-// ---------- Date validity (Phase 5, frontend_report finding 11) ----------
-//
-// Everything below reads a date out of stored tracker data, and until now the only check was
-// TRUTHINESS. A stored `date_iso` of "TBD", "2026-13-45", "Fall 2026" or "2026/11/01" — all of
-// which a model can produce and a student can paste — made `new Date(...)` an Invalid Date, so
-// daysUntil returned NaN. Every comparison against NaN is false, so:
-//
-//   computeProgressStatus  daysUntil(first) > 0 → false, daysUntil(last) < 0 → false
-//                          → falls through to 'in_progress', and the card reads HAPPENING NOW
-//                          for a programme whose date is a typo.
-//   getDisplayMilestones   isPast = NaN < 0 = false → a past date renders as upcoming.
-//   the calendar            renders the literal string NaN.
-//
-// One validator, applied at the ONE place each reader extracts a date, so a malformed entry is
-// simply not a date rather than being a date that lies. That is the safe direction: an item
-// with no usable dates reads as "not started" and shows no milestone, which is honest, where
-// "Happening Now" is not.
-
-// A calendar date, not a timestamp: `YYYY-MM-DD`, and a real day in a real month. The regex
-// alone is not enough — "2026-02-31" passes it — so the parsed date is checked to round-trip,
-// which is what rejects a day that does not exist in that month.
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-export function isValidDateISO(value: unknown): value is string {
-  if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) return false;
-  const [y, m, d] = value.split('-').map(Number);
-  if (m < 1 || m > 12 || d < 1) return false;
-  // Date.UTC(y, m, 0) is the last day of month `m` (months are 0-based, so `m` is the month
-  // after this one and day 0 steps back one).
-  return d <= new Date(Date.UTC(y, m, 0)).getUTCDate();
-}
-
-/**
- * The stored date on an importantDates entry, in either spelling, or null if it is not a
- * usable calendar date. Both spellings exist in stored data: the client writes `dateISO`, the
- * deadline endpoint speaks `date_iso`, and rows written by either are still on disk.
- */
-export function storedDateISO(entry: unknown): string | null {
-  const d = entry as { dateISO?: unknown; date_iso?: unknown } | null;
-  const raw = d?.dateISO ?? d?.date_iso;
-  return isValidDateISO(raw) ? raw : null;
-}
+export { isValidDateISO, storedDateISO };
 
 /**
  * Whole days from today until `dateISO`, or null if that is not a usable date.

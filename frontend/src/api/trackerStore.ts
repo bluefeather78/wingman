@@ -2,7 +2,9 @@ import type { Bucket } from '@/lib/constants';
 import { ALL_BUCKETS } from '@/lib/constants';
 import { httpClient } from './httpClient';
 import { isVerifiedDeadlineSource, normalizeVerifiedActionItems, type TrackerInfo } from '@/lib/tracker';
-import { isValidDateISO } from '@/lib/status';
+// dateISO, not status: status.ts imports THIS file, so importing it back would make a
+// require cycle Metro warns can leave a module-init value undefined (see src/lib/dateISO.ts).
+import { isValidDateISO } from '@/lib/dateISO';
 import { onSessionReset } from '@/lib/sessionScope';
 
 // The tracker is shared with the original web app: it persists under the SAME data key

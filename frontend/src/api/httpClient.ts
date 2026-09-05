@@ -626,35 +626,19 @@ export const httpClient: ApiClient = {
     }
   },
 
-  // `maxTokens` is optional and clamped server-side into [MESSAGES_MAX_TOKENS, ceiling], so
-  // it can only ever RAISE a call's headroom. Sent by callers whose answer length scales
-  // with their input — profile-tag extraction and enrichment both return one item per thing
-  // the profile mentions, which the uniform default silently truncated.
-  async callGemini(system, userContent, useWebSearch = false, maxTokens): Promise<string> {
-    const body: Record<string, unknown> = { system, userContent, useWebSearch };
-    if (maxTokens) body.maxTokens = maxTokens;
-    const data = await request<AiResponse>('/api/messages', {
+  // The ONE model call. S1-1, finding C1.2: this replaced callGemini / callClaude /
+  // callClaudeDetailed, each of which posted a `system` string the CLIENT composed — so
+  // every prompt shipped in the bundle, and the contract any account holder could read off
+  // it was "send any prompt, any input, search on, 8k output".
+  //
+  // Now the client names a feature and hands it inputs. The prompt text, the provider, the
+  // tool config and the token budget all live in app/services/prompts.py, and the server
+  // refuses a feature it does not know. There is no `system`, no `useWebSearch` and no
+  // `maxTokens` on this request, because none of them were ever the client's to choose.
+  async callFeature(feature, inputs): Promise<AiResult> {
+    const data = await request<AiResponse>('/api/ai', {
       method: 'POST',
-      body: JSON.stringify(body),
-    });
-    return cleanAiText(data);
-  },
-
-  async callClaude(system, userContent, useWebSearch = false, maxTokens): Promise<string> {
-    return (await this.callClaudeDetailed(system, userContent, useWebSearch, maxTokens)).text;
-  },
-
-  async callClaudeDetailed(
-    system,
-    userContent,
-    useWebSearch = false,
-    maxTokens,
-  ): Promise<AiResult> {
-    const body: Record<string, unknown> = { system, userContent, useWebSearch };
-    if (maxTokens) body.maxTokens = maxTokens;
-    const data = await request<AiResponse>('/api/messages-claude', {
-      method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify({ feature, inputs }),
     });
     // Mock mode returns no stop_reason; a missing one reads as a clean finish.
     return { text: cleanAiText(data), truncated: data.stop_reason === 'max_tokens' };

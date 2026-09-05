@@ -1,17 +1,16 @@
-import type { GeminiCall } from './aiJson';
+import type { FeatureCall } from './aiJson';
 import { countProfileWords } from './profile';
 import { parseGradeFromText } from './grade';
 import { inferSubjects } from './ranking';
 import { extractTagsAndBasics, type EnrichedTag, type ProfileExtract } from './profileTags';
-import { starterQuestionPoolFromAI, type ClaudeCall } from './profileChat';
+import { starterQuestionPoolFromAI } from './profileChat';
 
-// Both providers, because the slots don't share one: the chat openers are the profile
-// chat's deliberate Anthropic holdout, and routing them through Gemini would silently move
-// the feature to the other provider and mis-attribute its cost.
-export interface ModelCalls {
-  gemini: GeminiCall;
-  claude: ClaudeCall;
-}
+// ONE call, not one per provider. This used to be `{ gemini, claude }`, because picking the
+// provider meant picking an endpoint and the chat openers are the profile chat's deliberate
+// Anthropic holdout — so a slot that called the wrong one would silently move a feature
+// across providers and mis-attribute its cost. As of S1-1 the provider is a property of the
+// FEATURE and lives server-side, so there is nothing left here to get wrong.
+export type ModelCalls = FeatureCall;
 
 // PROFILE_DERIVED_SLOTS, restored from the retired SPA. These are the values derived from
 // the profile text by a model call: they depend on NOTHING but that text, which is exactly
@@ -98,7 +97,7 @@ let sharedExtract: { text: string; promise: Promise<ProfileExtract> } | null = n
 
 function tagsAndBasics(calls: ModelCalls, text: string): Promise<ProfileExtract> {
   if (sharedExtract && sharedExtract.text === text) return sharedExtract.promise;
-  const promise = extractTagsAndBasics(calls.gemini, text);
+  const promise = extractTagsAndBasics(calls, text);
   promise.catch(() => {
     if (sharedExtract && sharedExtract.promise === promise) sharedExtract = null;
   });
@@ -115,7 +114,7 @@ const SLOTS: Record<SlotName, SlotConfig> = {
   filterValues: {
     isFilled: (r) => Array.isArray((r as FilterValuesSlot).subjects),
     async compute(calls, text) {
-      return { subjects: await inferSubjects(calls.gemini, text), grade: parseGradeFromText(text) };
+      return { subjects: await inferSubjects(calls, text), grade: parseGradeFromText(text) };
     },
   },
   filterTags: {
@@ -139,7 +138,7 @@ const SLOTS: Record<SlotName, SlotConfig> = {
   starterPool: {
     isFilled: (r) => Array.isArray((r as StarterPoolSlot).questions),
     async compute(calls, text) {
-      return { questions: await starterQuestionPoolFromAI(calls.claude, text) };
+      return { questions: await starterQuestionPoolFromAI(calls, text) };
     },
   },
 };

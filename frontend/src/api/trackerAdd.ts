@@ -11,7 +11,7 @@ import {
   type TrackerInfo,
 } from '@/lib/tracker';
 
-const callGemini = httpClient.callGemini.bind(httpClient);
+const callFeature = httpClient.callFeature.bind(httpClient);
 
 export interface AddCatalogResult {
   /** False when the item was already tracked (by id OR url) and nothing was written. */
@@ -46,10 +46,10 @@ export async function addCatalogOpportunity(
   let slim: { meta?: string; fit?: string } = {};
   try {
     try {
-      slim = await extractTrackerInfo(callGemini, opp);
+      slim = await extractTrackerInfo(callFeature, opp);
     } catch (firstErr) {
       console.warn(`Retrying ${opp.name} after error:`, (firstErr as Error).message);
-      slim = await extractTrackerInfo(callGemini, opp);
+      slim = await extractTrackerInfo(callFeature, opp);
     }
   } catch (err) {
     console.warn(`meta/fit extraction failed for ${opp.name}:`, (err as Error).message);

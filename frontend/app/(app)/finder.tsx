@@ -51,14 +51,11 @@ interface Result {
   score?: number | null;
   strong?: boolean;
 }
-const callGemini = httpClient.callGemini.bind(httpClient);
-// The profile-derived slots need both providers and a place to persist to. Defined once at
-// module scope: they hold no state, so a new object per render would only defeat the
-// in-flight de-duplication inside getProfileDerived.
-const modelCalls: ModelCalls = {
-  gemini: callGemini,
-  claude: httpClient.callClaude.bind(httpClient),
-};
+// ONE call for every model-backed feature. The provider is chosen server-side from the
+// feature id (S1-1), so this no longer picks between two endpoints — and the profile-derived
+// slots can no longer route a Claude feature through Gemini by wiring the wrong one.
+const callFeature = httpClient.callFeature.bind(httpClient);
+const modelCalls: ModelCalls = callFeature;
 const profileStore: ProfileStore = {
   load: () => httpClient.loadData<ProfileRecord>('student-profile'),
   save: (record) => httpClient.saveData('student-profile', record),
@@ -157,31 +154,19 @@ interface SessionSearch {
 }
 let sessionSearch: SessionSearch | null = null;
 
-// batchScoreOpportunitiesWithAI, ported: one Gemini call scoring the visible results
-// against the selected tag; returns null on failure (distinct from "nothing matched").
+// batchScoreOpportunitiesWithAI, ported: one call scoring the visible results against the
+// selected tag; returns null on failure (distinct from "nothing matched"). Its prompt moved
+// to app/services/prompts.py as `tag_suggestions` in S1-1 — the security plan's inventory
+// listed this function as dead, which it is not: the effect below calls it whenever a tag is
+// selected, so it was ported rather than deleted.
 async function scoreOpportunitiesForTag(tag: EnrichedTag, opps: Opportunity[]): Promise<Record<string, TagScore> | null> {
-  const oppsList = opps
-    .map((o) => `ID: ${o.id} | Name: ${o.name} | Type: ${o.type} | Summary: ${o.summary || '(no description)'}`)
-    .join('\n');
-  const system = `You are helping a student find opportunities that match their interests and goals. Write directly to them in second person (using "you").`;
-  const userContent = `STUDENT'S PROFILE TAG: "${tag.tag}"
-INTENT: ${tag.intent || '(no intent specified)'}
-NEXT STEPS: ${(tag.nextSteps || []).join(', ') || '(no specific steps)'}
-
-OPPORTUNITIES TO RANK:
-${oppsList}
-
-Rank these opportunities by relevance to this student's profile. Return JSON array with only genuinely relevant opportunities:
-[
-  { "id": "opp_id", "rank": 1, "reasoning": "Brief 1-sentence message directly to the student using 'you' language" },
-  ...
-]
-
-For each reasoning, write directly to the student as if you're the app speaking to them. Omit opportunities that don't align with the profile. Include only good/strong matches.
-Return ONLY valid JSON, no markdown, no preamble.`;
   try {
-    const raw = await callGemini(system, userContent, false);
-    const results = extractJSON(raw);
+    const res = await callFeature('tag_suggestions', {
+      tag,
+      // Only the four fields the prompt reads leave the device.
+      opps: opps.map((o) => ({ id: o.id, name: o.name, type: o.type, summary: o.summary })),
+    });
+    const results = extractJSON(res.text);
     if (!Array.isArray(results)) return null;
     const scores: Record<string, TagScore> = {};
     results.forEach((r: { id?: string; rank?: number; reasoning?: string }) => {
@@ -605,16 +590,16 @@ export default function Finder() {
     const top = rows.slice(0, REASON_TOP_N) as unknown as Opportunity[];
     if (top.length) {
       // One reasoning call produces every card's "why it fits", so a single failure wipes them
-      // ALL — retry once after a short backoff before degrading to no reasons. callGeminiJSON
+      // ALL — retry once after a short backoff before degrading to no reasons. callFeatureJSON
       // already retries a parse failure internally; this covers a transient network/API error.
       let ranked: RankedPick[] = [];
       try {
-        ranked = await rankCandidates(callGemini, reasonDesc, top, buildPrefs() || null, false);
+        ranked = await rankCandidates(callFeature, reasonDesc, top, buildPrefs() || null, false);
       } catch (e1) {
         console.warn('why-it-fits reasoning failed once, retrying:', (e1 as Error).message);
         try {
           await new Promise((r) => setTimeout(r, 1200));
-          ranked = await rankCandidates(callGemini, reasonDesc, top, buildPrefs() || null, false);
+          ranked = await rankCandidates(callFeature, reasonDesc, top, buildPrefs() || null, false);
         } catch (e2) {
           console.warn('why-it-fits reasoning failed after retry, showing matches without reasons:', (e2 as Error).message);
         }
@@ -769,11 +754,11 @@ export default function Finder() {
         // the student to the keyword fallback.
         let ranked: RankedPick[];
         try {
-          ranked = await rankCandidates(callGemini, desc, pool, prefs || null, strict);
+          ranked = await rankCandidates(callFeature, desc, pool, prefs || null, strict);
         } catch (err) {
           console.warn('rankCandidates failed once, retrying after backoff:', (err as Error).message);
           await new Promise((r) => setTimeout(r, 1500));
-          ranked = await rankCandidates(callGemini, desc, pool, prefs || null, strict);
+          ranked = await rankCandidates(callFeature, desc, pool, prefs || null, strict);
         }
         const mapped = ranked
           .map((r) => (byId.get(r.id) ? { opp: byId.get(r.id) as Opportunity, reason: r.reason, tier: r.tier } : null))
@@ -904,10 +889,10 @@ export default function Finder() {
     let slim: { meta?: string; fit?: string } = {};
     try {
       try {
-        slim = await extractTrackerInfo(callGemini, opp);
+        slim = await extractTrackerInfo(callFeature, opp);
       } catch (firstErr) {
         console.warn(`Retrying ${opp.name} after error:`, (firstErr as Error).message);
-        slim = await extractTrackerInfo(callGemini, opp);
+        slim = await extractTrackerInfo(callFeature, opp);
       }
     } catch (err) {
       console.warn(`meta/fit extraction failed for ${opp.name}:`, (err as Error).message);

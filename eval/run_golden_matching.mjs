@@ -5,7 +5,8 @@
 //      cosine-recalls the catalog by match_vector, drops verified-ineligible rows),
 //      returning the whole scored pool. (matching.py)
 //   2. rankCandidates() — the REAL frontend function (src/lib/ranking.ts), imported here
-//      so the "why it fits" prompt is byte-identical to production — over the top 12 rows,
+//      so the pipeline is byte-identical to production (the PROMPT itself is
+//      server-side as of S1-1, which makes this stricter still) — over the top 12 rows,
 //      producing the second-person reason + strong/look tier. (finder.tsx callMatchMapped)
 //   3. CURATE to reranker-vouched rows: keep ONLY rows the reranker wrote a blurb for, exactly
 //      as finder.tsx callMatchMapped does (commit 6e49034) — with the same guard that falls back
@@ -55,17 +56,20 @@ async function authedPost(path, body) {
   return r;
 }
 
-// callGemini shim: identical contract to httpClient.callGemini (POST /api/messages,
-// clean the text blocks). rankCandidates calls this via callGeminiJSON.
-async function callGemini(system, userContent, useWebSearch = false, maxTokens) {
-  const body = { system, userContent, useWebSearch };
-  if (maxTokens) body.maxTokens = maxTokens;
-  const data = await (await authedPost('/api/messages', body)).json();
+// callFeature shim: identical contract to httpClient.callFeature (POST /api/ai, clean the
+// text blocks). rankCandidates calls this via callFeatureJSON.
+//
+// S1-1 moved the prompt server-side, which makes this harness MORE faithful, not less: the
+// grader used to import the prompt from src/lib/ranking.ts and post it to a dumb pipe, so
+// it graded whatever that file said. It now names the same feature id production names, so
+// it is graded against the prompt production actually sends.
+async function callFeature(feature, inputs) {
+  const data = await (await authedPost('/api/ai', { feature, inputs })).json();
   const clean = (data.content ?? [])
     .filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n')
     .replace(/```json|```/g, '').trim();
   if (!clean) throw new Error('Empty response from API');
-  return clean;
+  return { text: clean, truncated: data.stop_reason === 'max_tokens' };
 }
 
 async function callMatch(blob) {
@@ -113,10 +117,10 @@ async function runProfile(p) {
   if (top.length) {
     let ranked = [];
     try {
-      ranked = await rankCandidates(callGemini, themeDesc, top, null, false);
+      ranked = await rankCandidates(callFeature, themeDesc, top, null, false);
     } catch (e1) {
       await new Promise((r) => setTimeout(r, 1200));
-      try { ranked = await rankCandidates(callGemini, themeDesc, top, null, false); }
+      try { ranked = await rankCandidates(callFeature, themeDesc, top, null, false); }
       catch (e2) { console.warn(`  ${p.id} rank failed: ${e2.message}`); }
     }
     ranked.forEach((x) => { if (x && x.id) reasons[x.id] = { reason: x.reason || '', tier: x.tier === 'strong' ? 'strong' : 'look' }; });

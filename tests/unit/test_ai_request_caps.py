@@ -101,14 +101,16 @@ def test_a_cached_body_over_the_cap_is_still_refused():
     assert exc.value.status_code == 413
 
 
-def test_both_proxies_read_through_the_capped_dependency():
-    """Wiring check: swapping either route back to the uncapped app.deps.raw_body reopens
-    the billing lever, so assert the dependency by identity rather than by grepping."""
+def test_the_ai_route_reads_through_the_capped_dependency():
+    """Wiring check: swapping the route back to the uncapped app.deps.raw_body reopens the
+    billing lever, so assert the dependency by identity rather than by grepping.
+
+    One handler now, not two: S1-1 replaced /api/messages and /api/messages-claude with the
+    single /api/ai, which picks the provider from the server-side feature id."""
     import inspect
-    for handler in (ai.handle_messages, ai.handle_messages_claude):
-        param = inspect.signature(handler).parameters["raw_body"]
-        assert param.default.dependency is ai.ai_raw_body
-        assert param.default.dependency is not deps.raw_body
+    param = inspect.signature(ai.handle_ai).parameters["raw_body"]
+    assert param.default.dependency is ai.ai_raw_body
+    assert param.default.dependency is not deps.raw_body
 
 
 # ---------- the throttle (D1) ----------
@@ -172,9 +174,8 @@ def test_handlers_throttle_before_spending(monkeypatch):
         monkeypatch.setattr(ai, attr, lambda *a, **k: pytest.fail("reached past the throttle"))
     monkeypatch.setattr(ai, "client_ip", lambda _r: "1.2.3.4")
 
-    for handler in (ai.handle_messages, ai.handle_messages_claude):
-        resp = handler(request=None, raw_body=b"{}", user=None)
-        assert resp.status_code == 429
+    resp = ai.handle_ai(request=None, raw_body=b'{"feature":"ranking"}', user=None)
+    assert resp.status_code == 429
 
 
 # ---------- S0-3 / finding D3: the client does not decide whether we pay for search ----------
@@ -186,12 +187,12 @@ def test_web_search_is_pinned_off():
     assert ai._USE_WEB_SEARCH is False
 
 
-def test_neither_proxy_reads_usewebsearch_from_the_body():
-    """The precise regression to prevent: re-deriving the flag from the payload. If a feature
-    ever genuinely needs search, derive it from the server-side feature id (S1-1), never from
-    a client flag — so reading it back off `payload` here is always wrong."""
+def test_no_provider_branch_reads_usewebsearch_from_the_body():
+    """The precise regression to prevent: re-deriving the flag from the payload. As of S1-1
+    the branches cannot even see the request body — they take a system string the server
+    built — so a `useWebSearch` mention here would have to be someone reintroducing it."""
     import inspect
-    for fn in (ai._proxy_to_gemini, ai._proxy_to_anthropic):
+    for fn in (ai._proxy_to_gemini, ai._anthropic_call):
         src = inspect.getsource(fn)
         assert "useWebSearch" not in src
         assert "_USE_WEB_SEARCH" in src
@@ -224,8 +225,7 @@ def test_anthropic_attaches_no_search_tool_while_search_is_off(monkeypatch):
     monkeypatch.setattr(ai, "record_interactive_cost_async", lambda *a, **k: None)
     monkeypatch.setattr(ai, "log_conversation_async", lambda *a, **k: None)
 
-    ai._proxy_to_anthropic(json.dumps({"system": "s", "userContent": "u",
-                                       "useWebSearch": True}).encode(), "1.2.3.4", "alice")
+    ai._anthropic_call("s", "u", 1000)
     assert "tools" not in sent["body"]
 
 
@@ -260,8 +260,7 @@ def test_anthropic_urlopen_is_given_an_explicit_timeout(monkeypatch):
     monkeypatch.setattr(ai, "record_interactive_cost_async", lambda *a, **k: None)
     monkeypatch.setattr(ai, "log_conversation_async", lambda *a, **k: None)
 
-    ai._proxy_to_anthropic(json.dumps({"system": "s", "userContent": "u"}).encode(),
-                           "1.2.3.4", "alice")
+    ai._anthropic_call("s", "u", 1000)
     assert seen["timeout"] == AI_UPSTREAM_TIMEOUT_SECONDS
 
 
@@ -280,8 +279,7 @@ def test_gemini_call_passes_an_explicit_timeout(monkeypatch):
     monkeypatch.setattr(ai, "record_interactive_cost_async", lambda *a, **k: None)
     monkeypatch.setattr(ai, "log_conversation_async", lambda *a, **k: None)
 
-    ai._proxy_to_gemini(json.dumps({"system": "s", "userContent": "u"}).encode(),
-                        "1.2.3.4", "alice")
+    ai._proxy_to_gemini("s", "u", 2000, "alice", "ranking")
     assert seen["timeout"] == AI_UPSTREAM_TIMEOUT_SECONDS
     assert seen["use_web_search"] is False
 
@@ -292,7 +290,7 @@ def test_the_search_tool_carries_a_hard_max_uses():
     import inspect
     from app.config import ANTHROPIC_MAX_WEB_SEARCH_USES
 
-    src = inspect.getsource(ai._proxy_to_anthropic)
+    src = inspect.getsource(ai._anthropic_call)
     assert "max_uses" in src and "ANTHROPIC_MAX_WEB_SEARCH_USES" in src
     # Anthropic enforces max_uses server-side, so a generous number is a real bill. The
     # defence-in-depth layer should stay minimal.

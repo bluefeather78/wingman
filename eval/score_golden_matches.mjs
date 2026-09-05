@@ -16,7 +16,9 @@
 // Fabrication is judged ONLY on the opportunity-half of the reason: the student-half (their
 // project/goal) is not in the summary by design and must never count as fabrication.
 //
-// Env: WINGMAN_TOKEN, WINGMAN_API_BASE (default http://127.0.0.1:8000).
+// Env: GEMINI_API_KEY (the grader calls Gemini directly — S1-1 removed the
+//      /api/messages passthrough it used to borrow). WINGMAN_TOKEN /
+//      WINGMAN_API_BASE are only needed if a future revision reads from the API.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +28,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const BASE = process.env.WINGMAN_API_BASE || 'http://127.0.0.1:8000';
 let TOKEN = process.env.WINGMAN_TOKEN;
 let REFRESH = process.env.WINGMAN_REFRESH;
-if (!TOKEN) { console.error('WINGMAN_TOKEN not set'); process.exit(1); }
+if (!process.env.GEMINI_API_KEY) {
+  console.error('GEMINI_API_KEY not set (put it in .env)'); process.exit(1);
+}
+// The grading model. Pinned here rather than read from the app, because this is the
+// operator's grader and its cost is the operator's, not a student's.
+const GRADER_MODEL = process.env.WINGMAN_GRADER_MODEL || 'gemini-3.6-flash';
 
 // Refresh the short-lived access token on a 401 so a long scoring run doesn't die partway.
 async function refreshToken() {
@@ -110,12 +117,30 @@ fabrication — does the blurb assert a fact ABOUT THE OPPORTUNITY that is NOT s
 fab_evidence — if not "supported"/"none", quote the exact unsupported phrase from the blurb; else "".
 note — <=15 words, the single most useful observation.`;
   const userContent = `THEME: ${themeUsed}\n\nITEMS (JSON):\n${JSON.stringify(items)}\n\nReturn the JSON array, one object per item, same order.`;
-  const body = { system, userContent, useWebSearch: false, maxTokens: 6000 };
-  const resp = await authedPost('/api/messages', body);
-  if (!resp.ok) throw new Error(`/api/messages ${resp.status}: ${await resp.text()}`);
+  // S1-1 removed the /api/messages passthrough — the app no longer forwards a
+  // client-supplied prompt to a model, which is the whole point of that change. A GRADER
+  // needs its own prompt, so it calls Gemini DIRECTLY with the operator's own key from
+  // .env, exactly as eval/theme_extraction_eval.py already does. It must not be added to
+  // the product's feature registry: that would make a 6000-token grading call reachable by
+  // any account holder, which is the passthrough with extra steps.
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not set (put it in .env) — the grader calls Gemini directly.');
+  const resp = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GRADER_MODEL}:generateContent`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: userContent }] }],
+        systemInstruction: { parts: [{ text: system }] },
+        generationConfig: { maxOutputTokens: 6000, thinkingConfig: { thinkingLevel: 'low' } },
+      }),
+    },
+  );
+  if (!resp.ok) throw new Error(`Gemini ${resp.status}: ${await resp.text()}`);
   const data = await resp.json();
-  const clean = (data.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '')
-    .join('\n').replace(/```json|```/g, '').trim();
+  const clean = ((data.candidates?.[0]?.content?.parts) ?? [])
+    .map((b) => b.text ?? '').join('\n').replace(/```json|```/g, '').trim();
   const start = clean.indexOf('['), end = clean.lastIndexOf(']');
   const arr = JSON.parse(clean.slice(start, end + 1));
   return arr;

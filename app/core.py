@@ -213,7 +213,7 @@ _interactive_lock = threading.Lock()
 _interactive_rollup = {}  # {(agent, utc_date): agent_runs row id}
 
 
-def record_interactive_cost(surface, usage, model=None, userid=None, system=None):
+def record_interactive_cost(surface, usage, model=None, userid=None, feature=None):
     """Add one interactive API call to today's rollup row for `surface`.
 
     When `userid` is present the SAME cost is additionally attributed to that user in
@@ -289,7 +289,10 @@ def record_interactive_cost(surface, usage, model=None, userid=None, system=None
         record_user_cost(
             userid,
             "claude" if surface == "interactive_claude" else "gemini",
-            classify_feature(system),
+            # Exact, from the feature id the route resolved — not guessed from the prompt
+            # (S1-1). Anything that somehow arrives without one is honestly "other" rather
+            # than misfiled.
+            feature or "other",
             cost=cost,
             model=model,
             input_tokens=usage.get("input_tokens") or 0,
@@ -298,9 +301,9 @@ def record_interactive_cost(surface, usage, model=None, userid=None, system=None
         )
 
 
-def record_interactive_cost_async(surface, usage, model=None, userid=None, system=None):
+def record_interactive_cost_async(surface, usage, model=None, userid=None, feature=None):
     threading.Thread(target=record_interactive_cost,
-                     args=(surface, usage, model, userid, system), daemon=True).start()
+                     args=(surface, usage, model, userid, feature), daemon=True).start()
 
 
 # ---------- Per-user cost attribution ----------
@@ -319,10 +322,10 @@ def record_interactive_cost_async(surface, usage, model=None, userid=None, syste
 # visitors, anything before login) are simply not attributed. The console reports the
 # residual explicitly as "unattributed" rather than pretending the split is complete.
 #
-# Feature is classified server-side from the system prompt rather than passed by the
-# client, reusing the exact signatures generate_mock_text() already matches on. That keeps
-# every existing call site in script.js untouched — but it also means adding a new AI
-# feature requires a line here (and in generate_mock_text) or its spend lands in "other".
+# The feature key comes from the SERVER-OWNED feature id the route resolved (S1-1), not
+# from a substring guess over a client-supplied prompt. Adding an AI feature therefore means
+# adding it to app/services/prompts.py and to this table; miss the second and its spend is
+# honestly labelled by its raw id rather than silently pooled into "other".
 FEATURE_LABELS = {
     "profile_chat":      "Profile chat",
     "chat_starters":     "Chat starters",
@@ -386,55 +389,18 @@ def provider_for_model(model, surface=None):
     return _SURFACE_PROVIDERS.get(surface, "unknown")
 
 
-# Tested in order: the two tracker-extraction prompts are prefixes of one another, so the
-# longer one has to be checked first — the same ordering constraint generate_mock_text()
-# already lives under.
-_FEATURE_SIGNATURES = [
-    # The eligibility-only gate over a recall pool (docs/plans/RECALL_GRID_MERGE_PLAN.md). Distinctive
-    # opening line, so position is unimportant — it collides with nothing else here.
-    ("Wingman's eligibility checker",                            "match_eligibility"),
-    # The merged tags+basics pass. FIRST, because it does the work of `infer_subjects`'s tag
-    # branch and `profile_basics` and so matches their wording too; whichever signature is
-    # tested first wins, and this one is the accurate answer for that call.
-    ("pulling out everything an opportunity-matching app needs", "profile_extract"),
-    ("infer which subject categories",                            "infer_subjects"),
-    ("Rank the best 10-12 matches",                               "ranking"),
-    ("find real, current",                                        "venue_search"),
-    ("maintain a single, coherent running profile",               "profile_synthesis"),
-    ("decide whether a student's profile has enough detail",      "profile_readiness"),
-    # Both the 3-at-a-time regenerate and the 10-at-a-time cached pool are the same feature
-    # (chat openers) and must be tested before the generic profile-chat signature below,
-    # which their prompts also contain.
-    ("exactly THREE distinct",                                    "chat_starters"),
-    ("exactly TEN distinct",                                      "chat_starters"),
-    ("helping a high schooler build a detailed personal profile", "profile_chat"),
-    ("distill a casual chat conversation into new facts",         "chat_findings"),
-    ("classify and extract structured tracking data",             "tracker_extract"),
-    ("extract structured tracking data",                          "tracker_extract"),
-    ("extract ONLY information that would be relevant",           "resume_import"),
-    ("pull out a small set of specific profile facts",            "profile_basics"),
-    # The ranking prompt only contains "Rank the best 10-12 matches" on one of its two
-    # selectionRule branches, so it also gets matched on its stable opening line.
-    ("helping a student find the best-fit extracurricular",       "ranking"),
-    ("interests/goals to the best opportunities",                 "tag_intent"),
-    ("Write directly to them in second person",                   "tag_suggestions"),
-    ("extracting specific interests, goals, and pursuits",        "infer_subjects"),
-]
-
-
-def classify_feature(system):
-    """Map a system prompt to one of FEATURE_LABELS' keys.
-
-    Unrecognised prompts bucket to 'other' rather than being dropped — spend you cannot
-    name is still spend, and a growing 'other' slice is the signal that a new feature
-    needs a signature added above.
-    """
-    if not system:
-        return "other"
-    for needle, key in _FEATURE_SIGNATURES:
-        if needle in system:
-            return key
-    return "other"
+# S1-1 retired _FEATURE_SIGNATURES and classify_feature().
+#
+# Cost attribution used to guess the feature by testing an ORDERED list of substrings against
+# the system prompt — which was itself supplied by the client, so the classification was both
+# a guess and trivially gamed (finding C1 called it out). The order was load-bearing in three
+# places (the two tracker signatures, chat_starters before profile_chat, the two ranking
+# signatures), and adding a feature meant remembering to add a signature or watching its
+# spend land in "other".
+#
+# The client now names a feature id and the server owns the prompt for it, so attribution is
+# EXACT: app/services/prompts.py maps each id to its FEATURE_LABELS key. Nothing infers a
+# feature from prose any more.
 
 
 # Flipped to False the first time user_costs comes back missing, so a server running

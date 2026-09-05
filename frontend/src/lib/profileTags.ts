@@ -1,5 +1,5 @@
-import { callGeminiJSON, type GeminiCall } from './aiJson';
-import { normalizeProfileBasics, PROFILE_BASICS_RULE } from './ranking';
+import { callFeatureJSON, type FeatureCall } from './aiJson';
+import { normalizeProfileBasics } from './ranking';
 
 // The "Your Profile" filter facet's tags — the retired SPA's `filterTags` slot
 // (PROFILE_DERIVED_SLOTS), ported. The RN app READ this slot but never wrote it, so the
@@ -48,27 +48,15 @@ export interface EnrichedTag {
   nextSteps?: string[];
 }
 
-// Output budget for the extraction call. The tag count is unknown by definition before it
-// runs — that is what it is computing — so it simply asks for the ceiling. Unused budget is
-// free (billing is on tokens produced), the same reason profile synthesis asks generously.
-export const TAG_EXTRACT_MAX_TOKENS = 8000;
-
-// Enrichment budget, sized from the tag count rather than fixed. An enrichment object is a
-// tag (<= 60 chars) plus a one-sentence intent plus 2-3 short next steps; ~90 tokens covers
-// one comfortably, and the overhead term leaves room for JSON scaffolding and for Gemini 3.x
-// thinking tokens, which draw from this SAME budget.
-export const ENRICH_TOKENS_PER_TAG = 90;
-export const ENRICH_TOKEN_OVERHEAD = 600;
+// The two output budgets — the extraction ceiling and the per-tag enrichment sizing — moved
+// to app/services/prompts.py with the prompts they belong to (S1-1). The enrichment one is a
+// function of the tag count, and the server has the same tag count this file did.
 
 // A non-termination guard, NOT a size limit — it bounds retries, not tags. Every round asks
 // for every tag still missing, so the shortfall shrinks fast (a round that fits most of a
 // long list leaves only a short one behind). A round that adds nothing stops the loop
 // immediately, so this is only reached when rounds keep making partial progress.
 export const ENRICH_MAX_ROUNDS = 4;
-
-export function enrichBudgetFor(tagCount: number): number {
-  return ENRICH_TOKEN_OVERHEAD + tagCount * ENRICH_TOKENS_PER_TAG;
-}
 
 // Deduped case-insensitively, and never truncated. Duplicates matter here because
 // `enrichProfileTags` keys its results by tag string and the facet renders one row per tag
@@ -90,26 +78,14 @@ export function dedupeTagStrings(tags: unknown[]): string[] {
 // One request for the tags it is given. Returns what it could parse, keyed by tag; never
 // throws, so a failed request costs its tags' enrichment rather than every tag's.
 async function enrichRequest(
-  callGemini: GeminiCall,
+  callFeature: FeatureCall,
   wanted: string[],
 ): Promise<Record<string, EnrichedTag>> {
-  const system = `You are helping match a high school student's interests/goals to the best opportunities. You will be given a list of the student's profile themes — each one covers a whole area of what they do, not a single project. Analyze EACH theme for what it represents and what would best help them grow.
-
-Return ONLY a JSON array with one object per tag, in the same order as given, no other text:
-[{
-  "tag": "the tag string exactly as given",
-  "intent": "what they want out of this whole area (1 short sentence)",
-  "nextSteps": ["2-3 short, logical milestones for the AREA, e.g. Master advanced techniques", "Enter competitions"]
-}]
-
-Return an object for EVERY tag listed, however many there are — do not stop early and do not summarise. Keep every field short so the whole array fits in one response.`;
-  const userContent = `PROFILE THEMES:\n${wanted.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n\nReturn the JSON array of ${wanted.length} enrichment objects.`;
-
   let arr: unknown[] = [];
   try {
-    const parsed = await callGeminiJSON<unknown>(
-      callGemini, system, userContent, false, enrichBudgetFor(wanted.length),
-    );
+    // The output budget is sized from the tag count SERVER-side now (S1-1) — it is a
+    // function of this input, and the server can compute it from the same input.
+    const parsed = await callFeatureJSON<unknown>(callFeature, 'tag_intent', { tags: wanted });
     // Tolerate the model wrapping the array in an object ({"tags": [...]}) — the shape it
     // was asked for is an array, but a wrapper is a formatting slip, not a failed answer.
     arr = Array.isArray(parsed)
@@ -140,7 +116,7 @@ Return an object for EVERY tag listed, however many there are — do not stop ea
 // The top-up is what lets the tag count be unbounded without a per-request size limit — a
 // response that could not fit the whole list is a shortfall to repair, not a cap to accept.
 async function enrichProfileTags(
-  callGemini: GeminiCall,
+  callFeature: FeatureCall,
   tags: string[],
   // Enrichments already in hand. The merged extraction pass returns tags WITH their intent
   // and next steps, so it seeds this and the loop below usually has nothing left to do —
@@ -151,7 +127,7 @@ async function enrichProfileTags(
   const byTag: Record<string, EnrichedTag> = { ...seed };
   let pending = tags.filter((t) => !byTag[t]);
   for (let round = 0; round < ENRICH_MAX_ROUNDS && pending.length; round++) {
-    const got = await enrichRequest(callGemini, pending);
+    const got = await enrichRequest(callFeature, pending);
     const before = Object.keys(byTag).length;
     Object.assign(byTag, got);
     // No progress means re-asking is not going to start working — a failed call, or a model
@@ -189,62 +165,16 @@ export interface ProfileExtract {
   tags: EnrichedTag[];
 }
 
-// Budget: the basics object and the tag array in one response, so the per-tag term plus the
-// extraction headroom. Unused budget is free (billing is on tokens produced).
-export function mergedExtractBudget(): number {
-  return TAG_EXTRACT_MAX_TOKENS;
-}
-
 export async function extractTagsAndBasics(
-  callGemini: GeminiCall,
+  callFeature: FeatureCall,
   text: string,
 ): Promise<ProfileExtract> {
   if (!text || !text.trim()) return { basics: {}, tags: [] };
-  const system = `You are reading a high school student's profile and pulling out everything an opportunity-matching app needs from it, in ONE pass. Return ONLY a raw JSON object, no markdown and no preamble, with exactly two keys: "basics" and "tags".
-
-"basics" is an object with exactly these keys: ${PROFILE_BASICS_RULE}
-
-"tags" is the student's whole profile reduced to a small set of BROAD THEMES. This is a filter facet, not a resume: each theme becomes one row in a dropdown, and picking it searches a catalog of programs, competitions and internships for things that fit it. A theme nobody could search for is a wasted row.
-
-First sweep the profile for raw material - current projects and research; interests they want to go deeper in; interests mentioned but never started; academic goals such as competitions, scores and certifications; career or industry aspirations; leadership and organizing; service and volunteering; hobbies and crafts. Then GROUP that material into themes. The grouping is the job; the sweep only makes sure nothing is missed.
-
-Two rules govern the grouping:
-
-MUTUALLY EXCLUSIVE - every item belongs to exactly ONE theme. When an item could sit in two, put it where the opportunities that would help with it live: a chatbot built to learn AI belongs with studying AI, a chatbot being sold to users belongs with building products; a physics olympiad score belongs with competitions, not with physics as a subject. If two themes would surface the same programs, they are one theme - merge them.
-
-COLLECTIVELY EXHAUSTIVE - everything in the profile lands somewhere, and nothing is dropped for being small, old or unimpressive. A single passing mention joins the nearest theme ONLY when it genuinely fits that direction; if nothing related exists, it becomes its own theme rather than being fused onto an unrelated one.
-
-ONE DIRECTION PER THEME - a theme covers a single searchable direction. Never join two unrelated areas with "and" or a comma just to place a stray item (WRONG: "Community service and baking" - volunteering and baking are searched for in completely different places). A conjunction is allowed only when both halves serve the SAME catalog search (OK: "Cooking and baking from scratch", where both are culinary).
-
-Get the altitude right. A theme names a DIRECTION the student is pursuing, pitched at the level a program is described:
-- TOO SPECIFIC - one project, club, role, event, organization or achievement. Never emit these: "Founded Linguistics Club", "Organized school Trivia Night", "Volunteering with Kids Coming Together", "Improving USAPhO score", "Making fresh pasta from scratch".
-- RIGHT - "Organizing student clubs and enrichment events", "Volunteering with organizations that serve children", "Competing in STEM olympiads and contests", "Cooking and baking from scratch".
-- TOO BROAD - a whole field of human activity: "STEM", "Science", "The arts", "Community service", "Leadership". If a theme would match most of a catalog of extracurriculars, split it.
-Test each theme: it should either cover TWO OR MORE things in the profile, or be a standing interest broad enough that several different programs could serve it. If a theme covers only one line BECAUSE it is a single project, club, role, event or achievement, widen it to the area it belongs to. But if that one line is itself a distinct, searchable interest with no related sibling in the profile (e.g. baking, when nothing else culinary appears), let it stand as its own theme - do NOT fuse it onto an unrelated area just to avoid a one-line theme.
-
-Past and present merge. Something done last year and something happening now belong to the same theme when they point the same way. Write every theme in the present, as an ongoing direction, never as a past accomplishment.
-
-Use as many themes as there are genuinely distinct, searchable directions - a rich profile often lands around 6-12 and a thin one around 3-5, but that is a rough guide, not a target to hit: never merge distinct areas, and never split one area, just to reach a number. Never return one theme per profile line, and never invent a theme for something the profile does not say. Order them most important first: the themes carrying the most of the profile, and the ones the student says they want to go further in.
-
-Before returning, re-check every theme that joins two things with "and" or a comma: if a single catalog search would not serve both halves, split them into separate themes.
-
-Each entry is an object:
-{
-  "tag": "the theme, 3-8 words, plain and searchable, max 60 characters",
-  "intent": "what the student wants out of this whole area (1 short sentence)",
-  "nextSteps": ["2-3 short milestones for the AREA, e.g. Enter a national competition"]
-}
-
-Worked example - a profile mentioning a Linguistics Club she founded, a Math Club she co-founded, a school Trivia Night she ran, tutoring friends in chemistry, and two years volunteering at a children's outdoor program yields TWO themes, not five: "Organizing student clubs and enrichment events" and "Mentoring and volunteering with young people".`;
-  const userContent = `STUDENT PROFILE:\n\n${text}\n\nReturn the JSON object with "basics" and "tags" only.`;
-
-  // callGeminiJSON, not callGemini + extractJSON: it retries once on a parse failure.
-  // Gemini intermittently emits a stray character into an otherwise fine response (an observed
-  // run opened with `[=` instead of `["`), and without the retry that one glitch silently cost
+  // callFeatureJSON, not one call + extractJSON: it retries once on a parse failure. Gemini
+  // intermittently emits a stray character into an otherwise fine response (an observed run
+  // opened with `[=` instead of `["`), and without the retry that one glitch silently cost
   // the student their whole filter facet — which is exactly what this writer exists for.
-  const parsed = await callGeminiJSON<unknown>(
-    callGemini, system, userContent, false, mergedExtractBudget(),
-  );
+  const parsed = await callFeatureJSON<unknown>(callFeature, 'profile_extract', { text });
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { basics: {}, tags: [] };
   }
@@ -272,5 +202,5 @@ Worked example - a profile mentioning a Linguistics Club she founded, a Math Clu
     if (e.intent || (Array.isArray(e.nextSteps) && e.nextSteps.length)) seed[tag] = { ...e, tag };
   });
 
-  return { basics, tags: await enrichProfileTags(callGemini, names, seed) };
+  return { basics, tags: await enrichProfileTags(callFeature, names, seed) };
 }

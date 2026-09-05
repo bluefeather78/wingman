@@ -127,8 +127,11 @@ def handle_match(body: dict = Depends(json_body),
                             "Please try again.", e, op="matching.run")
 
     if elig_usage:
+        # The feature id directly (S1-1): this prompt was previously identified by the
+        # substring "Wingman's eligibility checker", so rewording its first line silently
+        # refiled the spend.
         record_interactive_cost_async("interactive_gemini", elig_usage, MESSAGES_MODEL,
-                                      userid=userid, system=ELIGIBILITY_ONLY_SYSTEM)
+                                      userid=userid, feature="match_eligibility")
     return json_response(200, {
         "results": results, "pool_size": len(gate["pool"]),
         "excluded_ineligible": gate["excluded"], "embed_cost_usd": embed_cost,

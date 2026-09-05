@@ -4226,9 +4226,10 @@ function featurePanel(d) {
 }
 
 // What a student actually did to trigger each feature — mirrors FEATURE_LABELS in
-// server.py, keyed the same way. Purely descriptive copy for the console; add a line here
-// alongside any new entry in server.py's FEATURE_LABELS/_FEATURE_SIGNATURES, or the feature
-// shows with no description rather than a wrong one.
+// app/core.py, keyed the same way. Purely descriptive copy for the console; add a line here
+// alongside any new entry in app/core.py's FEATURE_LABELS and app/services/prompts.py's
+// FEATURES registry (S1-1 replaced the _FEATURE_SIGNATURES guess with those exact ids), or
+// the feature shows with no description rather than a wrong one.
 const FEATURE_TRIGGER = {
   profile_chat:      'Answering a follow-up question in the profile-chat drawer',
   chat_starters:     'Opening the profile-chat drawer (generates its opening questions)',

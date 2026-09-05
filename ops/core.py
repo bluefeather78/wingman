@@ -40,7 +40,7 @@ from app.core import (
     _is_missing_column_error, _missing_table_error, _runs_cache, _runs_cache_lock,
     RUNS_CACHE_TTL, RECENT_RUNS_LIMIT, invalidate_runs_cache, flush_user_activity,
     INTERACTIVE_AGENTS, FEATURE_LABELS, PROVIDER_LABELS, provider_for_model,
-    classify_feature, subscription_state,
+    subscription_state,
 )
 from app.services.opportunities import _opportunities_cache, _opportunities_cache_lock
 from wingman.subscription_common import (is_trial_expired, promo_kind,

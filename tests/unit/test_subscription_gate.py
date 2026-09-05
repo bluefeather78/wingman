@@ -165,13 +165,13 @@ def test_route_is_not_gated(method, path):
         f"{method} {path} must stay reachable to a lapsed account"
 
 
-def test_ai_routes_gate_by_hand():
-    """The two AI proxies gate by hand rather than with the dependency: the MOCK branch must
-    stay reachable signed-out, and they return their 401/402 as a json_error body built in
-    the handler. Both route through ai._ai_access_error — assert the wiring is still there."""
+def test_ai_route_gates_by_hand():
+    """The AI route gates by hand rather than with the dependency: the MOCK branch must stay
+    reachable signed-out, and it returns its 401/402 as a json_error body built in the
+    handler. One route since S1-1 (POST /api/ai), which picks the provider — and therefore
+    which key the gate consults — from the server-side feature id."""
     import app.routes.ai as ai
-    for fn in (ai.handle_messages, ai.handle_messages_claude):
-        assert "_ai_access_error" in inspect.getsource(fn)
+    assert "_ai_access_error" in inspect.getsource(ai.handle_ai)
     assert "subscription_block_reason" in inspect.getsource(ai._ai_access_error)
 
 
@@ -242,8 +242,9 @@ def test_ai_handlers_consult_the_gate_before_spending(monkeypatch):
     monkeypatch.setattr(ai, "ANTHROPIC_API_KEY", "live-key")
     monkeypatch.setattr(ai, "client_ip", lambda _r: "1.2.3.4")
 
-    for handler in (ai.handle_messages, ai.handle_messages_claude):
-        resp = handler(request=None, raw_body=b"{}", user=None)
+    for feature in ("ranking", "profile_chat"):     # one Gemini, one Claude
+        resp = ai.handle_ai(request=None,
+                            raw_body=('{"feature":"%s"}' % feature).encode(), user=None)
         assert resp.status_code == 401
 
 

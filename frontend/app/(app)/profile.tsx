@@ -27,17 +27,15 @@ import {
 import { PopButton, RightDrawer, Screen, SoftCard, Txt, usePopInteraction, VibeField } from '@/ui/components';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
-const callClaude = httpClient.callClaude.bind(httpClient);
-const callClaudeDetailed = httpClient.callClaudeDetailed.bind(httpClient);
-const callGemini = httpClient.callGemini.bind(httpClient);
+// ONE call for every model-backed feature (S1-1): the provider, the prompt and the token
+// budget are all properties of the server-side feature id now, so there is nothing to pick
+// between here.
+const callFeature = httpClient.callFeature.bind(httpClient);
 const PROFILE_KEY = 'student-profile';
 
 // Shared with Fresh Finds: the profile-derived slots (subjects+grade, filter tags, basics,
 // chat openers) are computed once per profile "version" and stored on this same record.
-const modelCalls: ModelCalls = {
-  gemini: callGemini,
-  claude: callClaude,
-};
+const modelCalls: ModelCalls = callFeature;
 const profileStore: ProfileStore = {
   load: () => httpClient.loadData<ProfileRecord>(PROFILE_KEY),
   save: (record) => httpClient.saveData(PROFILE_KEY, record),
@@ -201,7 +199,7 @@ export default function Profile() {
     try {
       let merged: string;
       try {
-        merged = await synthesizeProfile(callClaudeDetailed, before, newText, isTranscript);
+        merged = await synthesizeProfile(callFeature, before, newText, isTranscript);
       } catch {
         const fb = isTranscript ? transcriptStudentLines(newText) : newText;
         merged = fb ? (before ? `${before} ${fb}` : fb) : before;
@@ -275,7 +273,7 @@ export default function Profile() {
     setStartersLoading(true);
     try {
       if (regenerate) {
-        setStarters(await profileChatStarterQuestionsFromAI(callClaude, profile.synthesized, profile.chatRounds, true));
+        setStarters(await profileChatStarterQuestionsFromAI(callFeature, profile.synthesized, profile.chatRounds, true));
       } else {
         const slot = (await getProfileDerived(profileStore, modelCalls, 'starterPool')) as StarterPoolSlot;
         setStarters(drawStarterWindow(slot.questions));
@@ -353,7 +351,7 @@ export default function Profile() {
     setHistory((prev) => {
       const next: ChatMessage[] = [...prev, { role: 'user', text }];
       setBusy('thinking');
-      profileChatNextQuestion(callClaude, profile.synthesized, next, profile.chatRounds)
+      profileChatNextQuestion(callFeature, profile.synthesized, next, profile.chatRounds)
         .then((q) => {
           const bot = q || 'Tell me something else about yourself.';
           setHistory([...next, { role: 'bot', text: bot }]);
@@ -382,7 +380,7 @@ export default function Profile() {
     setBusy('tidying');
     beginProfileWrite();
     try {
-      const repaired = await repairProfileText(callClaudeDetailed, profile.synthesized);
+      const repaired = await repairProfileText(callFeature, profile.synthesized);
       await persist({ ...profile, synthesized: repaired, updatedAt: new Date().toISOString() });
       // A repair is a synthesis pass like any other — it rewrites the profile text, so every
       // derived slot is now computed from text that no longer exists. Warm them in the

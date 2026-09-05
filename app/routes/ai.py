@@ -1,13 +1,22 @@
-"""AI proxy routes: /api/messages (Gemini) and /api/messages-claude (Anthropic).
+"""The AI route: POST /api/ai.
 
-Translated from server.py's handle_messages / proxy_to_gemini / mock_response /
-handle_messages_claude / proxy_to_anthropic (docs/archive/PLAN_1_decompose.md). The client sends a
-plain {system, userContent, userid} body either way; the response is the
-{"content":[{"type":"text","text":...}]} envelope for both live and mock, so script.js
-doesn't branch on mode.
+**MARQUEE M8 + M9.** M8 because the prompts this route sends live in
+app/services/prompts.py; M9 because every branch below can make a paid call.
 
-The client may still send "useWebSearch" — it is read and IGNORED. Whether the server runs a
-paid web search is a server-side decision now; see _USE_WEB_SEARCH below (M9 / S0-3).
+ONE endpoint, and it takes `{feature, inputs}`. It replaced /api/messages and
+/api/messages-claude, which took `system`, `userContent`, `useWebSearch` and `maxTokens`
+straight off the request body — S1-1, finding C1.2. Those two routes were a model
+passthrough with an auth check in front: the client-visible contract was "send any prompt,
+any input, search on, 8k output", so every product guardrail written into a prompt was one
+curl away from being bypassed, on Wingman's keys and Wingman's bill.
+
+Now the server owns the prompt text, the provider, the tool config, the token budget and
+the feature id, and an unknown feature is a 400 that never reaches a provider. Removed
+rather than deprecated: leaving the old routes accepting `system` would leave the finding
+exactly where it was.
+
+The response envelope is unchanged — {"content":[{"type":"text","text":...}]} for both live
+and mock, plus stop_reason — so nothing downstream branches on mode.
 """
 import json
 import urllib.error
@@ -31,6 +40,7 @@ from app.auth import get_optional_user, AuthedUser
 from app.auth.ratelimit import ai_ip_limiter, ai_user_limiter
 from app.services.ai import generate_mock_text
 from app.services import budget
+from app.services import prompts
 from wingman.gemini_common import call_gemini
 
 router = APIRouter()
@@ -120,54 +130,34 @@ def _record_provider_failure(provider, path, status, detail):
     record_api_error("POST", path, status or 502, kind, message=msg)
 
 
-def _clamped_max_tokens(requested):
-    """Client-requested output budget, clamped into [CLAUDE_MAX_TOKENS, ceiling]."""
-    try:
-        n = int(requested)
-    except (TypeError, ValueError):
-        return CLAUDE_MAX_TOKENS
-    return max(CLAUDE_MAX_TOKENS, min(n, CLAUDE_MAX_TOKENS_CEILING))
+def _envelope(text, stop_reason=None):
+    """The response shape both providers and the mock branch answer in.
+
+    Unchanged from the old proxies on purpose: `content[0].text` plus `stop_reason` is what
+    cleanAiText() and the profile-synthesis retry already read, so moving the prompts
+    server-side did not also move the wire format.
+    """
+    body = {"content": [{"type": "text", "text": text}]}
+    if stop_reason:
+        body["stop_reason"] = stop_reason
+    return json_response(200, body)
 
 
-def _clamped_gemini_max_tokens(requested):
-    """Same, for /api/messages. A caller whose answer length scales with its input (profile
-    tag extraction and enrichment) asks for its own budget; everyone else gets the uniform
-    default. Never BELOW the default, so this can only ever raise a call's headroom."""
-    try:
-        n = int(requested)
-    except (TypeError, ValueError):
-        return MESSAGES_MAX_TOKENS
-    return max(MESSAGES_MAX_TOKENS, min(n, MESSAGES_MAX_TOKENS_CEILING))
-
-
-def _mock_response(raw_body, ip, userid):
-    try:
-        payload = json.loads(raw_body)
-        system = payload.get("system", "") or ""
-        user_content = payload.get("userContent", "")
-    except Exception:
-        system, user_content = "", ""
+def _mock_response(system, user_content, userid):
+    """The offline branch. generate_mock_text still pattern-matches on the SYSTEM PROMPT —
+    which the server now builds — so mock mode is unchanged by S1-1 and the app stays fully
+    click-through-able with no API keys, exactly as CLAUDE.md requires."""
     text = generate_mock_text(system, user_content)
-    resp = json_response(200, {"content": [{"type": "text", "text": text}]})
-    log_conversation_async(userid, "mock", system,
-                           user_content if isinstance(user_content, str) else json.dumps(user_content),
-                           text)
-    return resp
+    log_conversation_async(userid, "mock", system, user_content, text)
+    return _envelope(text)
 
 
-def _proxy_to_gemini(raw_body, ip, userid):
-    try:
-        payload = json.loads(raw_body)
-    except Exception:
-        return json_error(400, "Malformed request body.")
-    system = payload.get("system", "") or ""
-    user_content = payload.get("userContent", "")
-    user_content = user_content if isinstance(user_content, str) else json.dumps(user_content)
+def _proxy_to_gemini(system, user_content, max_tokens, userid, cost_feature):
     try:
         text, usage = call_gemini(
             system, user_content, GEMINI_API_KEY,
             use_web_search=_USE_WEB_SEARCH,
-            max_tokens=_clamped_gemini_max_tokens(payload.get("maxTokens")),
+            max_tokens=min(int(max_tokens), MESSAGES_MAX_TOKENS_CEILING),
             model=MESSAGES_MODEL,
             # Explicit, not inherited from gemini_common's 120s default: this is an
             # interactive request holding an anyio threadpool slot, not a batch agent that
@@ -176,29 +166,22 @@ def _proxy_to_gemini(raw_body, ip, userid):
         )
     except urllib.error.HTTPError as e:
         body = e.read()
-        _record_provider_failure("gemini", "/api/messages", e.code, _provider_detail(body))
+        _record_provider_failure("gemini", "/api/ai", e.code, _provider_detail(body))
         return _provider_error_response(e.code)
     except Exception as e:
-        _record_provider_failure("gemini", "/api/messages", 0, str(e))
+        _record_provider_failure("gemini", "/api/ai", 0, str(e))
         return _mark_logged(json_error(502, _PROVIDER_DEFAULT))
-    resp = json_response(200, {"content": [{"type": "text", "text": text}]})
     log_conversation_async(userid, "live", system, user_content, text)
     record_interactive_cost_async("interactive_gemini", usage, MESSAGES_MODEL,
-                                  userid=userid, system=system)
-    return resp
+                                  userid=userid, feature=cost_feature)
+    return _envelope(text)
 
 
-def _proxy_to_anthropic(raw_body, ip, userid):
-    try:
-        payload = json.loads(raw_body)
-    except Exception:
-        return json_error(400, "Malformed request body.")
-    system = payload.get("system", "") or ""
-    user_content = payload.get("userContent", "")
-    user_content = user_content if isinstance(user_content, str) else json.dumps(user_content)
+def _anthropic_call(system, user_content, max_tokens):
+    """One Anthropic request. Returns the decoded JSON; raises HTTPError like urlopen."""
     body = {
         "model": CLAUDE_MODEL,
-        "max_tokens": _clamped_max_tokens(payload.get("maxTokens")),
+        "max_tokens": min(int(max_tokens), CLAUDE_MAX_TOKENS_CEILING),
         "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": user_content}],
     }
@@ -219,37 +202,58 @@ def _proxy_to_anthropic(raw_body, ip, userid):
             "anthropic-version": "2023-06-01",
         },
     )
-    try:
-        # No timeout here at all until S0-4: a hung socket permanently consumed one of the
-        # anyio threadpool's 40 slots, capacity that never returned until a restart.
-        with urllib.request.urlopen(req, timeout=AI_UPSTREAM_TIMEOUT_SECONDS) as upstream:
-            data = upstream.read()
-            resp = Response(content=data, status_code=upstream.status,
-                            media_type="application/json")
-    except urllib.error.HTTPError as e:
-        body = e.read()
-        _record_provider_failure("anthropic", "/api/messages-claude", e.code,
-                                 _provider_detail(body))
-        return _provider_error_response(e.code)
-    except Exception as e:
-        _record_provider_failure("anthropic", "/api/messages-claude", 0, str(e))
-        return _mark_logged(json_error(502, _PROVIDER_DEFAULT))
-    # Best-effort logging + cost, after the response body is captured.
-    try:
-        resp_json = json.loads(data)
-        response_text = "\n".join(
-            b.get("text", "") for b in resp_json.get("content", []) if b.get("type") == "text"
-        )
-        u = resp_json.get("usage") or {}
-        record_interactive_cost_async("interactive_claude", {
-            "input_tokens": u.get("input_tokens", 0),
-            "output_tokens": u.get("output_tokens", 0),
-            "server_tool_use": u.get("server_tool_use") or {},
-        }, CLAUDE_MODEL, userid=userid, system=system)
-    except Exception:
-        response_text = ""
-    log_conversation_async(userid, "live", system, user_content, response_text)
-    return resp
+    # No timeout here at all until S0-4: a hung socket permanently consumed one of the
+    # anyio threadpool's 40 slots, capacity that never returned until a restart.
+    with urllib.request.urlopen(req, timeout=AI_UPSTREAM_TIMEOUT_SECONDS) as upstream:
+        return json.loads(upstream.read())
+
+
+def _claude_text(data):
+    return "\n".join(b.get("text", "") for b in (data.get("content") or [])
+                      if b.get("type") == "text")
+
+
+def _proxy_to_anthropic(feature, system, user_content, max_tokens, userid, cost_feature):
+    """The Claude branch, including the profile-synthesis retry.
+
+    The retry used to live in the CLIENT (call at 4000, call again at 8000 if the answer
+    stopped on max_tokens), which meant the client chose both budgets. S1-1 moves the budget
+    server-side, so the retry has to come with it — a feature declares retry_max_tokens and
+    this decides. Behaviour is identical; the ceiling is simply no longer negotiable.
+    """
+    attempts = [max_tokens]
+    if feature.retry_max_tokens:
+        attempts.append(feature.retry_max_tokens)
+
+    data = None
+    for budget_tokens in attempts:
+        try:
+            data = _anthropic_call(system, user_content, budget_tokens)
+        except urllib.error.HTTPError as e:
+            body = e.read()
+            _record_provider_failure("anthropic", "/api/ai", e.code,
+                                     _provider_detail(body))
+            return _provider_error_response(e.code)
+        except Exception as e:
+            _record_provider_failure("anthropic", "/api/ai", 0, str(e))
+            return _mark_logged(json_error(502, _PROVIDER_DEFAULT))
+        # Each attempt is a real, billed call, so each is attributed. Best-effort, after
+        # the body is in hand.
+        try:
+            usage = data.get("usage") or {}
+            record_interactive_cost_async("interactive_claude", {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "server_tool_use": usage.get("server_tool_use") or {},
+            }, CLAUDE_MODEL, userid=userid, feature=cost_feature)
+        except Exception:                                          # noqa: BLE001
+            pass
+        if data.get("stop_reason") != "max_tokens":
+            break
+
+    text = _claude_text(data or {})
+    log_conversation_async(userid, "live", system, user_content, text)
+    return _envelope(text, (data or {}).get("stop_reason"))
 
 
 # MARQUEE M9: this is the auth gate in front of the two paid AI proxies. See S0-1 in
@@ -321,43 +325,70 @@ def _live_branch(userid, key_configured):
     return True, None
 
 
-@router.post("/api/messages")
-def handle_messages(request: Request, raw_body: bytes = Depends(ai_raw_body),
-                    user: AuthedUser = Depends(get_optional_user)):
-    # Identity comes from the token if present, else None. Signed-out is allowed only on the
-    # mock branch — see _ai_access_error (M9 / S0-1).
+@router.post("/api/ai")
+def handle_ai(request: Request, raw_body: bytes = Depends(ai_raw_body),
+              user: AuthedUser = Depends(get_optional_user)):
+    """{feature, inputs} -> {"content":[{"type":"text","text":...}], "stop_reason"?}.
+
+    MARQUEE M8 + M9. The one door to a model. S1-1, finding C1.2: this replaced
+    /api/messages and /api/messages-claude, which forwarded a client-supplied `system`
+    string, so any account holder could run arbitrary prompts on Wingman's keys.
+
+    Order matters and is the same order the two old routes used, for the same reasons:
+      throttle -> access -> feature lookup -> spend -> provider.
+    The feature lookup sits BEFORE the spend layers and after the access ones, so a bad
+    feature costs a 400 rather than a budget check, and an unauthenticated caller never
+    learns which feature ids exist.
+    """
     userid = user.id if user else None
     ip = client_ip(request)
     throttled = _rate_limit_error(ip, userid)
     if throttled:
         return throttled
-    denied = _ai_access_error(userid, bool(GEMINI_API_KEY))
+
+    try:
+        payload = json.loads(raw_body) if raw_body else {}
+    except Exception:                                              # noqa: BLE001
+        return json_error(400, "Malformed request body.")
+    if not isinstance(payload, dict):
+        return json_error(400, "Malformed request body.")
+
+    name = payload.get("feature")
+    # The provider is a property of the FEATURE, not of the route, so the access gate needs
+    # to know which key it is gating on before it can answer. Resolve the feature first,
+    # but only far enough to learn that — the prompt is not built until access is settled.
+    try:
+        feature = prompts.get_feature(name)
+    except prompts.UnknownFeature:
+        # No hint about which ids exist. The registry is the allow-list, and enumerating it
+        # in an error message would hand back most of what S1-1 just took away.
+        return json_error(400, "Unknown request.")
+
+    key_configured = bool(ANTHROPIC_API_KEY if feature.provider == "claude"
+                          else GEMINI_API_KEY)
+    denied = _ai_access_error(userid, key_configured)
     if denied:
         return denied
-    live, refused = _live_branch(userid, bool(GEMINI_API_KEY))
+
+    try:
+        feature, system, user_content, max_tokens = prompts.build(name, payload.get("inputs"))
+    except prompts.UnknownFeature:                                 # unreachable; belt
+        return json_error(400, "Unknown request.")
+    except Exception as e:                                         # noqa: BLE001
+        # A malformed `inputs` is the caller's mistake, not a server fault — and it must not
+        # reach a provider, which is where the money is.
+        print(f"[WARN] Could not build feature {name!r}: {type(e).__name__}")
+        return json_error(400, "That request could not be built.")
+
+    live, refused = _live_branch(userid, key_configured)
     if refused:
         return refused
-    touch_user_activity(userid, "ai_gemini")
-    if live:
-        return _proxy_to_gemini(raw_body, ip, userid)
-    return _mock_response(raw_body, ip, userid)
 
-
-@router.post("/api/messages-claude")
-def handle_messages_claude(request: Request, raw_body: bytes = Depends(ai_raw_body),
-                           user: AuthedUser = Depends(get_optional_user)):
-    userid = user.id if user else None
-    ip = client_ip(request)
-    throttled = _rate_limit_error(ip, userid)
-    if throttled:
-        return throttled
-    denied = _ai_access_error(userid, bool(ANTHROPIC_API_KEY))
-    if denied:
-        return denied
-    live, refused = _live_branch(userid, bool(ANTHROPIC_API_KEY))
-    if refused:
-        return refused
-    touch_user_activity(userid, "ai_claude")
-    if live:
-        return _proxy_to_anthropic(raw_body, ip, userid)
-    return _mock_response(raw_body, ip, userid)
+    cost_feature = feature.cost_feature or name
+    touch_user_activity(userid, "ai_claude" if feature.provider == "claude" else "ai_gemini")
+    if not live:
+        return _mock_response(system, user_content, userid)
+    if feature.provider == "claude":
+        return _proxy_to_anthropic(feature, system, user_content, max_tokens, userid,
+                                   cost_feature)
+    return _proxy_to_gemini(system, user_content, max_tokens, userid, cost_feature)

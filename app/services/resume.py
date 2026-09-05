@@ -124,7 +124,7 @@ Keep it to 2-4 short paragraphs maximum. Do NOT include markdown, quotes, or pre
             # Same rollup row as every other interactive Claude call, so the console's
             # app-spend total and the per-user breakdown both pick it up.
             record_interactive_cost_async("interactive_claude", usage, CLAUDE_MODEL,
-                                          userid=userid, system=system_prompt)
+                                          userid=userid, feature="resume_import")
 
         if extracted_text and str(extracted_text).strip():
             return str(extracted_text).strip()

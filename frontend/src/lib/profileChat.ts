@@ -1,4 +1,4 @@
-import { callGeminiJSON } from './aiJson';
+import { callFeatureJSON, type FeatureCall } from './aiJson';
 
 // Profile-chat flow, ported from script.js. CLAUDE.md's long note is the spec:
 //   - OPENERS are cached (a pool of 10, a rotating window of 3 per open) and safe to
@@ -12,12 +12,8 @@ import { callGeminiJSON } from './aiJson';
 // The DOM/state orchestration (drawer, speak, render, session reset) is rebuilt in the
 // Profile screen; model access is injected so this stays pure and auth-independent.
 
-// A Claude text call: same {system, userContent, useWebSearch} shape as callGemini.
-export type ClaudeCall = (
-  system: string,
-  userContent: string,
-  useWebSearch?: boolean,
-) => Promise<string>;
+// ClaudeCall was DELETED by S1-1: the client no longer chooses a provider by choosing a
+// call signature. Everything here takes the one injected FeatureCall.
 
 export interface ChatMessage {
   role: 'bot' | 'user';
@@ -114,14 +110,12 @@ export function drawStarterWindow(pool: string[] | null | undefined): string[] {
 
 // Build the cached bank of 10 openers for the current profile (the `starterPool` slot).
 export async function starterQuestionPoolFromAI(
-  callClaude: ClaudeCall,
+  callFeature: FeatureCall,
   text: string,
 ): Promise<string[]> {
   if (isProfileInsufficientForAI(text)) return getNextPredeterminedQuestions(STARTER_POOL_SIZE);
-  const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY. Come up with exactly TEN distinct, short, fun, wacky-but-meaningful icebreaker questions, each capable of opening a chat session on its own, probing for details the profile is missing or only has shallowly — think music, sports/athletics, hobbies, what they do purely for fun, family or community involvement, leadership moments, part-time jobs, quirks of personality, or deeper specifics on things already mentioned. Every question must be ONE short, plain sentence — never a run-on, never two questions joined with "and"/"or"/a semicolon. When a question draws on the profile, pull in at most 2-3 specific details from it at a time — don't try to connect four or more dots into one elaborate question. Keep the tone playful and casual, like a clever friend riffing with them, not a form — but every question must serve a real purpose in understanding this student for extracurricular/college-application matching. These ten are shown a few at a time across several visits, so keep them varied and non-overlapping with each other. Respond with ONLY a JSON array of exactly 10 short question strings, e.g. ["...", ...] — no markdown, no preamble, no numbering.`;
-  const userContent = `CURRENT PROFILE SUMMARY:\n${text || '(empty)'}\n\nRespond with a JSON array of exactly ${STARTER_POOL_SIZE} questions only.`;
   const parsed = await withTimeout(
-    callGeminiJSON<unknown>(callClaude, system, userContent, false),
+    callFeatureJSON<unknown>(callFeature, 'chat_starter_pool', { profileText: text }),
     20000,
     'Timed out waiting for starter questions',
   );
@@ -131,19 +125,14 @@ export async function starterQuestionPoolFromAI(
 
 // The 3 openers offered when the drawer opens (regenerate = student asked for a fresh set).
 export async function profileChatStarterQuestionsFromAI(
-  callClaude: ClaudeCall,
+  callFeature: FeatureCall,
   profileText: string,
   chatRounds: number,
   regenerate: boolean,
 ): Promise<string[]> {
   if (isProfileInsufficientForAI(profileText)) return getNextPredeterminedStarterQuestions();
-  const breadthDirective = regenerate
-    ? ` The student explicitly asked to regenerate these — swap in a fresh set. Prioritize BREADTH over depth: favor surfacing entirely new areas of their life the profile hasn't touched at all (academics, social life, jobs, family, random obsessions, sports, art, gaming, etc.) over drilling further into what's already well-covered. Where a question does build on something they've already mentioned, use it only as a springboard to go one layer deeper on that specific thing — but most of the three should open up completely uncovered territory rather than deepen existing ones.`
-    : '';
-  const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY (may be empty). Come up with exactly THREE distinct, short, fun, wacky-but-meaningful icebreaker questions to kick off a chat session that probes for details the profile is missing or only has shallowly — think music, sports/athletics, hobbies, what they do purely for fun, leadership, part-time jobs, quirks of personality, or deeper specifics on things already mentioned.${breadthDirective} Every question must be ONE short, plain sentence — never a run-on, never two questions joined with "and"/"or"/a semicolon. When a question draws on the profile, pull in at most 2-3 specific details from it at a time — don't try to connect four or more dots into one elaborate question. Keep each one playful and casual, like a clever friend riffing with them, not a form — but each must serve a real purpose in understanding this student for extracurricular/college-application matching. This is chat round ${chatRounds + 1} of them returning to this page — the higher that number, the more specific and creative the questions should get. Respond with ONLY a JSON array of exactly 3 short question strings, e.g. ["...", "...", "..."] — no markdown, no preamble, no numbering.`;
-  const userContent = `CURRENT PROFILE SUMMARY:\n${profileText || '(empty)'}\n\nRespond with a JSON array of exactly 3 starter questions only.`;
   const parsed = await withTimeout(
-    callGeminiJSON<unknown>(callClaude, system, userContent, false),
+    callFeatureJSON<unknown>(callFeature, 'chat_starters', { profileText, chatRounds, regenerate }),
     20000,
     'Timed out waiting for starter questions',
   );
@@ -152,23 +141,20 @@ export async function profileChatStarterQuestionsFromAI(
 }
 
 // The bot's next question — ONE live call, deliberately NOT pooled. Transcript sent whole.
+// The history goes as structured messages now rather than as a transcript this file built:
+// the transcript format is part of the prompt, so it belongs with the prompt (S1-1).
 export async function profileChatNextQuestion(
-  callClaude: ClaudeCall,
+  callFeature: FeatureCall,
   profileText: string,
   history: ChatMessage[],
   chatRounds: number,
 ): Promise<string> {
-  const system = `You are a friendly, upbeat chatbot helping a high schooler build a detailed personal profile for finding extracurricular opportunities (research programs, internships, competitions, summer programs). You'll be given their CURRENT PROFILE SUMMARY (may be empty) and the CONVERSATION SO FAR in this session. Ask exactly ONE short, fun, wacky-but-meaningful question. If their last answer introduced something specific — a project, a role, a place, a result — follow up on THAT rather than changing the subject: ask what exactly they did, what their part in it was, what surprised them, or what they'd change. Only open a new topic when the last answer was thin or the thread is genuinely exhausted, and then favour ground the profile hasn't covered (music, sports/athletics, hobbies, family or community involvement, leadership moments, part-time jobs, quirks of personality). Your question must be ONE short, plain sentence — never a run-on, never two questions joined with "and"/"or"/a semicolon. Draw on at most 2-3 specific details at a time — don't try to connect four or more dots into one elaborate question. This is chat round ${chatRounds + 1} of them returning to this page — the more rounds, the more specific and creative your questions should get; don't repeat ground already covered earlier in this conversation. Keep your tone playful and casual, like a clever friend riffing with them, not a form — but every question must serve a real purpose in understanding this student for extracurricular/college-application matching. No lists, no markdown, no preamble, and no "Great!" acknowledgment beyond at most a few words of playful reaction folded into the same sentence.`;
-  const transcript =
-    history.map((m) => `${m.role === 'bot' ? 'You' : 'Student'}: ${m.text}`).join('\n') ||
-    '(nothing yet)';
-  const userContent = `CURRENT PROFILE SUMMARY:\n${profileText || '(empty)'}\n\nCONVERSATION SO FAR:\n${transcript}\n\nRespond with your next single question only — no preamble, no quotes around it.`;
-  const raw = await withTimeout(
-    callClaude(system, userContent, false),
+  const res = await withTimeout(
+    callFeature('profile_chat', { profileText, history, chatRounds }),
     20000,
     'Timed out waiting for the next question',
   );
-  return raw.trim();
+  return res.text.trim();
 }
 
 // The transcript in the shape synthesizeProfile's transcript mode expects (Bot: / Student:).

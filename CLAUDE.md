@@ -76,7 +76,8 @@ below for the module map. `requirements.txt` now installs `fastapi` + `uvicorn`;
 agents at the repo root remain stdlib-only.
 
 - `.env` (gitignored) holds `GEMINI_API_KEY` and `ANTHROPIC_API_KEY`. If either is unset,
-  that endpoint (`/api/messages` or `/api/messages-claude` respectively) runs in **MOCK
+  the AI features backed by that provider (`POST /api/ai` picks the provider from the
+  server-side feature id; see `app/services/prompts.py`) run in **MOCK
   mode**, fabricating plausible pattern-matched responses (see `generate_mock_text` in
   [app/services/ai.py](app/services/ai.py)) so the app is fully click-through-able offline.
 - Never pass an API key inline on the command line (e.g.

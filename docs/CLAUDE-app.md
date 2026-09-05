@@ -14,6 +14,15 @@ Sibling: [CLAUDE-ops.md](CLAUDE-ops.md) — the agents, the pipeline, and the ad
 
 **Backend (`server.py`)** is a `ThreadingHTTPServer` with a `GET /api/opportunities` route
 plus five POST endpoints:
+> **S1-1 (2026-09-04) replaced `/api/messages` and `/api/messages-claude` with one route,
+> `POST /api/ai`, taking `{feature, inputs}`.** Every reference to those two endpoints below
+> is historical: the model pins, the mock behaviour, the token clamps and the cost
+> accounting all still apply — but the client no longer sends `system`, `userContent`,
+> `useWebSearch` or `maxTokens`, and the provider is chosen from the server-side feature id.
+> The prompts themselves live in [app/services/prompts.py](../app/services/prompts.py), which
+> is **marquee M8**. `_FEATURE_SIGNATURES`/`classify_feature` are gone with them: cost
+> attribution reads the feature id, so it is exact rather than a substring guess.
+
 - `/api/messages` — proxies to the real Gemini API (model `gemini-3.5-flash-lite`, pinned
   as `MESSAGES_MODEL` in server.py, see `callGemini()` in script.js) when `GEMINI_API_KEY`
   is set, otherwise fabricates a mock response by pattern-matching the `system` prompt text

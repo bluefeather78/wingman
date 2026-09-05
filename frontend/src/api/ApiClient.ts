@@ -92,19 +92,14 @@ export interface ApiClient {
   // Goes through the authed request() path (bearer + refresh + the 402 gate), NOT the
   // callGemini proxy — it is a first-class gated route, not a model passthrough.
   match(blob: MatchRequest): Promise<MatchResponse>;
-  callGemini(system: string, userContent: string, useWebSearch?: boolean, maxTokens?: number): Promise<string>;
-  callClaude(
-    system: string,
-    userContent: string,
-    useWebSearch?: boolean,
-    maxTokens?: number,
-  ): Promise<string>;
-  callClaudeDetailed(
-    system: string,
-    userContent: string,
-    useWebSearch?: boolean,
-    maxTokens?: number,
-  ): Promise<AiResult>;
+  // The ONE model call (S1-1, finding C1.2). It replaced callGemini / callClaude /
+  // callClaudeDetailed, which each posted a client-composed `system` string — so every
+  // prompt shipped in the web bundle and any account holder could send one of their own.
+  //
+  // `feature` is a server-side id from app/services/prompts.py; `inputs` is the data that
+  // feature's prompt interpolates. The server owns the prompt, the provider, the tool
+  // config and the token budget, and answers 400 for a feature it does not know.
+  callFeature(feature: string, inputs: Record<string, unknown>): Promise<AiResult>;
 
   // --- Auth (Phase 2 contract) ---
   // Load persisted tokens into memory on app start; returns the current session if the

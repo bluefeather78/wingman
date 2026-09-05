@@ -37,7 +37,9 @@ load_dotenv()
 
 PORT = 8000
 
-# ---------- /api/messages (Gemini-backed) ----------
+# ---------- The Gemini-backed AI features (POST /api/ai) ----------
+# Was /api/messages until S1-1; the provider is now a property of the server-side
+# feature id in app/services/prompts.py rather than of the endpoint the client picked.
 # Interactive, in-page AI calls from script.js's callGemini() — ranking, profile chat,
 # tracker extraction, etc. Pinned to gemini-3.5-flash-lite: cheaper/faster than
 # gemini_common.MODEL ("gemini-3.6-flash", used by the offline batch scripts
@@ -50,7 +52,7 @@ PORT = 8000
 # lite model, following the same "pin an exact version" convention as wingman/gemini_common.py's
 # MODEL constant. Swap this if/when a real gemini-3.6-flash-lite ships.
 MESSAGES_MODEL = "gemini-3.5-flash-lite"
-# Uniform cap across every /api/messages call site (mirrors the old Anthropic path's
+# Uniform cap across every Gemini feature (mirrors the old Anthropic path's
 # uniform max_tokens=1000) — bumped above what each system prompt's own "stay well
 # within a 1000-token response" instruction asks for, to leave headroom for Gemini 3.x's
 # thinking tokens, which draw from this SAME budget (see wingman/gemini_common.py's "FOURTH
@@ -69,10 +71,10 @@ MESSAGES_MAX_TOKENS = 2000
 # from this SAME budget.
 MESSAGES_MAX_TOKENS_CEILING = 8000
 
-# ---------- /api/messages-claude (Anthropic-backed, profile chat only) ----------
+# ---------- The Anthropic-backed AI features (profile chat + synthesis) ----------
 # profileChatNextQuestion/profileChatStarterQuestionsFromAI (script.js's callClaude())
 # deliberately stayed on Claude rather than moving to Gemini with the rest of the app on
-# 2026-08-18 — a separate endpoint from /api/messages so the Gemini path above is
+# 2026-08-18 — a separate provider from the Gemini path above so it is
 # untouched; client still sends the same plain {system, userContent, useWebSearch} body,
 # translated into Anthropic's content-block/messages shape here rather than on the client.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

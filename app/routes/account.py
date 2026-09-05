@@ -14,7 +14,7 @@ from app.core import (
 )
 from app.deps import json_body, json_response, json_error, client_ip, login_response
 from app.auth import hash_password, verify_password, AuthConfigError
-from app.auth.ratelimit import login_limiter, register_limiter
+from app.auth.ratelimit import login_limiter, login_ip_limiter, register_limiter
 from app.services.email import send_lifecycle_email_async
 
 router = APIRouter()
@@ -100,12 +100,17 @@ def handle_register(request: Request, body: dict = Depends(json_body)):
 
 @router.post("/api/login")
 def handle_login(request: Request, body: dict = Depends(json_body)):
-    if not login_limiter.allow(client_ip(request)):
-        return json_error(429, "Too many sign-in attempts. Please wait a few minutes "
-                               "and try again.")
     userid = (body.get("userid") or "").strip()
     password_hash = body.get("passwordHash") or ""
     key = userid.lower()
+    # Two buckets (S0-7, finding H3). The narrow (IP, userid) one is what stops a caller
+    # locking OTHER people out — the single IP-keyed bucket this replaces was, as deployed,
+    # one bucket for the entire user base. The loose per-IP backstop is what still blunts an
+    # address rotating userids, which the narrow key alone would allow forever.
+    ip = client_ip(request)
+    if not login_limiter.allow(f"{ip}|{key}") or not login_ip_limiter.allow(ip):
+        return json_error(429, "Too many sign-in attempts. Please wait a few minutes "
+                               "and try again.")
     try:
         record = get_user_account(key)
     except Exception as e:

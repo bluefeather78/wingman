@@ -57,10 +57,21 @@ class RateLimiter:
             del self._hits[k]
 
 
-# 10 sign-in attempts per IP per 5 minutes; 10 registrations per IP per hour. Generous
-# enough that a real user fumbling their password is never stopped, tight enough that
-# scripted guessing against the unlimited endpoints it replaces is throttled.
+# Sign-in: 10 attempts per (IP, userid) per 5 minutes, plus a loose per-IP backstop.
+#
+# It used to be one bucket keyed on the IP alone (S0-7, finding H3). As deployed that was one
+# bucket for the ENTIRE USER BASE, because uvicorn ignored X-Forwarded-For and every visitor
+# on earth arrived as Render's load balancer — so ten POST /api/login bodies locked every
+# student out of sign-in for five minutes, for free, repeatably.
+#
+# Keying on (IP, userid) is what stops one caller locking out other people's accounts. The
+# per-IP backstop is kept because the narrow key alone lets one address rotate userids
+# forever, which is credential stuffing; it is deliberately loose, since a school NAT puts a
+# whole cohort of legitimate sign-ins behind one address at the start of a class.
 login_limiter = RateLimiter(10, 5 * 60)
+login_ip_limiter = RateLimiter(100, 5 * 60)
+# 10 registrations per IP per hour, unchanged. Its site-wide-capacity problem was the same
+# forwarded-IP bug, not the key.
 register_limiter = RateLimiter(10, 60 * 60)
 
 # The AI proxies (S0-2, findings D1/D4). Two buckets rather than one composite (ip, user)

@@ -15,7 +15,27 @@ services:
     # and the Google OAuth callback host stays put. The separate static site below remains
     # an alternative; point the custom domain at it and drop these two lines to use it.
     buildCommand: pip install -r requirements.txt && cd frontend && npm ci && npx expo export -p web
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # --forwarded-allow-ips is what makes request.client.host the real visitor rather than
+    # Render's load balancer (S0-7, finding H3). Without it uvicorn 0.52 defaults to trusting
+    # only loopback, Render's LB connects from the private network, X-Forwarded-For is
+    # ignored, and every visitor on earth shares one rate-limit bucket.
+    #
+    # DELIBERATELY NOT `*`. Read uvicorn/middleware/proxy_headers.py: with always_trust it
+    # returns x_forwarded_for_hosts[0] — the LEFTMOST entry, which is whatever the CLIENT
+    # sent, since each proxy APPENDS. So `*` would make request.client.host fully
+    # attacker-controlled: a bypass, not a fix. This is the trap the security plan's hazard
+    # H3 warns about.
+    #
+    # With a real trusted list uvicorn instead walks the header in REVERSE and returns the
+    # rightmost untrusted host — the address Render's LB actually observed. Listing the
+    # private ranges is fail-safe either way: if Render's LB turns out not to connect from
+    # one of them, the outer trust check simply fails and behaviour is exactly as it is
+    # today. It can never be worse than the status quo, only better.
+    #
+    # VERIFY AFTER DEPLOY, as the plan asks: app/main.py logs the first request's resolved
+    # client IP and raw X-Forwarded-For once at [client-ip]. Read it off the Render log and
+    # confirm it is a real visitor address, not 10.x.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --forwarded-allow-ips "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
     envVars:
       - key: PYTHON_VERSION
         value: "3.13.2"

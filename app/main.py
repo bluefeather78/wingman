@@ -88,6 +88,26 @@ async def no_cache(request: Request, call_next):
     return response
 
 
+# S0-7 asks for this explicitly: "verify empirically by logging client_ip() once from a real
+# request before relying on it". --forwarded-allow-ips is set in render.yaml but Render's
+# proxy behaviour cannot be confirmed from here — so the first real request prints what the
+# app resolved and what the header actually said, once, and the operator reads it off the
+# Render log. A resolved address that is still 10.x means the trusted list does not cover
+# Render's LB and the rate limiters are still sharing one bucket.
+_client_ip_logged = False
+
+
+@app.middleware("http")
+async def log_first_client_ip(request: Request, call_next):
+    global _client_ip_logged
+    if not _client_ip_logged:
+        _client_ip_logged = True
+        peer = request.client.host if request.client else "(none)"
+        xff = request.headers.get("x-forwarded-for") or "(absent)"
+        print(f"[client-ip] resolved={peer} x-forwarded-for={xff!r} path={request.url.path}")
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def capture_api_errors(request: Request, call_next):
     """Record server-side failures to api_errors so the admin console's API Errors tab can show

@@ -238,10 +238,12 @@ def test_ai_handlers_consult_the_gate_before_spending(monkeypatch):
         assert resp.status_code == 401
 
 
-def test_resume_routes_gate_by_hand():
+def test_resume_routes_gate_on_the_allowance():
+    # Resume/LinkedIn imports are metered Free-tier actions and paid Claude calls, so they now
+    # gate on the two-tier allowance (M11) rather than the old — now no-op — block reason.
     import app.routes.resume as resume
     for fn in (resume.handle_extract_from_resume, resume.handle_extract_from_linkedin):
-        assert "subscription_block_reason" in inspect.getsource(fn)
+        assert "ai_allowance_state" in inspect.getsource(fn)
 
 
 # ---------- no lockout: the gate raises nothing for any account state ----------

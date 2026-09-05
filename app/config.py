@@ -292,8 +292,19 @@ FREE_TIER_DAILY_AI_ACTIONS = int(os.environ.get("FREE_TIER_DAILY_AI_ACTIONS", ""
 # A new account's natural first session burns ~6 actions (build profile, find matches, add a
 # few opportunities, one deadline check), so hitting the wall mid-onboarding is the worst
 # possible moment. A higher allowance on the signup day (created_at == today, UTC) avoids it.
-# Also not enforced until step 4.
 FIRST_DAY_AI_ACTIONS = int(os.environ.get("FIRST_DAY_AI_ACTIONS", "") or 20)
+# One user ACTION can fan out to several billed calls (a profile chat session, a "find
+# matches" run, one deadline "check for updates" tap). Same-class calls within this window
+# collapse into ONE metered action, so a chat session costs the student 1 of their 10, not 6.
+# Per-call classes (adding an opportunity, a resume import) do not collapse — each is 1 action.
+FREE_TIER_ACTION_WINDOW_SECONDS = int(os.environ.get("FREE_TIER_ACTION_WINDOW_SECONDS", "") or 300)
+# The kill-switch on ENFORCEMENT of the action allowance (MARQUEE M11). Off by default so the
+# gate ships in OBSERVE mode first (TWO_TIER_AI_PLAN.md §13 step 4): the allowance is computed
+# and reported to the client and the console, but a Free user is never actually blocked by the
+# action count until this is turned on. The dollar backstop and the global circuit breaker are
+# unaffected by this flag — they always apply. Set FREE_TIER_AI_GATE_ENFORCED=1 to enforce.
+FREE_TIER_AI_GATE_ENFORCED = (os.environ.get("FREE_TIER_AI_GATE_ENFORCED", "") or "").strip().lower() \
+    in ("1", "true", "yes", "on")
 
 # ---------- Opportunities catalog (Supabase-backed) ----------
 # The opportunity catalog lives in a Supabase (hosted Postgres) table rather than

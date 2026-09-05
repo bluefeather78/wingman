@@ -15,7 +15,7 @@ from app.config import (
 )
 from app.core import touch_user_activity, record_user_cost_async, record_api_error
 from app.deps import (json_response, json_error, require_subscription,
-                      optional_subscribed_user,
+                      optional_subscribed_user, allowance_error,
                       opaque_error, DB_UNAVAILABLE)
 from app.auth import AuthedUser
 from app.services.opportunities import catalog_payload
@@ -195,10 +195,15 @@ def handle_deadline_check(opp_id: str, request: Request,
             budget.forced_recheck_retry_after(deadline_userid, opp_id))
         return resp
 
-    # The per-user daily allowance (layer 1). Checked before the paid call, not after.
-    over = budget.over_user_budget(deadline_userid)
-    if over:
-        return json_error(429, over)
+    # MARQUEE M11: the Free-tier daily AI allowance, in front of the paid Claude check. A
+    # deadline "Check for updates" tap fans out across the whole Quest Log, so it counts as ONE
+    # action (the "deadline" class collapses same-window calls). ai_allowance_state also carries
+    # the dollar backstop, so it replaces the old over_user_budget check here. Paid users are
+    # unlimited. See MARQUEE_DECISIONS.md M11 and app/services/budget.py.
+    allowance = budget.ai_allowance_state(deadline_userid, feature="deadline_check")
+    if allowance["over"]:
+        touch_user_activity(deadline_userid, "ai_limit_hit")
+        return allowance_error(allowance)
 
     # The global circuit breaker (layer 3) degrades rather than errors: serve whatever is
     # cached, and fall through to the free mock payload when there is nothing cached. Same
@@ -357,12 +362,14 @@ def handle_action_items(opp_id: str, user: AuthedUser = Depends(require_subscrip
     the client renders 'page' items plainly and everything else under "Typical steps".
     """
     touch_user_activity(user.id, "action_items")
-    # MARQUEE M9 (S0-5, finding H4). Same two layers as the deadline check. This route has the
-    # same shape as the exploit: a user-submitted row is never stamped with
-    # action_items_checked_at, so EVERY call on such a row takes the paid generate branch.
-    over = budget.over_user_budget(user.id)
-    if over:
-        return json_error(429, over)
+    # MARQUEE M9 + M11 (S0-5, finding H4). Same shape as the exploit: a user-submitted row is
+    # never stamped with action_items_checked_at, so EVERY call on such a row takes the paid
+    # generate branch. Action items are NOT one of the metered user actions (feature=None → the
+    # action count is untouched), but a Free user is still bounded by the dollar backstop that
+    # ai_allowance_state carries; a Paid user is unlimited. Global circuit breaker still applies.
+    allowance = budget.ai_allowance_state(user.id, feature=None)
+    if allowance["over"]:
+        return allowance_error(allowance)
     # Degrade, don't error: allow_paid=False takes resolve()'s existing no-API-key path,
     # which serves the stored list if there is one and an honest generic checklist otherwise.
     try:

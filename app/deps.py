@@ -28,6 +28,30 @@ def json_error(code, message):
     return json_response(code, {"error": message})
 
 
+def allowance_error(allowance):
+    """A structured 429 for the Free-tier daily AI allowance (TWO_TIER_AI_PLAN.md §4.2).
+
+    The body keeps `error` as the human string so an old client that reads only that still
+    renders the message, and adds an `allowance` block (tier / used / limit / remaining /
+    reset_at) so the client can show a real "resets in Nh — go Unlimited" state instead of
+    parsing a sentence. Carries Retry-After (seconds to the UTC reset) like the other 429s.
+    """
+    import datetime
+    reason = allowance.get("reason") or "You've used today's AI actions."
+    resp = json_response(429, {"error": reason, "allowance": {
+        "tier": allowance.get("tier"),
+        "used": allowance.get("used"), "limit": allowance.get("limit"),
+        "remaining": allowance.get("remaining"), "reset_at": allowance.get("reset_at"),
+    }})
+    try:
+        reset = datetime.datetime.fromisoformat(str(allowance.get("reset_at")))
+        secs = int((reset - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
+        resp.headers["Retry-After"] = str(max(1, secs))
+    except Exception:                                              # noqa: BLE001
+        pass
+    return resp
+
+
 # --- Opaque failures with a correlation id (S1-13, finding L5) ----------------------
 #
 # Routes used to hand the caller the raw exception: `f"Could not reach Supabase: {e}"`,

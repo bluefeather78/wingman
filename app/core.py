@@ -583,9 +583,15 @@ def record_user_cost(userid, surface, feature, cost, input_tokens=0, output_toke
     block comment above. Everything after it is bookkeeping that may lag; that line is a
     spend guard that may not.
     """
+    # MARQUEE M11: this is the counting seam for the Free-tier daily AI allowance. EVERY paid
+    # provider call in the app is costed through here (the AI proxies via record_interactive_cost,
+    # the deadline check and action items directly), so noting the action here is what makes the
+    # allowance impossible to bypass — a call that reaches a provider without reaching this line
+    # is both an M9 and an M11 violation. See MARQUEE_DECISIONS.md M11 and app/services/budget.py.
     try:
         from app.services import budget
         budget.note_spend(userid, cost)
+        budget.note_action(userid, feature)
     except Exception:                                              # noqa: BLE001
         pass
     if not userid or not _user_costs_available or not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
@@ -855,8 +861,11 @@ _account_select = _ACCOUNT_COLUMNS
 # PER PROCESS, like app/auth/ratelimit.py's windows. Render runs one worker today; scale to
 # several and each keeps its own copy, so the effective staleness stays TTL rather than
 # multiplying. That is a property worth knowing, not a bug.
+# created_at is here for the two-tier first-day allowance boost (budget.ai_allowance_state):
+# a new account gets FIRST_DAY_AI_ACTIONS on its signup day. It rides the same cached narrow
+# read the access gate uses, so the allowance costs no extra Supabase round-trip.
 _SUBSCRIPTION_COLUMNS = ("userid,subscription_status,trial_ends_at,subscription_end_at,"
-                         "stripe_customer_id")
+                         "stripe_customer_id,created_at")
 _identity_cache = {}                    # {userid: (expires_at_monotonic, record_or_None)}
 _identity_lock = threading.Lock()
 identity_cache_hits = 0                 # observability without a metrics stack (item 9 dropped)

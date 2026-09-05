@@ -20,6 +20,7 @@ from app.auth import AuthedUser
 from app.services.opportunities import fetch_opportunities
 from app.services import action_items as action_items_service
 from app.services import deadlines
+from app.services import budget
 # Imported, never re-declared: user_costs.model must name the model that was actually
 # billed. The Sonnet/Haiku drift this repo already paid for came from exactly that — a pin
 # copied into a second file and left behind when the first one moved.
@@ -89,10 +90,48 @@ def handle_deadline_check(opp_id: str, request: Request,
     # nor the write guards: a forced check that comes back silent/unparsed/empty still writes
     # nothing and does not stamp, so it cannot cache a hole for 7 days.
     force = str(request.query_params.get("refresh", "")).strip().lower() in ("1", "true", "yes")
-    if not force and deadlines.deadline_cache_is_fresh(opp.get("dates_last_checked_at")):
+    fresh = deadlines.deadline_cache_is_fresh(opp.get("dates_last_checked_at"))
+    if fresh and not force:
         payload = deadlines.cached_deadline_payload(opp, "cached")
         deadlines.log_deadline_check(opp_id, "cached", opp.get("status"), None, None,
                                      opp.get("was_estimated"))
+        return json_response(200, payload)
+
+    # MARQUEE M9 (S0-5, finding H4): the forced-recheck cooldown. THIS route is the exploit
+    # in the security report — refresh=1 bypassed the 7-day cache unconditionally, and each
+    # verified check measures ~$0.07, so a single free trial account could loop the catalog
+    # for ~$90 a pass, repeatably. The cache bypass is the amplifier, so it gets its own
+    # per-(user, row) limit on top of the daily budget below.
+    #
+    # Only a force that ACTUALLY bypasses a fresh cache is charged against it. A stale row
+    # would be re-checked by any passive load anyway, so counting that would penalise normal
+    # use and stop nothing.
+    if fresh and force and not budget.forced_recheck_ok(deadline_userid, opp_id):
+        resp = json_error(429, "You just refreshed this one. We re-check it automatically — "
+                               "try again a little later.")
+        resp.headers["Retry-After"] = str(
+            budget.forced_recheck_retry_after(deadline_userid, opp_id))
+        return resp
+
+    # The per-user daily allowance (layer 1). Checked before the paid call, not after.
+    over = budget.over_user_budget(deadline_userid)
+    if over:
+        return json_error(429, over)
+
+    # The global circuit breaker (layer 3) degrades rather than errors: serve whatever is
+    # cached, and fall through to the free mock payload when there is nothing cached. Same
+    # shape as the no-API-key branch below, which is the app's existing honest degraded path.
+    if budget.circuit_open():
+        if opp.get("dates_last_checked_at"):
+            payload = deadlines.cached_deadline_payload(opp, "cached")
+            deadlines.log_deadline_check(opp_id, "cached", opp.get("status"), None, None,
+                                         opp.get("was_estimated"),
+                                         "Global spend circuit breaker open")
+            return json_response(200, payload)
+        payload = deadlines.mock_deadline_check_payload(opp)
+        deadlines.log_deadline_check(opp_id, "mock", payload.get("status"), 0, 0.0,
+                                     payload.get("was_estimated"),
+                                     "Global spend circuit breaker open")
         return json_response(200, payload)
 
     if not ANTHROPIC_API_KEY:
@@ -223,8 +262,17 @@ def handle_action_items(opp_id: str, user: AuthedUser = Depends(require_subscrip
     the client renders 'page' items plainly and everything else under "Typical steps".
     """
     touch_user_activity(user.id, "action_items")
+    # MARQUEE M9 (S0-5, finding H4). Same two layers as the deadline check. This route has the
+    # same shape as the exploit: a user-submitted row is never stamped with
+    # action_items_checked_at, so EVERY call on such a row takes the paid generate branch.
+    over = budget.over_user_budget(user.id)
+    if over:
+        return json_error(429, over)
+    # Degrade, don't error: allow_paid=False takes resolve()'s existing no-API-key path,
+    # which serves the stored list if there is one and an honest generic checklist otherwise.
     try:
-        payload, cost = action_items_service.resolve(opp_id)
+        payload, cost = action_items_service.resolve(opp_id,
+                                                     allow_paid=not budget.circuit_open())
     except Exception as e:
         return json_error(502, f"Could not resolve action items: {e}")
     if payload is None:

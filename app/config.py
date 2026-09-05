@@ -132,6 +132,40 @@ AI_UPSTREAM_TIMEOUT_SECONDS = float(os.environ.get("AI_UPSTREAM_TIMEOUT_SECONDS"
 # for the same reason.
 ANTHROPIC_MAX_WEB_SEARCH_USES = int(os.environ.get("ANTHROPIC_MAX_WEB_SEARCH_USES", "") or 1)
 
+# ---------- Spend caps (S0-5; finding H4) ----------
+# Nothing anywhere read spend BACK to refuse a call — the rollups only recorded it. One
+# 7-day trial account (which costs $0) could loop
+# GET /api/opportunities/<id>/deadline?refresh=1 across the catalog: refresh=1 bypassed the
+# 7-day cache unconditionally and each verified check measures ~$0.07, so ~$90 per pass over
+# 1,300 rows, repeatable. /api/match is a few cents a call, also unbounded.
+#
+# Three independent layers, all needed — see app/services/budget.py. A value <= 0 disables
+# that layer, which is the operator's off switch.
+#
+# 1. Per-user daily budget. $0.50 is a deliberately conservative placeholder, NOT a measured
+#    number: SECURITY_HARDENING_PLAN.md asks for ~5x the median daily per-user spend read off
+#    the console's Cost per user tab. Tune USER_DAILY_BUDGET_USD once that figure is known.
+USER_DAILY_BUDGET_USD = float(os.environ.get("USER_DAILY_BUDGET_USD", "") or 0.50)
+# Userids that bypass the per-user cap entirely — the operator override the plan asks for, for
+# demos and for a support case where someone legitimately needs more. Comma-separated.
+BUDGET_EXEMPT_USERIDS = frozenset(
+    u.strip().lower() for u in (os.environ.get("BUDGET_EXEMPT_USERIDS") or "").split(",")
+    if u.strip()
+)
+# 2. Per-user, per-row cooldown on a FORCED deadline re-check. The budget alone still allows a
+#    fast burn, because the cache bypass is the amplifier — this caps how often any one row can
+#    be forced past its 7-day cache by one student.
+FORCED_RECHECK_WINDOW_SECONDS = int(os.environ.get("FORCED_RECHECK_WINDOW_SECONDS", "") or 3600)
+FORCED_RECHECK_MAX_PER_WINDOW = int(os.environ.get("FORCED_RECHECK_MAX_PER_WINDOW", "") or 1)
+# 3. Global daily circuit breaker. Above this, every paid branch degrades to its existing
+#    cached/mock path — which turns a billing incident into a degraded app, the correct
+#    failure direction. One H4 pass was ~$90, so this trips well inside a single pass; it
+#    also sits far above 50 users each spending their whole per-user allowance.
+GLOBAL_DAILY_BUDGET_USD = float(os.environ.get("GLOBAL_DAILY_BUDGET_USD", "") or 25.0)
+# How long a spend total read out of user_costs is trusted before it is re-read. The AI
+# limiter (30/min/user) bounds how far a user can overshoot inside one window.
+BUDGET_CACHE_TTL_SECONDS = int(os.environ.get("BUDGET_CACHE_TTL_SECONDS", "") or 60)
+
 # ---------- Opportunities catalog (Supabase-backed) ----------
 # The opportunity catalog lives in a Supabase (hosted Postgres) table rather than
 # the old static opportunities.json — see scripts/one-off/migrate_to_supabase.py for the one-time

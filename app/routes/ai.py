@@ -30,6 +30,7 @@ from app.deps import (json_response, json_error, subscription_block_reason, clie
 from app.auth import get_optional_user, AuthedUser
 from app.auth.ratelimit import ai_ip_limiter, ai_user_limiter
 from app.services.ai import generate_mock_text
+from app.services import budget
 from wingman.gemini_common import call_gemini
 
 router = APIRouter()
@@ -278,6 +279,30 @@ def _rate_limit_error(ip, userid):
     return None
 
 
+# MARQUEE M9: the spend layers in front of the paid proxies (S0-5, finding H4). Two of the
+# three apply here — the per-user daily budget and the global circuit breaker. They behave
+# differently ON PURPOSE:
+#
+#   budget reached  -> 429 for THAT user. One account has used its allowance; everyone else
+#                      is unaffected, so refusing is right and naming it is right.
+#   circuit open    -> the request DEGRADES to the mock branch for everyone. A global spend
+#                      incident should leave a working-but-dumber app, not a broken one, and
+#                      the mock path already exists and is already exercised offline.
+#
+# The circuit does NOT relax the 401: the key is still configured, so a signed-out caller is
+# still refused. Degrading is a spend decision, not an access decision.
+def _live_branch(userid, key_configured):
+    """(use_live_provider, error_response). error_response non-None means refuse outright."""
+    if not key_configured:
+        return False, None
+    if budget.circuit_open():
+        return False, None
+    over = budget.over_user_budget(userid)
+    if over:
+        return False, json_error(429, over)
+    return True, None
+
+
 @router.post("/api/messages")
 def handle_messages(request: Request, raw_body: bytes = Depends(ai_raw_body),
                     user: AuthedUser = Depends(get_optional_user)):
@@ -291,8 +316,11 @@ def handle_messages(request: Request, raw_body: bytes = Depends(ai_raw_body),
     denied = _ai_access_error(userid, bool(GEMINI_API_KEY))
     if denied:
         return denied
+    live, refused = _live_branch(userid, bool(GEMINI_API_KEY))
+    if refused:
+        return refused
     touch_user_activity(userid, "ai_gemini")
-    if GEMINI_API_KEY:
+    if live:
         return _proxy_to_gemini(raw_body, ip, userid)
     return _mock_response(raw_body, ip, userid)
 
@@ -308,7 +336,10 @@ def handle_messages_claude(request: Request, raw_body: bytes = Depends(ai_raw_bo
     denied = _ai_access_error(userid, bool(ANTHROPIC_API_KEY))
     if denied:
         return denied
+    live, refused = _live_branch(userid, bool(ANTHROPIC_API_KEY))
+    if refused:
+        return refused
     touch_user_activity(userid, "ai_claude")
-    if ANTHROPIC_API_KEY:
+    if live:
         return _proxy_to_anthropic(raw_body, ip, userid)
     return _mock_response(raw_body, ip, userid)

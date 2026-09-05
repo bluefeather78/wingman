@@ -21,6 +21,7 @@ from app.services.opportunities import fetch_opportunities
 from app.services.embeddings import embed_student_themes
 from app.services.recall_query import recall_pool, attach_display, student_embed_texts
 from app.services.pool_eligibility import gate_pool_eligibility, ELIGIBILITY_ONLY_SYSTEM
+from app.services import budget
 from wingman.gemini_common import call_gemini, extract_json
 
 router = APIRouter()
@@ -61,8 +62,17 @@ def handle_match(body: dict = Depends(json_body),
     userid = user.id
     touch_user_activity(userid, "match")
 
+    # MARQUEE M9 (S0-5, finding H4). /api/match is a few cents a call and was unbounded.
+    # Budget reached -> refuse this user; circuit open -> everyone falls through to the
+    # mock/offline branch below, which is already an honest degraded list rather than a
+    # broken screen. The prewarm path embeds (a paid call too), so it is behind both.
+    over = budget.over_user_budget(userid)
+    if over:
+        return json_error(429, over)
+    live = bool(GEMINI_API_KEY) and not budget.circuit_open()
+
     if body.get("prewarm"):
-        if GEMINI_API_KEY:
+        if live:
             tt, pt = student_embed_texts(_student_from_body(body))
             if tt or pt:
                 try:
@@ -80,14 +90,18 @@ def handle_match(body: dict = Depends(json_body),
 
     student = _student_from_body(body)
 
-    if not GEMINI_API_KEY:
-        # Mock/offline: no embeddings (recall returns the filtered set unscored), no eligibility
-        # model call. Honest degraded list rather than a broken screen.
+    if not live:
+        # Mock/offline (no key, or the spend circuit breaker is open): no embeddings (recall
+        # returns the filtered set unscored), no eligibility model call. Honest degraded list
+        # rather than a broken screen.
         pool, _cost, scores = recall_pool(rows, student, lambda texts: ([], 0.0))
         return json_response(200, {
             "results": attach_display(pool, scores), "pool_size": len(pool),
             "excluded_ineligible": [], "embed_cost_usd": 0.0, "checked": 0,
-            "note": "matching runs in mock mode (no model key) — showing catalog matches",
+            "note": ("matching runs in mock mode (no model key) — showing catalog matches"
+                     if not GEMINI_API_KEY else
+                     "matching is running in a reduced mode right now — showing catalog "
+                     "matches"),
         })
 
     elig_usage: dict = {}

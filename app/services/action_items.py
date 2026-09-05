@@ -132,7 +132,7 @@ def _is_fresh(checked_at):
     return age <= datetime.timedelta(days=TASK_TTL_DAYS)
 
 
-def resolve(opp_id):
+def resolve(opp_id, allow_paid=True):
     """(payload, cost). Serves the stored list while it is fresh, otherwise re-runs the same
     fetch-verify-decide pipeline the batch uses and caches the result on the row.
 
@@ -140,6 +140,11 @@ def resolve(opp_id):
     deadline endpoint's cache. A stamped, in-window list is served free; a stale or never-
     stamped one is re-verified (a re-verify writes nothing and does not stamp when the page
     cannot be read, so an unreachable row stays due rather than freezing an unverified list).
+
+    `allow_paid=False` takes the same path as an absent API key: keep a stored list, else
+    return the generic checklist, and never call a model. That is how the global spend
+    circuit breaker (S0-5) degrades this route — reusing the existing honest fallback rather
+    than inventing a second one that could drift from it.
     """
     opp = get_opportunity_for_action_items(opp_id)
     if not opp:
@@ -154,7 +159,7 @@ def resolve(opp_id):
     # rather than replacing it with generic (it is at least what the batch last verified),
     # and otherwise give the student an honest generic checklist for free. Generic items
     # assert nothing about the program, so producing them without reading anything is safe.
-    if not ANTHROPIC_API_KEY:
+    if not ANTHROPIC_API_KEY or not allow_paid:
         if has_stored:
             return payload(stored, opp.get("action_items_source") or "stored"), 0.0
         return payload(generic_items(opp), "generic-fallback"), 0.0

@@ -438,6 +438,14 @@ def record_user_cost(userid, surface, feature, cost, input_tokens=0, output_toke
     accounting must not be able to break a student's chat.
     """
     global _user_costs_available, _user_costs_has_model
+    # Bump the in-process spend counters FIRST, ahead of every early return below: the money
+    # was spent whether or not we manage to write it down, and the budget layers (S0-5) must
+    # see it. Lazy import — app.services.budget imports this module.
+    try:
+        from app.services import budget
+        budget.note_spend(userid, cost)
+    except Exception:                                              # noqa: BLE001
+        pass
     if not userid or not _user_costs_available or not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return
     userid = str(userid).strip().lower()

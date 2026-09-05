@@ -34,7 +34,10 @@ def _raw_claims(token):
 
 def test_issue_tokens_shape():
     pair = issue_tokens("alice")
-    assert set(pair) == {"token", "refresh_token", "token_type", "expires_in"}
+    # refresh_jti rides alongside the wire fields as of S1-2 — it is what the SERVER
+    # stores, and app.deps.login_response pops it before the payload goes out.
+    assert set(pair) == {"token", "refresh_token", "token_type", "expires_in",
+                         "refresh_jti"}
     assert pair["token_type"] == "Bearer"
     assert pair["expires_in"] == ACCESS_TOKEN_TTL_SECONDS
 
@@ -76,11 +79,12 @@ def test_roundtrip_access():
     assert verify_access_token(pair["token"]) == "alice"
 
 
-def test_roundtrip_refresh_returns_userid_and_ver():
+def test_roundtrip_refresh_returns_userid_ver_and_jti():
     pair = issue_tokens("Alice", token_version=7)
-    sub, ver = verify_refresh_token(pair["refresh_token"])
+    sub, ver, jti = verify_refresh_token(pair["refresh_token"])
     assert sub == "alice"
     assert ver == 7
+    assert jti == pair["refresh_jti"]
 
 
 # ---------- wrong type (critical) ----------

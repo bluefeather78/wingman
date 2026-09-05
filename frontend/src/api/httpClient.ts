@@ -372,6 +372,23 @@ export const httpClient: ApiClient = {
   },
 
   async logout(): Promise<void> {
+    // S1-2: tell the SERVER first. This used to be forgetSession() alone, so the token it
+    // "forgot" kept minting access tokens for the rest of its 30 days — the shared school
+    // computer case exactly. Best-effort and never throws: the local session is dropped
+    // either way, and a logout that reports an error is a logout the student will assume
+    // did not happen.
+    const refresh = _refresh;
+    if (refresh) {
+      try {
+        await rawFetch(
+          '/api/auth/logout',
+          { method: 'POST', body: JSON.stringify({ refresh_token: refresh }) },
+          false,
+        );
+      } catch (e) {
+        console.warn('Server-side logout failed:', (e as Error).message);
+      }
+    }
     await forgetSession();
   },
 

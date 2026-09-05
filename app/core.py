@@ -994,6 +994,141 @@ def redeem_promo_conditional(userid, code, previous_codes, updates):
     return bool(rows)
 
 
+# ---------- Refresh-token rotation (S1-2, finding M2) ----------
+#
+# users.refresh_jtis holds the jti that is currently valid for each live device. A refresh
+# replaces that device's entry, so the presented token dies the instant it is used.
+#
+# An ARRAY rather than a single value so a laptop and a phone hold independent lineages
+# instead of logging each other out on every refresh. Capped, oldest evicted: device number
+# six signs the first one out, which is a bounded, explainable behaviour, whereas an
+# unbounded list is a row that grows forever.
+REFRESH_JTI_MAX = int(os.environ.get("REFRESH_JTI_MAX", "") or 5)
+
+# A jti we JUST rotated away, held briefly in-process so an immediate retry of the very
+# same refresh call succeeds instead of reading as theft.
+#
+# The realistic false positive is not an attacker: it is a dropped response. The client
+# fires /api/auth/refresh, the server rotates and answers, the answer is lost on a school
+# wifi — and the client retries with a token the server has already superseded. Without
+# this grace the student is signed out of every device for having bad reception.
+#
+# In-process, so it is best-effort and does not survive a restart or a second worker. That
+# is the safe direction to fail: the fallback is the DB check, i.e. reuse detection fires.
+REFRESH_GRACE_SECONDS = int(os.environ.get("REFRESH_GRACE_SECONDS", "") or 60)
+_refresh_grace = {}
+_refresh_grace_lock = threading.Lock()
+
+
+def _grace_note(old_jti, new_jti):
+    if not old_jti:
+        return
+    now = time.time()
+    with _refresh_grace_lock:
+        for stale in [k for k, v in _refresh_grace.items() if v[1] < now]:
+            del _refresh_grace[stale]
+        _refresh_grace[old_jti] = (new_jti, now + REFRESH_GRACE_SECONDS)
+
+
+def refresh_grace_successor(old_jti):
+    """The jti that replaced `old_jti` moments ago, or None. See _refresh_grace."""
+    if not old_jti:
+        return None
+    with _refresh_grace_lock:
+        entry = _refresh_grace.get(old_jti)
+    if not entry or entry[1] < time.time():
+        return None
+    return entry[0]
+
+
+def rotate_refresh_jti(userid, new_jti, replaces=None):
+    """Record `new_jti` as a live lineage for this account, dropping `replaces`.
+
+    Returns True when written, False when users.refresh_jtis does not exist yet — which is
+    how the whole feature degrades: the refresh route reads False as "rotation is not on"
+    and behaves exactly as it did before the migration, rather than refusing every token.
+
+    The write is conditional on the array we read, like the promo redemption in S1-6, so two
+    devices refreshing in the same instant cannot each clobber the other's new lineage. One
+    retry, then a plain write: losing this race costs one device an extra sign-in, and
+    looping on it would be worse than that.
+    """
+    for attempt in range(2):
+        try:
+            record = select_user(userid, "userid,refresh_jtis")
+        except urllib.error.HTTPError as e:
+            if e.code == 400:
+                return False
+            raise
+        if not record:
+            return False
+        if "refresh_jtis" not in record:
+            return False                                   # column not migrated in yet
+        current = list(record.get("refresh_jtis") or [])
+        kept = [j for j in current if j and j != replaces and j != new_jti]
+        updated = ([new_jti] + kept)[:REFRESH_JTI_MAX]
+        filters = [("userid", f"eq.{userid}")]
+        if current:
+            filters.append(("refresh_jtis", "eq.{" + ",".join(current) + "}"))
+        else:
+            filters.append(
+                ("or", "(refresh_jtis.is.null,refresh_jtis.eq.{})"))
+        query = "?" + urllib.parse.urlencode(filters)
+        try:
+            rows = _users_request("PATCH", query, data={"refresh_jtis": updated},
+                                  prefer="return=representation")
+        except urllib.error.HTTPError as e:
+            if _is_missing_column_error(e) or e.code == 400:
+                print("[WARN] users.refresh_jtis missing - refresh-token rotation is off. "
+                      "Run db/auth_schema.sql in the Supabase SQL editor.")
+                return False
+            raise
+        if rows:
+            _grace_note(replaces, new_jti)
+            return True
+        if attempt == 0:
+            continue
+    # Lost the race twice. Write unconditionally rather than leave this device with a jti
+    # the server does not know — that would make its NEXT refresh look like a stolen token.
+    query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
+    try:
+        _users_request("PATCH", query, data={"refresh_jtis": [new_jti]})
+    except urllib.error.HTTPError as e:
+        if _is_missing_column_error(e) or e.code == 400:
+            return False
+        raise
+    _grace_note(replaces, new_jti)
+    return True
+
+
+def forget_refresh_jti(userid, jti):
+    """Drop one lineage — the server side of "log out on this device" (S1-2).
+
+    Returns True if the column exists and the write went through. Best-effort: a failure
+    here means the token stays valid until it expires, which is the pre-S1-2 behaviour, so
+    it must not fail the logout the student asked for.
+    """
+    if not jti:
+        return False
+    try:
+        record = select_user(userid, "userid,refresh_jtis")
+    except urllib.error.HTTPError as e:
+        if e.code == 400:
+            return False
+        raise
+    if not record or "refresh_jtis" not in record:
+        return False
+    kept = [j for j in (record.get("refresh_jtis") or []) if j and j != jti]
+    query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
+    try:
+        _users_request("PATCH", query, data={"refresh_jtis": kept})
+    except urllib.error.HTTPError as e:
+        if _is_missing_column_error(e) or e.code == 400:
+            return False
+        raise
+    return True
+
+
 def bump_token_version(userid):
     """Invalidate every outstanding refresh token for this account (docs/archive/PLAN_2_auth.md).
 

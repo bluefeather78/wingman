@@ -15,6 +15,7 @@ Fail closed: if JWT_SECRET is unset we raise AuthConfigError rather than signing
 guessable key. Routes translate that into a 503.
 """
 import datetime
+import secrets
 
 import jwt
 
@@ -53,23 +54,34 @@ def _encode(claims):
     return jwt.encode(claims, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
-def issue_tokens(userid, token_version=0):
+def new_refresh_jti():
+    """A random id for one refresh token. S1-2 (finding M2): this is what makes a refresh
+    token single-use — the server records the current jti per device and refuses any other."""
+    return secrets.token_urlsafe(16)
+
+
+def issue_tokens(userid, token_version=0, refresh_jti=None):
     """Mint a fresh access+refresh pair for a verified identity.
 
     Called from the one login-response builder (app.deps.login_response), so password and
     Google logins converge on the same tokens. `token_version` is stamped into both so a
     later bump can invalidate the refresh token; the access token carries it only for
     symmetry (it is never re-checked against the DB — it just expires).
+
+    The returned dict carries `refresh_jti` ALONGSIDE the wire fields. login_response pops
+    it before the payload goes out — it is the value the server has to store, and a jti on
+    the wire would tell a thief exactly which string to look for.
     """
     userid = str(userid).strip().lower()
     ver = int(token_version or 0)
+    jti = refresh_jti or new_refresh_jti()
     now = _now()
     access = _encode({
         "sub": userid, "type": "access", "ver": ver,
         "iat": now, "exp": now + datetime.timedelta(seconds=ACCESS_TOKEN_TTL_SECONDS),
     })
     refresh = _encode({
-        "sub": userid, "type": "refresh", "ver": ver,
+        "sub": userid, "type": "refresh", "ver": ver, "jti": jti,
         "iat": now, "exp": now + datetime.timedelta(seconds=REFRESH_TOKEN_TTL_SECONDS),
     })
     return {
@@ -77,6 +89,7 @@ def issue_tokens(userid, token_version=0):
         "refresh_token": refresh,
         "token_type": "Bearer",
         "expires_in": ACCESS_TOKEN_TTL_SECONDS,
+        "refresh_jti": jti,
     }
 
 
@@ -107,11 +120,16 @@ def verify_access_token(token):
 
 
 def verify_refresh_token(token):
-    """Return (userid, ver) for a valid refresh token, or raise AuthError.
+    """Return (userid, ver, jti) for a valid refresh token, or raise AuthError.
 
     The caller (the /api/auth/refresh route) is responsible for comparing `ver` against the
-    account's current token_version — that DB check is what makes revocation real, and it
-    lives at the route, not here, so this module stays free of app.core.
+    account's current token_version and `jti` against users.refresh_jtis — those DB checks
+    are what make revocation and rotation real, and they live at the route, not here, so
+    this module stays free of app.core.
+
+    `jti` is None for a token minted before S1-2. The route honours one of those and
+    rotates it in; treating it as a reuse would sign out every logged-in student the moment
+    this deploys.
     """
     claims = _decode(token, "refresh")
-    return claims["sub"], int(claims.get("ver") or 0)
+    return claims["sub"], int(claims.get("ver") or 0), claims.get("jti") or None

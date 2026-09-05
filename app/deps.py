@@ -9,7 +9,7 @@ from fastapi import Depends, HTTPException, Request, Response
 
 from app.config import JSON_MAX_BODY_BYTES
 from app.core import (get_user_account, subscription_state, _login_payload,
-                      record_api_error)
+                      record_api_error, rotate_refresh_jti)
 from app.auth import issue_tokens, get_current_user, get_optional_user, AuthedUser
 
 
@@ -189,7 +189,7 @@ def client_ip(request: Request):
     return request.client.host if request.client else ""
 
 
-def login_response(record):
+def login_response(record, replaces_jti=None):
     """The signed-in payload every login path returns: the identity block _login_payload
     already built, plus a freshly minted access+refresh token pair (docs/archive/PLAN_2_auth.md).
 
@@ -200,7 +200,21 @@ def login_response(record):
     free of the auth layer (core is the seam ops/ imports too).
     """
     payload = _login_payload(record)
-    payload.update(issue_tokens(record["userid"], record.get("token_version") or 0))
+    tokens = issue_tokens(record["userid"], record.get("token_version") or 0)
+    # S1-2: the jti is what the SERVER stores, not something the client is told. Popped
+    # before the payload goes out — a jti on the wire would hand a thief the exact string
+    # to look for. rotate_refresh_jti returns False when db/auth_schema.sql's refresh_jtis
+    # column has not been run in, in which case rotation is simply off and this behaves as
+    # it did before.
+    jti = tokens.pop("refresh_jti", None)
+    if jti:
+        try:
+            rotate_refresh_jti(record["userid"], jti, replaces=replaces_jti)
+        except Exception as e:                                 # noqa: BLE001
+            # Never fail a sign-in over the rotation bookkeeping. The lineage is then
+            # unknown to the server, and its next refresh is treated as a legacy token.
+            print(f"[WARN] Could not record refresh lineage: {type(e).__name__}")
+    payload.update(tokens)
     return payload
 
 

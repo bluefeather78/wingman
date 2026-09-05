@@ -113,6 +113,10 @@ export interface ApiClient {
   // Client hashes the password (SHA-256) before calling — pass the raw password.
   login(userid: string, password: string): Promise<SessionUser>;
   register(input: RegisterInput): Promise<SessionUser>;
+  // Revokes this device's refresh lineage on the server, THEN drops the local session
+  // (S1-2). It used to be local-only, which left the "forgotten" refresh token minting
+  // access tokens for the rest of its 30 days. Never rejects: the local session is dropped
+  // even if the server call fails.
   logout(): Promise<void>;
 
   // --- Google sign-in (redirect flow) ---

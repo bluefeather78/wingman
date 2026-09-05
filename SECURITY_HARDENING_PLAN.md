@@ -17,9 +17,22 @@ have drifted.
 
 ## 0. Status (updated 2026-09-04)
 
-**Phase S0 is COMPLETE**, plus S1-8 (pulled forward because hazard H3 requires it to land
-before S0-7). One commit per item; the five M9 items were approved by Shama in chat before
-any editing and each names M9 in its subject.
+**Phase S0 is COMPLETE and shipped**, plus S1-8 (pulled forward because hazard H3 requires it
+to land before S0-7). One commit per item; the five M9 items were approved by Shama in chat
+before any editing and each names M9 in its subject.
+
+| | |
+|---|---|
+| Tag | **`phase-S0`** (annotated), pushed to `origin` |
+| Commits | `efcb6f7..8acab94` on `codecleanup`, 10 commits, pushed |
+| Diff | 27 files, +2006 / −62 |
+| Tests | 6 new files, 82 new test functions; suite green at **2080 passing** (see the `EMAIL_POSTAL_ADDRESS` note at the end of this section) |
+
+New test files, so the next session knows where the coverage already is:
+`tests/unit/test_ai_request_caps.py` (S0-2/S0-3/S0-4), `test_spend_caps.py` (S0-5),
+`test_ops_gate.py` (S1-8), `test_login_ratelimit.py` (S0-7),
+`test_google_oauth_security.py` (S0-8/S0-9), `test_requirements_pins.py` (S0-11), plus
+new cases in `test_subscription_gate.py` (S0-1).
 
 | Item | State | Commit |
 |---|---|---|
@@ -72,6 +85,74 @@ CAN-SPAM placeholder reaching a rendered email. Not caused by this work (it fail
 commit before it) and not a code bug — but confirm the value IS set in the Render dashboard,
 or every lifecycle email ships with `[SET EMAIL_POSTAL_ADDRESS IN .env]` in its footer. With
 it set, the suite is fully green.
+
+### Environment variables S0 introduced
+
+All have working defaults, so nothing breaks unset — **except `WINGMAN_OPS_TOKEN`, which
+fails closed on purpose.** Every budget/limit value is disabled by setting it `<= 0`, which
+is the operator's off switch.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `WINGMAN_OPS_TOKEN` | *(none — ops API routes 503)* | S1-8. `X-Ops-Token` header on every ops API route. `python server.py` mints and prints one when `.env` has none; put it in `.env` to keep it stable |
+| `USER_DAILY_BUDGET_USD` | `0.50` | S0-5 layer 1. **A conservative placeholder, not the measured number** — see the open decisions above |
+| `BUDGET_EXEMPT_USERIDS` | *(empty)* | S0-5. Comma-separated userids that bypass the per-user cap — the operator override |
+| `GLOBAL_DAILY_BUDGET_USD` | `25.0` | S0-5 layer 3. Above this every paid branch degrades to cached/mock |
+| `FORCED_RECHECK_WINDOW_SECONDS` / `_MAX_PER_WINDOW` | `3600` / `1` | S0-5 layer 2. The `refresh=1` cooldown, per (user, row) |
+| `BUDGET_CACHE_TTL_SECONDS` | `60` | How long a spend total read from `user_costs` is trusted |
+| `AI_MAX_BODY_BYTES` | `524288` | S0-2. Largest legitimate payload measured ~100 KB |
+| `RESUME_MAX_BODY_BYTES` | `10485760` | S0-2. The resume upload parses wholly in memory |
+| `AI_RATE_LIMIT_PER_USER` / `_PER_IP` / `_WINDOW_SECONDS` | `30` / `120` / `60` | S0-2. Per-IP is loose on purpose — a school NAT |
+| `AI_UPSTREAM_TIMEOUT_SECONDS` | `60` | S0-4 |
+| `ANTHROPIC_MAX_WEB_SEARCH_USES` | `1` | S0-4. Moot while S0-3's pin holds; the defence-in-depth layer |
+
+`render.yaml` also changed: `startCommand` gained `--forwarded-allow-ips` (S0-7) — read the
+note above on why it is **not** `*`.
+
+---
+
+## 0b. Start here for Phase S1
+
+S1 is §5 of this same file. **Fourteen items remain** — S1-8 is done (see above). Two
+decisions block part of it; everything else can proceed on normal judgement.
+
+**Blocked on Shama:**
+
+- **S1-1 needs M8 approval.** It moves every system prompt out of the web bundle into
+  `app/`, keyed by a server-side feature id. It is the largest item in the plan and it also
+  carries the S0-3 leftover (deleting `intakeExtractAndClassify`). Recommended yes — §6
+  question 1.
+- **S1-9 needs the `conversations` decision** — stop writing it, or add RLS and hash the IP.
+  §6 question 3.
+
+**Needs SQL run by hand** in the Supabase editor (this repo's convention: a `db/*.sql` file
+with `create table if not exists` **plus an ALTER block**, and the code degrades rather than
+breaks when the migration has not been run):
+
+- **S1-2** — a `users.refresh_jti` column (or a small set, for two devices).
+- **S1-11** — the legacy-hash wrapping migration.
+
+**Suggested order for the unblocked items,** cheapest-first within severity so the
+Medium-severity exploits close early:
+
+1. **S1-12** (`compare_digest` on non-ASCII) — 20 minutes, a plain unhandled 500.
+2. **S1-6** (conditional promo PATCH) — a live race giving free access indefinitely from a
+   7-day code. One filter on an existing request, no migration.
+3. **S1-4** (`url_is_public()` + auth on submission) — the unauthenticated catalog write and
+   the blind SSRF that chains off it. The biggest of the unblocked items.
+4. **S1-3** (calendar handoff nonce), **S1-7** (one login-failure message),
+   **S1-14** (calendar sync input handling), **S1-13** (stop relaying upstream error bodies),
+   **S1-15** (narrow the row reads).
+5. **S1-5** (body limits everywhere, security headers, `Secure` cookies) — note S0-2 already
+   built `capped_raw_body()` in `app/deps.py`; S1-5 is extending it to the remaining routes
+   plus the headers. CSP **report-only first**, and `public/walkthrough.html` needs
+   `frame-ancestors 'self'`, not `DENY`.
+6. **S1-10** (promo codes into a table) — must ship **after** S1-6 or the race outlives the
+   move.
+
+**Remember the exit criterion is not "zero findings".** The plan parks M5 (the process-wide
+5 s Gemini sleep) and the argon2 parameters in Phase 2, and L9 in Phase 4. Finishing S1 means
+no High or Medium open **except M5** — see §1's table.
 
 ---
 
@@ -161,6 +242,9 @@ that `profile_extract`'s signature is load-bearing: rewording it silently moves 
 ---
 
 ## 4. Phase S0 — Stop the bleeding (~2 days)
+
+> **COMPLETE 2026-09-04, tag `phase-S0`.** Kept in full below as the record of what each item
+> was and why — the per-item status, and the three things deliberately left open, are in § 0.
 
 Ordered by dependency. S0-1 through S0-5 are one M9 approval conversation.
 
@@ -467,6 +551,10 @@ and receives the student's access **and refresh** tokens.
 
 ## 5. Phase S1 — Security hardening (~5 days)
 
+> **NOT STARTED, except S1-8, which is done** (marked inline below). Read § 0b first — it
+> carries the two decisions that block part of this phase, which items need SQL run by hand,
+> and a suggested order for the rest.
+
 ---
 
 ### S1-1 — Move every system prompt server-side, keyed by feature id  `[C1.2]` `[M8]`
@@ -679,6 +767,16 @@ minimum rate-limit per email.
 
 ### S1-8 — Ops console: a token, and refuse to mount on Render  `[M8-finding]`
 
+> **DONE 2026-09-04** (commit `S1-8:`), shipped ahead of S0-7 exactly as § 3 requires.
+> Implemented as written, with one addition the plan did not specify: the four
+> browser-navigable HTML shells (`/admin`, `/admin/logic-map`, `/evals`, `/evals/scorecard`)
+> are exempt from the header check, because a page navigation cannot set a header. They carry
+> no credential and no data — the console prompts for the token and sends it on every API
+> call — so a tunnel reaches a page asking for a secret, not a console. `/evals/data` is NOT
+> exempt: nothing navigates to it, so it is tooling, and tooling can send a header.
+> `server.py` mints and prints a token when `.env` has none, so `python server.py` still
+> works out of the box without weakening the fail-closed rule.
+
 **Files:** `ops/admin.py:18-30`, `server.py:32-33`, `app/main.py:109-114`
 
 **READ § 3 — this gates S0-7.**
@@ -832,8 +930,9 @@ Blocking, or near enough:
    with an operator override. Read the median off the Cost per user tab.
 3. **`conversations` (S1-9)** — stop writing it, or add RLS and hash the IP?
 4. **Password reset (S1-11 note).** There is no recovery path today. Product decision.
-5. **Anthropic `max_uses` value (S0-4).** Moot while search is pinned off; pick a number for
-   the defence-in-depth layer anyway.
+5. ~~**Anthropic `max_uses` value (S0-4).**~~ **ANSWERED** — S0-4 set it to **1**. The layer
+   only matters if S0-3's pin is lifted by accident, so the blast radius should be one search,
+   not three. Tunable via `ANTHROPIC_MAX_WEB_SEARCH_USES`.
 
 ---
 

@@ -18,6 +18,7 @@ import pytest
 
 import app.routes.google_oauth as gr
 import app.services.google_oauth as g
+import app.services.handoff_store as hs
 
 
 # ---------------- the redirect ----------------
@@ -80,7 +81,8 @@ def test_session_is_a_post_with_the_token_in_the_body():
 
 
 def test_a_valid_token_resolves_and_is_consumed(monkeypatch):
-    monkeypatch.setattr(g, "_google_session_tokens", {})
+    monkeypatch.setattr(hs, "SUPABASE_URL", "")   # pin the in-process backend
+    hs._reset_for_tests()
     token = g._mint_google_token({"kind": "pending", "google_id": "gid",
                                   "email": "a@b.c", "first_name": "A", "last_name": "B"})
     resp = gr.handle_google_session(body={"token": token})
@@ -91,7 +93,8 @@ def test_a_valid_token_resolves_and_is_consumed(monkeypatch):
 
 
 def test_a_missing_or_unknown_token_is_refused(monkeypatch):
-    monkeypatch.setattr(g, "_google_session_tokens", {})
+    monkeypatch.setattr(hs, "SUPABASE_URL", "")   # pin the in-process backend
+    hs._reset_for_tests()
     assert gr.handle_google_session(body={}).status_code == 400
     assert gr.handle_google_session(body={"token": "nope"}).status_code == 400
 

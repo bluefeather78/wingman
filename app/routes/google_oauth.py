@@ -7,7 +7,6 @@ import datetime
 import json
 import os
 import secrets
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -238,11 +237,7 @@ def handle_google_start(request: Request):
     # sign-in token back to the app instead of to the backend-root SPA.
     app_redirect = request.query_params.get("app_redirect") or ""
     if app_redirect and _is_allowed_app_redirect(app_redirect):
-        g._prune_google_login_redirects()
-        g._google_login_redirects[state] = {
-            "app_redirect": app_redirect,
-            "expires_at": time.time() + GOOGLE_TOKEN_TTL_SECONDS,
-        }
+        g.remember_login_redirect(state, app_redirect)
     resp = RedirectResponse(f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(params)}", status_code=302)
     # Short-lived, HttpOnly CSRF protection for the handshake only (not an app session).
     return _state_cookie(resp, "google_oauth_state", state, request)
@@ -340,11 +335,15 @@ def handle_google_callback(request: Request):
             "first_name": first_name,
             "last_name": last_name,
         })
+    # A store that cannot hold the nonce means nothing can spend it, so say so here rather
+    # than redirecting the student into "this sign-in link has expired" on a link minted two
+    # seconds ago (Phase 4, app/services/handoff_store.py).
+    if not token:
+        return json_error(503, "Sign-in is temporarily unavailable. Please try again "
+                               "shortly.")
     # Phase 3: if the app registered a redirect for this handshake, send the one-time token
     # there (the Expo app captures it); otherwise fall back to the backend-root SPA.
-    g._prune_google_login_redirects()
-    redirect_entry = g._google_login_redirects.pop(req_state, None)
-    dest = redirect_entry["app_redirect"] if redirect_entry else "/"
+    dest = g.take_login_redirect(req_state) or "/"
     return RedirectResponse(_handoff_url(dest, token), status_code=302)
 
 
@@ -454,7 +453,13 @@ def handle_google_calendar_handoff(user: AuthedUser = Depends(require_subscripti
     Subscription-gated like the sync itself, so a lapsed account cannot start a connect
     flow that its next step would refuse anyway.
     """
-    return json_response(200, {"nonce": g.mint_calendar_handoff(user.id),
+    nonce = g.mint_calendar_handoff(user.id)
+    if not nonce:
+        # Handing back a nonce the store never kept would send the student into a connect
+        # flow that fails one navigation later (Phase 4, app/services/handoff_store.py).
+        return json_error(503, "Connecting Google Calendar is temporarily unavailable. "
+                               "Please try again shortly.")
+    return json_response(200, {"nonce": nonce,
                                "expires_in": g.CALENDAR_HANDOFF_TTL_SECONDS})
 
 
@@ -482,17 +487,16 @@ def handle_google_calendar_start(request: Request):
     except Exception as e:
         return opaque_error(502, DB_UNAVAILABLE, e, op="google.db")
 
-    g._prune_google_calendar_states()
     state = secrets.token_urlsafe(24)
     # In dev the app and the API are two origins (Metro :8081 -> API :8000), so returning to
     # the API's own root would land the student on a 404 rather than back in the Quest Log.
     # Same allowlist Google Sign-In already uses, so this can't become an open redirect.
     app_redirect = request.query_params.get("app_redirect") or ""
-    g._google_calendar_states[state] = {
-        "userid": userid,
-        "app_redirect": app_redirect if _is_allowed_app_redirect(app_redirect) else "",
-        "expires_at": time.time() + GOOGLE_TOKEN_TTL_SECONDS,
-    }
+    if not g.remember_calendar_state(
+            state, userid,
+            app_redirect if _is_allowed_app_redirect(app_redirect) else ""):
+        return json_error(503, "Connecting Google Calendar is temporarily unavailable. "
+                               "Please try again shortly.")
 
     params = {
         "client_id": GOOGLE_CLIENT_ID,
@@ -513,8 +517,7 @@ def handle_google_calendar_callback(request: Request):
     cookie_state = request.cookies.get("google_calendar_oauth_state")
     req_state = query.get("state") or ""
     code = query.get("code") or ""
-    g._prune_google_calendar_states()
-    entry = g._google_calendar_states.pop(req_state, None) if req_state else None
+    entry = g.take_calendar_state(req_state) if req_state else None
     if not code or not req_state or not cookie_state or req_state != cookie_state or not entry:
         return json_error(400, "Google Calendar connection failed: invalid "
                                "or expired request. Please try again.")

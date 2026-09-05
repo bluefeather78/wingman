@@ -1,11 +1,26 @@
-"""Google Sign-In / Calendar in-process token stores and pruning helpers.
-Extracted verbatim from server.py (docs/archive/PLAN_1_decompose.md). These are process-local
-dicts (one uvicorn worker); the OAuth request/redirect glue lives in
-app.routes.google_oauth, which also holds the calendar token-refresh helpers.
+"""Google Sign-In / Calendar handoff nonces and the OAuth state they are keyed by.
+Extracted from server.py (docs/archive/PLAN_1_decompose.md); the OAuth request/redirect glue
+lives in app.routes.google_oauth, which also holds the calendar token-refresh helpers.
+
+PHASE 4: THESE ARE NO LONGER PROCESS-LOCAL DICTS. All four stores below now sit on
+app.services.handoff_store, which keeps them in the `auth_handoffs` table when
+db/auth_handoffs_schema.sql has been run and falls back to in-process dicts (today's exact
+behaviour, warned about once) when it has not.
+
+The reason is perf_report finding 11 and it is worth stating plainly, because every one of
+these looks harmless on a laptop: each store is WRITTEN by one request and READ by a later,
+separate one. On two uvicorn workers the second request lands on the other worker about half
+the time, finds nothing, and tells the student their sign-in link expired — on a link that is
+perfectly valid. It does not degrade under load, it breaks sign-in intermittently, and it is
+the single hardest blocker on running `--workers > 1`.
+
+Single-use is preserved, not traded away: consumption is one DELETE returning its row, so of
+two concurrent spenders exactly one gets the payload. See handoff_store's module docstring for
+why that matters more than the stateless signed token the perf report offered as an
+alternative.
 """
 import datetime
 import json
-import time
 import secrets
 import urllib.error
 import urllib.parse
@@ -13,38 +28,34 @@ import urllib.request
 
 from app.config import *  # noqa: F401,F403
 from app.core import get_user, select_user, _users_request
+from app.services import handoff_store
 
 
 # One-time-use handoff tokens bridging the OAuth redirect back to the SPA, which has no
 # cookie/session concept of its own (see handle_login: login is just a POST that returns
 # user JSON, cached client-side). Minted in handle_google_callback, consumed exactly once
-# by handle_google_session. In-process only, like _opportunities_cache — fine for a
-# single-process dev/prod server, and these are short-lived by design.
-_google_session_tokens = {}
-
-
-def _prune_google_tokens():
-    now = time.time()
-    expired = [t for t, entry in _google_session_tokens.items() if entry["expires_at"] < now]
-    for t in expired:
-        del _google_session_tokens[t]
+# by handle_google_session. Shared across workers since Phase 4 (see the module docstring).
+KIND_SESSION = "google_session"
 
 
 def _mint_google_token(payload):
-    _prune_google_tokens()
+    """A single-use token standing for `payload` for GOOGLE_TOKEN_TTL_SECONDS.
+
+    Returns None when the store refuses it. The caller must treat that as a failed sign-in
+    rather than redirecting with a token nothing can spend — a nonce that cannot be stored is
+    a dead end one redirect later, and an honest error there is far easier to diagnose than
+    "this sign-in link has expired" on a link minted two seconds ago.
+    """
     token = secrets.token_urlsafe(32)
-    _google_session_tokens[token] = {
-        **payload,
-        "expires_at": time.time() + GOOGLE_TOKEN_TTL_SECONDS,
-    }
+    if not handoff_store.put(KIND_SESSION, token, payload, GOOGLE_TOKEN_TTL_SECONDS):
+        return None
     return token
 
 
 def _take_google_token(token):
     """Look up and delete a token in one step — single-use, so a replayed or leaked
     URL (browser history, a referrer header) can't be reused to resolve a session twice."""
-    _prune_google_tokens()
-    return _google_session_tokens.pop(token, None)
+    return handoff_store.take(KIND_SESSION, token)
 
 # ---------- Calendar handoff nonces (S1-3, finding M3) ----------
 #
@@ -60,23 +71,18 @@ def _take_google_token(token):
 # navigation. Single-use on top of that, so a replayed URL out of history is inert.
 CALENDAR_HANDOFF_TTL_SECONDS = 60
 
-_google_calendar_handoffs = {}
-
-
-def _prune_calendar_handoffs():
-    now = time.time()
-    for nonce in [n for n, e in _google_calendar_handoffs.items() if e["expires_at"] < now]:
-        del _google_calendar_handoffs[nonce]
+KIND_CALENDAR_HANDOFF = "calendar_handoff"
 
 
 def mint_calendar_handoff(userid):
-    """A single-use nonce standing in for `userid` for the next 60 seconds."""
-    _prune_calendar_handoffs()
+    """A single-use nonce standing in for `userid` for the next 60 seconds.
+
+    None when the store refuses it, for the same reason _mint_google_token can be None.
+    """
     nonce = secrets.token_urlsafe(32)
-    _google_calendar_handoffs[nonce] = {
-        "userid": userid,
-        "expires_at": time.time() + CALENDAR_HANDOFF_TTL_SECONDS,
-    }
+    if not handoff_store.put(KIND_CALENDAR_HANDOFF, nonce, {"userid": userid},
+                             CALENDAR_HANDOFF_TTL_SECONDS):
+        return None
     return nonce
 
 
@@ -86,41 +92,48 @@ def take_calendar_handoff(nonce):
     Look-up and delete in one step, like _take_google_token: a URL that reaches browser
     history or a Referer header must not resolve twice.
     """
-    _prune_calendar_handoffs()
-    entry = _google_calendar_handoffs.pop(nonce, None)
-    if not entry or entry["expires_at"] < time.time():
-        return None
-    return entry["userid"]
+    entry = handoff_store.take(KIND_CALENDAR_HANDOFF, nonce)
+    return (entry or {}).get("userid")
 
 
-# state -> {"userid": ..., "expires_at": ...}. Mirrors _google_session_tokens: in-process,
-# short-lived, fine for a single-process server. Keyed separately from the sign-in state
-# cookie so a stale calendar-connect attempt can't be replayed against the sign-in flow
-# or vice versa.
-_google_calendar_states = {}
+# The calendar grant's OAuth `state` -> {"userid", "app_redirect"}. Keyed separately from the
+# sign-in state cookie (a different `kind`, so a different primary key) so a stale
+# calendar-connect attempt can't be replayed against the sign-in flow or vice versa.
+KIND_CALENDAR_STATE = "calendar_state"
 
 
-def _prune_google_calendar_states():
-    now = time.time()
-    expired = [s for s, entry in _google_calendar_states.items() if entry["expires_at"] < now]
-    for s in expired:
-        del _google_calendar_states[s]
+def remember_calendar_state(state, userid, app_redirect=""):
+    """Record what a calendar-grant handshake is for. False if it could not be stored."""
+    return handoff_store.put(KIND_CALENDAR_STATE, state,
+                             {"userid": userid, "app_redirect": app_redirect or ""},
+                             GOOGLE_TOKEN_TTL_SECONDS)
 
 
-# state -> {"app_redirect": ..., "expires_at": ...}. Phase 3 (docs/archive/PLAN_3_rn.md): the sign-in
-# redirect flow historically ended at the SPA served from the backend root ("/"). The Expo
-# app is a SEPARATE origin (web) or a native app (custom scheme), so it passes its own
-# redirect URI to /start; the callback sends the one-time google_token there instead of to
-# "/". Keyed by the OAuth state so it can't be set for someone else's handshake, and the
-# target is allowlist-checked at /start before it is ever stored here.
-_google_login_redirects = {}
+def take_calendar_state(state):
+    """The handshake this state belongs to, consuming it. None if unknown or expired."""
+    return handoff_store.take(KIND_CALENDAR_STATE, state)
 
 
-def _prune_google_login_redirects():
-    now = time.time()
-    expired = [s for s, entry in _google_login_redirects.items() if entry["expires_at"] < now]
-    for s in expired:
-        del _google_login_redirects[s]
+# The sign-in handshake's OAuth `state` -> {"app_redirect"}. Phase 3
+# (docs/archive/PLAN_3_rn.md): the sign-in redirect flow historically ended at the SPA served
+# from the backend root ("/"). The Expo app is a SEPARATE origin (web) or a native app (custom
+# scheme), so it passes its own redirect URI to /start; the callback sends the one-time
+# google_token there instead of to "/". Keyed by the OAuth state so it can't be set for
+# someone else's handshake, and the target is allowlist-checked at /start before it is ever
+# stored here.
+KIND_LOGIN_REDIRECT = "login_redirect"
+
+
+def remember_login_redirect(state, app_redirect):
+    """Record where this handshake's token should be sent back to."""
+    return handoff_store.put(KIND_LOGIN_REDIRECT, state, {"app_redirect": app_redirect},
+                             GOOGLE_TOKEN_TTL_SECONDS)
+
+
+def take_login_redirect(state):
+    """The app redirect registered for this handshake, consuming it. "" if there was none."""
+    entry = handoff_store.take(KIND_LOGIN_REDIRECT, state) if state else None
+    return (entry or {}).get("app_redirect") or ""
 
 
 # ---------- Google Calendar token refresh + dedicated-calendar helpers ----------

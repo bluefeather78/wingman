@@ -9,13 +9,25 @@ import pytest
 
 import app.routes.google_oauth as gr
 import app.services.google_oauth as g
+import app.services.handoff_store as hs
 
 
 # ================= S1-3: the handoff nonce =================
 
 @pytest.fixture(autouse=True)
 def _empty_handoff_store(monkeypatch):
-    monkeypatch.setattr(g, "_google_calendar_handoffs", {})
+    """A clean, in-process handoff store.
+
+    Phase 4 moved these nonces onto app.services.handoff_store, which prefers the
+    `auth_handoffs` table when Supabase creds are configured. A dev machine has a real
+    SUPABASE_URL in .env and CI does not, so the backend is pinned here rather than left to
+    whichever machine runs the suite — otherwise these tests would take the DB path locally
+    (and be refused by conftest's socket guard) and the memory path in CI.
+    """
+    monkeypatch.setattr(hs, "SUPABASE_URL", "")
+    hs._reset_for_tests()
+    yield
+    hs._reset_for_tests()
 
 
 def test_a_nonce_resolves_to_its_userid_exactly_once():
@@ -33,7 +45,7 @@ def test_an_unknown_nonce_resolves_to_nothing():
 
 def test_a_nonce_expires():
     nonce = g.mint_calendar_handoff("alice")
-    g._google_calendar_handoffs[nonce]["expires_at"] = time.time() - 1
+    hs._memory[(g.KIND_CALENDAR_HANDOFF, hs._hash(nonce))]["expires_at"] = time.time() - 1
     assert g.take_calendar_handoff(nonce) is None
 
 
@@ -47,8 +59,8 @@ def test_the_nonce_carries_no_credential():
     """The whole point: what lands in the access log stands for a userid, and is not a
     token that can be presented anywhere else."""
     nonce = g.mint_calendar_handoff("alice")
-    entry = g._google_calendar_handoffs[nonce]
-    assert set(entry) == {"userid", "expires_at"}
+    entry = hs._memory[(g.KIND_CALENDAR_HANDOFF, hs._hash(nonce))]
+    assert set(entry["payload"]) == {"userid"}
 
 
 def test_nonces_are_unguessable():
@@ -58,9 +70,19 @@ def test_nonces_are_unguessable():
 
 def test_expired_nonces_are_pruned_rather_than_accumulating():
     stale = g.mint_calendar_handoff("alice")
-    g._google_calendar_handoffs[stale]["expires_at"] = time.time() - 1
+    hs._memory[(g.KIND_CALENDAR_HANDOFF, hs._hash(stale))]["expires_at"] = time.time() - 1
+    hs._last_prune = 0.0            # the sweep is throttled to once a minute per process
     g.mint_calendar_handoff("bob")
-    assert stale not in g._google_calendar_handoffs
+    assert (g.KIND_CALENDAR_HANDOFF, hs._hash(stale)) not in hs._memory
+
+
+def test_the_nonce_itself_is_never_what_is_stored():
+    """Phase 4: for the 60 seconds it lives, a nonce is a live credential. It is only ever
+    compared for equality, so only its sha256 is kept — a database dump cannot hand anybody
+    a working calendar-connect link."""
+    nonce = g.mint_calendar_handoff("alice")
+    assert (g.KIND_CALENDAR_HANDOFF, nonce) not in hs._memory
+    assert (g.KIND_CALENDAR_HANDOFF, hs._hash(nonce)) in hs._memory
 
 
 # ---------------- the two routes ----------------

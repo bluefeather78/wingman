@@ -21,6 +21,7 @@ import datetime
 import os
 import urllib.parse
 
+from wingman import agent_common
 from wingman import url_dedupe
 from wingman import url_repair
 from wingman import url_validate
@@ -146,8 +147,13 @@ def main():
     from wingman.gemini_common import set_min_delay
     set_min_delay(args.min_delay)
     today = datetime.date.today().strftime("%Y%m%d")
-    all_ids = {r["id"] for r in (supabase_get(supabase_url, "opportunities",
-                                              {"select": "id"}, service_key) or [])}
+    # The dedupe set is the WHOLE catalog, not just the inactive rows this agent selects from
+    # (audit 4.1). `rows` above is `is_active=eq.false`, so deduping against it never consulted
+    # a single live row: a URL re-found for a dead row that some OTHER row already sits at was
+    # inserted as a duplicate pending row, and the reviewer got two of the same program.
+    catalog = supabase_get(supabase_url, "opportunities",
+                           {"select": "id,name,url"}, service_key) or []
+    all_ids = {r["id"] for r in catalog}
     mint_id = so.next_id_generator(all_ids, supabase_url, service_key)
 
     class _A:  # minimal args shim for research_seed
@@ -167,11 +173,14 @@ def main():
             new_url = best_refound_url(resolved, r.get("url") or "", name, org,
                                        url_validate.DEFAULT_TIMEOUT)
         except Exception as e:
+            # research_seed may already have paid for attempt 1 before the retry blew up
+            # (audit 4.3); without this the run's reported cost is short by that much.
+            cost += agent_common.banked_cost(e)
             print(f"  [WARN] {r['id']}: {str(e)[:120]}")
             new_url = None
         stamp = list(r.get("quality_flags") or []) + [f"{_REFIND_STAMP} {today}"]
         patch = {"quality_flags": stamp}
-        if new_url and not url_dedupe.find_duplicates(new_url, name, rows)[0]:
+        if new_url and not url_dedupe.find_duplicates(new_url, name, catalog)[0]:
             new_row = so.build_row({**r, "url": new_url}, next(mint_id),
                                    f"refind-{today}", new_url, [])
             if new_row:

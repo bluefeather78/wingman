@@ -1214,6 +1214,7 @@ def main():
     total_cost = 0.0
     raw_found = duplicates_skipped = invalid_skipped = errors = 0
     not_running_skipped = 0   # programs the notes report as no longer running — DROPPED before insert
+    unsourced_rejected = 0    # model-typed URLs the search never retrieved — never stored (4.1)
     total_searches = silent_search_count = flagged_rows = dead_links = 0
     # Stage 1b (per-name URL resolution) run-level totals + the shared run budget.
     resolve_run_count = names_attempted = names_resolved = names_dropped = 0
@@ -1308,7 +1309,29 @@ def main():
                         candidate.get("running_reason")), "raw": candidate})
                     continue
                 span_urls = spans_for_name(name, spans)
+                unsourced_here = False
                 url, flags = reconcile_url(candidate.get("url"), resolved_urls, span_urls)
+                if url and FLAG_URL_UNSOURCED in flags:
+                    # A MODEL-TYPED URL IS NOT TRUSTWORTHY ANYWHERE IN THIS REPO, and this was
+                    # the last path that still stored one (audit 4.1). reconcile_url's final
+                    # rung returns the model's own URL when the search retrieved neither it nor
+                    # anything on its host — the signature of a remembered address — and the row
+                    # was then staged, liveness-checked and inserted carrying a flag. A flag is
+                    # not a defence: it survives only until a reviewer clears it, and under
+                    # --no-verify-urls the row was inserted without even the liveness check. It
+                    # is also the exact mechanism behind the scraper's measured 26% dead-link
+                    # rate, and refresh_opportunities already stopped writing `url` for it.
+                    #
+                    # Discarded rather than kept-and-flagged — but NOT by dropping the
+                    # candidate. Clearing the URL hands it to stage 1b, which runs one per-name
+                    # search and stores a page only when the page's own title proves it. So the
+                    # program still gets a chance; what it cannot do is keep an unproven
+                    # address. If stage 1b is off (--no-resolve / --no-verify-urls, both meaning
+                    # "spend nothing on URL work") or fails, the existing no-URL branch drops it
+                    # with a reason, and nothing vanishes silently.
+                    unsourced_rejected += 1
+                    unsourced_here = True
+                    url, flags = "", [f for f in flags if f != FLAG_URL_UNSOURCED]
                 if not url:
                     # Stage 1b: discovery found a NAME but no URL. Try one per-name search to
                     # find its own page before dropping it — within the per-angle and per-run
@@ -1339,8 +1362,12 @@ def main():
                         seed_names_dropped += 1
                         names_dropped += 1
                         invalid_skipped += 1
-                        rejected.append({"reason": "name found but no own-page URL could be "
-                                                   "proven (stage 1b)", "raw": candidate})
+                        rejected.append({"reason": ("model named a URL the search never "
+                                                    "retrieved, and no own page could be "
+                                                    "proven for it (stage 1b)")
+                                                   if unsourced_here else
+                                                   ("name found but no own-page URL could be "
+                                                    "proven (stage 1b)"), "raw": candidate})
                         continue
                 # Phase-2 URL truth: rescue a content-mill/off-site URL to the program's own
                 # page and title-prove what we store. Free HTTP, so it rides the same
@@ -1569,6 +1596,7 @@ def main():
     print(f"\n[SUMMARY] seeds run: {len(seeds)}, raw candidates: {raw_found}, "
           f"duplicates skipped: {duplicates_skipped}, invalid skipped: {invalid_skipped}, "
           f"not-running dropped: {not_running_skipped}, "
+          f"unsourced URLs rejected: {unsourced_rejected}, "
           f"errors: {errors}, new rows: {len(inserted_rows)} "
           f"({flagged_rows} flagged for review, {dead_links} with dead links), "
           f"searches: {total_searches}, silent seeds: {silent_search_count}/{len(seeds)}, "

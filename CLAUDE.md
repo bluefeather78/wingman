@@ -165,8 +165,11 @@ data/                     Opportunities.xlsx, the diffable opportunities.json sn
                           the two hand-curated hub registries. Not read at runtime.
 legal/*.md                source of record -> agents/build_legal.py -> public/terms.html/privacy.html
 tests/                    pytest suite for the backend (945 tests, all green)
-public/walkthrough.html          the landing film (vendored ~1.5MB bundle) — see its section below
-public/styles.css, public/favicon.svg   kept ONLY for the legal/about pages the RN app links to
+public/                   the ONLY directory the static route serves, and the only thing on
+                          this host reachable without auth: terms/privacy/about.html,
+                          walkthrough.html (the landing film, ~1.5MB vendored bundle),
+                          styles.css, favicon.svg. URLs stay unprefixed — /terms.html —
+                          so links in already-delivered emails still resolve.
 ```
 
 **Adding a module: does it go in `wingman/` or `agents/`?** `agents/` is for something an
@@ -177,14 +180,18 @@ something other code IMPORTS. A file that is both — `check_deadlines` and
 `REPO_ROOT` from `wingman`. That mistake broke 17 sites at once during this move and 16 of
 them failed silently.
 
-The root-level pages above (terms/privacy/about + walkthrough/logic_map/styles/favicon)
-are the ONLY thing `app/main.py`'s repo-root static route exists to serve. Its
-`_DENY_DIRS` blocks every directory in this map by name — `_DENY_EXT` is a file-TYPE list
-with no `.json`/`.xlsx`/`.docx`, so without it `data/` and `docs/` would be world-readable
-on the production domain. **A new top-level directory holding anything non-public must be
-added there**, and the route stays deny-list-shaped until
-[PRODUCTION_READINESS_PLAN.md](PRODUCTION_READINESS_PLAN.md) High #5 replaces it with an
-allow-list.
+**`app/main.py`'s static route resolves inside `public/` and nowhere else** (`PUBLIC_DIR`).
+Until 2026-09-04 it resolved against the whole repo and defended with deny-lists, so a file
+was served unless something remembered to exclude it — and one was not: **`GET
+/logic_map.html` returned 200 in production**, publishing the ops console's internal
+pipeline map. It now lives in `ops/`, which is never mounted on Render.
+
+Serving is **opt-in: to publish a file, put it in `public/`.** Nothing else on disk is
+reachable, whatever its extension — which closes the gap that `_DENY_EXT`, a file-TYPE
+list with no `.json`/`.xlsx`/`.docx`, could never close on its own. Those deny-lists are
+kept as a second line, not the only one. This is
+[PRODUCTION_READINESS_PLAN.md](PRODUCTION_READINESS_PLAN.md) High #5 ("catch-all static
+route serves the repo"), closed. `agents/build_legal.py` writes into `public/`.
 
 Retired at tag `workingwithauth`: `index.html`, `script.js`, the old icon SVGs. Every
 `script.js` / `index.html` reference below is **historical** — the reasoning was ported

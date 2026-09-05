@@ -14,6 +14,9 @@ import threading
 import time
 from collections import defaultdict, deque
 
+from app.config import (AI_RATE_LIMIT_PER_USER, AI_RATE_LIMIT_PER_IP,
+                        AI_RATE_LIMIT_WINDOW_SECONDS)
+
 
 class RateLimiter:
     def __init__(self, max_hits, window_seconds):
@@ -38,6 +41,17 @@ class RateLimiter:
                 self._sweep(cutoff)
             return True
 
+    def retry_after(self, key):
+        """Whole seconds until `key`'s oldest recorded hit falls out of the window, i.e. the
+        soonest allow() could succeed again. This is the Retry-After value; the floor of 1
+        keeps a client from being told to retry immediately."""
+        now = time.time()
+        with self._lock:
+            dq = self._hits.get(key)
+            if not dq:
+                return 1
+            return max(1, int(dq[0] + self.window - now) + 1)
+
     def _sweep(self, cutoff):
         for k in [k for k, v in self._hits.items() if not v or v[-1] <= cutoff]:
             del self._hits[k]
@@ -48,3 +62,11 @@ class RateLimiter:
 # scripted guessing against the unlimited endpoints it replaces is throttled.
 login_limiter = RateLimiter(10, 5 * 60)
 register_limiter = RateLimiter(10, 60 * 60)
+
+# The AI proxies (S0-2, findings D1/D4). Two buckets rather than one composite (ip, user)
+# key: a per-(ip,user) bucket would let one attacker with N accounts, or one account across N
+# addresses, multiply the ceiling by N. Checking both means neither dimension is free.
+# Rationale for the numbers, including why the per-IP bucket is the loose one, is on the
+# constants in app/config.py.
+ai_user_limiter = RateLimiter(AI_RATE_LIMIT_PER_USER, AI_RATE_LIMIT_WINDOW_SECONDS)
+ai_ip_limiter = RateLimiter(AI_RATE_LIMIT_PER_IP, AI_RATE_LIMIT_WINDOW_SECONDS)

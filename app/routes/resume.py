@@ -6,17 +6,24 @@ lives in app.services.resume; these are the HTTP glue.
 
 from fastapi import APIRouter, Request, Depends
 
+from app.config import RESUME_MAX_BODY_BYTES
 from app.core import touch_user_activity
 from app.deps import (json_body, json_response, json_error, subscription_block_reason,
-                      optional_subscribed_user, raw_body as raw_body_dep)
+                      optional_subscribed_user, capped_raw_body)
 from app.auth import get_current_user, AuthedUser
 from app.services import resume as resume_service
 
 router = APIRouter()
 
+# The upload is parsed wholly in memory (extract_multipart_file, then PyPDF2/python-docx), so
+# it gets its own ceiling rather than the AI proxies' — higher, because a real resume PDF is
+# far larger than a JSON prompt, and separate so raising one never silently raises the other.
+# S0-2 / finding M4.
+resume_raw_body = capped_raw_body(RESUME_MAX_BODY_BYTES)
+
 
 @router.post("/api/extract-from-resume")
-def handle_extract_from_resume(request: Request, raw: bytes = Depends(raw_body_dep),
+def handle_extract_from_resume(request: Request, raw: bytes = Depends(resume_raw_body),
                                user: AuthedUser = Depends(get_current_user)):
     """Extract profile-relevant information from a resume (PDF or DOCX)."""
     # Identity is token-derived (was a query-string userid). Gate on subscription before

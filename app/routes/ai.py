@@ -15,19 +15,25 @@ from fastapi import APIRouter, Request, Response, Depends
 from app.config import (
     GEMINI_API_KEY, MESSAGES_MODEL, MESSAGES_MAX_TOKENS, MESSAGES_MAX_TOKENS_CEILING,
     ANTHROPIC_API_KEY, ANTHROPIC_URL, CLAUDE_MODEL,
-    CLAUDE_MAX_TOKENS, CLAUDE_MAX_TOKENS_CEILING,
+    CLAUDE_MAX_TOKENS, CLAUDE_MAX_TOKENS_CEILING, AI_MAX_BODY_BYTES,
 )
 from app.core import (
     touch_user_activity, record_interactive_cost_async, log_conversation_async,
     record_api_error,
 )
 from app.deps import (json_response, json_error, subscription_block_reason, client_ip,
-                      raw_body as raw_body_dep)
+                      capped_raw_body)
 from app.auth import get_optional_user, AuthedUser
+from app.auth.ratelimit import ai_ip_limiter, ai_user_limiter
 from app.services.ai import generate_mock_text
 from wingman.gemini_common import call_gemini
 
 router = APIRouter()
+
+# MARQUEE M9: the request cap in front of the paid proxies (S0-2). Both routes read the body
+# through this rather than app.deps.raw_body, so an over-limit request is 413'd by the
+# dependency — before the handler exists to make an upstream call.
+ai_raw_body = capped_raw_body(AI_MAX_BODY_BYTES)
 
 # A response header the capture middleware (app/main.py) skips over, so a provider failure
 # recorded HERE with its real upstream status + error message is not ALSO recorded generically
@@ -225,31 +231,56 @@ def _ai_access_error(userid, key_configured):
     return None
 
 
+# MARQUEE M9: the throttle in front of the paid proxies (S0-2, findings D1/D4). Neither route
+# had a limiter — verified live 2026-09-03, 12 rapid POSTs returned 200 twelve times with
+# zero 429s. Both buckets are checked (see app/auth/ratelimit.py for why not one composite
+# key); the per-IP one is consulted first so a flood is refused before the per-user bucket,
+# and before the account lookup the subscription gate does, is reached at all.
+def _rate_limit_error(ip, userid):
+    """A 429 carrying Retry-After if this caller has spent either bucket, else None."""
+    buckets = [(ai_ip_limiter, f"ip:{ip or '-'}")]
+    if userid:
+        buckets.append((ai_user_limiter, f"user:{userid}"))
+    for limiter, key in buckets:
+        if not limiter.allow(key):
+            resp = json_error(429, "You're going a little fast for us — "
+                                   "give it a moment and try again.")
+            resp.headers["Retry-After"] = str(limiter.retry_after(key))
+            return resp
+    return None
+
+
 @router.post("/api/messages")
-def handle_messages(request: Request, raw_body: bytes = Depends(raw_body_dep),
+def handle_messages(request: Request, raw_body: bytes = Depends(ai_raw_body),
                     user: AuthedUser = Depends(get_optional_user)):
     # Identity comes from the token if present, else None. Signed-out is allowed only on the
     # mock branch — see _ai_access_error (M9 / S0-1).
     userid = user.id if user else None
+    ip = client_ip(request)
+    throttled = _rate_limit_error(ip, userid)
+    if throttled:
+        return throttled
     denied = _ai_access_error(userid, bool(GEMINI_API_KEY))
     if denied:
         return denied
     touch_user_activity(userid, "ai_gemini")
-    ip = client_ip(request)
     if GEMINI_API_KEY:
         return _proxy_to_gemini(raw_body, ip, userid)
     return _mock_response(raw_body, ip, userid)
 
 
 @router.post("/api/messages-claude")
-def handle_messages_claude(request: Request, raw_body: bytes = Depends(raw_body_dep),
+def handle_messages_claude(request: Request, raw_body: bytes = Depends(ai_raw_body),
                            user: AuthedUser = Depends(get_optional_user)):
     userid = user.id if user else None
+    ip = client_ip(request)
+    throttled = _rate_limit_error(ip, userid)
+    if throttled:
+        return throttled
     denied = _ai_access_error(userid, bool(ANTHROPIC_API_KEY))
     if denied:
         return denied
     touch_user_activity(userid, "ai_claude")
-    ip = client_ip(request)
     if ANTHROPIC_API_KEY:
         return _proxy_to_anthropic(raw_body, ip, userid)
     return _mock_response(raw_body, ip, userid)

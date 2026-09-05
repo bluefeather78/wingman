@@ -240,6 +240,7 @@ def test_ai_handlers_consult_the_gate_before_spending(monkeypatch):
                             lambda *a, **k: pytest.fail("reached past the gate"))
     monkeypatch.setattr(ai, "GEMINI_API_KEY", "live-key")
     monkeypatch.setattr(ai, "ANTHROPIC_API_KEY", "live-key")
+    monkeypatch.setattr(ai, "client_ip", lambda _r: "1.2.3.4")
 
     for handler in (ai.handle_messages, ai.handle_messages_claude):
         resp = handler(request=None, raw_body=b"{}", user=None)

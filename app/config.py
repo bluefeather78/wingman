@@ -89,6 +89,31 @@ CLAUDE_MAX_TOKENS = 1000
 # on an endpoint any signed-in browser can post to, not a model limit.
 CLAUDE_MAX_TOKENS_CEILING = 8000
 
+# ---------- Request caps on the two AI proxies (S0-2; findings D1, D4, M4) ----------
+# Before these there was no limiter on either proxy route and no body-size limit anywhere in
+# the app — app.deps.raw_body read the whole request into memory unbounded. Verified live
+# 2026-09-03: 12 rapid POSTs -> 200 x12 with zero 429s, and a 41,040-byte body -> 200 with
+# 9,703 input tokens billed. Both are direct billing levers.
+#
+# Size: the largest LEGITIMATE payload is rankCandidates', which sends preFilter's pool —
+# capped at 100 rows compacted to 9 fields each (frontend/src/lib/ranking.ts) — so ~100 KB
+# measured. 512 KB is 5x that headroom while still bounding one call to roughly a tenth of
+# what SECURITY_HARDENING_PLAN.md's suggested 1 MB would allow through. Raise the env var,
+# don't raise a student's floor, if a future feature genuinely needs more.
+AI_MAX_BODY_BYTES = int(os.environ.get("AI_MAX_BODY_BYTES", "") or 512 * 1024)
+# The resume/LinkedIn import parses an uploaded PDF or DOCX wholly in memory, so it needs its
+# own, higher ceiling; it is token-gated and subscription-gated, unlike the proxies.
+RESUME_MAX_BODY_BYTES = int(os.environ.get("RESUME_MAX_BODY_BYTES", "") or 10 * 1024 * 1024)
+
+# Rate: two buckets, both checked. The PER-USER bucket is what bounds one account's spend.
+# The PER-IP bucket is deliberately far looser because a school NAT puts a whole cohort
+# behind one address — tightening it would lock out a classroom, not an attacker. Home Base
+# opens with a burst (inferSubjects + rankCandidates + the finder's tag scorer), so the
+# per-user number has to clear a normal burst with room to spare.
+AI_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("AI_RATE_LIMIT_WINDOW_SECONDS", "") or 60)
+AI_RATE_LIMIT_PER_USER = int(os.environ.get("AI_RATE_LIMIT_PER_USER", "") or 30)
+AI_RATE_LIMIT_PER_IP = int(os.environ.get("AI_RATE_LIMIT_PER_IP", "") or 120)
+
 # ---------- Opportunities catalog (Supabase-backed) ----------
 # The opportunity catalog lives in a Supabase (hosted Postgres) table rather than
 # the old static opportunities.json — see scripts/one-off/migrate_to_supabase.py for the one-time

@@ -61,6 +61,54 @@ async def raw_body(request: Request) -> bytes:
     return await request.body()
 
 
+def capped_raw_body(max_bytes):
+    """A raw_body dependency that refuses an over-large request with 413 (S0-2, finding M4).
+
+    Plain raw_body reads the whole request into memory with no ceiling, so a large body was
+    both a memory lever and — on the AI proxies — a billing one (a 41 KB body billed 9,703
+    input tokens, verified live 2026-09-03). Two checks, because either alone has a hole:
+
+      * Content-Length first, so an honest oversized upload is refused before a single byte
+        of it is buffered. Client-supplied, so it cannot be trusted on its own, and it is
+        absent entirely on a chunked request.
+      * The stream is then consumed with a running total and abandoned the moment it passes
+        the cap, so a chunked or lying client cannot buffer more than the cap either.
+
+    The assembled bytes are cached on request._body — the same attribute Starlette's
+    Request.body() populates and checks — so anything downstream that reads the body again
+    (an exception handler, a later dependency) still works instead of hitting a consumed
+    stream.
+
+    Returns a dependency; call it with the route's ceiling. Being a dependency, the 413 is
+    raised BEFORE the handler runs, which is what makes "zero provider usage for an
+    over-limit body" true rather than merely likely.
+    """
+    detail = "Request body is too large."
+
+    async def _capped(request: Request) -> bytes:
+        declared = request.headers.get("content-length")
+        if declared:
+            try:
+                if int(declared) > max_bytes:
+                    raise HTTPException(status_code=413, detail=detail)
+            except ValueError:
+                pass                       # unparseable header: fall through to the real count
+        if hasattr(request, "_body"):      # already read upstream; just enforce the ceiling
+            if len(request._body) > max_bytes:
+                raise HTTPException(status_code=413, detail=detail)
+            return request._body
+        chunks, total = [], 0
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(status_code=413, detail=detail)
+            chunks.append(chunk)
+        request._body = b"".join(chunks)
+        return request._body
+
+    return _capped
+
+
 async def read_json_body_strict(request: Request):
     """Mirror Handler._read_json_body_strict: (data, error), distinguishing malformed
     from empty and naming a non-UTF-8 body specifically."""

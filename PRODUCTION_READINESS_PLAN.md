@@ -126,6 +126,47 @@ scope this document originally proposed.
 **Net effect on the ten items: NINE get built, not ten.** Item 9 is out. Only how the rest are
 *verified* changed.
 
+### Phase 2 progress (branch `phase2-capacity`, as of 2026-09-05)
+
+Five of the nine items are built, committed and green. Each marquee item is its own dedicated
+commit naming M9, per MARQUEE_DECISIONS.md.
+
+| Item | State | Commit |
+|---|---|---|
+| 2 async AI lane | **DONE** | `MARQUEE M9 (Phase 2 item 2)` |
+| 8 paid deadline/checklist lane | **DONE** | `MARQUEE M9 (Phase 2 item 8)` |
+| 1 no Gemini sleep on the web path | **DONE** | `MARQUEE M9 (Phase 2 item 1)` |
+| 3 60s identity cache | **DONE** | `Phase 2 item 3` |
+| 7 OWASP argon2 | **DONE** | `Phase 2 item 7` |
+| 4 pooled HTTP | not started | — |
+| 5 gzip+ETag catalog, split vector cache, 24 h backstop | not started — **its "paused" reason has expired**, see below | — |
+| 6 batched cost accounting | not started | — |
+| 9 observability | **DROPPED** (decision 7) | — |
+| 10 laptop probe + provider tiers | probe not run; tier still unconfirmed | — |
+
+Tests went 2349 -> 2401, exit 0 throughout; every item added its own tests.
+
+**Item 5's pause is over.** The reason recorded under "Live finding" below — "it touches
+`ops/core.py` + the tested cache contract that a concurrent workstream is editing" — was
+checked on 2026-09-05 and is no longer true: no unmerged branch touches
+`app/services/opportunities.py` or `ops/core.py`, there are no extra worktrees, and the last
+commits to both are Phase 1 work already on `main`. The workstream finished and merged; the
+plan text simply had not caught up. Item 5 is unblocked.
+
+**Three things measured while doing this, worth keeping:**
+
+1. **/api/match was sleeping ~10s per request, not ~5.** The Gemini throttle is taken once to
+   embed the student's themes and once for the eligibility gate. The plan described M5 as one
+   5s sleep; it was two, on the route matching is built around.
+2. **OWASP's argon2 numbers are LIGHTER than argon2-cffi's defaults**, not heavier
+   (19 MiB/t=2/p=1 against 64 MiB/t=3/p=4). Item 7 therefore made sign-in ~2x faster and cut
+   its memory ~70%. At the old default, eight concurrent sign-ins is all 512 MB of a free
+   instance — an OOM reachable from an unauthenticated endpoint.
+3. **AI_MAX_CONCURRENCY shipped at 12, not the plan's 30.** 30 of the shared 40-slot anyio
+   threadpool would leave 10 for every other route, which is not meaningfully better than the
+   starvation it is meant to prevent. Raise it via the env var once the provider tier is known
+   and the host is paid.
+
 ---
 
 ## Headline

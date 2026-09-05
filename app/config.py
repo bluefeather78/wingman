@@ -181,6 +181,21 @@ PAID_CHECK_SHED_RETRY_AFTER_SECONDS = int(
 # upgrade, a promo redemption or a cancellation is visible on the very next request.
 IDENTITY_CACHE_TTL_SECONDS = float(os.environ.get("IDENTITY_CACHE_TTL_SECONDS", "") or 60)
 
+# ---------- Batched cost accounting (Phase 2 item 6) ----------
+# How long a paid call's rollup write may sit in memory before the flusher writes it. This is
+# the window in which unflushed attribution is lost if the process is killed — bounded, small,
+# and drained by an atexit hook on a clean shutdown.
+#
+# It is NOT the window in which the spend caps lag: budget.note_spend() still fires
+# synchronously on every paid call, so the per-user daily budget and the circuit breaker are
+# exact. Only the console's Cost-per-user view is behind, by at most this many seconds.
+COST_FLUSH_INTERVAL_SECONDS = float(os.environ.get("COST_FLUSH_INTERVAL_SECONDS", "") or 5)
+
+# Backstop for a burst wide enough to grow the buffer faster than the interval drains it: at
+# this many distinct (user, day, surface, feature, model) keys, flush immediately. Bounded
+# memory beats a tidy cadence on a 512 MB instance.
+COST_FLUSH_MAX_KEYS = int(os.environ.get("COST_FLUSH_MAX_KEYS", "") or 200)
+
 # Ceiling on web searches per Anthropic call. Unlike Gemini's max_searches — a number folded
 # into the prompt and nothing more — Anthropic ENFORCES max_uses server-side, so this is a
 # real cost ceiling ($0.01/search). It is moot while _USE_WEB_SEARCH pins search off; it

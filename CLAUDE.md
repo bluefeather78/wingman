@@ -137,13 +137,31 @@ app/                      FastAPI service (the only Python thing deployed)
 ops/                      LOCAL-ONLY console (WINGMAN_ENABLE_OPS): core.py, admin.py,
                           admin_console.html — never mounted on Render
 *.py (repo root)          the 7 offline agents + their shared libs (stdlib-only; app/
-                          imports check_deadlines). See the agents section below.
+                          imports check_deadlines). See the agents section below. These
+                          stay at the root deliberately — they import each other by BARE
+                          NAME and anchor log/snapshot I/O to __file__.
+db/                       one-time manual DDL, run by hand in the Supabase SQL editor.
+                          Never opened by code; the filenames appear in ~130 setup and
+                          503 messages, so keep the basenames stable.
+docs/                     plans/ (unbuilt or part-shipped) · archive/ (shipped, superseded,
+                          dated snapshots) · review-2026-09-02/ (the production audit) ·
+                          SUBSCRIPTION_SETUP.md + MATCHING_UX_REQUIREMENTS.md (live refs)
+data/                     Opportunities.xlsx, the diffable opportunities.json snapshot,
+                          the two hand-curated hub registries. Not read at runtime.
 legal/*.md                source of record -> build_legal.py -> terms.html/privacy.html
-*.sql (repo root)         one-time manual DDL, run by hand in the Supabase SQL editor
 tests/                    pytest suite for the backend (945 tests, all green)
 walkthrough.html          the landing film (vendored ~1.5MB bundle) — see its section below
 styles.css, favicon.svg   kept ONLY for the legal/about pages the RN app links to
 ```
+
+The root-level pages above (terms/privacy/about + walkthrough/logic_map/styles/favicon)
+are the ONLY thing `app/main.py`'s repo-root static route exists to serve. Its
+`_DENY_DIRS` blocks every directory in this map by name — `_DENY_EXT` is a file-TYPE list
+with no `.json`/`.xlsx`/`.docx`, so without it `data/` and `docs/` would be world-readable
+on the production domain. **A new top-level directory holding anything non-public must be
+added there**, and the route stays deny-list-shaped until
+[PRODUCTION_READINESS_PLAN.md](PRODUCTION_READINESS_PLAN.md) High #5 replaces it with an
+allow-list.
 
 Retired at tag `workingwithauth`: `index.html`, `script.js`, the old icon SVGs. Every
 `script.js` / `index.html` reference below is **historical** — the reasoning was ported
@@ -178,9 +196,11 @@ Postgres) `opportunities` table, not a static file — `/api/opportunities`
 proxies to it (PostgREST, anon key, RLS-restricted to `is_active=true` rows, paginated past
 PostgREST's 1000-row cap, cached in-process for `OPPORTUNITIES_CACHE_TTL` seconds) and
 the client fetches that endpoint once on load.
-[opportunities.json](opportunities.json) still exists git-tracked as a diffable backup
+[opportunities.json](data/opportunities.json) still exists git-tracked as a diffable backup
 snapshot only — regenerate it with `export_json.py` after editing the DB, it is **not**
-fetched at runtime anymore. `migrate_to_supabase.py` was the one-off script that populated the
+fetched at runtime anymore. It moved to `data/` on 2026-09-04; `export_json.py`'s `OUT_PATH`
+writes there, and the static route now blocks the directory (it was downloadable from the
+production domain before, since `.json` is not in `_DENY_EXT`). `migrate_to_supabase.py` was the one-off script that populated the
 table (from this file plus a sibling `opportunity finder/` project's seed data); not part of
 the regular dev loop.
 

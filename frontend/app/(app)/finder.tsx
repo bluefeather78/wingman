@@ -21,7 +21,7 @@ import {
   type ProfileRecord,
   type ProfileStore,
 } from '@/lib/profileDerived';
-import { parseGradeFromText } from '@/lib/grade';
+import { parseGradeFromText, parseGradeLevel } from '@/lib/grade';
 import { extractJSON } from '@/lib/extractJSON';
 import { inferSubjects, preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
 import { markNewlyAdded } from '@/lib/newlyAdded';
@@ -549,7 +549,9 @@ export default function Finder() {
         /* best effort — no grade just means no grade filter */
       }
     }
-    return parseGradeFromText(grade) ?? profileGrade;
+    // `grade` is the form's DROPDOWN value, so parseGradeLevel — the explicit-value parser.
+    // parseGradeFromText is for prose and deliberately refuses a bare "Senior" in a sentence.
+    return parseGradeLevel(grade) ?? profileGrade;
   }
 
   function buildMatchBlob(themeTags: EnrichedTag[], gradeNum: number | null): MatchRequest {
@@ -719,7 +721,7 @@ export default function Finder() {
       // the one-time question (stored on the profile record); then whatever grade-level
       // language the student's own profile text happens to contain, if any.
       const storedGrade = profileRecord.current?.grade;
-      const gradeNum = parseGradeFromText(grade) ?? (typeof storedGrade === 'number' ? storedGrade : profileGrade);
+      const gradeNum = parseGradeLevel(grade) ?? (typeof storedGrade === 'number' ? storedGrade : profileGrade);
 
       // ---- The profile-driven path is now semantic recall (PR4) ----
       // Instead of the per-kind preFilter + rankCandidates fan-out, the suggest path posts the
@@ -895,7 +897,7 @@ export default function Finder() {
   // slots or the location stored alongside it), then run the search. Mirrors
   // submitLocationAndSearch; a save failure must not block the search.
   async function submitGradeAndSearch() {
-    const value = parseGradeFromText(gradeInput);
+    const value = parseGradeLevel(gradeInput);
     if (value == null || savingGrade) return;
     setSavingGrade(true);
     try {

@@ -20,7 +20,58 @@ export const BUCKET_LABELS: Record<Bucket, string> = {
   journals: 'Research Journal',
 };
 
-export function daysUntil(dateISO: string): number {
+// ---------- Date validity (Phase 5, frontend_report finding 11) ----------
+//
+// Everything below reads a date out of stored tracker data, and until now the only check was
+// TRUTHINESS. A stored `date_iso` of "TBD", "2026-13-45", "Fall 2026" or "2026/11/01" — all of
+// which a model can produce and a student can paste — made `new Date(...)` an Invalid Date, so
+// daysUntil returned NaN. Every comparison against NaN is false, so:
+//
+//   computeProgressStatus  daysUntil(first) > 0 → false, daysUntil(last) < 0 → false
+//                          → falls through to 'in_progress', and the card reads HAPPENING NOW
+//                          for a programme whose date is a typo.
+//   getDisplayMilestones   isPast = NaN < 0 = false → a past date renders as upcoming.
+//   the calendar            renders the literal string NaN.
+//
+// One validator, applied at the ONE place each reader extracts a date, so a malformed entry is
+// simply not a date rather than being a date that lies. That is the safe direction: an item
+// with no usable dates reads as "not started" and shows no milestone, which is honest, where
+// "Happening Now" is not.
+
+// A calendar date, not a timestamp: `YYYY-MM-DD`, and a real day in a real month. The regex
+// alone is not enough — "2026-02-31" passes it — so the parsed date is checked to round-trip,
+// which is what rejects a day that does not exist in that month.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export function isValidDateISO(value: unknown): value is string {
+  if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) return false;
+  const [y, m, d] = value.split('-').map(Number);
+  if (m < 1 || m > 12 || d < 1) return false;
+  // Date.UTC(y, m, 0) is the last day of month `m` (months are 0-based, so `m` is the month
+  // after this one and day 0 steps back one).
+  return d <= new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
+/**
+ * The stored date on an importantDates entry, in either spelling, or null if it is not a
+ * usable calendar date. Both spellings exist in stored data: the client writes `dateISO`, the
+ * deadline endpoint speaks `date_iso`, and rows written by either are still on disk.
+ */
+export function storedDateISO(entry: unknown): string | null {
+  const d = entry as { dateISO?: unknown; date_iso?: unknown } | null;
+  const raw = d?.dateISO ?? d?.date_iso;
+  return isValidDateISO(raw) ? raw : null;
+}
+
+/**
+ * Whole days from today until `dateISO`, or null if that is not a usable date.
+ *
+ * The null return is the point: callers used to get NaN and compare it, which is always false
+ * and therefore always the wrong branch, silently. Now a caller has to decide what an unknown
+ * date means, and every one of them below decides "treat the item as having no such date".
+ */
+export function daysUntil(dateISO: string): number | null {
+  if (!isValidDateISO(dateISO)) return null;
   const d = new Date(dateISO + 'T00:00:00');
   const now = new Date();
   now.setHours(0, 0, 0, 0);
@@ -29,8 +80,8 @@ export function daysUntil(dateISO: string): number {
 
 function rawDates(item: TrackerItem): string[] {
   return (item.importantDates ?? [])
-    .map((d) => (d as { dateISO?: string; date_iso?: string }).dateISO || (d as { date_iso?: string }).date_iso)
-    .filter(Boolean) as string[];
+    .map(storedDateISO)
+    .filter((d): d is string => d !== null);
 }
 
 // Feb 29 does not exist in a non-leap year — clamp to the 28th rather than letting the
@@ -68,9 +119,17 @@ export function cycleYearShift(item: TrackerItem): number {
   const dates = rawDates(item);
   if (!dates.length) return 0;
   const last = [...dates].sort()[dates.length - 1];
-  if (daysUntil(last) >= 0) return 0;
+  const until = daysUntil(last);
+  if (until === null || until >= 0) return 0;
   let n = Math.max(1, new Date().getFullYear() - Number(last.slice(0, 4)));
-  while (daysUntil(addYearsISO(last, n)) < 0) n += 1;
+  // Bounded. rawDates only yields valid dates so the loop terminates on the arithmetic alone,
+  // but an unbounded `while` whose exit depends on a date parse is the shape that hangs the UI
+  // thread if that ever stops being true — and this runs on every render of every card.
+  for (let guard = 0; guard < 200; guard += 1) {
+    const shifted = daysUntil(addYearsISO(last, n));
+    if (shifted === null || shifted >= 0) break;
+    n += 1;
+  }
   return n;
 }
 
@@ -103,8 +162,14 @@ export function computeProgressStatus(item: TrackerItem): OppStatus {
   dates.sort();
   const firstStep = dates[0];
   const lastStep = dates[dates.length - 1];
-  if (daysUntil(firstStep) > 0) return 'not_started';
-  if (daysUntil(lastStep) < 0) return 'completed';
+  const untilFirst = daysUntil(firstStep);
+  const untilLast = daysUntil(lastStep);
+  // A null cannot reach here — itemDates has already dropped unparseable entries — but the
+  // branch is written so that "unknown" reads as not_started rather than falling through to
+  // in_progress. Falling through IS the finding: a malformed date made the card say
+  // "Happening Now".
+  if (untilFirst === null || untilFirst > 0) return 'not_started';
+  if (untilLast !== null && untilLast < 0) return 'completed';
   return 'in_progress';
 }
 
@@ -139,7 +204,9 @@ export function getDisplayMilestones(item: TrackerItem): Milestone[] {
   const seen = new Set<string>();
   const milestones: Milestone[] = [];
   (item.importantDates ?? []).forEach((d) => {
-    const stored = (d as { dateISO?: string; date_iso?: string }).dateISO || (d as { date_iso?: string }).date_iso;
+    // A malformed date is DROPPED rather than rendered. It used to render with isPast=false
+    // (NaN < 0 is false), so a typo'd deadline showed up as an upcoming milestone.
+    const stored = storedDateISO(d);
     if (!stored) return;
     const dateISO = shift ? addYearsISO(stored, shift) : stored;
     const key = dateISO + '|' + (d.label || '');
@@ -160,7 +227,8 @@ export function getDisplayMilestones(item: TrackerItem): Milestone[] {
   });
   milestones.sort((a, b) => a.date.localeCompare(b.date));
   milestones.forEach((m) => {
-    m.isPast = daysUntil(m.date) < 0;
+    const until = daysUntil(m.date);
+    m.isPast = until !== null && until < 0;
   });
   return milestones;
 }
@@ -169,17 +237,21 @@ export function getDisplayMilestones(item: TrackerItem): Milestone[] {
 export function earliestUpcoming(item: TrackerItem): { date: string; label: string; kind: string } | null {
   const shift = cycleYearShift(item);
   const candidates = (item.importantDates ?? [])
-    .filter((d) => (d as { dateISO?: string; date_iso?: string }).dateISO || (d as { date_iso?: string }).date_iso)
     .map((d) => {
-      const stored = ((d as { dateISO?: string; date_iso?: string }).dateISO || (d as { date_iso?: string }).date_iso) as string;
+      const stored = storedDateISO(d);
+      if (!stored) return null;
       return {
         date: shift ? addYearsISO(stored, shift) : stored,
         label: d.label,
         kind: d.type || 'deadline',
       };
-    });
+    })
+    .filter((c): c is { date: string; label: string; kind: string } => c !== null);
   if (!candidates.length) return null;
-  const future = candidates.filter((c) => daysUntil(c.date) >= 0);
+  const future = candidates.filter((c) => {
+    const until = daysUntil(c.date);
+    return until !== null && until >= 0;
+  });
   future.sort((a, b) => a.date.localeCompare(b.date));
   if (future.length) return future[0];
   candidates.sort((a, b) => a.date.localeCompare(b.date));

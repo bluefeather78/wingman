@@ -1,5 +1,5 @@
 import { ALL_BUCKETS } from '@/lib/constants';
-import { addYearsISO, cycleYearShift } from '@/lib/status';
+import { addYearsISO, cycleYearShift, storedDateISO } from '@/lib/status';
 import { httpClient } from './httpClient';
 import {
   loadTrackerDataChecked,
@@ -54,9 +54,12 @@ export function collectTrackedDeadlineEvents(data: TrackerData, saved: Record<st
       // so a shifted date PATCHes the existing event rather than creating a second one.
       const shift = cycleYearShift(item);
       (item.importantDates ?? []).forEach((d, idx) => {
-        // Both spellings exist in stored data — the deadline endpoint speaks date_iso.
-        const stored = (d as { dateISO?: string; date_iso?: string }).dateISO
-          || (d as { date_iso?: string }).date_iso;
+        // Both spellings exist in stored data — the deadline endpoint speaks date_iso —
+        // and storedDateISO also REJECTS a malformed one (Phase 5, finding 11). Only
+        // truthiness was checked before, so a stored "TBD" or "2026-13-45" was handed to
+        // Google as an event date; the request either failed or wrote a garbage day onto the
+        // student's real calendar.
+        const stored = storedDateISO(d);
         if (!stored) return;
         const dateISO = shift ? addYearsISO(stored, shift) : stored;
         const label = shift

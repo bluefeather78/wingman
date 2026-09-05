@@ -2,6 +2,7 @@ import type { Bucket } from '@/lib/constants';
 import { ALL_BUCKETS } from '@/lib/constants';
 import { httpClient } from './httpClient';
 import { isVerifiedDeadlineSource, normalizeVerifiedActionItems, type TrackerInfo } from '@/lib/tracker';
+import { isValidDateISO } from '@/lib/status';
 
 // The tracker is shared with the original web app: it persists under the SAME data key
 // (`hs-tracker-data`) in the SAME shape — a JSON *string* of a 6-bucket object, each bucket
@@ -345,22 +346,50 @@ export function applyDeadlineToTrackerItem(item: TrackerItem, info: Partial<Trac
   if (Array.isArray(info.important_dates)
       && (isVerifiedDeadlineSource(info.source) || info.important_dates.length)) {
     const previous = item.importantDates ?? [];
+    // Google Calendar event ids are carried forward BY MILESTONE, not by index (Phase 5,
+    // frontend_report finding 9). Dropping them entirely made the next sync POST a new event
+    // while the old one survived the sweep, so the calendar gained a duplicate on every
+    // refresh — but carrying them by INDEX was worse, because it silently attached an event
+    // id to whatever date happened to land in that slot.
+    //
+    // The label (with the type as a tiebreak) is the milestone's identity; the DATE is the
+    // thing a refresh exists to change. Keying on the date would lose the event id on exactly
+    // the refresh that mattered — a moved deadline — and produce the duplicate this is meant
+    // to prevent. Entries are consumed as they are matched, so two milestones sharing a label
+    // pair up in order rather than both taking the first id.
+    const carry = new Map<string, (string | null)[]>();
+    previous.forEach((p) => {
+      const key = `${p.label || 'Date'}|${p.type || 'deadline'}`;
+      const ids = carry.get(key) ?? [];
+      ids.push(p.googleEventId ?? null);
+      carry.set(key, ids);
+    });
+    const takeEventId = (label: string, type: string): string | null => {
+      const ids = carry.get(`${label}|${type}`);
+      return ids && ids.length ? (ids.shift() ?? null) : null;
+    };
     const mapped = info.important_dates
-      .filter((d) => d && d.date_iso)
-      .map((d, idx) => ({
-        label: d.label || 'Date',
-        dateISO: d.date_iso,
-        type: d.type || 'deadline',
-        estimated: d.estimated,
-        // P6c per-date provenance, carried into the snapshot so the card can render the
-        // verified marker + evidence link without another fetch.
-        verified: d.verified,
-        sourceUrl: d.source_url ?? null,
-        // Carry the Google Calendar event id forward by index. Dropping it made the next
-        // sync POST a NEW event while the old one (same index-based wingmanId) survived the
-        // sweep, so the student's real calendar gained a duplicate on every refresh.
-        googleEventId: previous[idx]?.googleEventId ?? null,
-      }));
+      .filter((d) => isValidDateISO(d?.date_iso))
+      .map((d) => {
+        const label = d.label || 'Date';
+        const type = d.type || 'deadline';
+        return {
+          label,
+          dateISO: d.date_iso,
+          type,
+          estimated: d.estimated,
+          // P6c per-date provenance, carried into the snapshot so the card can render the
+          // verified marker + evidence link without another fetch.
+          verified: d.verified,
+          sourceUrl: d.source_url ?? null,
+          googleEventId: takeEventId(label, type),
+        };
+      })
+      // SORTED, matching the add path (trackerAdd.ts). The two paths produced differently
+      // ordered lists for the same data, so a refresh reported `changed` on ORDER ALONE —
+      // which re-renders the card, marks the item updated, and (before the fix above) shuffled
+      // the calendar ids. One order, one comparison.
+      .sort((a, b) => a.dateISO.localeCompare(b.dateISO));
     if (JSON.stringify(mapped) !== JSON.stringify(previous)) changed = true;
     item.importantDates = mapped;
   }

@@ -10,6 +10,7 @@ import {
   staticGenericChecklist,
   type TrackerInfo,
 } from '@/lib/tracker';
+import { isValidDateISO } from '@/lib/status';
 
 const callFeature = httpClient.callFeature.bind(httpClient);
 
@@ -99,7 +100,10 @@ export async function addCatalogOpportunity(
     noteType: status === 'not_running' ? 'flag' : deadline ? 'plain' : 'flag',
     importantDates: Array.isArray(deadline?.important_dates)
       ? deadline.important_dates
-          .filter((d) => d && d.date_iso)
+          // isValidDateISO, not truthiness (Phase 5, finding 11): a stored "TBD" or
+          // "2026-13-45" made daysUntil NaN, and every comparison against NaN is false, so
+          // the card read HAPPENING NOW and the calendar rendered the literal string NaN.
+          .filter((d) => isValidDateISO(d?.date_iso))
           .map((d) => ({
             label: d.label || 'Date',
             dateISO: d.date_iso,

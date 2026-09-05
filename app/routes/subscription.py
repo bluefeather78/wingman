@@ -15,7 +15,8 @@ from app.services.email import send_lifecycle_email_async
 from app.auth import get_current_user, get_optional_user, AuthedUser
 from wingman.subscription_common import (
     get_or_create_customer, create_checkout_session, cancel_subscription,
-    validate_promo_code, promo_kind, extend_from, GRANTABLE_STATUSES,
+    validate_promo_code, promo_kind, extend_from, note_promo_redemption,
+    GRANTABLE_STATUSES,
 )
 
 router = APIRouter()
@@ -187,6 +188,12 @@ def handle_redeem_promo(body: dict = Depends(json_body),
         if code in list(record.get("promo_codes_used") or []):
             return json_error(400, "You have already used this promo code.")
         return json_error(409, "Your subscription just changed — reload and try again.")
+
+    # The global usage counter, AFTER the grant is safely written. Best-effort and
+    # deliberately not part of the transaction: the per-user "already used" guard is the
+    # conditional PATCH above, and failing to bump a counter must never fail a redemption
+    # the student has already earned. S1-10.
+    note_promo_redemption(code, promo_data)
 
     try:
         record = get_user_account(userid)

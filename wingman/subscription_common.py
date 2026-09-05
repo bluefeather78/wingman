@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """Stripe subscription management — handles trials, paid plans, and promo codes.
 Uses Stripe's HTTP API directly (no external dependency required).
-Promo codes are validated server-side from a simple JSON config.
+
+Promo codes are validated server-side against the `promo_codes` table
+(db/promo_codes_schema.sql) as of S1-10, with the built-in PROMO_CODES dict kept as the
+degrade path for a database where that migration has not been run.
 """
 import datetime
 import json
 import math
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import base64
 import hashlib
 import hmac
+
+from wingman import supabase_common
 
 
 STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "")
@@ -24,7 +30,18 @@ TRIAL_DAYS = 7
 PLAN_PRICE_CENTS = 999  # $9.99/month
 PLAN_PRICE_ID = os.environ.get("STRIPE_PRICE_ID", "price_test_subscription")  # Set in .env for real deployments
 
-# Valid promo codes (in production, store these in Supabase).
+# The BUILT-IN promo table — the fallback, not the source of record any more.
+#
+# S1-10, finding L3: these were the only definition, so anybody who could read the
+# repository had free access, there was no way to expire a code or cap how often it could
+# be handed out, and retiring one meant a deploy. They now live in the `promo_codes` table
+# (db/promo_codes_schema.sql), which load_promo_codes() below reads.
+#
+# This dict stays as the degrade path, exactly as this repo does everywhere else a manual
+# migration is involved: until the SQL is run — or if Supabase is unreachable at that
+# moment — promo redemption behaves precisely as it did before, rather than every code
+# suddenly reading as invalid. The seed rows in that file match these three, so the
+# switchover is a no-op.
 #
 # `kind` decides how a code is applied, and the two kinds are not interchangeable:
 #
@@ -200,12 +217,144 @@ def get_customer_subscriptions(customer_id):
     return result.get("data", []), None
 
 
+# ---------- The promo_codes table (S1-10, finding L3) ----------
+#
+# Cached in-process for a short window. A promo lookup happens on a keystroke in the redeem
+# box, and a code's definition changes about once a quarter — but the cache is short enough
+# that retiring a code in the dashboard takes effect within a minute rather than at the next
+# deploy, which is the whole point of moving them out of the source.
+PROMO_CACHE_TTL_SECONDS = int(os.environ.get("PROMO_CACHE_TTL_SECONDS", "") or 60)
+
+_promo_cache = {"codes": None, "at": 0.0}
+_promo_table_warned = False
+
+
+def _promo_row_to_definition(row):
+    """One promo_codes row in the shape the rest of the code already expects."""
+    return {k: v for k, v in {
+        "kind": row.get("kind") or "checkout",
+        "status": row.get("status"),
+        "grant_days": row.get("grant_days"),
+        "discount_months": row.get("discount_months"),
+        "discount_percent": row.get("discount_percent"),
+        "description": row.get("description"),
+        "expires_at": row.get("expires_at"),
+        "max_redemptions": row.get("max_redemptions"),
+        "redemption_count": row.get("redemption_count") or 0,
+    }.items() if v is not None}
+
+
+def load_promo_codes(force=False):
+    """{CODE: definition} from the promo_codes table, falling back to PROMO_CODES.
+
+    Degrades rather than breaks, which is this repo's rule for anything behind a manual
+    migration: if db/promo_codes_schema.sql has not been run, or Supabase is unreachable
+    right now, redemption behaves exactly as it did before instead of every code suddenly
+    reading as invalid — which would look, to a student holding a valid code, identical to
+    being cheated. Warns ONCE per process so the operator sees it without the log filling up.
+    """
+    global _promo_table_warned
+    now = time.time()
+    if not force and _promo_cache["codes"] is not None and \
+            now - _promo_cache["at"] < PROMO_CACHE_TTL_SECONDS:
+        return _promo_cache["codes"]
+
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    codes = None
+    if url and key:
+        try:
+            rows = supabase_common.supabase_get(
+                url, "promo_codes",
+                {"select": ("code,kind,status,grant_days,discount_months,discount_percent,"
+                            "description,is_active,expires_at,max_redemptions,"
+                            "redemption_count"),
+                 "is_active": "eq.true"},
+                key)
+            codes = {str(r.get("code") or "").upper(): _promo_row_to_definition(r)
+                     for r in (rows or []) if r.get("code")}
+        except Exception as e:                                     # noqa: BLE001
+            if not _promo_table_warned:
+                _promo_table_warned = True
+                print(f"[WARN] promo_codes table unreadable ({e}); using the built-in "
+                      f"codes. Run db/promo_codes_schema.sql in the Supabase SQL editor.")
+    if codes is None:
+        codes = dict(PROMO_CODES)
+    _promo_cache["codes"] = codes
+    _promo_cache["at"] = now
+    return codes
+
+
+def _promo_expired(definition):
+    expires = definition.get("expires_at")
+    if not expires:
+        return False
+    try:
+        when = datetime.datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
+    except ValueError:
+        # An unparseable expiry is treated as EXPIRED. A date nobody can read is not a
+        # reason to keep handing out free access.
+        return True
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    return datetime.datetime.now(datetime.timezone.utc) >= when
+
+
+def _promo_exhausted(definition):
+    cap = definition.get("max_redemptions")
+    if cap in (None, ""):
+        return False
+    try:
+        return int(definition.get("redemption_count") or 0) >= int(cap)
+    except (TypeError, ValueError):
+        return False
+
+
 def validate_promo_code(code):
-    """Validate a promo code. Returns (promo_data, error)."""
-    code_upper = code.upper().strip()
-    if code_upper not in PROMO_CODES:
+    """Validate a promo code. Returns (promo_data, error).
+
+    Expiry and the redemption cap answer the SAME "Invalid promo code" as an unknown code,
+    deliberately: distinguishing them would tell a caller which codes exist, which is the
+    thing having them in a table is meant to stop.
+    """
+    code_upper = (code or "").upper().strip()
+    definition = load_promo_codes().get(code_upper)
+    if not definition:
         return None, "Invalid promo code"
-    return PROMO_CODES[code_upper], None
+    if _promo_expired(definition) or _promo_exhausted(definition):
+        return None, "Invalid promo code"
+    return definition, None
+
+
+def note_promo_redemption(code, definition):
+    """Increment promo_codes.redemption_count for `code`, once, without a lost update.
+
+    Compare-and-swap on the count we read, like S1-6's conditional PATCH: two concurrent
+    redemptions must not both write count+1 from the same starting value, or a
+    max_redemptions of 100 would hand out considerably more than 100.
+
+    Best-effort by design and always returns None — the per-user "already used" guard is
+    users.promo_codes_used and is enforced by S1-6's conditional write. This count is the
+    GLOBAL cap and the operator's usage number; failing it must not fail a redemption the
+    student already earned.
+    """
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if not url or not key:
+        return
+    try:
+        observed = int((definition or {}).get("redemption_count") or 0)
+        supabase_common.supabase_patch(
+            url, "promo_codes",
+            {"code": f"eq.{(code or '').upper().strip()}",
+             "redemption_count": f"eq.{observed}"},
+            {"redemption_count": observed + 1}, key)
+    except Exception as e:                                         # noqa: BLE001
+        print(f"[WARN] Could not record redemption of {code!r}: {e}")
+    finally:
+        # The cached count is now stale either way, so the next lookup re-reads. Without
+        # this a capped code would keep validating from a cache that never moves.
+        _promo_cache["codes"] = None
 
 
 def verify_stripe_webhook_signature(payload, signature):

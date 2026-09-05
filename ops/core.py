@@ -43,7 +43,8 @@ from app.core import (
     classify_feature, subscription_state,
 )
 from app.services.opportunities import _opportunities_cache, _opportunities_cache_lock
-from wingman.subscription_common import is_trial_expired, promo_kind, PROMO_CODES
+from wingman.subscription_common import (is_trial_expired, promo_kind,
+                                         load_promo_codes)
 from app.services.mailing_list import (
     SIGNUPS_TABLE, SUBSCRIPTIONS_TABLE, SIGNUP_REVIEW_STATUSES, MAILING_LIST_SETUP_HINT,
 )
@@ -1328,8 +1329,12 @@ def get_user_metrics(days=30, limit=500):
         for code in (record.get("promo_codes_used") or []):
             entry = promos.setdefault(str(code).upper(), {"code": str(code).upper(), "uses": 0})
             entry["uses"] += 1
+    # From the promo_codes table (S1-10), so a code added or retired in the dashboard shows
+    # up here without a deploy. Falls back to the built-in dict when that migration has not
+    # been run, so an un-migrated database still labels the three original codes.
+    known = load_promo_codes()
     for code, entry in promos.items():
-        definition = PROMO_CODES.get(code)
+        definition = known.get(code)
         # grant and checkout codes travel through different endpoints and one cannot be
         # redeemed through the other's path, so the kind is not decoration.
         entry["kind"] = promo_kind(definition) if definition else "unknown"

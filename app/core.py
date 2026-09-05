@@ -1100,13 +1100,65 @@ def update_password_hash(userid, password_hash):
     return True
 
 
+# ---------- Writing into users.data (Phase 4, perf_report finding 10 / security L9) ----------
+#
+# Flipped permanently the first time PostgREST reports the RPC missing, so an un-migrated
+# checkout costs one failed call rather than one per save forever. See db/user_data_rpc.sql.
+_set_user_data_rpc_available = True
+_set_user_data_rpc_warned = False
+
+# PostgREST's code for "no function by that name/signature". Distinct from the missing-TABLE
+# codes _missing_table_error knows about: a missing function is a setup step, a missing table
+# here would be a broken database.
+_MISSING_FUNCTION_CODES = ("PGRST202", "42883")
+
+
 def update_user_data(userid, key, value):
-    # Read-modify-write of one key inside the `data` jsonb. Only `data` is selected —
-    # the account columns beside it are never looked at here.
+    """Set ONE key inside this account's `data` jsonb. False if there is no such account."""
+    return update_user_data_many(userid, {key: value})
+
+
+def update_user_data_many(userid, values):
+    """Set several keys inside `data` in ONE atomic statement. False if no such account.
+
+    This is the L9 fix. The old shape was a read-modify-write — SELECT the whole blob, set the
+    key in Python, PATCH the whole blob back — which cost three round trips and two transfers
+    of every tracked opportunity and the entire profile, and, far worse, LOST UPDATES: two
+    overlapping saves (two tabs, a phone and a laptop, a background write racing a foreground
+    one) both read the same blob and the second PATCH overwrote the first's key with the stale
+    value it had read. Nothing errored; the student's change was simply gone. The client's
+    queueSlotWrite serialiser exists because of this and can only ever help on ONE device.
+
+    Postgres does the merge now, so concurrent writers serialise on the row and every one of
+    them lands.
+    """
+    global _set_user_data_rpc_available, _set_user_data_rpc_warned
+    if not values:
+        return user_exists(userid)
+    if _set_user_data_rpc_available and SUPABASE_URL and SUPABASE_SERVICE_KEY:
+        try:
+            result = _supabase_request_strict(
+                "rpc/set_user_data", "POST", data={"uid": userid, "kv": dict(values)})
+            # The function answers a bare boolean: true when a row matched, false when there
+            # is no such account — which is what makes the 404 below still correct.
+            return bool(result) if not isinstance(result, list) else bool(result and result[0])
+        except urllib.error.HTTPError as e:
+            code = (_error_body(e) or {}).get("code")
+            if code not in _MISSING_FUNCTION_CODES:
+                raise
+            _set_user_data_rpc_available = False
+            if not _set_user_data_rpc_warned:
+                _set_user_data_rpc_warned = True
+                print("[WARN] set_user_data RPC missing — saves fall back to read-modify-write, "
+                      "which loses concurrent updates (finding L9). Run db/user_data_rpc.sql "
+                      "in the Supabase SQL editor.")
+
+    # Fallback: the pre-Phase-4 read-modify-write, race and all. Kept because a checkout where
+    # the .sql file has not been run must still be able to save — it is what ships today.
     data = get_user_data(userid)
     if data is None:
         return False
-    data[key] = value
+    data.update(values)
     query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
     _users_request("PATCH", query, data={"data": data})
     return True

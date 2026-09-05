@@ -199,7 +199,7 @@ def test_an_over_large_data_value_is_refused(monkeypatch):
     """The request cap bounds ONE request; users.data ACCUMULATES, and is read in full on
     every app open."""
     monkeypatch.setattr(ud, "touch_user_activity", lambda *a: None)
-    monkeypatch.setattr(ud, "update_user_data", lambda *a: True)
+    monkeypatch.setattr(ud, "update_user_data_many", lambda *a: True)
 
     class _U:
         id = "alice"
@@ -209,6 +209,33 @@ def test_an_over_large_data_value_is_refused(monkeypatch):
     assert ud.handle_data_save(body=over, user=_U()).status_code == 413
     ok = {"key": "hs-tracker-data", "value": "x" * 100}
     assert ud.handle_data_save(body=ok, user=_U()).status_code == 200
+
+
+def test_the_cap_is_per_value_so_the_multi_key_form_cannot_smuggle_one_past_it(monkeypatch):
+    """Phase 4 added {values: {...}}. Checking the batch's total instead of each value would
+    let one oversized value through by wrapping it in a one-key object — and users.data is
+    read in full on every app open, so the ceiling is what bounds that read forever."""
+    monkeypatch.setattr(ud, "touch_user_activity", lambda *a: None)
+    monkeypatch.setattr(ud, "update_user_data_many", lambda *a: True)
+
+    class _U:
+        id = "alice"
+
+    over = {"values": {"a": "x" * 100,
+                       "b": "x" * (ud.USER_DATA_MAX_VALUE_BYTES + 10)}}
+    assert ud.handle_data_save(body=over, user=_U()).status_code == 413
+    ok = {"values": {"a": "x" * 100, "b": "x" * 100}}
+    assert ud.handle_data_save(body=ok, user=_U()).status_code == 200
+
+
+def test_an_empty_multi_key_save_is_a_400_not_a_silent_success(monkeypatch):
+    monkeypatch.setattr(ud, "touch_user_activity", lambda *a: None)
+    monkeypatch.setattr(ud, "update_user_data_many", lambda *a: True)
+
+    class _U:
+        id = "alice"
+
+    assert ud.handle_data_save(body={"values": {}}, user=_U()).status_code == 400
 
 
 def test_an_unserializable_data_value_is_a_400_not_a_500(monkeypatch):

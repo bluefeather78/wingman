@@ -11,24 +11,103 @@ The five specialist reports it summarises, with file:line for every finding, are
 `agents_report.md` (includes the node-by-node control flow of every agent), `frontend_report.md`,
 `merge_report.md`, plus `load_results.json` and the `load_probe.py` that produced it.
 
+---
+
+## STATUS: Phases 0 and 1 are DONE and deployed (2026-09-04)
+
+**All security work in this plan is complete.** Phase 0 (stop the bleeding) and Phase 1
+(security hardening) shipped as 31 commits on `codecleanup`, one per finding, and are pushed.
+Phase 2 (capacity) is the next unstarted phase and is where this document picks up again.
+
+The blow-by-blow — every finding, what was done, what was deliberately not done, and the
+three places this plan's own text turned out to be wrong — is in
+[SECURITY_HARDENING_PLAN.md](SECURITY_HARDENING_PLAN.md), sections 0 and 0b. Read that
+before touching anything security-adjacent; this section is only the summary.
+
+| | |
+|---|---|
+| Phase 0 | complete, tag `phase-S0` |
+| Phase 1 | complete, 15 items (14 + the S0-9 leftover) |
+| Findings closed | C1, C2, H1–H5, M1–M4, M6–M11, L1, L2, L3, L5, L6, L10 |
+| Still open by design | **M5** (process-wide 5 s Gemini sleep) → Phase 2; argon2 parameters → Phase 2; L9 (lost updates on `users.data`) → Phase 4; L4 (Stripe webhook) → Phase 6; L8 (PyPDF2 → pypdf) → Phase 6 |
+| Tests | 2349 passing (was 2080 at the end of Phase 0); 12 new test files |
+| Verified against a real production build | `tsc --noEmit` exit 0 · `expo export -p web` succeeds · **no prompt text left in the shipped bundle**, checked with the same grep the security report used to prove the vulnerability |
+| Database | all migrations run and RLS confirmed live — `conversations`, `agent_runs`, `deadline_check_log`, `promo_codes`, `users` all report `rls = true` |
+
+### What changed that Phase 2 has to know about
+
+- **The two AI proxies are gone.** `/api/messages` and `/api/messages-claude` are replaced by
+  ONE route, `POST /api/ai`, taking `{feature, inputs}`. Phase 2's async AI lane therefore
+  targets a single handler (`app.routes.ai.handle_ai`) rather than two near-duplicates —
+  simpler than this plan assumed. The prompts live in `app/services/prompts.py`, which is
+  **marquee M8**: editing anything between the triple quotes needs approval first.
+- **`classify_feature` and `_FEATURE_SIGNATURES` no longer exist.** Cost attribution reads the
+  server-side feature id, so it is exact. Adding an AI feature now means adding it to
+  `app/services/prompts.py` AND to `FEATURE_LABELS` in `app/core.py`.
+- **Use pure ASGI middleware, not `BaseHTTPMiddleware`.** Phase 1 added the security-headers
+  middleware that way deliberately, because the perf report flags the existing
+  `BaseHTTPMiddleware`-based one and a second of the same kind compounds it. `SecurityHeaders`
+  in `app/main.py` is the pattern to copy.
+- **Body caps already exist and are on the shared dependency.** `app.deps.json_body` is capped
+  at `JSON_MAX_BODY_BYTES`; `capped_raw_body(n)` is there for a route that needs its own
+  ceiling. A new route is bounded by default — don't re-solve this.
+- **`select_user()` / `user_exists()` exist** (`app/core.py`) and should be preferred over
+  `get_user()`, which pulls the whole row including `password_hash` and the `data` blob.
+  Phase 2's 60 s identity cache should cache the narrow read, not the wide one.
+- **Errors go through `app.deps.opaque_error()`** — a correlation ref to the caller, the
+  detail to `api_errors`. Don't interpolate an exception into a client-facing message; there
+  is a test that greps `app/routes/` for exactly that.
+- **`wingman/url_guard.py` is the one SSRF answer.** Any new outbound fetch of a
+  catalog/user-supplied URL must go through `safe_urlopen`, not `urllib.request.urlopen`.
+  A test asserts the five existing sinks still do.
+
+### Still needs a human (none of it blocks Phase 2)
+
+1. **Read the `[client-ip]` line off the Render log** after this deploy. `app/main.py` prints
+   it once, on the first request. A resolved address still in `10.x` means
+   `--forwarded-allow-ips` does not cover Render's LB and the rate limiters are still sharing
+   one bucket — which is the H3 finding not actually fixed. This is the single most valuable
+   five seconds of verification left.
+2. **Watch `/api/auth/refresh` for a burst of 401s** on the first deploy. S1-2's rotation goes
+   live the moment this code meets the migrated database. Tokens minted before it carry no
+   `jti` and are adopted once rather than read as theft; that path is tested, but it is the
+   one change here that could sign the whole user base out.
+3. **Set `EMAIL_POSTAL_ADDRESS`** in the Render dashboard. Nothing crashes without it —
+   verified by rendering an email with it genuinely unset — but every lifecycle email ships
+   with `[SET EMAIL_POSTAL_ADDRESS IN .env]` where a CAN-SPAM-required physical address
+   belongs.
+4. **Leave `CSP_ENFORCE` unset** until the report-only violations have been read against a
+   real exported bundle. Turning it on blind can white-screen the app.
+5. **Decisions 2 and 3 below are still open** — the real per-user daily allowance
+   (`USER_DAILY_BUDGET_USD` is still the conservative $0.50 placeholder, not the measured
+   5x-median this plan asks for) and the paid Render tier.
+
+---
+
 ## Headline
 
 | | |
 |---|---|
-| Critical | 2 — open, unmetered AI proxy (`app/routes/ai.py`) — **live-verified 2026-09-03, see below**; `numpy` missing from `requirements.txt` (prod survives on Render's build cache) |
-| High | 9 — Google link without `email_verified`; prefix-match open redirect leaks the login token; login limiter is one global bucket behind Render's proxy; no per-user spend cap; catch-all static route serves the repo; AI calls stall the shared 40-thread pool; `opportunity-matching` would silently land unapproved M8/M9 changes; insert ladder strips review data on any error; snapshot commit uses a weaker dedupe key and re-stamps dates |
+| Critical | 2 — **both CLOSED** (Phase 0). Open, unmetered AI proxy (`app/routes/ai.py`) — live-verified 2026-09-03, see below; `numpy` missing from `requirements.txt` |
+| High | 9 — **7 CLOSED** (Phases 0–1): `email_verified`, the prefix-match open redirect, the global login bucket, the per-user spend cap, the catch-all static route, and both pipeline items are done. **2 remain**, and neither is security: AI calls stalling the shared 40-thread pool is M5/Phase 2; `opportunity-matching` is Phase 3 (never merge it) |
 | Capacity today | ~10–15 mixed rps on Render free (0.1 CPU, sleeps). Laptop measurement: catalog 70 rps ceiling, authed data 27–95 rps, ~150 ms Supabase gate read per signed-in request |
-| Tests | backend suite green, `tsc --noEmit` clean, zero frontend tests |
+| Tests | backend suite green at **2349** (was 2080 after Phase 0, ~1900 at review time), `tsc --noEmit` clean, still zero frontend tests (Phase 5) |
 | Branches | 34 local; 29 fully merged; merge only `local-discovery-engine`; never merge `opportunity-matching`; rescue `cleanup_subject_tags.py` from the fb6134 worktree |
 | Spend by this review | $0 — no paid agent was run; the load probe ran with AI keys withheld |
 
 ## Decisions needed from Shama
 
-1. Move AI prompts server-side (M8)? Recommended yes.
-2. Daily AI allowance per student? Recommended ~5x measured median daily spend, with operator override.
-3. Hosting: recommended stay on Render + Supabase, move to a paid tier, two instances after Phase 4.
+1. ~~Move AI prompts server-side (M8)?~~ **ANSWERED yes; shipped 2026-09-04** as S1-1, its own
+   dedicated M8 commit. The prompt text was moved verbatim and that was verified character by
+   character against the originals.
+2. **STILL OPEN — daily AI allowance per student.** `USER_DAILY_BUDGET_USD` shipped at a
+   conservative $0.50 placeholder. Read the median off the console's Cost-per-user tab and set
+   it to ~5x that, with the `BUDGET_EXEMPT_USERIDS` override.
+3. **STILL OPEN — hosting.** `render.yaml` still says `plan: free`.
 4. Retire `opportunity-matching` as a branch (archive tag, extract per decision)? Recommended yes.
-5. Keep logging chat turns + IP to `conversations`? Recommended stop, or hash IP + add RLS.
+5. ~~Keep logging chat turns + IP to `conversations`?~~ **ANSWERED (Shama, 2026-09-04): keep
+   the turns, drop the IP.** Shipped as S1-9 — `client_ip` is no longer written and the column
+   is dropped, RLS is on and confirmed live, and userids/emails no longer go to stdout.
 6. Split the catalog cache and refresh embeddings on a **24 h** backstop instead of 5 min?
    **Decided yes (Shama, 2026-09-02).** See "Live finding" below.
 
@@ -114,9 +193,9 @@ body → `413`.
 
 | Phase | When | Effort | Approvals | Exit test |
 |---|---|---|---|---|
-| 0 Stop the bleeding — numpy + exact pins; proxy requires subscribed caller on live path; Anthropic timeout + `max_uses`; per-user daily budget + forced-recheck cooldown + circuit breaker; static allow-list; `FORWARDED_ALLOW_IPS` + login key (ip,user); `email_verified` + exact redirect host; paid tier; delete tracked logs/dumps/stray Render CLI README+CHANGELOG; rotate the PAT in the git remote | Days 1–3 | 2 d | M9 (proxy) | signed-out proxy POST → 401; clean Render build passes; `/ops/admin_console.html` → 404 |
-| 1 Security — prompts server-side by feature id; refresh-token rotation; calendar handoff nonce; `url_is_public()` + auth on submissions; body limits + security headers (CSP report-only) + Secure cookies; conditional promo PATCH; single login-failure message; ops token; `conversations` RLS or stop; promo table; argon2-wrap legacy rows | Wk 1–2 | 5 d | M8 | no High/Medium open; replayed refresh token revokes lineage |
-| 2 Capacity — no Gemini sleep on web path; async AI lane (httpx, semaphore 30, timeouts, 503+Retry-After); 60 s identity cache; pooled HTTP; pre-serialized gzip+ETag catalog with background refresh + client cache; batched cost accounting; OWASP argon2; semaphore 4 on fresh deadline/checklist; `/healthz` + structured logs + alerts; k6 load test on staging; confirm provider tiers | Wk 2–4 | 7 d | M9 flag (sleep) | 50 rps × 10 min on staging, p95 < 1 s data routes, AI sheds not stalls |
+| **0 DONE** Stop the bleeding — numpy + exact pins; proxy requires subscribed caller on live path; Anthropic timeout + `max_uses`; per-user daily budget + forced-recheck cooldown + circuit breaker; static allow-list; `FORWARDED_ALLOW_IPS` + login key (ip,user); `email_verified` + exact redirect host; paid tier; delete tracked logs/dumps/stray Render CLI README+CHANGELOG; rotate the PAT in the git remote | Days 1–3 | 2 d | M9 (proxy) | signed-out proxy POST → 401; clean Render build passes; `/ops/admin_console.html` → 404 |
+| **1 DONE** Security — prompts server-side by feature id; refresh-token rotation; calendar handoff nonce; `url_is_public()` + auth on submissions; body limits + security headers (CSP report-only) + Secure cookies; conditional promo PATCH; single login-failure message; ops token; `conversations` RLS or stop; promo table; argon2-wrap legacy rows | Wk 1–2 | 5 d | M8 | no High/Medium open; replayed refresh token revokes lineage |
+| **2 NEXT** Capacity — no Gemini sleep on web path; async AI lane (httpx, semaphore 30, timeouts, 503+Retry-After); 60 s identity cache; pooled HTTP; pre-serialized gzip+ETag catalog with background refresh + client cache; batched cost accounting; OWASP argon2; semaphore 4 on fresh deadline/checklist; `/healthz` + structured logs + alerts; k6 load test on staging; confirm provider tiers | Wk 2–4 | 7 d | M9 flag (sleep) | 50 rps × 10 min on staging, p95 < 1 s data routes, AI sheds not stalls |
 | 3 Pipeline + repo — insert ladder degrades only on missing column; one URL key, no re-stamp on commit, all snapshot families committable; DB-sequence ids + run lock in `agent_runs`; bank cost before parse; merges → review queue; discontinued needs page evidence; reject unsourced URLs; ordered pagination; service key required; branch cleanup + merge `local-discovery-engine`; CI marquee-tag check; move one-offs/eval out of root; `scrape_common.py`; tests for untested paid paths | Wk 3–5 | 6 d | M8 if prompt text moves; decision 4 | two agents at once refuse to overlap; simulated insert timeout fails loudly; snapshot commit inserts 0 dupes |
 | 4 Shared state — shared cache or signed handoff tokens; lock file batch-only; idempotent rollups via RPC; `jsonb_set` RPC for saves; leads + snapshots in tables; scheduled worker (free agents first, paid behind toggle + dollar ceiling); optional direct Postgres for hot queries | Wk 5–7 | 6 d | M3 per scheduled paid run | two instances pass the 50 rps test; second machine sees same lead queue |
 | 5 Product accuracy — grade parser context; date validation; sort-on-refresh + calendar ids by label; synthesis failure keeps transcript; unreachable ≠ revoked; reset singletons on logout; one retry per action; client timeouts; drop icon fonts + dead prompts/code; Vitest ~40 cases; a11y labels; split big screens | Wk 6–8 | 5 d | none | frontend tests in CI; golden-set score holds; bundle −300 KB |
@@ -145,4 +224,6 @@ concurrency 1/8/32 for 12 s each; stopped it afterwards. Read-only git analysis 
 worktrees and stashes. Production was only pinged read-only (root + catalog headers).
 
 Assumptions to confirm: Render plan actually in use; Supabase region vs Render; Anthropic/Gemini org
-tiers; RLS state of `conversations`, `agent_runs`, `deadline_check_log` (no schema file in the tree).
+tiers. ~~RLS state of `conversations`, `agent_runs`, `deadline_check_log` (no schema file in the
+tree)~~ — **RESOLVED 2026-09-04**: all three now have schema files, RLS is enabled, and it was
+confirmed against the live database rather than assumed (all report `rls = true`).

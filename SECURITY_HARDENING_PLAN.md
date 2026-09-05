@@ -15,6 +15,66 @@ have drifted.
 
 ---
 
+## 0. Status (updated 2026-09-04)
+
+**Phase S0 is COMPLETE**, plus S1-8 (pulled forward because hazard H3 requires it to land
+before S0-7). One commit per item; the five M9 items were approved by Shama in chat before
+any editing and each names M9 in its subject.
+
+| Item | State | Commit |
+|---|---|---|
+| S0-1 gate the live AI proxy `[C1]` `[M9]` | done | `MARQUEE M9 (S0-1)` |
+| S0-2 throttle + size cap `[D1,D4,M4]` `[M9]` | done | `MARQUEE M9 (S0-2)` |
+| S0-3 pin tool use `[D3]` `[M9]` | done, **minus the M8 half** | `MARQUEE M9 (S0-3)` |
+| S0-4 timeout + `max_uses` `[C1.4,M4]` `[M9]` | done | `MARQUEE M9 (S0-4)` |
+| S0-5 spend caps `[H4]` `[M9]` | done | `MARQUEE M9 (S0-5)` |
+| S0-6 static allow-list `[H5]` | **already done** before this pass | `25de538` |
+| S0-7 forwarded IPs + login key `[H3]` | done | `S0-7:` |
+| S0-8 `email_verified` `[H1]` | done | `S0-8 + S0-9:` |
+| S0-9 exact-origin redirects `[H2]` | done, **minus the fragment move** | `S0-8 + S0-9:` |
+| S0-10 repo hygiene | **already done**; no PAT in the remote | — |
+| S0-11 deploy prerequisites | done, **minus the free tier** | `S0-11:` |
+| S1-8 ops token + Render refusal | done, ahead of S0-7 per H3 | `S1-8:` |
+
+**Three things S0 deliberately did NOT close, each flagged in its commit:**
+
+1. **Deleting `intakeExtractAndClassify`** from `frontend/src/lib/tracker.ts` (part of S0-3).
+   It is prompt text, so it is **M8** and was not covered by the M9 approval. Harmless now —
+   search is pinned off server-side — but it still advertises the exploit shape. Fold it into
+   the S1-1 commit.
+2. **Moving the Google token into the URL fragment** (the second half of S0-9). The takeover
+   is closed by the exact-origin check; the fragment move is the plan's "better, and cheap"
+   hardening that keeps the token out of access logs and `Referer`. It needs matching changes
+   in `frontend/app/google-auth.tsx` and `frontend/src/auth/googleSignIn.ts` across web, iOS
+   and Android — untestable without a device, and a mistake breaks sign-in outright.
+3. **Moving off the Render free tier** (part of S0-11). A billing decision, not a code change;
+   `render.yaml` still says `plan: free`.
+
+**One thing S0-7 cannot finish from a laptop.** `--forwarded-allow-ips` is set in
+`render.yaml` to loopback + the private ranges, deliberately **not** `*` — reading the
+installed `uvicorn/middleware/proxy_headers.py` settles the plan's open question: with
+`always_trust` uvicorn returns `x_forwarded_for_hosts[0]`, the **leftmost** entry, which is
+whatever the client sent, because proxies append. `*` would have made `request.client.host`
+attacker-controlled. The chosen list is fail-safe (worst case it changes nothing), but
+**confirm it actually helped**: `app/main.py` logs the first request's resolved client IP and
+raw `X-Forwarded-For` once at `[client-ip]`. Read it off the Render log after deploy — a
+resolved address still in `10.x` means the trusted list does not cover Render's LB and the
+limiters are still sharing one bucket.
+
+**Open decisions still waiting on Shama** (§6 below): the real per-user daily allowance
+(S0-5 shipped a conservative $0.50 placeholder behind `USER_DAILY_BUDGET_USD`, not the
+measured 5x-median the plan asks for); M8 approval for S1-1; the `conversations` question;
+password reset. §6's question 5 (Anthropic `max_uses`) is answered — S0-4 set it to 1.
+
+**Unrelated config gap found while running the suite.** `EMAIL_POSTAL_ADDRESS` is unset
+locally, so `test_lifecycle_email.py` and `test_deadline_alert_template.py` fail on the
+CAN-SPAM placeholder reaching a rendered email. Not caused by this work (it fails on the
+commit before it) and not a code bug — but confirm the value IS set in the Render dashboard,
+or every lifecycle email ships with `[SET EMAIL_POSTAL_ADDRESS IN .env]` in its footer. With
+it set, the suite is fully green.
+
+---
+
 ## 1. Scope
 
 This document covers **Phase 0 and Phase 1** of the production readiness plan, i.e. the

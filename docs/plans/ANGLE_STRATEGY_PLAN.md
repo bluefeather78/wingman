@@ -133,7 +133,7 @@ run twice.
 ### 4a. Hand-written (the real source of every angle in use)
 
 40 `NATIONAL_SEEDS` + 8 `SEATTLE_SEEDS` literals, migrated into the table
-(`migrate_seeds_to_supabase.py`). Every angle currently enabled traces to a person typing it.
+(`../../scripts/one-off/migrate_seeds_to_supabase.py`). Every angle currently enabled traces to a person typing it.
 
 ### 4b. `propose_angles.py` — coverage-gap analysis (FREE)
 

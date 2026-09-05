@@ -22,8 +22,8 @@
       "id": "eligibility-reasoning",
       "name": "Eligibility Reasoning",
       "summary": "Curation-call eligibility verdicts graded in both error directions: over-exclusion (an open program hidden) and the worse, unguarded under-exclusion (a hard-scope program shown to an ineligible student).",
-      "source": "matching_eval.py",
-      "runner": "python matching_eval.py --run",
+      "source": "eval/matching_eval.py",
+      "runner": "python eval/matching_eval.py --run",
       "scorecard": null,
       "metrics": [
         {"key": "correct_rate", "label": "Correct verdicts", "unit": "pct", "direction": "up", "desc": "Share of cases with the gold eligibility verdict."},
@@ -48,8 +48,8 @@
       "id": "dedupe-separation",
       "name": "Dedupe Separation",
       "summary": "How cleanly the dedupe score separates true aliases from distinct opportunities — the gap between the two score bands, and the precision/recall at the best threshold.",
-      "source": "dedupe_eval.py",
-      "runner": "python dedupe_eval.py",
+      "source": "eval/dedupe_eval.py",
+      "runner": "python eval/dedupe_eval.py",
       "scorecard": null,
       "metrics": [
         {"key": "clean_gap", "label": "Clean gap", "unit": "num", "direction": "up", "desc": "Min alias score minus max distinct score; positive means a clean separation."},

@@ -1,4 +1,4 @@
-"""Selection logic for the match_vector backfill (backfill_match_vectors.py). The paid embed
+"""Selection logic for the match_vector backfill (scripts/backfill/backfill_match_vectors.py). The paid embed
 + Supabase writes are not exercised; rows_needing_embedding is pure and is the piece that
 decides what gets (re)embedded — it must agree with the runtime hook's hash so a row isn't
 re-embedded forever.

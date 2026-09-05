@@ -33,7 +33,7 @@ ALTER TABLE opportunities
   -- idempotent). Written by the console's Reject flow as "code" or "code: note"
   -- (codes: duplicate, third-party-url, wrong-page, dead-link, not-a-fit, low-quality,
   -- other), auto-filled for the Duplicate button, cleared on Restore. This is labeled
-  -- training data for the scraper: grade_scraper_batch.py fixtures read it to map each
+  -- training data for the scraper: eval/grade_scraper_batch.py fixtures read it to map each
   -- rejection to the scraper failure mode that caused it, instead of re-inferring the
   -- reason from row content after the fact. Until the column exists the console still
   -- rejects fine — the reason is dropped with a notice, never the whole verdict.

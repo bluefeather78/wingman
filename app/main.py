@@ -177,7 +177,7 @@ _DENY_NAMES = {".env", "agent_settings.json"}
 # directories are named here as well. This is a targeted patch, not the fix: the route is
 # still deny-list-shaped, and PRODUCTION_READINESS_PLAN.md High #5 ("catch-all static
 # route serves the repo") wants an ALLOW-list of the handful of pages this exists for.
-_DENY_DIRS = {"agent_logs", "data", "db", "docs", "tests", "eval", "legal", "frontend"}
+_DENY_DIRS = {"agent_logs", "data", "db", "docs", "tests", "eval", "legal", "frontend", "scripts"}
 
 # Where the web app lives when this service does NOT serve it itself. When set (e.g. a
 # separate Static Site origin), a browser hitting the root is redirected there; otherwise

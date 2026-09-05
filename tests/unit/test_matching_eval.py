@@ -1,4 +1,4 @@
-"""Phase 7 eval scoring math (matching_eval.py). The live model call is not exercised; the
+"""Phase 7 eval scoring math (eval/matching_eval.py). The live model call is not exercised; the
 scoring — especially the asymmetric over/under-exclusion accounting — is what's pinned, since
 the under-exclusion metric is the ONLY measure of the eligibility reasoning's worst failure.
 """

@@ -2,8 +2,8 @@
 -- admin console can add/edit/enable/disable/delete them and track which ones earn their keep.
 --
 -- Run this once in the Supabase SQL editor, then populate it with:
---     python migrate_seeds_to_supabase.py --dry-run
---     python migrate_seeds_to_supabase.py
+--     python scripts/one-off/migrate_seeds_to_supabase.py --dry-run
+--     python scripts/one-off/migrate_seeds_to_supabase.py
 --
 -- RLS: enabled with NO policies, matching the `users` table. That means the anon key gets
 -- zero access and only server.py's service-role calls can read or write these rows. Seeds

@@ -3,7 +3,7 @@
 
 The companion to clear_deadline_cache.py: look before you clear. Both were pointing at
 column names that no longer exist (`deadlines` was renamed to `important_dates` by
-merge_opens_date_into_important_dates.py, `opens_date` was folded into it as an "opens"
+scripts/one-off/merge_opens_date_into_important_dates.py, `opens_date` was folded into it as an "opens"
 entry, `deadline_note` is `important_date_note`, and the cache stamp is
 `dates_last_checked_at`, never `last_checked_at`). PostgREST 400s the WHOLE select on one
 unknown column, so this script could only ever print an error.

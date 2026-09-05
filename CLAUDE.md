@@ -136,10 +136,16 @@ app/                      FastAPI service (the only Python thing deployed)
   auth/                   JWT tokens, argon2 passwords, deps, ratelimit
 ops/                      LOCAL-ONLY console (WINGMAN_ENABLE_OPS): core.py, admin.py,
                           admin_console.html — never mounted on Render
-*.py (repo root)          the 7 offline agents + their shared libs (stdlib-only; app/
-                          imports check_deadlines). See the agents section below. These
-                          stay at the root deliberately — they import each other by BARE
-                          NAME and anchor log/snapshot I/O to __file__.
+*.py (repo root)          55 files: ~34 shared libs + the 21 scripts ops/core.py runs by
+                          filename. Stdlib-only. They stay at the root deliberately — they
+                          import each other by BARE NAME and anchor log/snapshot I/O to
+                          __file__. Only 14 are reachable from app/, i.e. deployed.
+scripts/                  leaf scripts nothing imports: one-off/ (9 migrations+backfills
+                          already run) · dev/ · backfill/. Each carries a ROOT sys.path
+                          shim because `python scripts/x/y.py` puts x/ on the path, not
+                          the repo root.
+eval/                     grading + golden-set harness (matching_eval, dedupe_eval,
+                          grade_scraper_batch, build_fixture, the golden CSVs, evals_hub).
 db/                       one-time manual DDL, run by hand in the Supabase SQL editor.
                           Never opened by code; the filenames appear in ~130 setup and
                           503 messages, so keep the basenames stable.
@@ -200,7 +206,7 @@ the client fetches that endpoint once on load.
 snapshot only — regenerate it with `export_json.py` after editing the DB, it is **not**
 fetched at runtime anymore. It moved to `data/` on 2026-09-04; `export_json.py`'s `OUT_PATH`
 writes there, and the static route now blocks the directory (it was downloadable from the
-production domain before, since `.json` is not in `_DENY_EXT`). `migrate_to_supabase.py` was the one-off script that populated the
+production domain before, since `.json` is not in `_DENY_EXT`). `scripts/one-off/migrate_to_supabase.py` was the one-off script that populated the
 table (from this file plus a sibling `opportunity finder/` project's seed data); not part of
 the regular dev loop.
 
@@ -663,7 +669,7 @@ knows about a user is current state (the `users` row and its `data` jsonb) or a 
 rollup. Two obvious substitutes are both wrong, and both were checked:
 
 - **`users.updated_at` is a trap.** Declared `default now()` in
-  `migrate_users_to_supabase.py` with **no trigger**, and `update_user_data()` never
+  `scripts/one-off/migrate_users_to_supabase.py` with **no trigger**, and `update_user_data()` never
   writes it — it equals `created_at` on practically every row. A "last active" metric
   built on it looks plausible and is fiction. (Contrast `opportunities.updated_at`, which
   moves on every write — see below. Same column name, opposite meaning, and **neither**
@@ -1305,7 +1311,7 @@ same shared, cached deadline check a Fresh Finds add does, on add and on every l
   `id: null`, the item stays in the Quest Log under a slug, and the refresh says plainly that
   it cannot be auto-checked instead of claiming it checked it.
 Matching lives in **[url_dedupe.py](url_dedupe.py)**, kept separate from the `normalize_url()`
-that `scrape_opportunities.py` / `dryrun_common.py` / `migrate_to_supabase.py` each carry —
+that `scrape_opportunities.py` / `dryrun_common.py` / `scripts/one-off/migrate_to_supabase.py` each carry —
 those three are deliberately identical to each other and are **not** to be changed to match
 this one.
 
@@ -1442,7 +1448,7 @@ of this chart:
 - **`end_user` — "End User Initiated"**: both `interactive_*` rollups plus on-demand
   deadline checks. Spend the users caused, which nobody starts from this console. The
   per-user decomposition of exactly this money is the Cost per user tab.
-- **`other` — "Other"**: standalone scripts with no card — `backfill_subject_tags.py` (a
+- **`other` — "Other"**: standalone scripts with no card — `scripts/one-off/backfill_subject_tags.py` (a
   completed one-off) and `find_contact_emails.py` (a full-catalog pass; an ordinary
   `refresh_opportunities.py` run already resolves `contact_email` per row, so this is only
   for an initial backfill or a `--force` re-check).
@@ -1639,7 +1645,7 @@ plus five POST endpoints:
   calls can read/write it, unlike the public read-only `opportunities` table. Client hashes
   passwords with SHA-256 (`crypto.subtle.digest`) before sending; the server only ever
   stores/sees the hash — no salting, no HTTPS enforcement, no rate limiting (fine for a
-  prototype, not production-grade). `migrate_users_to_supabase.py` was the one-off script that
+  prototype, not production-grade). `scripts/one-off/migrate_users_to_supabase.py` was the one-off script that
   moved the old flat-file `users_db.json` into this table — logic/shape is otherwise
   unchanged, this was a storage-backend swap only.
 

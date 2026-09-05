@@ -1,7 +1,7 @@
 -- Adds a contact email column to the existing `opportunities` table.
 --
 -- Not a new table, so this is a bare ALTER (not a CREATE + ALTER pair like the other
--- schema files) — the table already exists in Supabase from migrate_to_supabase.py.
+-- schema files) — the table already exists in Supabase from scripts/one-off/migrate_to_supabase.py.
 -- Run this once in the Supabase SQL editor.
 --
 -- Nothing in this repo writes this column automatically: none of the five background

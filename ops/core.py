@@ -2501,7 +2501,7 @@ def _embed_match_vectors(ids):
     """Best-effort (MARQUEE M9): compute and store the RECALL match_vector for the just-activated
     rows, so semantic matching can score them the moment they go live — app/services/matching.recall
     drops any row with no match_vector, so without this a newly-activated row is invisible to Fresh
-    Finds until the next backfill_match_vectors.py run.
+    Finds until the next scripts/backfill/backfill_match_vectors.py run.
 
     Deliberately SEPARATE from _index_activated_rows: that writes the opportunities.dedupe_vector
     column the scraper gate reads, this writes the opportunities.match_vector column the

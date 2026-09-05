@@ -38,7 +38,7 @@ _METADATA_MODEL = "gemini-3.5-flash-lite"
 _METADATA_MAX_TOKENS = 1200
 _METADATA_PAGE_CHARS = 16_000
 
-# Set by dedupe_eval.py (run 2026-08-30, active catalog, 90 pairs). Two findings drive these:
+# Set by eval/dedupe_eval.py (run 2026-08-30, active catalog, 90 pairs). Two findings drive these:
 #   1. Embeddings are a strong HINT but NOT an auto-suppressor — there is NO clean threshold. Real
 #      duplicates and same-org SIBLINGS overlap (YoungArts category competitions, Badger Music vs
 #      Arts Clinic, Stanford sibling programs all sit in the 0.83-0.95 band). So this stays a

@@ -33,6 +33,14 @@ import argparse
 import json
 import os
 
+import sys
+# This script lives under eval/ but imports the repo-root shared
+# libraries (dedupe_confidence, dedupe_embed_store, embed_common, gemini_common, page_text, supabase_common, url_dedupe) by bare name, the way every
+# root script does. Running it as `python eval/dedupe_eval.py` puts its OWN directory on
+# sys.path, not the repo root, so the root has to be added explicitly.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
 import url_dedupe
 
 # The 5 pairs the operator confirmed as true aliases in the deferred 96-pair analysis (`/alp/`

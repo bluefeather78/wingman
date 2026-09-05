@@ -1,7 +1,7 @@
 """URL/name matching for user-submitted opportunities.
 
 Why this exists separately from the `normalize_url()` that scrape_opportunities.py,
-dryrun_common.py and migrate_to_supabase.py each carry: those three are deliberately
+dryrun_common.py and scripts/one-off/migrate_to_supabase.py each carry: those three are deliberately
 identical to one another (see the note in dryrun_common.py) and changing them would change
 the scraper's dedupe behaviour, so they are left alone. This module is the stronger matcher
 the *user-submission* path needs, and it is only used there.

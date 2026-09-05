@@ -4,7 +4,7 @@ check_deadlines.py): a stdlib-only .env loader plus small wrappers around Supaba
 PostgREST REST API (paginated GET, batched upsert POST, single-row insert, PATCH).
 
 This consolidates logic that was previously duplicated near-identically across
-migrate_to_supabase.py, export_json.py, and migrate_users_to_supabase.py.
+scripts/one-off/migrate_to_supabase.py, export_json.py, and scripts/one-off/migrate_users_to_supabase.py.
 server.py intentionally keeps its own copy of load_dotenv()/the fetch logic — it's
 the live server process, so minimizing its import surface is worth the small
 duplication.

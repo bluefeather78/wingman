@@ -23,6 +23,14 @@ import datetime
 import json
 import os
 
+import sys
+# This script lives under eval/ but imports the repo-root shared
+# libraries (supabase_common) by bare name, the way every
+# root script does. Running it as `python eval/build_fixture.py` puts its OWN directory on
+# sys.path, not the repo root, so the root has to be added explicitly.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
 from supabase_common import load_dotenv, supabase_get
 
 REPO = os.path.dirname(os.path.abspath(__file__))

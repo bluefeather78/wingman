@@ -9,7 +9,7 @@ different programs. Page CONTENT might separate those 5 from those 91; a URL and
 
 This module is the plumbing: turn text into a vector (Gemini `gemini-embedding-001`), compare
 vectors (cosine), and hold the catalog's vectors in a small on-disk index. Whether content
-actually separates aliases from siblings is an EMPIRICAL question answered by `dedupe_eval.py`
+actually separates aliases from siblings is an EMPIRICAL question answered by `eval/dedupe_eval.py`
 before any of this is wired live — if it does not separate, the dedupe axis stops there.
 
 **No numpy, no pgvector, no SQL RPC.** ~1300 rows x a ~768-float vector is ~4 MB; loading it and

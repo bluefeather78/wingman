@@ -25,6 +25,13 @@ import argparse
 import json
 import os
 import sys
+# This script lives under eval/ but imports repo-root shared libraries by bare name from inside its functions
+# (gemini_common, supabase_common), the way every root script does.
+# Running it as `python eval/matching_eval.py` puts its OWN directory on sys.path, not the
+# repo root, so the root has to be added explicitly.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
 
 # Each case: a single candidate + a student context + the gold eligibility answer.
 # dimension is for the per-dimension breakdown; note explains the distinction being tested.

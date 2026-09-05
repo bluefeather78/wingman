@@ -25,6 +25,13 @@ import datetime
 import os
 import sys
 
+# This script lives under scripts/backfill/ but imports the repo-root shared libraries below by bare name
+# (gemini_common, supabase_common), the way every root script does.
+# Running it as `python scripts/backfill/backfill_match_vectors.py` puts its OWN directory on sys.path, not the
+# repo root, so the root has to be added explicitly.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT)
+
 from supabase_common import load_dotenv, supabase_get, supabase_patch
 from app.services.matching import embed_text, match_vector_content_hash
 from app.services.embeddings import should_recompute_embedding

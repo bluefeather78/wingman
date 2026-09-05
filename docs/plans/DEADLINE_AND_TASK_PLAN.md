@@ -1505,7 +1505,7 @@ deadline."
   - Verification setup for later sessions: `.claude/launch.json` gained `wingman-api-8002`
     (PORT=8002, explicit WindowsApps python — the bare `python` on PATH lacks uvicorn) and
     `wingman-web-8083` (Metro, EXPO_PUBLIC_API_BASE→:8002), so this session's servers never
-    collide with 8000/8001/8081/8082 in use by others. Seeded via dev_test_account.py +
+    collide with 8000/8001/8081/8082 in use by others. Seeded via ../../scripts/dev/dev_test_account.py +
     /api/data/save; seed cleared after.
   - **PAID E2E PROVEN LIVE same session ($0.199, operator-approved).** Real flow, real THINK
     row (ec17921), through the browser UI: Quest Log intake with `https://think.mit.edu/` →

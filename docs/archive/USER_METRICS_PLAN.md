@@ -27,7 +27,7 @@ whole phasing below:
    (`handle_login` only calls `ensure_trial_started`, which is a no-op after the first
    time). `/api/data/save` PATCHes `data` and nothing else.
 2. **`users.updated_at` is a trap.** It is declared `default now()` in
-   `migrate_users_to_supabase.py` with **no trigger**, and `update_user_data()` never
+   `../../scripts/one-off/migrate_users_to_supabase.py` with **no trigger**, and `update_user_data()` never
    writes it. It therefore equals `created_at` for practically every row. Do **not** build
    a "last active" metric on it — it will look plausible and be wrong. (Contrast
    `opportunities.updated_at`, which *is* explicitly stamped by `server.py`. Same column

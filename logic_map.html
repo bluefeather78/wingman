@@ -684,7 +684,7 @@
         depends on</strong> (hash-gated, so only a genuinely-changed row re-embeds, and only the vectors
         whose fields moved). A row is never embedded while it sits pending; its vectors appear the
         instant it goes live. Two one-off backfill scripts exist to catch up rows activated before this
-        (<code>build_catalog_embeddings.py</code> for dedupe, <code>backfill_match_vectors.py</code> for
+        (<code>build_catalog_embeddings.py</code> for dedupe, <code>scripts/backfill/backfill_match_vectors.py</code> for
         match). The dashed arrows only READ — the Scraper and Hub Miner compare a new candidate against
         <code>dedupe_vector</code>; Fresh Finds compares a student against <code>match_vector</code> —
         neither ever writes. <strong>The two vectors never mix:</strong> different fields, different job,

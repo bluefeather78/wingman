@@ -247,7 +247,7 @@ The fallback goes away. Invalid type -> flag 9, never a guess.
 | `seeds_common.py` | `SEED_SELECT`, fallback dict shape, docstring |
 | `server.py` | `SEED_FIELDS` (:4683), `SEED_SELECT` (:4684), `create_seed()` validation (:4744) |
 | `admin_console.html` | remove category picker, pill column (:2778), payload (:2815), dropdown label (:2938) |
-| `migrate_seeds_to_supabase.py` | one-off, already run — update for consistency |
+| `../../scripts/one-off/migrate_seeds_to_supabase.py` | one-off, already run — update for consistency |
 
 Two schema facts make this cheap:
 - `opportunities.category` is **nullable and already NULL on 1139/1440 rows**. Just stop

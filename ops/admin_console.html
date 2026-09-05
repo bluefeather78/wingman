@@ -1555,7 +1555,7 @@ tr.disabled-seed { opacity: .48; }
 </div>
 
 <!-- Why a row is being rejected. The codes are labeled training data for the scraper:
-     each one names a scraper failure mode, and grade_scraper_batch.py fixtures read the
+     each one names a scraper failure mode, and eval/grade_scraper_batch.py fixtures read the
      stored reason instead of re-inferring it from row content. Codes here must stay in
      step with the taxonomy documented in db/user_submissions_schema.sql. -->
 <div class="overlay" id="rejectModal">
@@ -4516,7 +4516,7 @@ async function loadSeeds() {
     $('seedBody').innerHTML = `<tr><td colspan="13" class="empty">
       Could not load angles: ${esc(e.message)}<br>
       <span style="font-size:12px">Run <span class="mono">db/scraper_seeds_schema.sql</span> in the Supabase SQL editor,
-      then <span class="mono">python migrate_seeds_to_supabase.py</span>.</span></td></tr>`;
+      then <span class="mono">python scripts/one-off/migrate_seeds_to_supabase.py</span>.</span></td></tr>`;
   }
   loadMerges();
   loadQueryRuns();

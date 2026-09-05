@@ -91,7 +91,7 @@ CLAUDE_MAX_TOKENS_CEILING = 8000
 
 # ---------- Opportunities catalog (Supabase-backed) ----------
 # The opportunity catalog lives in a Supabase (hosted Postgres) table rather than
-# the old static opportunities.json — see migrate_to_supabase.py for the one-time
+# the old static opportunities.json — see scripts/one-off/migrate_to_supabase.py for the one-time
 # migration and CLAUDE.md for the rationale (scalability + free tier vs local SQLite).
 # The anon key is safe to hold server-side here: it's rate-limited by Supabase and
 # the table's Row Level Security policy only allows reading is_active=true rows.
@@ -132,7 +132,7 @@ TERMS_VERSION = "2026-08-22"
 
 # ---------- Persistent user account database (Supabase-backed) ----------
 # Account records live in a Supabase `users` table rather than the old flat
-# users_db.json file — see migrate_users_to_supabase.py for the one-time
+# users_db.json file — see scripts/one-off/migrate_users_to_supabase.py for the one-time
 # migration. Unlike the opportunities table, this table has NO RLS policies at
 # all, so the anon key gets zero access; every request here uses the
 # service_role key, which bypasses RLS. That key must never be sent to the

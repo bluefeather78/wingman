@@ -106,7 +106,7 @@ said yes/no. Offer it again if they mine repeatedly.
 
 ### Deferred / open (not this session's task)
 
-- **Grade the M9 gate** with `grade_scraper_batch.py` (0 regressions) before a large-scale scrape. Paid, user-triggered.
+- **Grade the M9 gate** with `../../eval/grade_scraper_batch.py` (0 regressions) before a large-scale scrape. Paid, user-triggered.
 - **Auto-merge** the CONFIDENT/PROOF dedupe tiers (reversible, audited) once FP rate is measured — 4
   confident pairs exist to start the count. Currently label-only by design.
 - **Rotate the GitHub PAT** embedded in the `origin` URL (flagged; user's call).

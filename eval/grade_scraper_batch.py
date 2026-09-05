@@ -28,6 +28,14 @@ import argparse
 import json
 import os
 
+import sys
+# This script lives under eval/ but imports the repo-root shared
+# libraries (scrape_opportunities) by bare name, the way every
+# root script does. Running it as `python eval/grade_scraper_batch.py` puts its OWN directory on
+# sys.path, not the repo root, so the root has to be added explicitly.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
 import scrape_opportunities  # classify_same_url — the SAME rule the live scraper runs (Phase 5)
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))

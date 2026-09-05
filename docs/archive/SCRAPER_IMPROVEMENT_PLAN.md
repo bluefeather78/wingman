@@ -342,7 +342,7 @@ which page CONTENT might do and URL/name cannot.
 - **The make-or-break risk is institutional boilerplate** (two different CMU programs share the
   chrome, the apply block, the footer), which a naive full-page embedding can read as a
   duplicate. That is exactly the 96-pair population, so it is a direct stress test.
-- **Measure BEFORE building (go/no-go gate).** `dedupe_eval.py` reconstructs the 96-pair labeled
+- **Measure BEFORE building (go/no-go gate).** `../../eval/dedupe_eval.py` reconstructs the 96-pair labeled
   set (same-site, diff-URL, name-sim ≥ 0.85; the 5 known aliases —
   `ec18774, ec18771, ec18856, ec18918, ec18865` — positive, the rest negative) and scores three
   representations: **(1) stripped page text, (2) structured fields (name+org+summary+eligibility+
@@ -364,8 +364,8 @@ which page CONTENT might do and URL/name cannot.
 
 | # | step | cost | gate |
 |---|---|---|---|
-| 1 | `classify_page.py` (CTA + staleness) + `embed_common.py` + `dedupe_eval.py` + `combined_reader.py` (classify + refresh-metadata + dedupe, fetch-once) + unit tests | **FREE ✅ BUILT** | pytest green (59 new tests); `grade_scraper_batch.py` 0 regressions |
-| 2 | run `dedupe_eval.py` — pick representation + threshold | ~$0.04 spent ✅ RAN 2026-08-30 | **verdict below** |
+| 1 | `classify_page.py` (CTA + staleness) + `embed_common.py` + `../../eval/dedupe_eval.py` + `combined_reader.py` (classify + refresh-metadata + dedupe, fetch-once) + unit tests | **FREE ✅ BUILT** | pytest green (59 new tests); `../../eval/grade_scraper_batch.py` 0 regressions |
+| 2 | run `../../eval/dedupe_eval.py` — pick representation + threshold | ~$0.04 spent ✅ RAN 2026-08-30 | **verdict below** |
 | 3 | `build_catalog_embeddings.py` — backfill the sidecar index (fields rep, incremental, `--commit`) | **built ✅; free preview: 1509 rows, ~$0.027 to embed** | run gated |
 | 4 | wire `combined_reader` into `scrape_opportunities.py`'s candidate loop | paid per run, gated | grade harness 0 regressions |
 | 5 | console: show class/confidence + the embedding dup-hint in the review queue | FREE | — |
@@ -452,7 +452,7 @@ error.
 
 **Build status (2026-08-30):** `dedupe_confidence.py` (identity-token + hard-field discriminators,
 proof helpers, `classify_pair` tier logic — all pure) BUILT + tested. `build_catalog_embeddings.py`
-RAN (`--commit`, $0.0269, 1509 active rows → `catalog_embeddings.jsonl`). `dedupe_eval.py --signals`
+RAN (`--commit`, $0.0269, 1509 active rows → `catalog_embeddings.jsonl`). `../../eval/dedupe_eval.py --signals`
 (discriminators, free) and `--tiers` (full pipeline: index cosine + discriminators, free) are the
 measurements.
 
@@ -520,12 +520,12 @@ committing, stage ONLY scraper files. The email commit `6f9ab2f` sits in scraper
 history; reorganize branches later if you want them fully separate.
 
 **State: all phases built, 1263 tests green, grading harness SAFE. `0 regressions` on
-`python grade_scraper_batch.py` is the merge bar for any future change.**
+`python ../../eval/grade_scraper_batch.py` is the merge bar for any future change.**
 
 ### DDL run by the operator (live): `../../db/scraper_attribution_schema.sql`, `scraper_seeds` ALTER (disabled_reason/at). `moderation_reason` was already live.
 
 ### What actually RAN this session (live, on real data)
-- **seed_id backfill DONE**: `backfill_seed_attribution.py` stamped **143/159** Aug-23 rows
+- **seed_id backfill DONE**: `../../scripts/one-off/backfill_seed_attribution.py` stamped **143/159** Aug-23 rows
   (16 honest `(no seed)`: 14 unmatched, 2 ambiguous). Idempotent; match is same-run-date +
   unambiguous. → the console seed funnel is now populated with real Appr/$-per-approved.
 - **Console verified live** at /admin → Scraper angles: funnel columns (Appr/Rej/Dup/Waste %/
@@ -593,9 +593,9 @@ the worktree is immune). `.env` copied in (gitignored) so tests/scripts run ther
    Then `git worktree remove C:\Users\shama\Documents\wingman-scraper-v2`.
 
 ### Every script, and its money tier (all `--preview` is FREE)
-- `python grade_scraper_batch.py` — FREE gate. `0 regressions` required to ship any change.
-- `python build_fixture.py --batch B --snapshot F1 F2 --out tests/fixtures/X.json` — FREE.
-- `python backfill_seed_attribution.py [--commit]` — FREE (done; idempotent).
+- `python ../../eval/grade_scraper_batch.py` — FREE gate. `0 regressions` required to ship any change.
+- `python ../../eval/build_fixture.py --batch B --snapshot F1 F2 --out tests/fixtures/X.json` — FREE.
+- `python ../../scripts/one-off/backfill_seed_attribution.py [--commit]` — FREE (done; idempotent).
 - `python propose_angles.py [--commit]` — FREE (18 written).
 - `python walk_up_hubs.py [--limit N] [--commit]` — **FREE at every tier** (plain HTTP +
   a Supabase read, no model call anywhere). Derives an institution's own program index by
@@ -743,7 +743,7 @@ the frozen fixtures are stable ground truth.
 
 **Fixtures on disk** (`tests/fixtures/`):
 - `scraper_grading_20260823.json` — 166 verdicts (115/44/7) over the two 08-23
-  snapshots. Harness: `grade_scraper_batch.py`. Probe already run: suppress-on-strong-dup
+  snapshots. Harness: `../../eval/grade_scraper_batch.py`. Probe already run: suppress-on-strong-dup
   would lose 18 approved rows → never a live rule.
 - `pair_resolution_20260826.json` — the 30 pair outcomes (survivor + losers + notes).
 
@@ -751,7 +751,7 @@ the frozen fixtures are stable ground truth.
 
 ## Current state (shipped and verified)
 
-- `grade_scraper_batch.py` — replay/scoring harness. Hard gate for every phase:
+- `../../eval/grade_scraper_batch.py` — replay/scoring harness. Hard gate for every phase:
   **zero human-approved rows suppressed**.
 - `find_catalog_dups.py` — read-only self-dup sweep (48 identical-URL groups found;
   the 30 pair-shaped ones are resolved; multi-row portal groups deliberately left).
@@ -775,7 +775,7 @@ the frozen fixtures are stable ground truth.
 
 ## Phases
 
-Grading rule for every phase: run `grade_scraper_batch.py` (and the pair fixture where
+Grading rule for every phase: run `../../eval/grade_scraper_batch.py` (and the pair fixture where
 relevant) before merging; **0 regressions** is the gate. `cd frontend && npx tsc
 --noEmit` untouched (no frontend work here). Full pytest suite stays green.
 
@@ -1090,7 +1090,7 @@ the operator can see the new yield channel.
 ### Phase 5 — The compounding loop (free)
 
 Build:
-- `build_fixture.py`: any adjudicated batch → grading fixture automatically (verdict +
+- `../../eval/build_fixture.py`: any adjudicated batch → grading fixture automatically (verdict +
   reason from the table, snapshot as row source). Ground truth grows with every review
   session.
 - Harness deciders that call the REAL Phase-2/3 functions over snapshots (not
@@ -1099,7 +1099,7 @@ Build:
   angles retire/spawn → next scrape.
 
 Success criteria:
-1. `build_fixture.py` regenerates the 08-23 fixture and matches the hand-built one.
+1. `../../eval/build_fixture.py` regenerates the 08-23 fixture and matches the hand-built one.
 2. A deliberately-broken decider (suppress-all) fails the gate loudly.
 3. The next real batch's review produces a fixture with zero manual steps.
 
@@ -1110,12 +1110,12 @@ Success criteria:
       │                                   ▼
     next scrape ◀── angles retire/spawn ◀── diagnose (seed_ledger funnel per angle)
       ▲                                   │
-      └──────── gate: grade_scraper_batch ◀── build_fixture.py (verdicts → frozen fixture)
+      └──────── gate: grade_scraper_batch ◀── ../../eval/build_fixture.py (verdicts → frozen fixture)
 
 - **One rule, graded automatically.** `classify_same_url` (the Phase-3 same-URL disposition) is
   imported by BOTH the live scraper and `grade_scraper_batch.decide_url_dup` — a change to the
   rule is re-graded against every accumulated fixture with no reimplementation to drift.
-- **`build_fixture.py`** turns any reviewed batch into a fixture from the live
+- **`../../eval/build_fixture.py`** turns any reviewed batch into a fixture from the live
   `moderation_status`/`moderation_reason`, so ground truth grows per review session at zero manual
   effort. Verified 2026-08-27 on the 08-23 batch: it reproduces a **grading-equivalent** fixture;
   the 12 id-level differences from the hand-built one are all real ground-truth evolution (7

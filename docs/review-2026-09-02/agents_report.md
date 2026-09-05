@@ -4,6 +4,18 @@ Scope: the 69 `*.py` files at `C:\Users\shama\Documents\wingman\` (not `app/`, n
 
 ---
 
+
+> **Layout note (2026-09-04).** This report describes the repo as it stood on
+> 2026-09-02, when all 69 of these scripts sat at the repo root. The paths in the
+> tables below are therefore historical. Acting on §1.2's verdicts, the 16 leaf
+> scripts moved: the 9 one-off migrations/backfills to `scripts/one-off/`,
+> `dev_test_account.py` to `scripts/dev/`, `backfill_match_vectors.py` to
+> `scripts/backfill/`, and `matching_eval.py` / `dedupe_eval.py` /
+> `grade_scraper_batch.py` / `build_fixture.py` to `eval/`. `grade_url_truth.py`
+> (0 references) was deleted. The 34 shared libraries and 21 console-wired entry
+> points stayed at the root, for the reasons §1.1 gives. Deliberately left
+> unrewritten so the snapshot still reads as one.
+
 ## 1. Import graph and dead code
 
 ### 1.1 The graph (root modules, plus what `app/`, `ops/`, `tests/` pull from the root)

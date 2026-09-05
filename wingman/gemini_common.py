@@ -166,6 +166,49 @@ DEFAULT_TIMEOUT_SECS = 120
 
 _last_call_time = 0.0
 
+# MARQUEE M9 (Phase 2 item 1, finding M5): whether THIS PROCESS takes the batch throttle.
+#
+# _enforce_rate_limit() below sleeps up to DEFAULT_MIN_DELAY_SECS (5) between calls, against a
+# module global. That is right for a batch agent: the agents share one googleSearch quota and
+# the delay is what fixed past HTTP 429s. It is badly wrong for the web service, where it is a
+# process-wide 5-SECOND SLEEP taken inside an anyio threadpool slot while a student waits.
+# /api/match pays it TWICE in one request — once to embed the student's themes, once for the
+# eligibility gate — so ~10s of a match was pure sleep, serialised across every concurrent
+# caller because the timestamp is a module global rather than per-request.
+#
+# It protected nothing there. Two facts, both verified before this was changed:
+#   1. The agents run as SUBPROCESSES (ops/core.py spawns `python -m agents.<name>`), so they
+#      never share this module's state with the web process. The web app's throttle only ever
+#      throttled the web app.
+#   2. The quota it exists to protect is googleSearch's, and no interactive path uses search —
+#      app/routes/ai.py pins _USE_WEB_SEARCH False and the matching gate passes
+#      use_web_search=False.
+#
+# A PROCESS-level switch rather than a per-call argument on purpose. The three interactive
+# entry points (app/routes/ai.py, app/routes/matching.py, app/services/embeddings.py) reach
+# this module by different routes, and one of them — embed_student_themes — treats a custom
+# embed_fn as "do not use the cache", so threading a flag through it would silently disable
+# the student-embed cache and start re-billing calls it currently serves free. "This process
+# serves students, not batches" is the honest granularity, and it is one auditable line in
+# app/main.py instead of a flag every future caller must remember to pass.
+_interactive_process = False
+
+
+def set_interactive_process(value=True):
+    """Declare that this process serves interactive requests, so the batch throttle is off.
+
+    Called once, by app/main.py. Nothing else should call it: an agent that called it would
+    lose the delay that keeps long runs under Gemini's rate limit. Safe in the web process
+    precisely because that process runs no agent in-process — if that ever changes, this is
+    the decision that has to change with it.
+    """
+    global _interactive_process
+    _interactive_process = bool(value)
+
+
+def is_interactive_process():
+    return _interactive_process
+
 
 def _env_number(name, fallback):
     """Read a numeric env var, falling back silently on anything unparseable — a typo in
@@ -226,6 +269,10 @@ def _enforce_rate_limit():
     API call's own latency overlap: an agent whose calls take 3s sees ~5s per item at a
     5s delay, not 8s. Any extra per-item sleep in a calling script shorter than this
     window is therefore absorbed by it and has no effect."""
+    # MARQUEE M9 (Phase 2 item 1): the web service takes no batch throttle. See
+    # set_interactive_process above for why this is safe and why it is process-level.
+    if _interactive_process:
+        return
     global _last_call_time
     now = time.time()
     elapsed = now - _last_call_time
@@ -457,6 +504,14 @@ def call_gemini(system, user_content, api_key, use_web_search=True, max_tokens=4
             data = json.loads(resp.read())
     except urllib.error.HTTPError as e:
         if e.code == 429:
+            # MARQUEE M9 (Phase 2 item 1): interactive callers do not sleep-and-retry. A batch
+            # run should wait 5s and try again — it has nowhere else to be, and losing the item
+            # costs a re-run. A student's request holding a threadpool slot asleep for 5s to
+            # re-ask a service that just said "too many requests" is the exact pathology this
+            # item removes, and the caller already degrades well: app/routes/ai.py turns an
+            # upstream 429 into "Wingman is busy right now, give it a few seconds".
+            if _interactive_process:
+                raise
             print(f"[WARN] HTTP 429 (rate limited), retrying once after delay...")
             time.sleep(5)  # Wait before retry
             _enforce_rate_limit()
@@ -582,6 +637,9 @@ def call_gemini_embed(texts, api_key, model=None, output_dim=None, timeout=None)
                 data = json.loads(resp.read())
         except urllib.error.HTTPError as e:
             if e.code == 429:
+                # MARQUEE M9 (Phase 2 item 1): see the same guard in call_gemini above.
+                if _interactive_process:
+                    raise
                 print("[WARN] HTTP 429 on embed (rate limited), retrying once after delay...")
                 time.sleep(5)
                 _enforce_rate_limit()

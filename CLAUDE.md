@@ -233,8 +233,18 @@ uses today.
 **Opportunity data**: the opportunity catalog (1200+ rows) lives in a Supabase (hosted
 Postgres) `opportunities` table, not a static file — `/api/opportunities`
 proxies to it (PostgREST, anon key, RLS-restricted to `is_active=true` rows, paginated past
-PostgREST's 1000-row cap, cached in-process for `OPPORTUNITIES_CACHE_TTL` seconds) and
-the client fetches that endpoint once on load.
+PostgREST's 1000-row cap) and the client fetches that endpoint once on load. The response is
+pre-serialised with a gzip and an `ETag` once per refresh, so a returning client revalidates
+and gets a 304 rather than the largest payload in the app.
+
+**There are TWO caches, not one** (Phase 2 item 5): a vector-free catalog cache on
+`OPPORTUNITIES_CACHE_TTL`, and the 768-dim `match_vector` embeddings behind
+`CATALOG_VECTOR_CACHE_TTL` (24h), because embeddings only change on an offline re-embed and
+pulling ~20MB every five minutes to serve a column the browser never receives is what pushed
+the fetch into Supabase's statement timeout. `fetch_opportunities()` is vector-free;
+`fetch_opportunities_with_vectors()` is what `/api/match` wants; `bust_catalog_cache()` clears
+BOTH and is what the ops console calls — busting only the catalog leaves a newly-activated row
+un-matchable for a day while looking perfectly fine in the browser.
 [opportunities.json](data/opportunities.json) still exists git-tracked as a diffable backup
 snapshot only — regenerate it with `agents/export_json.py` after editing the DB, it is **not**
 fetched at runtime anymore. It moved to `data/` on 2026-09-04; `agents/export_json.py`'s `OUT_PATH`

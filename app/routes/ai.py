@@ -18,10 +18,12 @@ exactly where it was.
 The response envelope is unchanged — {"content":[{"type":"text","text":...}]} for both live
 and mock, plus stop_reason — so nothing downstream branches on mode.
 """
+import functools
 import json
 import urllib.error
 import urllib.request
 
+from anyio import to_thread
 from fastapi import APIRouter, Request, Response, Depends
 
 from app.config import (
@@ -29,6 +31,7 @@ from app.config import (
     ANTHROPIC_API_KEY, ANTHROPIC_URL, CLAUDE_MODEL,
     CLAUDE_MAX_TOKENS, CLAUDE_MAX_TOKENS_CEILING, AI_MAX_BODY_BYTES,
     AI_UPSTREAM_TIMEOUT_SECONDS, ANTHROPIC_MAX_WEB_SEARCH_USES,
+    AI_MAX_CONCURRENCY, AI_SHED_RETRY_AFTER_SECONDS,
 )
 from app.core import (
     touch_user_activity, record_interactive_cost_async, log_conversation_async,
@@ -49,6 +52,58 @@ router = APIRouter()
 # through this rather than app.deps.raw_body, so an over-limit request is 413'd by the
 # dependency — before the handler exists to make an upstream call.
 ai_raw_body = capped_raw_body(AI_MAX_BODY_BYTES)
+
+
+# MARQUEE M9: the concurrency bound in front of the paid provider calls (Phase 2 item 2,
+# finding M5). See AI_MAX_CONCURRENCY in app/config.py for why the number is 12.
+#
+# WHY A COUNTER AND NOT asyncio.Semaphore: a semaphore's acquire() WAITS. Waiting is the one
+# thing this must never do — a queued caller still holds its connection and still ends up
+# stalling, which is the behaviour being removed. The requirement is "shed, don't stall", so
+# the only acquire that makes sense is a non-blocking one, and asyncio.Semaphore has none.
+#
+# WHY A PLAIN INT IS SAFE: `handle_ai` is `async def`, so try_acquire() runs ON the event
+# loop, and there is no `await` between reading `_in_flight` and incrementing it. The event
+# loop is single-threaded and cannot interleave another task inside that window, so the
+# check-and-increment is atomic without a lock. (A threading.Lock here would be misleading
+# rather than wrong: it would suggest threads reach this, and none do.)
+class _AiLane:
+    """Bounds how many /api/ai requests may occupy a threadpool slot at once."""
+
+    def __init__(self, limit):
+        self.limit = limit
+        self.in_flight = 0
+        self.shed_count = 0        # observability without a metrics stack (item 9 is dropped)
+
+    def try_acquire(self):
+        """Take a lane slot if one is free. Never waits. True if acquired."""
+        if self.in_flight >= self.limit:
+            self.shed_count += 1
+            return False
+        self.in_flight += 1
+        return True
+
+    def release(self):
+        # max() so a double-release can never drive the count negative and silently widen
+        # the lane past its limit for the life of the process.
+        self.in_flight = max(0, self.in_flight - 1)
+
+
+ai_lane = _AiLane(AI_MAX_CONCURRENCY)
+
+
+def _shed_response():
+    """503 + Retry-After: the lane is full, try again shortly.
+
+    503 rather than 429 on purpose. 429 means "you have asked for too much" and is aimed at
+    one caller; this is "the service is at capacity right now" and is aimed at nobody in
+    particular. The distinction matters on the dashboard — a spike of 503s is a capacity
+    signal, a spike of 429s is an abuse signal, and collapsing them into one code would hide
+    exactly the thing this phase is trying to make visible.
+    """
+    resp = json_error(503, "Wingman is busy right now. Give it a few seconds and try again.")
+    resp.headers["Retry-After"] = str(AI_SHED_RETRY_AFTER_SECONDS)
+    return resp
 
 # MARQUEE M9 (S0-3, finding D3): whether the server performs PAID web searches is a
 # server-side decision. It used to be the CLIENT's — both proxies read
@@ -325,10 +380,14 @@ def _live_branch(userid, key_configured):
     return True, None
 
 
-@router.post("/api/ai")
-def handle_ai(request: Request, raw_body: bytes = Depends(ai_raw_body),
-              user: AuthedUser = Depends(get_optional_user)):
+def _serve_ai(request, raw_body, user):
     """{feature, inputs} -> {"content":[{"type":"text","text":...}], "stop_reason"?}.
+
+    The BLOCKING core of the route, unchanged by Phase 2 item 2 apart from this docstring and
+    its name. It runs in a worker thread, which is where it already ran (FastAPI dispatches
+    plain-`def` handlers to the anyio threadpool) — item 2 changed only how many of these may
+    run at once, not what any one of them does. It stays a module-level function rather than a
+    closure so the unit suite can call it directly, as it always has.
 
     MARQUEE M8 + M9. The one door to a model. S1-1, finding C1.2: this replaced
     /api/messages and /api/messages-claude, which forwarded a client-supplied `system`
@@ -339,6 +398,8 @@ def handle_ai(request: Request, raw_body: bytes = Depends(ai_raw_body),
     The feature lookup sits BEFORE the spend layers and after the access ones, so a bad
     feature costs a 400 rather than a budget check, and an unauthenticated caller never
     learns which feature ids exist.
+
+    The lane check sits in front of ALL of it, in handle_ai below — see there for why.
     """
     userid = user.id if user else None
     ip = client_ip(request)
@@ -392,3 +453,38 @@ def handle_ai(request: Request, raw_body: bytes = Depends(ai_raw_body),
         return _proxy_to_anthropic(feature, system, user_content, max_tokens, userid,
                                    cost_feature)
     return _proxy_to_gemini(system, user_content, max_tokens, userid, cost_feature)
+
+
+# MARQUEE M9: the async shell that bounds the paid lane (Phase 2 item 2, finding M5).
+#
+# This is `async def` where the old handler was plain `def`, and that is the whole point.
+# FastAPI runs an `async def` route ON the event loop and a plain `def` route in the 40-slot
+# threadpool. Being on the loop is what lets a shed cost nothing: the lane is full, the
+# caller is answered 503, and no threadpool slot is ever taken. Had this stayed synchronous,
+# every request would first have to WIN a threadpool slot just to discover it should be shed
+# — the flood would still drain the pool it is supposed to be kept out of.
+#
+# Nothing blocking may be added to this function. The three things it does — a counter check,
+# and handing off to a thread — are all non-blocking. Both limiters, the subscription read,
+# the budget lookups and the provider call itself are Supabase/HTTP round trips and stay
+# inside _serve_ai, on the far side of to_thread.run_sync. Adding a blocking call HERE would
+# stall the event loop for the entire process, which is a strictly worse version of the bug
+# this fixes.
+#
+# abandon_on_cancel is left at its default of False: if the client disconnects mid-call,
+# run_sync still waits for the worker thread to finish before returning. That is deliberate.
+# Abandoning it would return control — and run the `finally` that releases the lane — while
+# the thread is still holding a real provider connection, so the lane would report free while
+# more than `limit` calls were genuinely in flight. A disconnected student costs one slot for
+# the rest of one call; the alternative costs the bound itself.
+@router.post("/api/ai")
+async def handle_ai(request: Request, raw_body: bytes = Depends(ai_raw_body),
+                    user: AuthedUser = Depends(get_optional_user)):
+    """The route. Bounds the lane, then runs the blocking core in a worker thread."""
+    if not ai_lane.try_acquire():
+        return _shed_response()
+    try:
+        return await to_thread.run_sync(
+            functools.partial(_serve_ai, request, raw_body, user))
+    finally:
+        ai_lane.release()

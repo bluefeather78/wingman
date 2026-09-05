@@ -34,3 +34,10 @@ python-docx==1.2.0
 # was listed (S0-11) production survived only on Render's build cache — the next cache miss
 # would have been a ModuleNotFoundError at import and a hard outage.
 numpy==2.5.2
+
+# httpx is a HARD dependency, not an optional one: app/http_pool.py pools every Supabase
+# connection through it (Phase 2 item 4). It was already importable here as a transitive dep of
+# the test client, which is exactly how numpy came to be missing from this file while the code
+# imported it — the Critical #2 finding in PRODUCTION_READINESS_PLAN.md. Pinned explicitly so a
+# clean Render build cannot resolve without it.
+httpx==0.28.1

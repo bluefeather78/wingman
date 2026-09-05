@@ -59,9 +59,10 @@ from wingman import url_repair
 from wingman import url_validate
 from wingman import agent_common
 from wingman.agent_common import safe_console, snapshot_stamp
-from agents.scrape_opportunities import (build_row, next_id_generator, insert_rows, VALID_TYPES,
-                                  collapse_intra_run_twins, gate_dup_candidates,
-                                  FLAG_BARE_DOMAIN, FLAG_LOW_VALUE, FLAG_OFFSITE, FLAG_NO_TYPE)
+# From the SHARED layer, not from the runnable agent — see wingman/scrape_common.py's header.
+from wingman.scrape_common import (build_row, next_id_generator, insert_rows, VALID_TYPES,
+                                   collapse_intra_run_twins, gate_dup_candidates,
+                                   FLAG_BARE_DOMAIN, FLAG_LOW_VALUE, FLAG_OFFSITE, FLAG_NO_TYPE)
 from wingman import REPO_ROOT   # the repo root, defined once (see wingman/__init__.py)
 
 # --- pure audience/relevance filters (free, unit-tested) --------------------------------

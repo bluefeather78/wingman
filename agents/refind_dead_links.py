@@ -143,7 +143,10 @@ def main():
         raise SystemExit(1)
 
     # PAID PATH — reached only on an explicit (approved) live run.
+    # research_seed and RESOLVE_SYSTEM are the scraper's own paid search path (M8 prompt,
+    # M9 call), so they stay in the agent. next_id_generator and build_row are shared.
     from agents import scrape_opportunities as so
+    from wingman import scrape_common as sc
     from wingman.gemini_common import set_min_delay
     set_min_delay(args.min_delay)
     today = datetime.date.today().strftime("%Y%m%d")
@@ -154,7 +157,7 @@ def main():
     catalog = supabase_get(supabase_url, "opportunities",
                            {"select": "id,name,url"}, service_key) or []
     all_ids = {r["id"] for r in catalog}
-    mint_id = so.next_id_generator(all_ids, supabase_url, service_key)
+    mint_id = sc.next_id_generator(all_ids, supabase_url, service_key)
 
     class _A:  # minimal args shim for research_seed
         timeout = args.timeout
@@ -181,7 +184,7 @@ def main():
         stamp = list(r.get("quality_flags") or []) + [f"{_REFIND_STAMP} {today}"]
         patch = {"quality_flags": stamp}
         if new_url and not url_dedupe.find_duplicates(new_url, name, catalog)[0]:
-            new_row = so.build_row({**r, "url": new_url}, next(mint_id),
+            new_row = sc.build_row({**r, "url": new_url}, next(mint_id),
                                    f"refind-{today}", new_url, [])
             if new_row:
                 new_row["found_via"] = r.get("url")

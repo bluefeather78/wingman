@@ -184,3 +184,13 @@ def test_no_sentinel_is_written_in_an_unparsable_form():
                     if intent.search(line) and not mc.SENTINEL_RX.search(line):
                         bad.append(f"{os.path.relpath(path, REPO_ROOT)}:{n}: {line.strip()[:70]}")
     assert not bad, f"sentinel-shaped but unparsable: {bad}"
+
+
+def test_tests_and_the_checker_itself_are_not_protected_sites():
+    """A test that asserts marquee coverage necessarily contains the sentinel text. Without
+    this exclusion the guard would fire on the very file that verifies it."""
+    text = "# MARQUEE M4: something"
+    assert mc.entries_touched("tests/unit/test_marquee_check.py", {1}, text) == set()
+    assert mc.entries_touched("scripts/ci/check_marquee_commits.py", {1}, text) == set()
+    # ...but a real source file with the same content still is.
+    assert mc.entries_touched("agents/scrape_opportunities.py", {1}, text) == {"M4"}

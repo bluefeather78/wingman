@@ -52,6 +52,12 @@ WHOLE_FILE_PROTECTED = {
 # Suffixes worth scanning. A .md edit is documentation ABOUT a decision, not the decision.
 SOURCE_SUFFIXES = (".py", ".ts", ".tsx", ".js", ".html", ".yaml", ".yml", ".sql")
 
+# Paths that legitimately CONTAIN the sentinel text without being a protected site: the tests
+# that assert marquee coverage, and this checker itself. Without the exclusion, writing a test
+# that names an entry counts as changing that entry — which would make the guard fire on the
+# very thing that verifies it.
+SKIP_PREFIXES = ("tests/", "scripts/ci/check_marquee_commits.py")
+
 
 def _git(*args, cwd=ROOT):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
@@ -120,6 +126,8 @@ def changed_line_numbers(diff_text):
 
 def entries_touched(path, lines_touched, file_text):
     """Which marquee entries this file's changed lines land inside."""
+    if path.startswith(SKIP_PREFIXES):
+        return set()
     hit = {WHOLE_FILE_PROTECTED[path]} if path in WHOLE_FILE_PROTECTED else set()
     if not path.endswith(SOURCE_SUFFIXES):
         return hit

@@ -14,6 +14,11 @@ import urllib.error
 import pytest
 
 from agents import scrape_opportunities as so
+# insert_rows and its ladder now live in wingman/scrape_common.py (agents/ is for what an
+# operator RUNS, wingman/ for what other code IMPORTS). scrape_opportunities re-exports them,
+# so `so.insert_rows` is still the same function — but a monkeypatch has to land on the module
+# whose globals the function actually resolves supabase_post from, which is this one.
+from wingman import scrape_common as sc
 
 
 def _pgrst_error(code, message, status=400):
@@ -66,7 +71,7 @@ def test_without_strips_only_named_keys():
 
 def test_insert_full_when_both_migrations_present(monkeypatch):
     post, calls = _fake_post(forbidden=set())
-    monkeypatch.setattr(so, "supabase_post", post)
+    monkeypatch.setattr(sc, "supabase_post", post)
     tier = so.insert_rows("u", "k", _rows(), _review())
     assert tier == "full"
     assert len(calls) == 1
@@ -78,7 +83,7 @@ def test_insert_keeps_review_when_only_attribution_pending(monkeypatch):
     # The expected Phase-1 deploy window: db/user_submissions_schema.sql applied, attribution not.
     # The review columns MUST survive — dropping them would strip the queue of its flags.
     post, calls = _fake_post(forbidden={"seed_id", "found_via"})
-    monkeypatch.setattr(so, "supabase_post", post)
+    monkeypatch.setattr(sc, "supabase_post", post)
     tier = so.insert_rows("u", "k", _rows(), _review())
     assert tier == "no-attribution"
     assert calls[-1][0]["moderation_status"] == "pending_review"  # review columns kept
@@ -87,7 +92,7 @@ def test_insert_keeps_review_when_only_attribution_pending(monkeypatch):
 
 def test_insert_drops_review_columns_when_that_migration_pending(monkeypatch):
     post, calls = _fake_post(forbidden={"moderation_status", "dup_candidates", "quality_flags"})
-    monkeypatch.setattr(so, "supabase_post", post)
+    monkeypatch.setattr(sc, "supabase_post", post)
     tier = so.insert_rows("u", "k", _rows(), _review())
     assert tier == "no-review"
     # Final (successful) write keeps seed_id but not the review columns.
@@ -98,7 +103,7 @@ def test_insert_drops_review_columns_when_that_migration_pending(monkeypatch):
 def test_insert_drops_attribution_when_both_pending(monkeypatch):
     post, calls = _fake_post(forbidden={"moderation_status", "dup_candidates", "quality_flags",
                                         "seed_id", "found_via"})
-    monkeypatch.setattr(so, "supabase_post", post)
+    monkeypatch.setattr(sc, "supabase_post", post)
     tier = so.insert_rows("u", "k", _rows(), _review())
     assert tier == "minimal"
     assert "seed_id" not in calls[-1][0]
@@ -192,7 +197,7 @@ def test_statement_timeout_raises_and_never_narrows(monkeypatch):
     """The exit-test case: a simulated insert timeout must fail loudly, on the first attempt."""
     post, calls = _failing_post(_pgrst_error(
         "57014", "canceling statement due to statement timeout", status=500))
-    monkeypatch.setattr(so, "supabase_post", post)
+    monkeypatch.setattr(sc, "supabase_post", post)
     with pytest.raises(urllib.error.HTTPError):
         so.insert_rows("u", "k", _rows(), _review())
     assert len(calls) == 1, "a timeout must not be retried at a narrower tier"
@@ -203,7 +208,7 @@ def test_pk_collision_raises_and_never_narrows(monkeypatch):
     post, calls = _failing_post(_pgrst_error(
         "23505", 'duplicate key value violates unique constraint "opportunities_pkey"',
         status=409))
-    monkeypatch.setattr(so, "supabase_post", post)
+    monkeypatch.setattr(sc, "supabase_post", post)
     with pytest.raises(urllib.error.HTTPError):
         so.insert_rows("u", "k", _rows(), _review())
     assert len(calls) == 1
@@ -212,7 +217,7 @@ def test_pk_collision_raises_and_never_narrows(monkeypatch):
 def test_non_http_failure_raises_and_never_narrows(monkeypatch):
     """A socket timeout carries no PostgREST body at all — it is not a pending migration."""
     post, calls = _failing_post(TimeoutError("read timed out"))
-    monkeypatch.setattr(so, "supabase_post", post)
+    monkeypatch.setattr(sc, "supabase_post", post)
     with pytest.raises(TimeoutError):
         so.insert_rows("u", "k", _rows(), _review())
     assert len(calls) == 1
@@ -228,7 +233,7 @@ def test_missing_column_on_a_read_code_still_narrows(monkeypatch):
             raise _pgrst_error("42703", 'column "seed_id" does not exist')
         return None
 
-    monkeypatch.setattr(so, "supabase_post", post)
+    monkeypatch.setattr(sc, "supabase_post", post)
     assert so.insert_rows("u", "k", _rows(), _review()) == "no-attribution"
     assert "seed_id" not in calls[-1][0]
 

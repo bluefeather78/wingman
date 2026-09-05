@@ -58,8 +58,11 @@ from wingman import url_repair
 from wingman import url_validate
 from wingman import agent_common
 from wingman.agent_common import safe_console, snapshot_stamp
-from agents.scrape_opportunities import (build_row, next_id_generator, insert_rows, VALID_TYPES,
-                                  FLAG_BARE_DOMAIN, FLAG_LOW_VALUE, FLAG_OFFSITE, FLAG_NO_TYPE)
+# From the SHARED layer, not from the runnable agent: importing agents/scrape_opportunities.py
+# to borrow build_row dragged in its prompts, its argparse and its module state (CLAUDE.md's
+# agents/-runs vs wingman/-imports rule). Same functions, moved.
+from wingman.scrape_common import (build_row, next_id_generator, insert_rows, VALID_TYPES,
+                                   FLAG_BARE_DOMAIN, FLAG_LOW_VALUE, FLAG_OFFSITE, FLAG_NO_TYPE)
 from wingman import REPO_ROOT   # the repo root, defined once (see wingman/__init__.py)
 
 # At most this many grounding siblings are fetched while proving one name. The same cap

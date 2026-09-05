@@ -1,8 +1,10 @@
 """Unit tests for app.core.subscription_state / _iso_in_future / _login_payload
 and app.deps.subscription_block_reason.
 
-No Supabase: subscription_block_reason's only network seam is get_user_account (the account
-columns without the `data` blob), mocked via monkeypatch on app.deps.get_user_account. Dates are computed relative to now, so no clock
+No Supabase: subscription_block_reason's only network seam is get_user_subscription (the five
+subscription columns, cached per Phase 2 item 3), mocked via monkeypatch on
+app.deps.get_user_subscription — patching the seam rather than the cache keeps these tests
+about gate logic. Dates are computed relative to now, so no clock
 freezing is needed.
 """
 import datetime
@@ -145,31 +147,31 @@ def test_block_reason_empty_userid_none():
     assert deps.subscription_block_reason(None) is None
 
 
-def test_block_reason_get_user_account_raises_fails_open(monkeypatch):
+def test_block_reason_read_raises_fails_open(monkeypatch):
     def boom(_):
         raise RuntimeError("supabase down")
-    monkeypatch.setattr(deps, "get_user_account", boom)
+    monkeypatch.setattr(deps, "get_user_subscription", boom)
     assert deps.subscription_block_reason("alice") is None
 
 
 def test_block_reason_no_record_none(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_account", lambda _: None)
+    monkeypatch.setattr(deps, "get_user_subscription", lambda _: None)
     assert deps.subscription_block_reason("alice") is None
 
 
 def test_block_reason_has_access_none(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_account", lambda _: {"subscription_status": "active"})
+    monkeypatch.setattr(deps, "get_user_subscription", lambda _: {"subscription_status": "active"})
     assert deps.subscription_block_reason("alice") is None
 
 
 def test_block_reason_past_due_message(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_account", lambda _: {"subscription_status": "past_due"})
+    monkeypatch.setattr(deps, "get_user_subscription", lambda _: {"subscription_status": "past_due"})
     msg = deps.subscription_block_reason("alice")
     assert msg and "could not charge" in msg.lower()
 
 
 def test_block_reason_canceled_message(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_account",
+    monkeypatch.setattr(deps, "get_user_subscription",
                         lambda _: {"subscription_status": "canceled",
                                    "subscription_end_at": _iso(-1)})
     msg = deps.subscription_block_reason("alice")
@@ -177,7 +179,7 @@ def test_block_reason_canceled_message(monkeypatch):
 
 
 def test_block_reason_beta_message(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_account",
+    monkeypatch.setattr(deps, "get_user_subscription",
                         lambda _: {"subscription_status": "beta",
                                    "subscription_end_at": _iso(-1)})
     msg = deps.subscription_block_reason("alice")
@@ -185,7 +187,7 @@ def test_block_reason_beta_message(monkeypatch):
 
 
 def test_block_reason_expired_trial_default_message(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_account",
+    monkeypatch.setattr(deps, "get_user_subscription",
                         lambda _: {"subscription_status": "trial",
                                    "trial_ends_at": _iso(-1)})
     msg = deps.subscription_block_reason("alice")
@@ -197,6 +199,6 @@ def test_block_reason_lowercases_userid(monkeypatch):
     def fake_get(uid):
         seen["uid"] = uid
         return {"subscription_status": "active"}
-    monkeypatch.setattr(deps, "get_user_account", fake_get)
+    monkeypatch.setattr(deps, "get_user_subscription", fake_get)
     deps.subscription_block_reason("  ALICE  ")
     assert seen["uid"] == "alice"

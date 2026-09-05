@@ -579,6 +579,38 @@ def log_conversation_async(userid, mode, system_prompt, user_content, response_t
     ).start()
 
 
+def _invalidate_identity_for_write(query, data):
+    """Drop the identity-cache entries a users write could invalidate.
+
+    Reads the userid from the PostgREST filter (`?userid=eq.alice&...`) for an UPDATE, and
+    from the payload for an INSERT. The INSERT case is not theoretical: registration calls
+    user_exists() first, which caches a None for that userid, and without this the account
+    would be created and then treated as nonexistent for the rest of the TTL — a student
+    locked out of the app they just signed up for.
+
+    Anything it cannot parse clears the whole cache rather than guessing. A users write is
+    rare and a full clear costs one extra read per active account; a missed invalidation
+    costs correctness, and this is the layer that must not be clever.
+    """
+    seen = False
+    try:
+        for key, values in urllib.parse.parse_qs(query.lstrip("?")).items():
+            if key != "userid":
+                continue
+            for v in values:
+                invalidate_identity(v[3:] if v.startswith("eq.") else v)
+                seen = True
+        rows = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+        for row in rows:
+            if isinstance(row, dict) and row.get("userid"):
+                invalidate_identity(row["userid"])
+                seen = True
+    except Exception:                                              # noqa: BLE001
+        seen = False
+    if not seen:
+        clear_identity_cache()
+
+
 def _users_request(method, query="", data=None, prefer=None):
     """One PostgREST call against `users`.
 
@@ -595,6 +627,13 @@ def _users_request(method, query="", data=None, prefer=None):
         headers["Prefer"] = "return=minimal"
     elif method == "PATCH":
         headers["Prefer"] = "return=minimal"
+    if method != "GET":
+        # Phase 2 item 3: the identity cache is busted HERE, at the one PostgREST choke point
+        # every users write goes through, rather than at each of the ~14 call sites. A new
+        # write path cannot forget to invalidate, because it cannot reach the table without
+        # coming through this function. Before the request, not after: if the write succeeds
+        # but the response handling raises, the stale row must still be gone.
+        _invalidate_identity_for_write(query, data)
     if prefer:
         headers["Prefer"] = prefer
     req = urllib.request.Request(
@@ -708,6 +747,91 @@ _ACCOUNT_COLUMNS = (
     "parental_consent,terms_accepted_at,privacy_accepted_at,terms_version"
 )
 _account_select = _ACCOUNT_COLUMNS
+
+
+# ---------- The identity cache (Phase 2 item 3) ----------
+# Every signed-in request runs the subscription gate, and the gate read a users row to do it —
+# ~150ms against Supabase, on EVERY click by EVERY signed-in student, to answer a question
+# whose answer changes about twice in an account's lifetime.
+#
+# WHAT IS CACHED IS THE NARROW READ, deliberately. The gate needs five columns; caching
+# get_user_account's row instead would hold every account's password_hash and calendar refresh
+# token in process memory for a minute at a time, to save the same round trip.
+#
+# STALENESS IS BOUNDED IN ONE DIRECTION ONLY. A lapse can enforce up to TTL late — that is the
+# accepted trade-off in the plan. A student who just PAID must never wait, so every write to
+# the users table drops that userid's entry (see _users_request), which covers upgrades, promo
+# redemptions, cancellations and trial starts alike. Putting the bust at the single PostgREST
+# choke point rather than at each of the ~14 call sites is the whole reason it can be trusted:
+# a new write path cannot forget to invalidate, because it cannot reach the table without
+# going through there.
+#
+# PER PROCESS, like app/auth/ratelimit.py's windows. Render runs one worker today; scale to
+# several and each keeps its own copy, so the effective staleness stays TTL rather than
+# multiplying. That is a property worth knowing, not a bug.
+_SUBSCRIPTION_COLUMNS = ("userid,subscription_status,trial_ends_at,subscription_end_at,"
+                         "stripe_customer_id")
+_identity_cache = {}                    # {userid: (expires_at_monotonic, record_or_None)}
+_identity_lock = threading.Lock()
+identity_cache_hits = 0                 # observability without a metrics stack (item 9 dropped)
+identity_cache_misses = 0
+
+
+def invalidate_identity(userid):
+    """Drop one account's cached subscription row. Called on every users write."""
+    if not userid:
+        return
+    with _identity_lock:
+        _identity_cache.pop(str(userid).strip().lower(), None)
+
+
+def clear_identity_cache():
+    """Whole-cache reset. For tests and for the ops console's "reload" affordances."""
+    with _identity_lock:
+        _identity_cache.clear()
+
+
+def get_user_subscription(userid, ttl=None):
+    """The five columns the subscription gate reads, cached for IDENTITY_CACHE_TTL_SECONDS.
+
+    Returns the row, or None for an account that does not exist — and caches the None too,
+    because a signed token for a deleted account would otherwise re-ask Supabase on every
+    request forever, which is exactly the hot path this exists to take off the wire.
+    """
+    global identity_cache_hits, identity_cache_misses
+    userid = (userid or "").strip().lower()
+    if not userid:
+        return None
+    ttl = IDENTITY_CACHE_TTL_SECONDS if ttl is None else ttl
+    now = time.monotonic()
+    if ttl > 0:
+        with _identity_lock:
+            entry = _identity_cache.get(userid)
+            if entry and entry[0] > now:
+                identity_cache_hits += 1
+                return entry[1]
+    # Read OUTSIDE the lock: this is a ~150ms network call, and holding the lock across it
+    # would serialise every signed-in request in the process behind one Supabase round trip —
+    # a fresh version of the bug Phase 2 is removing. A concurrent miss on the same userid
+    # therefore costs a duplicate read, which is cheap and correct; a lock held across the
+    # wire would not be.
+    record = select_user(userid, _SUBSCRIPTION_COLUMNS)
+    # Project down to the five columns before caching. select_user degrades to a `SELECT *`
+    # when one of them has not been migrated in yet, and caching THAT would put every active
+    # student's 37KB `data` blob in process memory for a minute — turning a latency fix into a
+    # memory leak on the smallest Render tier, only on the database state nobody tests against.
+    if isinstance(record, dict):
+        record = {k: record.get(k) for k in _SUBSCRIPTION_COLUMNS.split(",")}
+    if ttl > 0:
+        with _identity_lock:
+            _identity_cache[userid] = (time.monotonic() + ttl, record)
+            identity_cache_misses += 1
+            # Bounded so a flood of signed tokens for nonexistent accounts cannot grow this
+            # without limit. Dropping the whole thing beats evicting cleverly: it is a cache,
+            # and the next request refills what is actually in use.
+            if len(_identity_cache) > 10000:
+                _identity_cache.clear()
+    return record
 
 
 def get_user_account(userid):

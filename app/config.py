@@ -168,6 +168,19 @@ PAID_CHECK_MAX_CONCURRENCY = int(os.environ.get("PAID_CHECK_MAX_CONCURRENCY", ""
 PAID_CHECK_SHED_RETRY_AFTER_SECONDS = int(
     os.environ.get("PAID_CHECK_SHED_RETRY_AFTER_SECONDS", "") or 10)
 
+# ---------- The identity cache (Phase 2 item 3) ----------
+# Every signed-in request runs the subscription gate, and the gate read a users row from
+# Supabase to do it — a ~150ms round trip measured in the load probe, paid on EVERY click by
+# EVERY signed-in student, to answer a question whose answer changes maybe twice in an account's
+# lifetime. This caches that one narrow read per process.
+#
+# The cost is stated plainly in the plan's trade-off table: "a lapse enforces up to 60s late."
+# That is the honest worst case for a trial running out mid-session. It is NOT the worst case
+# for a student who just PAID — that would be intolerable — because every write to the users
+# table busts this cache for that userid at the choke point in app/core._users_request, so an
+# upgrade, a promo redemption or a cancellation is visible on the very next request.
+IDENTITY_CACHE_TTL_SECONDS = float(os.environ.get("IDENTITY_CACHE_TTL_SECONDS", "") or 60)
+
 # Ceiling on web searches per Anthropic call. Unlike Gemini's max_searches — a number folded
 # into the prompt and nothing more — Anthropic ENFORCES max_uses server-side, so this is a
 # real cost ceiling ($0.01/search). It is moot while _USE_WEB_SEARCH pins search off; it

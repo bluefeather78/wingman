@@ -7,7 +7,8 @@ but loses access to the app, not merely to the calls that cost money. subscripti
 stays the single source of truth (test_subscription_state.py covers it); these tests cover
 turning its verdict into a 402 and hanging that off the right routes.
 
-No Supabase: the only network seam is get_user_account, monkeypatched on app.deps.
+No Supabase: the only network seam is get_user_subscription (Phase 2 item 3's cached
+narrow read), monkeypatched on app.deps.
 """
 import datetime
 import inspect
@@ -39,13 +40,13 @@ LIVE_TRIAL = {"subscription_status": "trial", "trial_ends_at": _iso(3)}
 
 @pytest.mark.parametrize("record", [ACTIVE, LIVE_TRIAL])
 def test_require_subscription_passes_user_through(monkeypatch, record):
-    monkeypatch.setattr(deps, "get_user_account", _account(record))
+    monkeypatch.setattr(deps, "get_user_subscription", _account(record))
     user = AuthedUser(id="alice")
     assert deps.require_subscription(user) is user
 
 
 def test_require_subscription_402s_expired_trial(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_account", _account(EXPIRED_TRIAL))
+    monkeypatch.setattr(deps, "get_user_subscription", _account(EXPIRED_TRIAL))
     with pytest.raises(HTTPException) as exc:
         deps.require_subscription(AuthedUser(id="alice"))
     assert exc.value.status_code == 402
@@ -59,7 +60,7 @@ def test_require_subscription_fails_open_when_supabase_is_down(monkeypatch):
     subscription_block_reason already makes."""
     def boom(_uid):
         raise RuntimeError("supabase down")
-    monkeypatch.setattr(deps, "get_user_account", boom)
+    monkeypatch.setattr(deps, "get_user_subscription", boom)
     user = AuthedUser(id="alice")
     assert deps.require_subscription(user) is user
 
@@ -71,19 +72,19 @@ def test_optional_never_blocks_signed_out(monkeypatch):
     cost accounting reports."""
     def unexpected(_uid):
         raise AssertionError("must not look up an account for a signed-out caller")
-    monkeypatch.setattr(deps, "get_user_account", unexpected)
+    monkeypatch.setattr(deps, "get_user_subscription", unexpected)
     assert deps.optional_subscribed_user(None) is None
 
 
 def test_optional_blocks_a_lapsed_signed_in_caller(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_account", _account(EXPIRED_TRIAL))
+    monkeypatch.setattr(deps, "get_user_subscription", _account(EXPIRED_TRIAL))
     with pytest.raises(HTTPException) as exc:
         deps.optional_subscribed_user(AuthedUser(id="alice"))
     assert exc.value.status_code == 402
 
 
 def test_optional_passes_a_current_caller(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_account", _account(ACTIVE))
+    monkeypatch.setattr(deps, "get_user_subscription", _account(ACTIVE))
     user = AuthedUser(id="alice")
     assert deps.optional_subscribed_user(user) is user
 
@@ -187,7 +188,7 @@ def test_ai_live_branch_401s_a_signed_out_caller(monkeypatch):
 
     def unexpected(_uid):
         raise AssertionError("must not look up an account before the 401")
-    monkeypatch.setattr(deps, "get_user_account", unexpected)
+    monkeypatch.setattr(deps, "get_user_subscription", unexpected)
     denied = ai._ai_access_error(None, key_configured=True)
     assert denied is not None and denied.status_code == 401
 
@@ -195,7 +196,7 @@ def test_ai_live_branch_401s_a_signed_out_caller(monkeypatch):
 def test_ai_live_branch_402s_a_lapsed_caller(monkeypatch):
     import app.routes.ai as ai
 
-    monkeypatch.setattr(deps, "get_user_account", _account(EXPIRED_TRIAL))
+    monkeypatch.setattr(deps, "get_user_subscription", _account(EXPIRED_TRIAL))
     denied = ai._ai_access_error("alice", key_configured=True)
     assert denied is not None and denied.status_code == 402
 
@@ -203,7 +204,7 @@ def test_ai_live_branch_402s_a_lapsed_caller(monkeypatch):
 def test_ai_live_branch_allows_a_current_caller(monkeypatch):
     import app.routes.ai as ai
 
-    monkeypatch.setattr(deps, "get_user_account", _account(LIVE_TRIAL))
+    monkeypatch.setattr(deps, "get_user_subscription", _account(LIVE_TRIAL))
     assert ai._ai_access_error("alice", key_configured=True) is None
 
 
@@ -215,7 +216,7 @@ def test_ai_mock_branch_stays_reachable_signed_out(monkeypatch):
 
     def unexpected(_uid):
         raise AssertionError("must not look up an account for a signed-out caller")
-    monkeypatch.setattr(deps, "get_user_account", unexpected)
+    monkeypatch.setattr(deps, "get_user_subscription", unexpected)
     assert ai._ai_access_error(None, key_configured=False) is None
 
 
@@ -224,7 +225,7 @@ def test_ai_mock_branch_still_402s_a_lapsed_caller(monkeypatch):
     branch. Only the signed-out case differs between them."""
     import app.routes.ai as ai
 
-    monkeypatch.setattr(deps, "get_user_account", _account(EXPIRED_TRIAL))
+    monkeypatch.setattr(deps, "get_user_subscription", _account(EXPIRED_TRIAL))
     denied = ai._ai_access_error("alice", key_configured=False)
     assert denied is not None and denied.status_code == 402
 
@@ -263,7 +264,7 @@ def test_402_detail_is_a_string_so_it_renders_as_error(monkeypatch):
     cannot open the socketpair its event loop needs.)"""
     import app.main as main
 
-    monkeypatch.setattr(deps, "get_user_account", _account(EXPIRED_TRIAL))
+    monkeypatch.setattr(deps, "get_user_subscription", _account(EXPIRED_TRIAL))
     with pytest.raises(HTTPException) as exc:
         deps.require_subscription(AuthedUser(id="alice"))
     assert isinstance(exc.value.detail, str) and exc.value.detail

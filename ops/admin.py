@@ -168,8 +168,12 @@ def handle_agents_config():
 
 @router.get("/api/agents/snapshots")
 def handle_snapshots_list():
+    # `backend` says whether these snapshots are shared or only on this machine (Phase 4).
+    # A snapshot is money a dry run already spent, so an operator needs to know whether the
+    # list in front of them is everything that exists or just this laptop's share of it.
     return json_response(200, {
         "snapshots": core.annotate_committed_snapshots(dryrun_common.list_snapshots()),
+        "backend": dryrun_common.mirror_backend(),
     }, default=str)
 
 

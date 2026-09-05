@@ -29,6 +29,19 @@ same scraper snapshot twice inserts nothing the second time.
 Committed rows always land with `is_active = false`, exactly like a live scrape. Activating
 them is a separate, deliberate step (see activate_opportunities in server.py) and is never
 implied by a commit.
+
+PHASE 4 — SNAPSHOTS ARE MIRRORED TO `agent_snapshots` so they are not stranded on one laptop
+(agents_report 4.20). A snapshot is money already spent: a dry run pays the API in full and
+writes nothing, and this module is how that money is redeemed. Leaving the only copy in a
+gitignored file on one machine meant a second checkout could not redeem any of it.
+
+The FILE stays the format and stays what the agents write — no agent changed. The table is a
+mirror: publish_snapshot() uploads one, and resolve() materialises a remote snapshot back to a
+byte-identical local file before returning its path. Everything downstream — the URL dedupe
+key, the run time read off the FILENAME rather than `now`, the STALE_DAYS refusal, the two
+families registered as not-committable — is therefore untouched, which is deliberate: Phase 3
+item 4.5 is precisely about a commit writing something different from what the live run would
+have written, and a mirror that re-derived anything would reintroduce it.
 """
 
 import datetime
@@ -37,6 +50,8 @@ import glob
 import json
 import os
 import re
+import socket
+import time
 from wingman import url_dedupe
 from wingman import REPO_ROOT   # the repo root, defined once (see wingman/__init__.py)
 
@@ -200,8 +215,229 @@ def _pending_count(agent, entries):
     return sum(1 for e in entries if isinstance(e, dict) and e.get("url"))
 
 
+# --------------------------------------------------------------------------- the mirror
+#
+# PHASE 4 (agents_report 4.20). Snapshots are money already spent — a dry run pays the API in
+# full — and they lived in gitignored files on one machine with no copy. `agent_snapshots`
+# mirrors them so a second checkout can list and commit them.
+#
+# STRICTLY ADDITIVE. Local files are still the primary source and still work with no table at
+# all; nothing here can make a local snapshot invisible or uncommittable.
+SNAPSHOT_TABLE = "agent_snapshots"
+
+# How often a process re-uploads whatever is on disk but not yet in the table. list_snapshots()
+# is called on every console poll, so an unthrottled sync would re-read every snapshot file
+# from disk several times a minute.
+SYNC_INTERVAL_SECONDS = 300
+
+# How long the remote LISTING is reused. Separate from, and much shorter than, the upload
+# throttle: the console polls list_snapshots() every few seconds, so an uncached remote read
+# would be ~20 Supabase round trips a minute to answer a question whose answer changes when
+# somebody finishes an agent run. 30s means another machine's snapshot appears within half a
+# minute while the poll costs nothing.
+REMOTE_CACHE_TTL = 30
+
+_mirror_available = True
+_mirror_warned = False
+_last_sync = 0.0
+_remote_cache = {"at": 0.0, "rows": []}
+_MISSING_CODES = ("PGRST205", "42P01", "42703", "PGRST204")
+
+
+def _mirror_creds():
+    """(url, service_key) or (None, None). Soft: no Supabase means local-only, not an error."""
+    from wingman import supabase_common
+    supabase_common.load_dotenv()
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    return (url, key) if url and key else (None, None)
+
+
+def _mirror_on():
+    return _mirror_available and all(_mirror_creds())
+
+
+def _mirror_off(reason):
+    global _mirror_available, _mirror_warned
+    _mirror_available = False
+    if not _mirror_warned:
+        _mirror_warned = True
+        print(f"[WARN] agent_snapshots unavailable ({reason}) — dry-run snapshots are LOCAL "
+              f"FILES only, so another machine cannot commit them. Run "
+              f"db/agent_snapshots_schema.sql in the Supabase SQL editor.")
+
+
+def _mirror_missing(exc):
+    try:
+        body = exc.read().decode("utf-8", "replace")
+    except Exception:                                                 # noqa: BLE001
+        body = str(exc)
+    return any(code in body for code in _MISSING_CODES)
+
+
+def _remote_snapshots(fresh=False):
+    """Rows in the mirror, or [] when there is no mirror. Cached, and never raises.
+
+    Deliberately does NOT select `payload`: the whole point of listing separately from fetching
+    is that a console poll must not download every snapshot that exists.
+    """
+    if not _mirror_on():
+        return []
+    now = time.time()
+    if not fresh and now - _remote_cache["at"] < REMOTE_CACHE_TTL:
+        return _remote_cache["rows"]
+    from wingman import supabase_common
+    url, key = _mirror_creds()
+    try:
+        rows = supabase_common.supabase_get(
+            url, SNAPSHOT_TABLE, {"select": "file,agent,ran_at,host,created_at"}, key)
+    except Exception as e:                                            # noqa: BLE001
+        if _mirror_missing(e):
+            _mirror_off(str(e)[:80])
+        else:
+            print(f"[WARN] could not list remote snapshots: {e}")
+        return []
+    _remote_cache["at"] = now
+    _remote_cache["rows"] = rows
+    return rows
+
+
+def publish_snapshot(file_name):
+    """Upload one local snapshot to the mirror. True if it is now there.
+
+    Idempotent on `file`, which is a snapshot's real identity — it carries the agent and the
+    run stamp, and agent_common.snapshot_stamp has included seconds since 2026-08-22 precisely
+    so two runs on the same day cannot collide.
+    """
+    if not _mirror_on():
+        return False
+    agent, path = _resolve_local(file_name)
+    if not agent:
+        return False
+    from wingman import supabase_common
+    url, key = _mirror_creds()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as e:                                            # noqa: BLE001
+        print(f"[WARN] could not read {file_name} to publish it: {e}")
+        return False
+    ran_at = _run_date(file_name)
+    row = {
+        "file": file_name,
+        "agent": agent,
+        "ran_at": ran_at.isoformat() if ran_at else None,
+        "payload": payload,
+        "host": socket.gethostname(),
+    }
+    try:
+        supabase_common.supabase_post(url, SNAPSHOT_TABLE, [row], key, on_conflict="file")
+        return True
+    except Exception as e:                                            # noqa: BLE001
+        if _mirror_missing(e):
+            _mirror_off(str(e)[:80])
+        else:
+            print(f"[WARN] could not publish {file_name}: {e}")
+        return False
+
+
+def fetch_snapshot(file_name):
+    """Write a mirrored snapshot to its local path. Returns the path, or None.
+
+    Byte-for-byte is not attempted and is not needed — what must survive is the JSON and the
+    FILENAME, because the filename is where the run's timestamp comes from (audit 4.5) and the
+    JSON is what _load() reads. Refuses to overwrite an existing local file: the local copy is
+    the original, and clobbering it with a re-serialised one would be a silent edit to
+    evidence.
+    """
+    if not _mirror_on() or not file_name or os.path.basename(file_name) != file_name:
+        return None
+    if not any(fnmatch.fnmatch(file_name, spec["glob"]) for spec in SNAPSHOT_SPECS.values()):
+        return None
+    path = os.path.join(REPO_DIR, file_name)
+    if os.path.isfile(path):
+        return path
+    from wingman import supabase_common
+    url, key = _mirror_creds()
+    try:
+        rows = supabase_common.supabase_get(
+            url, SNAPSHOT_TABLE, {"select": "payload", "file": f"eq.{file_name}"}, key)
+    except Exception as e:                                            # noqa: BLE001
+        if _mirror_missing(e):
+            _mirror_off(str(e)[:80])
+        else:
+            print(f"[WARN] could not fetch {file_name}: {e}")
+        return None
+    if not rows:
+        return None
+    tmp = path + ".part"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(rows[0].get("payload"), f, ensure_ascii=False)
+        # Rename last, so an interrupted download cannot leave a half-written file that
+        # list_snapshots would then report as "Unreadable" — or worse, that _load() would
+        # read as a short snapshot and commit.
+        os.replace(tmp, path)
+    except Exception as e:                                            # noqa: BLE001
+        print(f"[WARN] could not write {file_name}: {e}")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return None
+    return path
+
+
+def sync_snapshots(force=False):
+    """Publish any local snapshot the mirror does not have yet. Returns how many were sent.
+
+    Throttled, because list_snapshots() is called on every console poll and this reads every
+    snapshot file off disk. Best-effort throughout: a mirror that cannot be reached must never
+    stop an operator committing a snapshot that is sitting right there on their own disk.
+    """
+    global _last_sync
+    if not _mirror_on():
+        return 0
+    now = time.time()
+    if not force and now - _last_sync < SYNC_INTERVAL_SECONDS:
+        return 0
+    _last_sync = now
+    remote = {r.get("file") for r in _remote_snapshots(fresh=True)}
+    sent = 0
+    for agent, spec in SNAPSHOT_SPECS.items():
+        for path in glob.glob(os.path.join(REPO_DIR, spec["glob"])):
+            name = os.path.basename(path)
+            if name in remote:
+                continue
+            if publish_snapshot(name):
+                sent += 1
+    if sent:
+        _remote_cache["at"] = 0.0        # what was just published must show up immediately
+    return sent
+
+
+def mirror_backend():
+    """"supabase" or "local" — whether snapshots are shared right now. The console prints it."""
+    return "supabase" if _mirror_on() else "local"
+
+
+def _reset_mirror_for_tests():
+    global _mirror_available, _mirror_warned, _last_sync
+    _mirror_available = True
+    _mirror_warned = False
+    _last_sync = 0.0
+    _remote_cache["at"] = 0.0
+    _remote_cache["rows"] = []
+
+
 def list_snapshots():
-    """Every snapshot on disk, newest first, with enough detail to choose between them."""
+    """Every snapshot available, newest first, with enough detail to choose between them.
+
+    "Available" is local files PLUS anything another machine published to the mirror. A remote
+    one carries `remote: True` and is fetched on demand when it is actually committed — listing
+    must not download every snapshot on every console poll.
+    """
+    sync_snapshots()
     out = []
     for agent, spec in SNAPSHOT_SPECS.items():
         for path in glob.glob(os.path.join(REPO_DIR, spec["glob"])):
@@ -234,10 +470,52 @@ def list_snapshots():
                 "dry_only": spec["dry_only"],
                 "mode": _scraper_mode(name) if agent == "scraper" else None,
             })
+    # Snapshots another machine published and this one has never had. Entry/pending counts
+    # need the payload, which is deliberately NOT downloaded here — listing must not pull every
+    # snapshot on every console poll — so they are reported as None rather than as 0, which
+    # would read as "this snapshot is empty".
+    local = {s["file"] for s in out}
+    for row in _remote_snapshots():
+        name = row.get("file")
+        agent = row.get("agent")
+        if not name or name in local or agent not in SNAPSHOT_SPECS:
+            continue
+        spec = SNAPSHOT_SPECS[agent]
+        ran_at = _run_date(name) or _parse_iso(row.get("ran_at"))
+        age_days = ((datetime.datetime.now(datetime.timezone.utc) - ran_at).days
+                    if ran_at else 0)
+        out.append({
+            "agent": agent,
+            "label": spec["label"],
+            "kind": spec["kind"],
+            "file": name,
+            "modified_at": row.get("created_at"),
+            "run_date": ran_at.date().isoformat() if ran_at else None,
+            "ran_at": ran_at.isoformat() if ran_at else None,
+            "has_time": bool(re.search(r"\d{8}-\d{6}", name)),
+            "age_days": age_days,
+            "stale": age_days >= STALE_DAYS,
+            "entries": None,
+            "pending": None,
+            "dry_only": spec["dry_only"],
+            "mode": _scraper_mode(name) if agent == "scraper" else None,
+            "remote": True,
+            "host": row.get("host"),
+        })
     # By full instant, not date — otherwise same-day snapshots order by filename, which
     # sorts the agents alphabetically rather than putting the newest run first.
     out.sort(key=lambda s: (s.get("ran_at") or "", s.get("file")), reverse=True)
     return out
+
+
+def _parse_iso(value):
+    if not value:
+        return None
+    try:
+        when = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=datetime.timezone.utc)
 
 
 def _scraper_mode(filename):
@@ -272,8 +550,8 @@ def _run_date(filename):
         return None
 
 
-def resolve(file_name):
-    """Map a bare snapshot filename back to (agent, absolute path).
+def _resolve_local(file_name):
+    """Map a bare snapshot filename back to (agent, absolute path), local files only.
 
     Rejects anything that isn't a plain basename matching a known pattern — this is reached
     from an HTTP handler, and the value names a file to open.
@@ -289,6 +567,23 @@ def resolve(file_name):
         if os.path.isfile(path):
             return agent, path
     return None, None
+
+
+def resolve(file_name):
+    """(agent, absolute path) for a snapshot, materialising a mirrored one if it is not local.
+
+    The local file always wins. Only when there is no local copy is the mirror consulted, and
+    then the snapshot is written to its own filename first — so everything downstream sees an
+    ordinary local snapshot and behaves identically. That is the point: the run-time stamp
+    comes from the FILENAME (audit 4.5), the STALE_DAYS refusal is computed from it, and the
+    commit path must write exactly what the live run would have.
+    """
+    agent, path = _resolve_local(file_name)
+    if agent:
+        return agent, path
+    if not fetch_snapshot(file_name):
+        return None, None
+    return _resolve_local(file_name)
 
 
 # --------------------------------------------------------------------------- writing

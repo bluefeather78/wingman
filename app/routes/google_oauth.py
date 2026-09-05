@@ -88,8 +88,77 @@ _ALLOWED_APP_REDIRECTS = [
 ] or _DEFAULT_APP_REDIRECTS
 
 
+# S0-9 / finding H2. This used to be `any(uri.startswith(prefix) for prefix in ...)` — a bare
+# STRING PREFIX match. With the configured value https://highschoolwingman.com, BOTH
+# https://highschoolwingman.com.evil.tld/ and https://highschoolwingman.com@evil.tld/ passed,
+# and http://localhost:8081 matched http://localhost:8081.evil.tld.
+#
+# The exploit: mail a student
+#   .../api/auth/google/start?app_redirect=https://highschoolwingman.com.evil.tld/
+# They see the REAL Google consent screen, sign in, and are 302'd to evil.tld carrying
+# ?google_token=. The attacker calls /api/auth/google/session?token=... within five minutes
+# and receives that student's access AND refresh tokens.
+#
+# So the allowlist is parsed once into exact origins, and a candidate is compared on
+# (scheme, host, port) — never on text.
+def _parse_allowlist(entries):
+    """(exact origins, custom schemes) from the configured prefixes.
+
+    An entry with a network location becomes an exact (scheme, host, port) origin. A bare
+    `scheme://` entry becomes a scheme, and ONLY for a custom scheme: a bare `http://` would
+    mean "any host on http", which is the open redirect this function exists to prevent.
+    """
+    origins, schemes = set(), set()
+    for entry in entries:
+        parts = urllib.parse.urlsplit(entry)
+        scheme = (parts.scheme or "").lower()
+        if not scheme:
+            print(f"[WARN] Ignoring GOOGLE_APP_REDIRECTS entry with no scheme: {entry!r}")
+            continue
+        if parts.netloc:
+            origins.add((scheme, (parts.hostname or "").lower(), parts.port))
+        elif scheme in ("http", "https"):
+            print(f"[WARN] Ignoring host-less http(s) GOOGLE_APP_REDIRECTS entry "
+                  f"(it would allow ANY host): {entry!r}")
+        else:
+            # A custom scheme (wingman://, exp://) is resolved by the DEVICE's app registry,
+            # not over the network, so there is no remote host for an attacker to point it
+            # at — which is why these match on the scheme alone and keep working for native
+            # deep links like wingman://tracker. exp:// is in the DEV defaults only; it is
+            # not in GOOGLE_APP_REDIRECTS in production unless someone puts it there.
+            schemes.add(scheme)
+    return origins, schemes
+
+
+_ALLOWED_ORIGINS, _ALLOWED_SCHEMES = _parse_allowlist(_ALLOWED_APP_REDIRECTS)
+
+_REDIRECT_FORBIDDEN_CHARS = ("@", "\r", "\n", "\t", "\\")
+
+
 def _is_allowed_app_redirect(uri: str) -> bool:
-    return bool(uri) and any(uri.startswith(prefix) for prefix in _ALLOWED_APP_REDIRECTS)
+    if not uri:
+        return False
+    # '@' is rejected outright: https://highschoolwingman.com@evil.tld/ reads as our domain to
+    # a human and resolves to evil.tld. No legitimate app_redirect carries userinfo.
+    # CR/LF/tab and backslash are rejected because this value ends up in a Location header.
+    if any(c in uri for c in _REDIRECT_FORBIDDEN_CHARS):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(uri)
+    except ValueError:
+        return False
+    scheme = (parts.scheme or "").lower()
+    if not scheme:
+        return False
+    if scheme in _ALLOWED_SCHEMES:
+        return True
+    if not parts.netloc:
+        return False
+    try:
+        port = parts.port
+    except ValueError:                       # a non-numeric port, e.g. host:evil
+        return False
+    return (scheme, (parts.hostname or "").lower(), port) in _ALLOWED_ORIGINS
 
 
 @router.get("/api/auth/google/start")
@@ -170,12 +239,35 @@ def handle_google_callback(request: Request):
     if not google_id or not email:
         return json_error(502, "Google did not return a usable profile.")
 
+    # S0-8 / finding H1. The code below used to link an existing account by EMAIL under a
+    # comment asserting "Google has verified this address" — while never reading
+    # email_verified at all; only sub, email, given_name and family_name were used.
+    #
+    # Google issues email_verified: false for addresses that were never confirmed (a
+    # non-Gmail address added to a Google account; some Workspace configurations). So an
+    # attacker could create a Google account carrying a victim's email unverified, sign in
+    # with Google, have their google_id linked to the victim's password account, and receive
+    # a full session for it. The victim's password still works, so nothing looks wrong from
+    # either side.
+    #
+    # This gates BOTH paths, not just the link: an unverified address must not seed a pending
+    # signup either, or the same claim simply creates the account first and waits.
+    # Boolean per OIDC and per Google's v3 userinfo, but compared tolerantly: if the field
+    # ever came back as the string "true", a strict `is True` would refuse EVERY Google
+    # sign-in. Anything else — false, "false", absent, null — is refused.
+    _verified = profile.get("email_verified")
+    if _verified is not True and str(_verified).strip().lower() != "true":
+        print(f"[WARN] Refused Google sign-in for an unverified address (sub={google_id})")
+        return json_error(400, "Google has not verified that email address, so we can't "
+                               "use it to sign in. Verify it with Google and try again, "
+                               "or sign in with your user ID and password.")
+
     try:
         record = get_user_by_google_id(google_id)
         if not record:
             by_email = get_user_by_email(email)
             if by_email:
-                # Google has verified this address, so link it to the existing account.
+                # Link by email, now that email_verified has actually been checked above.
                 record = get_user(by_email["userid"])
                 query_patch = "?" + urllib.parse.urlencode({"userid": f"eq.{record['userid']}"})
                 _users_request("PATCH", query_patch, data={"google_id": google_id})

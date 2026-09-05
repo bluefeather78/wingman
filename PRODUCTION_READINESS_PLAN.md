@@ -489,6 +489,24 @@ is rebuilding one, or adding a second thing that does the same job badly.
    gate in chat. Phase 4's scheduled paid runs are M3 territory (approval moves from per-run to
    per-schedule) and the toggle + dollar ceiling the phase row asks for is what makes that safe.
 
+### Phase 4 approvals and scope (logged 2026-09-05, before any Phase 4 code was written)
+
+Recorded **before** implementation, so the phase is executed against the scope that was actually
+approved rather than the scope this document originally proposed. Full text in decisions 13–16
+above; the short version:
+
+| Phase-4 item | Ruling |
+|---|---|
+| handoff tokens survive a second worker | build |
+| lock file batch-only | build — **M9 approved**, its own dedicated commit |
+| idempotent rollups via RPC | build |
+| `jsonb_set` RPC for saves | build — this is finding **L9**, open since Phase 1 |
+| leads + snapshots in tables | build — this is the half of the exit test that is testable today |
+| scheduled worker | **DROPPED** (decision 14). No M3 is needed or taken |
+| optional direct Postgres | **SKIPPED** (decision 15), deferred to the launch gate |
+
+**Five items, one marquee commit, no paid call made or scheduled by this phase.**
+
 ### Picking Phase 4 up cold
 
 Phase 4 is **shared state** — making the pipeline correct when more than one process, or more
@@ -653,6 +671,51 @@ the failure this list exists to prevent. Nothing here is waiting on Shama.*
     **A future session must not re-raise it** — not as an open question, not as a risk note, and
     not as suggested follow-up work.
 
+13. **Marquee approvals for Phases 4 and 5 (Shama, 2026-09-05): TWO M9 items approved, a third
+    withdrawn.** Approved: (a) making the Gemini web-search lock **batch-only** in
+    `wingman/gemini_common.py`, and (b) the frontend **retry caps + client timeouts** on the paid
+    AI paths (`aiJson.ts`, `finder.tsx`, `trackerAdd.ts`, `profileTags.ts`, `httpClient.ts`). Both
+    are M9 because they edit code inside a paid call path — neither increases what anything spends
+    and (b) strictly reduces it. **Each lands as its own dedicated commit naming M9.** No prompt
+    text moves in either, so **no M8 was asked for or taken**. The third item put to Shama — a
+    scheduled worker, which would have been M9 + M3 — was **not** approved; see decision 14.
+
+    Also settled while asking: **there is no dead prompt text left in the frontend bundle.** The
+    phase-5 row's "dead prompts/code" was written before S1-1 moved every prompt server-side;
+    `AiRequest.system` in `frontend/src/api/types.ts` is a dead *type field*, not a prompt.
+    Verified by grep 2026-09-05. **Phase 5 is therefore not an M8 phase** — if a future session
+    thinks it has found a prompt to delete there, it should look again before asking.
+
+14. **The scheduled worker is DROPPED — Shama, 2026-09-05: "I don't want to build a scheduler. I
+    have dropped that idea."** Not deferred, not parked pending a hosting decision: dropped. So
+    Phase 4 builds **five** items, not seven, and takes **no M3 approval** (M3 governs paid runs,
+    and nothing here launches one). Every catalog agent stays operator-triggered from the console
+    or the CLI, exactly as today.
+
+    Two consequences a later session must not "fix": the catalog's freshness remains a function of
+    somebody pressing a button (audit §5.1 is an accepted state, not an open bug), and the note in
+    "What changed that Phase 4 has to know about" that *"the scheduled worker MUST take
+    `CATALOG_INSERT` before it inserts"* is now moot — there is no scheduled worker to take it.
+    `wingman/run_lock.py` is untouched by this phase.
+
+15. **"Optional direct Postgres for hot queries" is SKIPPED — Shama, 2026-09-05.** Deferred to the
+    launch gate, alongside the other performance work (decisions 3 and 8). It would add a psycopg
+    dependency, a database password to manage, and a **second way to reach the same database**
+    beside PostgREST — permanently, for every future reader — to buy throughput that cannot be
+    used on Render Free. Revisit when the plan is bumped, not before.
+
+16. **The paid golden-set run at the end of Phase 5 is DEFERRED — Shama, 2026-09-05.**
+    `eval/run_golden_matching.mjs` puts 50 profiles through the live `/api/match` plus the Claude
+    reranker; that is real money and M3 needs a fresh yes, which was not given. Phase 5 therefore
+    closes on its unit tests plus `tsc`, and **the phase row's "golden-set score holds" bar is
+    unmet by choice** — the same treatment decision 8 gave Phase 2's load probe.
+
+    **This does NOT relax M10.** The one Phase 5 change that touches match quality is the grade
+    parser, and `eval/run_golden_matching.mjs` imports `frontend/src/lib/ranking.ts` directly, so
+    it inherits the change rather than drifting from it. If a Phase 5 change turns out to need a
+    harness edit to stay byte-aligned with `finder.tsx`, that edit is still mandatory — M10's
+    obligation is to keep the two in sync, and it is independent of whether anyone pays to run it.
+
 ## Live finding (2026-09-02): catalog fetch statement-timeout + cache decoupling
 
 Surfaced by a real user report ("search a profile theme → *Search failed: Could not reach
@@ -749,8 +812,8 @@ departures section for why `agent_runs` cannot hold a lock**; bank cost before p
 ~~merge `local-discovery-engine`~~ **NOT merged — it is behind main on every shared file and a
 merge would revert the `wingman/` reorg; its plan doc was ported and the prototype is parked as
 an M8+M9 item**; CI marquee-tag check; ~~move one-offs/eval out of root~~ **already done — `scripts/one-off/` and `eval/` exist and `server.py` is the only `.py` left at the root (verified 2026-09-05)**; `scrape_common.py` **(now `wingman/scrape_common.py`)**; tests for untested paid paths | Wk 3–5 | 6 d | **none taken — no prompt text moved and no paid call changed**; decision 4 answered yes | **ALL THREE MET**, each pinned by a named test, and the lock verified live against the real `agent_locks` table |
-| **4 NEXT** Shared state — shared cache or signed handoff tokens; lock file batch-only; idempotent rollups via RPC; `jsonb_set` RPC for saves; leads + snapshots in tables; scheduled worker (free agents first, paid behind toggle + dollar ceiling); optional direct Postgres for hot queries | Wk 5–7 | 6 d | M3 per scheduled paid run | two instances pass the 50 rps test; second machine sees same lead queue |
-| 5 Product accuracy — grade parser context; date validation; sort-on-refresh + calendar ids by label; synthesis failure keeps transcript; unreachable ≠ revoked; reset singletons on logout; one retry per action; client timeouts; drop icon fonts + dead prompts/code; Vitest ~40 cases; a11y labels; split big screens | Wk 6–8 | 5 d | none | frontend tests in CI; golden-set score holds; bundle −300 KB |
+| **4 IN PROGRESS** Shared state — handoff tokens survive a second worker; lock file batch-only; idempotent rollups via RPC; `jsonb_set` RPC for saves; leads + snapshots in tables; ~~scheduled worker (free agents first, paid behind toggle + dollar ceiling)~~ **DROPPED 2026-09-05 (decision 14 — Shama has dropped the idea; do not build it)**; ~~optional direct Postgres for hot queries~~ **SKIPPED 2026-09-05 (decision 15 — deferred to the launch gate)** | Wk 5–7 | 6 d | ~~M3 per scheduled paid run~~ **not needed — no scheduler.** M9 granted for the Gemini lock change (decision 13) | ~~two instances pass the 50 rps test~~ **deferred with every other throughput bar (decisions 3 and 8)**; second machine sees same lead queue |
+| 5 NEXT Product accuracy — grade parser context; date validation; sort-on-refresh + calendar ids by label; synthesis failure keeps transcript; unreachable ≠ revoked; reset singletons on logout; one retry per action; client timeouts; drop icon fonts + dead ~~prompts/~~code (**no dead prompt text is left in the bundle — S1-1 removed it; verified 2026-09-05, so this is NOT an M8 item**); Vitest ~40 cases; a11y labels; split big screens | Wk 6–8 | 5 d | ~~none~~ **M9 granted for the retry caps + client timeouts (decision 13)** | frontend tests in CI; ~~golden-set score holds~~ **the paid golden run is DEFERRED (decision 16); the M10 harness is still kept in sync**; bundle −300 KB |
 | 6 Operate — dashboards, dependency bumps, key rotation, runbook, Stripe webhook route, re-arm trial cron | Wk 8+ | ongoing | none | "is it up / fast / what did it cost" on one screen |
 
 ## Trade-offs worth weighing

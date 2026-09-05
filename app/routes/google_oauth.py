@@ -95,8 +95,36 @@ def _canonicalize_loopback(request):
     return RedirectResponse(target, status_code=302)
 
 
-def _redirect_home(query_suffix=""):
-    return RedirectResponse(f"/{query_suffix}", status_code=302)
+def _handoff_url(dest, token):
+    """Where to send the browser with the one-time sign-in token — S0-9's second half.
+
+    IN THE FRAGMENT for an http(s) destination, which is every web origin. That request is
+    made against our OWN server (the SPA lives at the same origin in production), so a query
+    string lands in Render's access log, in browser history, and in the `Referer` of
+    everything the page then loads. A fragment is never sent to a server at all.
+
+    IN THE QUERY STRING for a custom scheme (`wingman://`, `exp://`). That is not a leak
+    being tolerated — it is a leak that does not exist: a custom-scheme redirect is resolved
+    by the OS and handed straight to the app, so it never reaches an HTTP server and there is
+    no access log for it to appear in. Sending a fragment there instead would gamble on
+    whether iOS and Android preserve fragments across a custom-scheme redirect, which cannot
+    be verified from a laptop — and getting it wrong breaks sign-in outright.
+
+    The token is a single-use 5-minute nonce either way (_mint_google_token), never a bearer.
+    """
+    # safe="" — quote's default leaves "/" alone, and a token carrying "/", "&" or "#"
+    # would break the fragment parse on the other side. token_urlsafe never emits those
+    # today; encoding them anyway means the two halves cannot be desynchronised by a future
+    # change to how the nonce is generated.
+    quoted = urllib.parse.quote(token, safe="")
+    scheme = urllib.parse.urlsplit(dest).scheme.lower()
+    if scheme in ("http", "https") or dest.startswith("/"):
+        # Replace any fragment the destination already carries rather than appending to it;
+        # an allow-listed app redirect should not have one, and two `#` is not a URL.
+        base = dest.split("#", 1)[0]
+        return f"{base}#google_token={quoted}"
+    sep = "&" if "?" in dest else "?"
+    return f"{dest}{sep}google_token={quoted}"
 
 
 # Phase 3: where the Expo app (web origin or native scheme) may receive the one-time
@@ -316,17 +344,20 @@ def handle_google_callback(request: Request):
     # there (the Expo app captures it); otherwise fall back to the backend-root SPA.
     g._prune_google_login_redirects()
     redirect_entry = g._google_login_redirects.pop(req_state, None)
-    if redirect_entry:
-        dest = redirect_entry["app_redirect"]
-        sep = "&" if "?" in dest else "?"
-        return RedirectResponse(f"{dest}{sep}google_token={urllib.parse.quote(token)}",
-                                status_code=302)
-    return _redirect_home(f"?google_token={urllib.parse.quote(token)}")
+    dest = redirect_entry["app_redirect"] if redirect_entry else "/"
+    return RedirectResponse(_handoff_url(dest, token), status_code=302)
 
 
-@router.get("/api/auth/google/session")
-def handle_google_session(request: Request):
-    token = request.query_params.get("token") or ""
+@router.post("/api/auth/google/session")
+def handle_google_session(body: dict = Depends(json_body)):
+    """Resolve the one-time sign-in token minted by the callback.
+
+    POST with the token in the BODY, not GET with it in the query string (S0-9). It is a
+    single-use nonce rather than a bearer, but a credential in a query string is a
+    credential in Render's access log, and this is the same leak S1-3 closed for the
+    calendar flow. There is no GET form left; keeping one would keep the leak.
+    """
+    token = body.get("token") or ""
     entry = g._take_google_token(token)
     if not entry:
         return json_error(400, "This sign-in link has expired. Please try "

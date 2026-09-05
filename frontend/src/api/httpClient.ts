@@ -398,9 +398,12 @@ export const httpClient: ApiClient = {
   },
 
   async googleSession(handoff: string): Promise<GoogleSessionResult> {
+    // POST with the token in the BODY (S0-9). It is a single-use nonce rather than a
+    // bearer, but a credential in a query string is a credential in Render's access log —
+    // the same leak S1-3 closed for the calendar flow.
     const res = await rawFetch(
-      `/api/auth/google/session?token=${encodeURIComponent(handoff)}`,
-      { method: 'GET' },
+      '/api/auth/google/session',
+      { method: 'POST', body: JSON.stringify({ token: handoff }) },
       false,
     );
     if (!res.ok) throw new Error(await errorMessage(res));

@@ -2,16 +2,42 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Switch, View } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
+import { googleHandoffFromUrl } from '@/auth/googleSignIn';
 import { PopButton, PopCard, Screen, Txt } from '@/ui/components';
 import { colors, fonts, space } from '@/ui/theme';
+
+// The one-time token, read ONCE at module scope on web.
+//
+// S0-9: the server now returns it in the URL FRAGMENT for a web destination, and
+// useLocalSearchParams only ever sees the query string — fragments are not sent to a server
+// and expo-router does not surface them. So the fragment is read straight off location, and
+// then SCRUBBED from the history entry: leaving it there would put the token back into the
+// one place (browser history) the fragment move exists to keep it out of.
+//
+// Read at module scope, not in the effect, because the scrub has to happen before any
+// re-render can re-read a now-empty hash.
+function takeWebHandoff(): string {
+  if (typeof globalThis === 'undefined' || !globalThis.location) return '';
+  const token = googleHandoffFromUrl(globalThis.location.href) ?? '';
+  if (token && globalThis.history?.replaceState) {
+    const { pathname, search } = globalThis.location;
+    globalThis.history.replaceState(null, '', `${pathname}${search}`);
+  }
+  return token;
+}
+
+const webHandoff = takeWebHandoff();
 
 // Resumes the Google redirect flow: reads the one-time google_token, resolves it, then either
 // enters the app (existing/linked account) or collects consent for a new account.
 export default function GoogleAuth() {
   const router = useRouter();
   const { googleSession, googleFinish } = useAuth();
+  // The query-string form is still accepted: it is what a custom-scheme (native) redirect
+  // carries, and what a deep link opened straight into this route would carry.
   const params = useLocalSearchParams<{ google_token?: string }>();
-  const handoff = typeof params.google_token === 'string' ? params.google_token : '';
+  const handoff =
+    webHandoff || (typeof params.google_token === 'string' ? params.google_token : '');
 
   const [phase, setPhase] = useState<'resolving' | 'pending' | 'error'>('resolving');
   const [error, setError] = useState<string | null>(null);

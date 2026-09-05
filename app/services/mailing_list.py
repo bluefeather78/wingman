@@ -13,7 +13,7 @@ import urllib.request
 from wingman import mailing_list_common
 from app.config import *  # noqa: F401,F403
 from app.core import (
-    _supabase_request, _supabase_request_strict, _is_missing_column_error, get_user,
+    _supabase_request, _supabase_request_strict, _is_missing_column_error, select_user,
     _error_body, _MISSING_COLUMN_CODES, _missing_table_error,
 )
 
@@ -200,7 +200,8 @@ def subscribe_user_to_list(userid, opp_id, email, consented):
 
     user = None
     try:
-        user = get_user(userid)
+        # Two columns — this only fills the name on a newsletter signup form (S1-15, L10).
+        user = select_user(userid, "userid,first_name,last_name")
     except Exception:
         pass
     values = {

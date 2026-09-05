@@ -94,7 +94,7 @@ class _Req:
 def test_start_no_longer_accepts_an_access_token_in_the_url(monkeypatch):
     """Leaving `token=` as a fallback would leave the leak exactly where it was."""
     monkeypatch.setattr(gr, "_canonicalize_loopback", lambda _r: None)
-    monkeypatch.setattr(gr, "get_user", lambda _u: {"userid": "alice"})
+    monkeypatch.setattr(gr, "user_exists", lambda _u: True)
     monkeypatch.setattr(gr, "GOOGLE_CLIENT_ID", "cid")
     monkeypatch.setattr(gr, "GOOGLE_CLIENT_SECRET", "csec")
     resp = gr.handle_google_calendar_start(_Req({"token": "a.real.jwt"}))
@@ -109,7 +109,7 @@ def test_start_source_does_not_verify_an_access_token_any_more():
 
 def test_start_accepts_a_fresh_nonce(monkeypatch):
     monkeypatch.setattr(gr, "_canonicalize_loopback", lambda _r: None)
-    monkeypatch.setattr(gr, "get_user", lambda _u: {"userid": "alice"})
+    monkeypatch.setattr(gr, "user_exists", lambda _u: True)
     monkeypatch.setattr(gr, "GOOGLE_CLIENT_ID", "cid")
     monkeypatch.setattr(gr, "GOOGLE_CLIENT_SECRET", "csec")
     nonce = g.mint_calendar_handoff("alice")
@@ -120,7 +120,7 @@ def test_start_accepts_a_fresh_nonce(monkeypatch):
 
 def test_a_replayed_nonce_is_refused(monkeypatch):
     monkeypatch.setattr(gr, "_canonicalize_loopback", lambda _r: None)
-    monkeypatch.setattr(gr, "get_user", lambda _u: {"userid": "alice"})
+    monkeypatch.setattr(gr, "user_exists", lambda _u: True)
     monkeypatch.setattr(gr, "GOOGLE_CLIENT_ID", "cid")
     monkeypatch.setattr(gr, "GOOGLE_CLIENT_SECRET", "csec")
     nonce = g.mint_calendar_handoff("alice")
@@ -134,7 +134,7 @@ def _sync(events, monkeypatch, requests=None):
     """Drive handle_calendar_sync with Google stubbed out."""
     monkeypatch.setattr(gr.g, "get_google_calendar_access_token", lambda _u: "tok")
     monkeypatch.setattr(gr.g, "ensure_wingman_calendar", lambda *a: "cal@group")
-    monkeypatch.setattr(gr, "get_user", lambda _u: {"userid": "alice"})
+    monkeypatch.setattr(gr, "select_user", lambda _u, _c: {"userid": "alice"})
     monkeypatch.setattr(gr, "_existing_event_map", lambda *a: ({}, []))
     monkeypatch.setattr(gr, "_sweep_stale_events", lambda *a, **k: (0, []))
 

@@ -647,7 +647,7 @@ def _unique_userid_from_email(email):
     base = re.sub(r"[^a-z0-9._-]", "", local) or "user"
     candidate = base
     suffix = 2
-    while get_user(candidate):
+    while user_exists(candidate):
         candidate = f"{base}{suffix}"
         suffix += 1
     return candidate
@@ -665,9 +665,48 @@ def normalize_email(email):
 
 
 def get_user(userid):
+    """The WHOLE row, `data` blob and all.
+
+    Prefer select_user()/user_exists()/get_user_account() (S1-15, finding L10). This pulls
+    password_hash, google_calendar_refresh_token and the student's entire app state into
+    memory to answer questions that almost never need any of them, and every new consumer
+    of the returned dict is one json.dumps away from shipping it somewhere. It is kept for
+    the two callers that genuinely want everything: the console's mimic/preview, which
+    renders the deadline digest out of `data`, and the Google signup path.
+    """
     query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}", "select": "*"})
     rows = _users_request("GET", query)
     return rows[0] if rows else None
+
+
+def select_user(userid, columns):
+    """One user row holding EXACTLY `columns`, or None. S1-15, finding L10.
+
+    Degrades the same way get_user_account does: a column that has not been migrated in
+    yet makes PostgREST 400 the WHOLE read, which would break a working feature over an
+    optional one — so a 400 falls back to `*` for this call and says so. The fallback is
+    per-call and does not latch, because unlike the account read this is used with several
+    different column sets and one missing column should not widen all of them.
+    """
+    query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}", "select": columns})
+    try:
+        rows = _users_request("GET", query)
+    except urllib.error.HTTPError as e:
+        if e.code != 400:
+            raise
+        print(f"[WARN] narrow users select {columns!r} fell back to '*' (a column is "
+              f"missing): {_error_body(e).get('message') or e}")
+        return get_user(userid)
+    return rows[0] if rows else None
+
+
+def user_exists(userid):
+    """Does this account exist? One column over the wire, not the whole row.
+
+    Most `if not get_user(x)` guards only ever asked this — and paid for password_hash,
+    the calendar refresh token and a 37KB tracker blob to find out.
+    """
+    return select_user(userid, "userid") is not None
 
 
 # Every column on `users` EXCEPT `data`. There is no "select everything but X" in
@@ -842,8 +881,7 @@ def _is_email_conflict(detail):
 
 
 def update_user_location(userid, location):
-    record = get_user(userid)
-    if not record:
+    if not user_exists(userid):
         return False
     query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
     _users_request("PATCH", query, data={"location": location})
@@ -872,8 +910,7 @@ def update_user_data(userid, key, value):
 
 def update_subscription(userid, updates):
     """Update subscription fields for a user. updates is a dict of fields to update."""
-    record = get_user(userid)
-    if not record:
+    if not user_exists(userid):
         return False
     query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
     _users_request("PATCH", query, data=updates)
@@ -947,7 +984,7 @@ def bump_token_version(userid):
     Degrades if db/auth_schema.sql has not run yet: the column simply isn't there, so revocation
     is a no-op (nothing to bump), consistent with how the rest of auth treats a version of 0.
     """
-    record = get_user(userid)
+    record = select_user(userid, "userid,token_version")
     if not record:
         return None
     current = int(record.get("token_version") or 0)

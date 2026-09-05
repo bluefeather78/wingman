@@ -21,7 +21,8 @@ from app.config import (
     GOOGLE_CALENDAR_API_BASE, WINGMAN_CALENDAR_NAME,
 )
 from app.core import (
-    get_user, get_user_by_email, get_user_by_google_id, create_user, ensure_trial_started,
+    get_user, get_user_account, select_user, user_exists,
+    get_user_by_email, get_user_by_google_id, create_user, ensure_trial_started,
     _check_signup_consent, _unique_userid_from_email, _users_request,
     _is_missing_column_error, MissingUserColumns, DuplicateEmail,
 )
@@ -269,7 +270,9 @@ def handle_google_callback(request: Request):
             by_email = get_user_by_email(email)
             if by_email:
                 # Link by email, now that email_verified has actually been checked above.
-                record = get_user(by_email["userid"])
+                # get_user_account, not get_user: this feeds login_response, which needs
+                # identity + subscription columns and never the `data` blob (S1-15, L10).
+                record = get_user_account(by_email["userid"])
                 query_patch = "?" + urllib.parse.urlencode({"userid": f"eq.{record['userid']}"})
                 _users_request("PATCH", query_patch, data={"google_id": google_id})
                 record["google_id"] = google_id
@@ -314,7 +317,7 @@ def handle_google_session(request: Request):
             "email": entry["email"],
         })
     try:
-        record = get_user(entry["userid"])
+        record = get_user_account(entry["userid"])
     except Exception as e:
         return opaque_error(502, DB_UNAVAILABLE, e, op="google.db")
     if not record:
@@ -420,7 +423,7 @@ def handle_google_calendar_start(request: Request):
     if not userid:
         return json_error(401, "That connect link expired. Try Sync to Calendar again.")
     try:
-        if not get_user(userid):
+        if not user_exists(userid):
             return json_error(404, "No account found.")
     except Exception as e:
         return opaque_error(502, DB_UNAVAILABLE, e, op="google.db")
@@ -703,7 +706,9 @@ def handle_calendar_sync(body: dict = Depends(json_body),
                                "account. Connect it first.")
 
     try:
-        calendar_id = g.ensure_wingman_calendar(access_token, userid, get_user(userid))
+        # ensure_wingman_calendar reads exactly one column off the record.
+        calendar_id = g.ensure_wingman_calendar(
+            access_token, userid, select_user(userid, "userid,google_calendar_id") or {})
     except urllib.error.HTTPError as e:
         if _is_missing_column_error(e):
             return json_error(503, "Google Calendar sync is temporarily "

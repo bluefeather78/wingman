@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 
 from app.config import *  # noqa: F401,F403
-from app.core import get_user, _users_request
+from app.core import get_user, select_user, _users_request
 
 
 # One-time-use handoff tokens bridging the OAuth redirect back to the SPA, which has no
@@ -132,7 +132,12 @@ def get_google_calendar_access_token(userid):
     """Returns a valid access token for this user's Calendar grant, refreshing it
     first if expired. Returns None if the user has never connected Calendar, and
     raises on a Supabase/Google failure so the caller can distinguish the two."""
-    record = get_user(userid)
+    # Four columns, not the whole row (S1-15, L10). select_user falls back to `*` if
+    # db/google_calendar_schema.sql has not run, so an un-migrated database still answers
+    # "not connected" instead of 400ing the read.
+    record = select_user(userid, "userid,google_calendar_refresh_token,"
+                                 "google_calendar_access_token,"
+                                 "google_calendar_token_expires_at")
     if not record or not record.get("google_calendar_refresh_token"):
         return None
     expires_at = record.get("google_calendar_token_expires_at")

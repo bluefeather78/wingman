@@ -1049,20 +1049,43 @@ def _activity_first_day():
 
 # ---------- The metrics themselves ----------
 
+# Columns dropped from every account row the moment it arrives (S1-15, finding L10).
+# They are credentials, and nothing in this module reads any of them: password_hash is
+# password-equivalent for any row still holding a legacy hash, and the two calendar token
+# columns are a live grant on a student's real calendar. See _fetch_all_accounts for why
+# they are stripped after the read rather than excluded from the select.
+#
+# `data` is deliberately NOT in this list — the funnel's _stage_flags reads the tracker and
+# profile out of it, so dropping it would silently zero every stage after "signed_up".
+_ACCOUNT_SECRET_COLUMNS = (
+    "password_hash",
+    "google_calendar_refresh_token",
+    "google_calendar_access_token",
+)
+
+
 def _fetch_all_accounts():
-    """Every account, paginated past PostgREST's 1000-row cap.
+    """Every account, paginated past PostgREST's 1000-row cap, minus the secret columns.
 
     Selects `*` on purpose: google_id and google_calendar_connected_at only exist once
     their own migrations have run, and PostgREST 400s an entire read on one unknown
     column — a named select would make this endpoint fail wholesale on a database that is
-    merely missing an optional feature. Nothing sensitive from these rows is ever put in
-    the response; see _shape_account.
+    merely missing an optional feature.
+
+    So the narrowing happens on THIS side instead: the credential columns are dropped from
+    every row as it lands, before anything else in this module can see them. That keeps the
+    migration-tolerance the `*` buys AND stops the whole roster's password hashes and live
+    calendar tokens from sitting in the console process — where, per finding L10, every new
+    consumer of a row is one json.dumps from publishing them.
     """
     page_size, offset, out = 1000, 0, []
     while True:
         batch = _users_request("GET", "?" + urllib.parse.urlencode({
             "select": "*", "order": "created_at.asc",
             "limit": str(page_size), "offset": str(offset)})) or []
+        for row in batch:
+            for column in _ACCOUNT_SECRET_COLUMNS:
+                row.pop(column, None)
         out.extend(batch)
         if len(batch) < page_size:
             return out

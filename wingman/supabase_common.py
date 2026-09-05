@@ -60,7 +60,7 @@ def require_service_key():
     return url, key
 
 
-def supabase_get(supabase_url, table, params, key, page_size=PAGE_SIZE):
+def supabase_get(supabase_url, table, params, key, page_size=PAGE_SIZE, order_by="id"):
     """Paginated GET against a Supabase/PostgREST table. `params` is a dict of
     query params, e.g. {"select": "id,url", "is_active": "eq.true"}.
 
@@ -69,7 +69,22 @@ def supabase_get(supabase_url, table, params, key, page_size=PAGE_SIZE):
     full 1000-row page can exceed Supabase's ~8s statement timeout and 500 with code 57014
     ("canceling statement due to statement timeout"). The total result is identical either way; a
     smaller page just fetches it in more, smaller requests. Never RAISE it above 1000 — PostgREST
-    caps a single response there regardless, so a larger value would silently under-read."""
+    caps a single response there regardless, so a larger value would silently under-read.
+
+    ORDER IS APPLIED HERE, NOT LEFT TO THE CALLER (audit finding 4.14). Offset pagination over an
+    UNORDERED query is not stable in Postgres: rows come back in heap order, and a row updated
+    mid-scan moves — so it can be returned twice or, worse, skipped entirely. Roughly 39 of the
+    45 `opportunities` reads in this repo passed no `order`, including the scraper's own dedupe
+    set, which pages a table the same run is concurrently PATCHing via apply_merge. A skipped row
+    there is a missed duplicate: the scraper re-inserts a program it already has.
+
+    So the default is `order_by="id"`, applied only when the caller has not set `order` itself.
+    Pass `order_by=` for a table keyed on something else (opportunity_signups is keyed on
+    `opportunity_id`), or `order_by=None` to opt out entirely — which is only correct for a read
+    that provably fits in one page.
+    """
+    if order_by and "order" not in params:
+        params = {**params, "order": order_by}
     query = urllib.parse.urlencode(params)
     rows = []
     offset = 0

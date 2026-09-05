@@ -236,8 +236,10 @@ def select_rows(supabase_url, service_key, args):
 
     if not args.force:
         try:
+            # order_by: this table is keyed on opportunity_id, not id (audit 4.14).
             done = supabase_get(supabase_url, "opportunity_signups",
-                                {"select": "opportunity_id"}, service_key)
+                                {"select": "opportunity_id"}, service_key,
+                                order_by="opportunity_id")
             seen = {r["opportunity_id"] for r in done}
         except Exception as e:
             print(f"[ERROR] Could not read opportunity_signups: {e}")

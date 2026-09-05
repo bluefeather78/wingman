@@ -10,7 +10,7 @@ from app.config import EMAIL_RE
 from app.core import (
     get_user_account, get_user_by_email, create_user, MissingUserColumns, DuplicateEmail,
     _check_signup_consent, ensure_trial_started, touch_user_activity,
-    update_password_hash, normalize_email,
+    update_password_hash, normalize_email, pseudonym,
 )
 from app.deps import (json_body, json_response, json_error, client_ip, login_response,
                       opaque_error, DB_UNAVAILABLE)
@@ -159,7 +159,8 @@ def handle_login(request: Request, body: dict = Depends(json_body)):
         except Exception as e:
             # Non-fatal: the login still succeeds on the legacy hash; we just retry the
             # upgrade next time rather than failing a valid sign-in over it.
-            print(f"[WARN] Could not upgrade password hash for {key}: {e}")
+            print(f"[WARN] Could not upgrade password hash for user "
+                  f"{pseudonym(key)}: {e}")
 
     record = ensure_trial_started(key, record)
     touch_user_activity(key, "login")

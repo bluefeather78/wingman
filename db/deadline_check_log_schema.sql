@@ -27,3 +27,17 @@ CREATE INDEX IF NOT EXISTS deadline_check_log_opp_time
 -- Index on (source) for filtering by check type (cached vs fresh vs mock, etc.)
 CREATE INDEX IF NOT EXISTS deadline_check_log_source
     ON deadline_check_log(source);
+
+-- ---------------------------------------------------------------------------
+-- Row level security. SECURITY_HARDENING_PLAN.md S1-9.
+--
+-- This file shipped without it. Every other user-facing table in this repo enables RLS
+-- with no policies, so that nothing is reachable with the anon key the browser holds; this
+-- one was missed. Its rows are not a student's own words, but they are a per-opportunity
+-- record of what the service checked and when, and there is no reason for a browser to
+-- read them.
+--
+-- Adding the line here does NOT retroactively secure a table that already exists —
+-- somebody has to run it. Confirm the live state in the Supabase dashboard.
+-- ---------------------------------------------------------------------------
+ALTER TABLE deadline_check_log ENABLE ROW LEVEL SECURITY;

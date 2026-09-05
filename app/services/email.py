@@ -47,7 +47,7 @@ from app.config import (
 )
 from app.core import (
     _supabase_request_strict, _missing_table_error, _error_body, get_user_account,
-    get_user, subscription_state,
+    get_user, subscription_state, pseudonym,
 )
 from wingman.subscription_common import TRIAL_DAYS
 from app.services import email_templates
@@ -381,7 +381,12 @@ def send_lifecycle_email(userid, kind, record=None, dedupe_key=None, to_email=No
     if not RESEND_API_KEY:
         # No claim row — see the module docstring. Printed rather than silent so an offline
         # signup still shows that an email would have gone out.
-        print(f"[MOCK EMAIL] {kind} -> {email}: {subject}")
+        # S1-9: the address does not go to stdout. Render retains it, and a log of
+        # "which minor got which email when" is a roster. The pseudonym is enough to see
+        # that a send fired and to correlate it with the other lines about that account;
+        # the RESPONSE still carries the real address, because that goes to the console
+        # (localhost, token-gated), not to a retained log.
+        print(f"[MOCK EMAIL] {kind} -> user {pseudonym(userid)}: {subject}")
         return {"state": "mock", "reason": "RESEND_API_KEY not set", "subject": subject,
                 "to": email}
 
@@ -397,7 +402,10 @@ def send_lifecycle_email(userid, kind, record=None, dedupe_key=None, to_email=No
     message_id, error = _resend_post(email, subject, html_body, text_body)
     if error:
         _finish(row, "failed", error=error)
-        print(f"[WARN] Lifecycle email {kind} -> {email} failed: {error}")
+        # email_sends.id, not the address: that row carries the address, so an operator
+        # can look it up, and the log line stops being a roster (S1-9).
+        print(f"[WARN] Lifecycle email {kind} failed "
+              f"(email_sends id={(row or {}).get('id')}): {error}")
         return {"state": "failed", "reason": error, "subject": subject, "to": email}
 
     _finish(row, "sent", message_id=message_id)
@@ -611,7 +619,7 @@ def _send_deadline_digest(record, due):
                 "deadline_alert", ctx, unsubscribe_url(userid))
         except Exception as e:
             return {"state": "failed", "reason": f"template error: {e}"}
-        print(f"[MOCK EMAIL] deadline_alert -> {email}: {subject}")
+        print(f"[MOCK EMAIL] deadline_alert -> user {pseudonym(userid)}: {subject}")
         return {"state": "mock", "units_sent": len(due), "subject": subject, "to": email}
 
     # Live: claim each unit; only survivors go into the digest, so the subject's count matches
@@ -658,7 +666,8 @@ def _send_deadline_digest(record, due):
     if error:
         for (r, _u, _rg) in survivors:
             _finish(r, "failed", error=error, subject=subject)
-        print(f"[WARN] deadline_alert -> {email} failed: {error}")
+        print(f"[WARN] deadline_alert failed for user {pseudonym(userid)} "
+              f"({len(survivors)} unit(s)): {error}")
         return {"state": "failed", "reason": error, "to": email,
                 "units_already_sent": already}
 
@@ -824,7 +833,7 @@ def set_optout(userid, value=True):
             print(f"[WARN] Cannot record opt-out: run {EMAIL_SETUP_SQL}.")
         return False
     except Exception as e:
-        print(f"[WARN] Could not record opt-out for {userid}: {e}")
+        print(f"[WARN] Could not record opt-out for user {pseudonym(userid)}: {e}")
         return False
 
 

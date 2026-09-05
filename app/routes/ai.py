@@ -149,7 +149,7 @@ def _mock_response(raw_body, ip, userid):
         system, user_content = "", ""
     text = generate_mock_text(system, user_content)
     resp = json_response(200, {"content": [{"type": "text", "text": text}]})
-    log_conversation_async(userid, ip, "mock", system,
+    log_conversation_async(userid, "mock", system,
                            user_content if isinstance(user_content, str) else json.dumps(user_content),
                            text)
     return resp
@@ -182,7 +182,7 @@ def _proxy_to_gemini(raw_body, ip, userid):
         _record_provider_failure("gemini", "/api/messages", 0, str(e))
         return _mark_logged(json_error(502, _PROVIDER_DEFAULT))
     resp = json_response(200, {"content": [{"type": "text", "text": text}]})
-    log_conversation_async(userid, ip, "live", system, user_content, text)
+    log_conversation_async(userid, "live", system, user_content, text)
     record_interactive_cost_async("interactive_gemini", usage, MESSAGES_MODEL,
                                   userid=userid, system=system)
     return resp
@@ -248,7 +248,7 @@ def _proxy_to_anthropic(raw_body, ip, userid):
         }, CLAUDE_MODEL, userid=userid, system=system)
     except Exception:
         response_text = ""
-    log_conversation_async(userid, ip, "live", system, user_content, response_text)
+    log_conversation_async(userid, "live", system, user_content, response_text)
     return resp
 
 

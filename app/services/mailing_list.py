@@ -14,6 +14,7 @@ from wingman import mailing_list_common
 from app.config import *  # noqa: F401,F403
 from app.core import (
     _supabase_request, _supabase_request_strict, _is_missing_column_error, select_user,
+    pseudonym,
     _error_body, _MISSING_COLUMN_CODES, _missing_table_error,
 )
 
@@ -157,7 +158,10 @@ def _record_subscription_attempt(userid, opp_id, email, state, message, provider
         return True
     except Exception as e:
         hint = f" {MAILING_LIST_SETUP_HINT}" if _missing_table_error(e) else ""
-        print(f"[WARN] Signup for {userid}/{opp_id} was SENT but not recorded: {e}.{hint}")
+        # Pseudonymised (S1-9). The opportunity id stays — it is catalog data, not a
+        # person — and it plus the pseudonym is what makes this line actionable.
+        print(f"[WARN] Signup for user {pseudonym(userid)} / {opp_id} was SENT but not "
+              f"recorded: {e}.{hint}")
         return False
 
 

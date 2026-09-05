@@ -38,7 +38,7 @@ from app.config import (USER_DAILY_BUDGET_USD, GLOBAL_DAILY_BUDGET_USD,
                         BUDGET_EXEMPT_USERIDS, BUDGET_CACHE_TTL_SECONDS,
                         FORCED_RECHECK_WINDOW_SECONDS, FORCED_RECHECK_MAX_PER_WINDOW,
                         SUPABASE_URL, SUPABASE_SERVICE_KEY)
-from app.core import _supabase_request
+from app.core import _supabase_request, pseudonym
 from app.auth.ratelimit import RateLimiter
 
 # One forced re-check per (user, opportunity) per window. RateLimiter is exactly this shape
@@ -161,7 +161,7 @@ def over_user_budget(userid):
     spent = user_spend_today(userid)
     if spent is None or spent < USER_DAILY_BUDGET_USD:
         return None
-    print(f"[WARN] Daily budget reached for {userid}: ${spent:.4f} of "
+    print(f"[WARN] Daily budget reached for user {pseudonym(userid)}: ${spent:.4f} of "
           f"${USER_DAILY_BUDGET_USD:.2f}")
     return ("You've used up today's AI allowance. It resets at midnight UTC — "
             "everything already saved to your profile and Quest Log stays put.")

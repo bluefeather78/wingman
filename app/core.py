@@ -7,6 +7,7 @@ here and the ops dashboards READ them, so both app.* and ops.* import from here.
 It never imports from app.services.* or ops.* (one-way dependency).
 """
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -126,31 +127,51 @@ def ensure_trial_started(userid, record):
     record["trial_ends_at"] = starts
     return record
 
+# ---------- De-identified logging (S1-9) ----------
+#
+# Render retains stdout, so every `print(f"... {userid}")` and `[MOCK EMAIL] -> {email}`
+# built a timeline of which minors did what, readable by anyone with log access. The
+# operational VALUE of those lines is correlation — "the same account failed here and
+# here" — not identity, so identity is what goes.
+#
+# Peppered with JWT_SECRET, not a bare hash: userids are short, guessable strings (they are
+# chosen at signup and often a first name), so an unsalted digest is reversible by anyone
+# who can run sha256 over a wordlist. The pepper is a secret the log reader does not
+# necessarily have. Stable within a deployment, so two lines about the same account still
+# line up; it changes if JWT_SECRET is rotated, which is the correct trade.
+def pseudonym(value):
+    """A short, stable, non-reversible stand-in for a userid or email, for log lines."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return "anon"
+    return hashlib.sha256(
+        (JWT_SECRET or "wingman-log-pepper").encode("utf-8") + b"|" + text.encode("utf-8")
+    ).hexdigest()[:8]
+
+
 # ---------- Conversation logging (Supabase-backed, server-side only) ----------
 # Only actual profile-chat Q&A turns are persisted to the `conversations` table,
-# purely for backend visibility — nothing in script.js changes or is even aware
+# purely for backend visibility — nothing in the client changes or is even aware
 # this happens. Every other /api/messages call (ranking, web search, tracker
 # extraction, chat-starter generation, session summarization, ...) is a one-shot
 # completion with no real "student answered a question" moment, so it's skipped
-# entirely rather than logged with an empty response. There's no session concept
-# in this server (no cookies/auth tokens on /api/messages requests), so rows are
-# NOT attributed to a specific userid; client_ip is stored as the closest
-# available correlation key. Logging is fire-and-forget on a background thread and
-# swallows its own errors so a logging hiccup can never break the actual API
-# response the user is waiting on.
+# entirely rather than logged with an empty response. Logging is fire-and-forget on a
+# background thread and swallows its own errors so a logging hiccup can never break the
+# actual API response the user is waiting on.
 #
-# Run this SQL once in the Supabase SQL editor before conversations start logging:
-#   create table conversations (
-#       id             bigint generated always as identity primary key,
-#       created_at     timestamptz not null default now(),
-#       userid         text,
-#       client_ip      text,
-#       mode           text,   -- 'live' or 'mock'
-#       system_prompt  text,   -- reused to hold just the bot's question for this turn
-#       user_content   text    -- reused to hold just the student's answer to it
-#   );
-# To add userid to existing table:
-#   alter table conversations add column userid text;
+# THE SCHEMA IS NOW db/conversations_schema.sql, not this comment (S1-9).
+#
+# That is the finding, not a tidy-up: this table's only definition was the SQL pasted into
+# this comment, and that SQL had no `enable row level security` line — while every other
+# user table in the repo has one. It holds the most sensitive free text in the product, a
+# minor describing themselves in their own words, duplicated outside the RLS-protected
+# `users` row. Whether the LIVE table has RLS on is still not knowable from here; the
+# schema file says to confirm it in the Supabase dashboard, and that instruction is the
+# actual fix.
+#
+# client_ip is NOT written any more, and the schema file drops the column. There is no
+# session concept on the AI proxy routes, so it was only ever a weak correlation key, and
+# "which minor, from which address, said what" is not worth keeping for that.
 def extract_qa_pair(user_content):
     """Pulls the most recent <bot question, student answer> pair out of a profile-chat
     'CONVERSATION SO FAR' transcript (see profileChatNextQuestion in script.js) — the
@@ -537,7 +558,7 @@ def record_user_cost(userid, surface, feature, cost, input_tokens=0, output_toke
                 "last_at": now.isoformat(),
             })
     except Exception as e:
-        print(f"[WARN] Could not attribute cost to {userid}: {e}")
+        print(f"[WARN] Could not attribute cost to user {pseudonym(userid)}: {e}")
 
 
 def record_user_cost_async(userid, surface, feature, cost, input_tokens=0,
@@ -550,7 +571,8 @@ def record_user_cost_async(userid, surface, feature, cost, input_tokens=0,
         daemon=True).start()
 
 
-def log_conversation(userid, client_ip, mode, system_question, user_response):
+def log_conversation(userid, mode, system_question, user_response):
+    """Persist one profile-chat <question, answer> turn. S1-9: no client_ip."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return
     try:
@@ -558,7 +580,6 @@ def log_conversation(userid, client_ip, mode, system_question, user_response):
             f"{SUPABASE_URL}/rest/v1/conversations",
             data=json.dumps([{
                 "userid": userid,
-                "client_ip": client_ip,
                 "mode": mode,
                 "system_prompt": system_question,
                 "user_content": user_response,
@@ -573,12 +594,12 @@ def log_conversation(userid, client_ip, mode, system_question, user_response):
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             resp.read()
-        print(f"[INFO] Logged conversation for userid={userid}")
+        print(f"[INFO] Logged conversation for user {pseudonym(userid)}")
     except Exception as e:
-        print(f"[WARN] Failed to log conversation for userid={userid}: {e}")
+        print(f"[WARN] Failed to log conversation for user {pseudonym(userid)}: {e}")
 
 
-def log_conversation_async(userid, client_ip, mode, system_prompt, user_content, response_text):
+def log_conversation_async(userid, mode, system_prompt, user_content, response_text):
     # system_prompt/response_text are unused now (kept in the signature so both call
     # sites below don't need to change) — only a real <question, answer> pair from the
     # transcript embedded in user_content gets logged.
@@ -587,7 +608,7 @@ def log_conversation_async(userid, client_ip, mode, system_prompt, user_content,
         return
     threading.Thread(
         target=log_conversation,
-        args=(userid, client_ip, mode, question, answer),
+        args=(userid, mode, question, answer),
         daemon=True,
     ).start()
 
@@ -1089,7 +1110,7 @@ def touch_user_activity(userid, surface):
     except Exception as e:
         # Activity logging must never be the reason a user's request fails. Same posture
         # as log_conversation().
-        print(f"[WARN] Could not buffer activity for {userid}: {e}")
+        print(f"[WARN] Could not buffer activity for user {pseudonym(userid)}: {e}")
 
 
 def _start_activity_flusher():
@@ -1131,7 +1152,7 @@ def flush_user_activity():
             # A transient failure loses this interval's counts for one user. Put nothing
             # back in the buffer: retrying forever would let one poisoned key grow without
             # bound, and the row this drops is a count, not the day's existence.
-            print(f"[WARN] Could not record activity for {uid} on {day}: {e}")
+            print(f"[WARN] Could not record activity for user {pseudonym(uid)} on {day}: {e}")
 
 
 def _activity_apply(uid, day, delta):
@@ -1245,7 +1266,7 @@ def record_user_events(userid, events):
         _start_events_flusher()
     except Exception as e:
         # Same posture as touch_user_activity(): capture must never break a request.
-        print(f"[WARN] Could not buffer events for {userid}: {e}")
+        print(f"[WARN] Could not buffer events for user {pseudonym(userid)}: {e}")
     return accepted
 
 

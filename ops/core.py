@@ -42,7 +42,7 @@ from app.core import (
     INTERACTIVE_AGENTS, FEATURE_LABELS, PROVIDER_LABELS, provider_for_model,
     subscription_state,
 )
-from app.services.opportunities import _opportunities_cache, _opportunities_cache_lock
+from app.services.opportunities import bust_catalog_cache
 from wingman.subscription_common import (is_trial_expired, promo_kind,
                                          load_promo_codes)
 from app.services.mailing_list import (
@@ -1701,8 +1701,7 @@ def resolve_link_queue(ids, action, reviewed_by="admin-console"):
     # Deactivating changes what students see, so drop the public catalog cache exactly as
     # activate_opportunities does. Clearing does not change is_active, so it cannot.
     if done and action == "deactivate":
-        with _opportunities_cache_lock:
-            _opportunities_cache["fetched_at"] = 0.0
+        bust_catalog_cache()
 
     return {"ok": errors == 0, "action": action, "review_status": review_value,
             "updated": done, "errors": errors, "details": details,
@@ -1770,8 +1769,7 @@ def commit_dryrun_snapshot(file_name, dry=False):
     }])
     invalidate_runs_cache()
     # Committed rows must not wait out OPPORTUNITIES_CACHE_TTL before they are visible.
-    with _opportunities_cache_lock:
-        _opportunities_cache["fetched_at"] = 0.0
+    bust_catalog_cache()
     return result
 
 
@@ -2257,8 +2255,7 @@ def moderate_opportunities(ids, status, reviewed_by="admin-console", duplicate_o
                 details.append(f"{opp_id}: {str(e)[:160]}")
 
     if done and status in ADJUDICATED_STATUSES:
-        with _opportunities_cache_lock:
-            _opportunities_cache["fetched_at"] = 0.0
+        bust_catalog_cache()
     # Feed the round-ups straight back in. The trigger is the REASON, not the rejection: the
     # operator looked at the page and said it lists many programs, which is better evidence than
     # anything this pipeline can derive. Every other reason says nothing about that and routes
@@ -2659,8 +2656,7 @@ def activate_opportunities(ids, active=True):
     # The public /api/opportunities response is cached for OPPORTUNITIES_CACHE_TTL seconds;
     # without this the operator activates a row and then cannot see it in the app.
     if done:
-        with _opportunities_cache_lock:
-            _opportunities_cache["fetched_at"] = 0.0
+        bust_catalog_cache()
     # Keep the dedupe index current (MARQUEE M9): embed the rows just made live so the next scrape
     # matches new candidates against them. Best-effort — never affects the activation result above.
     indexed = _index_activated_rows(activated_ids) if active else 0

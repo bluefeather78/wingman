@@ -8,7 +8,7 @@ import secrets
 from fastapi import Depends, HTTPException, Request, Response
 
 from app.config import JSON_MAX_BODY_BYTES
-from app.core import (get_user_account, subscription_state, _login_payload,
+from app.core import (get_user_account, get_user_subscription, subscription_state, _login_payload,
                       record_api_error, rotate_refresh_jti)
 from app.auth import issue_tokens, get_current_user, get_optional_user, AuthedUser
 
@@ -230,7 +230,11 @@ def subscription_block_reason(userid):
     if not userid:
         return None
     try:
-        record = get_user_account(userid)
+        # Phase 2 item 3: the cached NARROW read, not get_user_account. This runs on every
+        # signed-in request and needs exactly the five columns subscription_state reads;
+        # get_user_account pulled every column but `data` — password_hash and the calendar
+        # refresh token included — across the wire each time to answer it.
+        record = get_user_subscription(userid)
     except Exception:
         return None
     if not record:

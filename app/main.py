@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import GEMINI_API_KEY, ANTHROPIC_API_KEY
+from wingman import gemini_common
 from app.core import record_api_error
 from app.routes import (
     ai, opportunities, account, user_data, google_oauth, mailing_list,
@@ -26,6 +27,18 @@ from app.routes import (
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# MARQUEE M9 (Phase 2 item 1, finding M5): this process serves students, not batches, so it
+# takes no batch throttle. wingman/gemini_common._enforce_rate_limit() sleeps up to 5s between
+# calls against a MODULE GLOBAL — inside an anyio threadpool slot, with a student waiting, and
+# serialised across every concurrent caller. /api/match paid it twice per request (embed, then
+# eligibility gate), so ~10s of a match was pure sleep.
+#
+# Safe here because the agents that throttle exists for run as SUBPROCESSES (ops/core.py
+# spawns `python -m agents.<name>`) and never share this module's state, and because no
+# interactive path uses the googleSearch quota it protects. This must stay the only caller —
+# see set_interactive_process's docstring.
+gemini_common.set_interactive_process(True)
 
 app = FastAPI(title="Highschool Wingman", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -200,6 +213,22 @@ async def no_cache(request: Request, call_next):
         # Only Cache-Control is set here: nothing downstream emits Pragma/Expires, and
         # Starlette's MutableHeaders has no .pop, so there is nothing to unset either.
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif "cache-control" in response.headers:
+        # A route that set Cache-Control ITSELF owns it (Phase 2 item 5). This is not a
+        # loosening of the rule above — it is the reason the rule can stay strict everywhere
+        # else. Blanket `no-store` forbids the browser from KEEPING a response at all, so it
+        # never stores the catalog, never sends If-None-Match, and the conditional-request
+        # path on /api/opportunities was dead on arrival: the ETag went out, nothing ever came
+        # back to match it, and every app open re-downloaded the largest payload in the app.
+        #
+        # It went unnoticed because the route's own tests call the handler directly and never
+        # traverse this middleware. test_catalog_http_cache.py now drives the two together for
+        # exactly that reason.
+        #
+        # Deliberately narrow: `in response.headers` means only a route that made a decision
+        # opts out, and today exactly one has. Everything silent still gets no-store, so the
+        # stale-app-shell protection and the font-flash fix described above are untouched.
+        pass
     else:
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"

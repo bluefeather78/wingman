@@ -6,6 +6,7 @@ This is the seam module: public request handlers WRITE the cost/activity tables
 here and the ops dashboards READ them, so both app.* and ops.* import from here.
 It never imports from app.services.* or ops.* (one-way dependency).
 """
+import atexit
 import datetime
 import hashlib
 import json
@@ -22,6 +23,7 @@ from app.config import *  # noqa: F401,F403 -- shared constants by bare name (as
 from wingman.subscription_common import (
     is_trial_expired, days_until_trial_end, trial_ends_at_iso,
 )
+from app.http_pool import pooled_urlopen
 
 
 # ---------- Subscription access gate ----------
@@ -415,34 +417,19 @@ _user_costs_lock = threading.Lock()
 _user_costs_rows = {}  # {(userid, day, surface, feature, model): user_costs row id}
 
 
-def record_user_cost(userid, surface, feature, cost, input_tokens=0, output_tokens=0,
-                     searches=0, model=None):
-    """Accumulate one call into this user's (day, surface, feature) rollup row.
+def _write_user_cost(userid, day, surface, feature, model, calls, input_tokens,
+                     output_tokens, searches, cost, now):
+    """Write ONE aggregated rollup delta. Phase 2 item 6 made the counts parameters rather
+    than the literal +1 they were, so a flush that coalesced 30 calls costs the same three
+    round trips one call used to.
 
     Read-then-PATCH rather than a PostgREST upsert because upsert REPLACES a conflicting
-    row and these counters must ADD. Called from the same background thread that records
-    the daily rollup — never on the request path — and swallows everything: cost
-    accounting must not be able to break a student's chat.
+    row and these counters must ADD. Runs on the flusher thread — never on the request path —
+    and swallows everything: cost accounting must not be able to break a student's chat.
     """
     global _user_costs_available, _user_costs_has_model
-    # Bump the in-process spend counters FIRST, ahead of every early return below: the money
-    # was spent whether or not we manage to write it down, and the budget layers (S0-5) must
-    # see it. Lazy import — app.services.budget imports this module.
-    try:
-        from app.services import budget
-        budget.note_spend(userid, cost)
-    except Exception:                                              # noqa: BLE001
-        pass
     if not userid or not _user_costs_available or not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return
-    userid = str(userid).strip().lower()
-    if not userid:
-        return
-    now = datetime.datetime.now(datetime.timezone.utc)
-    day = now.date().isoformat()
-    # '' rather than None: the grain constraint includes this column and Postgres treats
-    # NULLs as distinct, so a NULL model would create a fresh row on every single call.
-    model = (model or "").strip()
     key = (userid, day, surface, feature, model)
     try:
         with _user_costs_lock:
@@ -516,7 +503,7 @@ def record_user_cost(userid, surface, feature, cost, input_tokens=0, output_toke
                 return
             r = current[0]
             _supabase_request("user_costs", method="PATCH", params={"id": f"eq.{row_id}"}, data={
-                "calls": (r.get("calls") or 0) + 1,
+                "calls": (r.get("calls") or 0) + int(calls or 0),
                 "input_tokens": (r.get("input_tokens") or 0) + int(input_tokens or 0),
                 "output_tokens": (r.get("output_tokens") or 0) + int(output_tokens or 0),
                 "web_searches": (r.get("web_searches") or 0) + int(searches or 0),
@@ -527,14 +514,120 @@ def record_user_cost(userid, surface, feature, cost, input_tokens=0, output_toke
         print(f"[WARN] Could not attribute cost to user {pseudonym(userid)}: {e}")
 
 
-def record_user_cost_async(userid, surface, feature, cost, input_tokens=0,
-                           output_tokens=0, searches=0, model=None):
+# ---------- Batched cost accounting (Phase 2 item 6) ----------
+# Attribution used to cost a THREAD PER CALL, and each thread held the global _user_costs_lock
+# across three or four Supabase round trips (lookup, maybe insert, read, patch). So concurrent
+# AI calls serialised behind one another's accounting — roughly 450ms of held lock each — and
+# the process spawned an unbounded number of threads to do it.
+#
+# Now a call buffers an in-memory delta under the same key the rollup row uses, and ONE flusher
+# thread writes each key's coalesced total on an interval. Thirty calls by one student in a
+# burst cost the three round trips that a single call used to.
+#
+# WHAT THIS DOES NOT CHANGE, and must never change: the spend caps. budget.note_spend() still
+# fires SYNCHRONOUSLY in record_user_cost below, ahead of any buffering, so the per-user daily
+# budget and the global circuit breaker (S0-5) see every dollar the instant it is spent. Only
+# the DASHBOARD lags, by at most COST_FLUSH_INTERVAL_SECONDS. Moving note_spend behind the
+# buffer would turn a latency fix into a hole in the spend caps.
+#
+# The cost of batching is stated plainly: costs buffered but not yet flushed are lost if the
+# process dies. That is bounded by the flush interval and by the atexit hook below, which
+# drains on a clean shutdown (a Render deploy). It is real, and it is small: seconds of one
+# instance's attribution, against a bug that serialised every paid call in the process.
+_cost_buffer = {}                       # {(userid, day, surface, feature, model): totals}
+_cost_buffer_lock = threading.Lock()
+_cost_flusher_started = False
+_cost_flusher_lock = threading.Lock()
+
+
+def _start_cost_flusher():
+    """Start the single flusher thread, once, on the first buffered cost."""
+    global _cost_flusher_started
+    if _cost_flusher_started:
+        return
+    with _cost_flusher_lock:
+        if _cost_flusher_started:
+            return
+        _cost_flusher_started = True
+
+        def _loop():
+            while True:
+                time.sleep(COST_FLUSH_INTERVAL_SECONDS)
+                try:
+                    flush_user_costs()
+                except Exception as e:                             # noqa: BLE001
+                    print(f"[WARN] cost flush failed: {e}")
+
+        threading.Thread(target=_loop, daemon=True).start()
+        atexit.register(flush_user_costs)
+
+
+def flush_user_costs():
+    """Drain the buffer, writing one aggregated row per key. Safe to call at any time."""
+    with _cost_buffer_lock:
+        if not _cost_buffer:
+            return
+        # A COPY, then clear. `pending = _cost_buffer` would alias the same dict, and the
+        # clear below would empty the thing about to be iterated — silently dropping every
+        # buffered cost while looking like a successful flush.
+        pending = dict(_cost_buffer)
+        _cost_buffer.clear()
+    # Written OUTSIDE the buffer lock: each key is several Supabase round trips, and holding
+    # the buffer lock across them would block every request thread trying to record a cost —
+    # reintroducing the serialisation this item exists to remove, one level up.
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for (userid, day, surface, feature, model), t in pending.items():
+        _write_user_cost(userid, day, surface, feature, model, t["calls"],
+                         t["input_tokens"], t["output_tokens"], t["searches"],
+                         t["cost"], now)
+
+
+def record_user_cost(userid, surface, feature, cost, input_tokens=0, output_tokens=0,
+                     searches=0, model=None):
+    """Attribute one paid call. Bumps the spend caps NOW, buffers the rollup write.
+
+    The note_spend call below is deliberately first and deliberately synchronous — see the
+    block comment above. Everything after it is bookkeeping that may lag; that line is a
+    spend guard that may not.
+    """
+    try:
+        from app.services import budget
+        budget.note_spend(userid, cost)
+    except Exception:                                              # noqa: BLE001
+        pass
+    if not userid or not _user_costs_available or not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
+    userid = str(userid).strip().lower()
     if not userid:
         return
-    threading.Thread(
-        target=record_user_cost,
-        args=(userid, surface, feature, cost, input_tokens, output_tokens, searches, model),
-        daemon=True).start()
+    day = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    # '' rather than None: the grain constraint includes this column and Postgres treats
+    # NULLs as distinct, so a NULL model would create a fresh row on every single call.
+    key = (userid, day, surface, feature, (model or "").strip())
+    with _cost_buffer_lock:
+        t = _cost_buffer.get(key)
+        if t is None:
+            t = _cost_buffer[key] = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
+                                     "searches": 0, "cost": 0.0}
+        t["calls"] += 1
+        t["input_tokens"] += int(input_tokens or 0)
+        t["output_tokens"] += int(output_tokens or 0)
+        t["searches"] += int(searches or 0)
+        t["cost"] = round(t["cost"] + float(cost or 0), 6)
+        overflowing = len(_cost_buffer) >= COST_FLUSH_MAX_KEYS
+    _start_cost_flusher()
+    if overflowing:
+        # A backstop for a burst wide enough to grow the buffer faster than the interval
+        # drains it. Bounded memory beats a tidy cadence.
+        flush_user_costs()
+
+
+def record_user_cost_async(userid, surface, feature, cost, input_tokens=0,
+                           output_tokens=0, searches=0, model=None):
+    """Kept for its callers. Buffering is a dict update under a lock, so there is nothing
+    left worth a thread — spawning one per paid call was itself part of the cost."""
+    record_user_cost(userid, surface, feature, cost, input_tokens, output_tokens,
+                     searches, model)
 
 
 def log_conversation(userid, mode, system_question, user_response):
@@ -558,7 +651,7 @@ def log_conversation(userid, mode, system_question, user_response):
                 "Prefer": "return=minimal",
             },
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with pooled_urlopen(req, timeout=10) as resp:
             resp.read()
         print(f"[INFO] Logged conversation for user {pseudonym(userid)}")
     except Exception as e:
@@ -579,6 +672,38 @@ def log_conversation_async(userid, mode, system_prompt, user_content, response_t
     ).start()
 
 
+def _invalidate_identity_for_write(query, data):
+    """Drop the identity-cache entries a users write could invalidate.
+
+    Reads the userid from the PostgREST filter (`?userid=eq.alice&...`) for an UPDATE, and
+    from the payload for an INSERT. The INSERT case is not theoretical: registration calls
+    user_exists() first, which caches a None for that userid, and without this the account
+    would be created and then treated as nonexistent for the rest of the TTL — a student
+    locked out of the app they just signed up for.
+
+    Anything it cannot parse clears the whole cache rather than guessing. A users write is
+    rare and a full clear costs one extra read per active account; a missed invalidation
+    costs correctness, and this is the layer that must not be clever.
+    """
+    seen = False
+    try:
+        for key, values in urllib.parse.parse_qs(query.lstrip("?")).items():
+            if key != "userid":
+                continue
+            for v in values:
+                invalidate_identity(v[3:] if v.startswith("eq.") else v)
+                seen = True
+        rows = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+        for row in rows:
+            if isinstance(row, dict) and row.get("userid"):
+                invalidate_identity(row["userid"])
+                seen = True
+    except Exception:                                              # noqa: BLE001
+        seen = False
+    if not seen:
+        clear_identity_cache()
+
+
 def _users_request(method, query="", data=None, prefer=None):
     """One PostgREST call against `users`.
 
@@ -595,6 +720,13 @@ def _users_request(method, query="", data=None, prefer=None):
         headers["Prefer"] = "return=minimal"
     elif method == "PATCH":
         headers["Prefer"] = "return=minimal"
+    if method != "GET":
+        # Phase 2 item 3: the identity cache is busted HERE, at the one PostgREST choke point
+        # every users write goes through, rather than at each of the ~14 call sites. A new
+        # write path cannot forget to invalidate, because it cannot reach the table without
+        # coming through this function. Before the request, not after: if the write succeeds
+        # but the response handling raises, the stale row must still be gone.
+        _invalidate_identity_for_write(query, data)
     if prefer:
         headers["Prefer"] = prefer
     req = urllib.request.Request(
@@ -603,7 +735,7 @@ def _users_request(method, query="", data=None, prefer=None):
         method=method,
         headers=headers,
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with pooled_urlopen(req, timeout=10) as resp:
         raw = resp.read()
         return json.loads(raw) if raw else None
 
@@ -708,6 +840,91 @@ _ACCOUNT_COLUMNS = (
     "parental_consent,terms_accepted_at,privacy_accepted_at,terms_version"
 )
 _account_select = _ACCOUNT_COLUMNS
+
+
+# ---------- The identity cache (Phase 2 item 3) ----------
+# Every signed-in request runs the subscription gate, and the gate read a users row to do it —
+# ~150ms against Supabase, on EVERY click by EVERY signed-in student, to answer a question
+# whose answer changes about twice in an account's lifetime.
+#
+# WHAT IS CACHED IS THE NARROW READ, deliberately. The gate needs five columns; caching
+# get_user_account's row instead would hold every account's password_hash and calendar refresh
+# token in process memory for a minute at a time, to save the same round trip.
+#
+# STALENESS IS BOUNDED IN ONE DIRECTION ONLY. A lapse can enforce up to TTL late — that is the
+# accepted trade-off in the plan. A student who just PAID must never wait, so every write to
+# the users table drops that userid's entry (see _users_request), which covers upgrades, promo
+# redemptions, cancellations and trial starts alike. Putting the bust at the single PostgREST
+# choke point rather than at each of the ~14 call sites is the whole reason it can be trusted:
+# a new write path cannot forget to invalidate, because it cannot reach the table without
+# going through there.
+#
+# PER PROCESS, like app/auth/ratelimit.py's windows. Render runs one worker today; scale to
+# several and each keeps its own copy, so the effective staleness stays TTL rather than
+# multiplying. That is a property worth knowing, not a bug.
+_SUBSCRIPTION_COLUMNS = ("userid,subscription_status,trial_ends_at,subscription_end_at,"
+                         "stripe_customer_id")
+_identity_cache = {}                    # {userid: (expires_at_monotonic, record_or_None)}
+_identity_lock = threading.Lock()
+identity_cache_hits = 0                 # observability without a metrics stack (item 9 dropped)
+identity_cache_misses = 0
+
+
+def invalidate_identity(userid):
+    """Drop one account's cached subscription row. Called on every users write."""
+    if not userid:
+        return
+    with _identity_lock:
+        _identity_cache.pop(str(userid).strip().lower(), None)
+
+
+def clear_identity_cache():
+    """Whole-cache reset. For tests and for the ops console's "reload" affordances."""
+    with _identity_lock:
+        _identity_cache.clear()
+
+
+def get_user_subscription(userid, ttl=None):
+    """The five columns the subscription gate reads, cached for IDENTITY_CACHE_TTL_SECONDS.
+
+    Returns the row, or None for an account that does not exist — and caches the None too,
+    because a signed token for a deleted account would otherwise re-ask Supabase on every
+    request forever, which is exactly the hot path this exists to take off the wire.
+    """
+    global identity_cache_hits, identity_cache_misses
+    userid = (userid or "").strip().lower()
+    if not userid:
+        return None
+    ttl = IDENTITY_CACHE_TTL_SECONDS if ttl is None else ttl
+    now = time.monotonic()
+    if ttl > 0:
+        with _identity_lock:
+            entry = _identity_cache.get(userid)
+            if entry and entry[0] > now:
+                identity_cache_hits += 1
+                return entry[1]
+    # Read OUTSIDE the lock: this is a ~150ms network call, and holding the lock across it
+    # would serialise every signed-in request in the process behind one Supabase round trip —
+    # a fresh version of the bug Phase 2 is removing. A concurrent miss on the same userid
+    # therefore costs a duplicate read, which is cheap and correct; a lock held across the
+    # wire would not be.
+    record = select_user(userid, _SUBSCRIPTION_COLUMNS)
+    # Project down to the five columns before caching. select_user degrades to a `SELECT *`
+    # when one of them has not been migrated in yet, and caching THAT would put every active
+    # student's 37KB `data` blob in process memory for a minute — turning a latency fix into a
+    # memory leak on the smallest Render tier, only on the database state nobody tests against.
+    if isinstance(record, dict):
+        record = {k: record.get(k) for k in _SUBSCRIPTION_COLUMNS.split(",")}
+    if ttl > 0:
+        with _identity_lock:
+            _identity_cache[userid] = (time.monotonic() + ttl, record)
+            identity_cache_misses += 1
+            # Bounded so a flood of signed tokens for nonexistent accounts cannot grow this
+            # without limit. Dropping the whole thing beats evicting cleverly: it is a cache,
+            # and the next request refills what is actually in use.
+            if len(_identity_cache) > 10000:
+                _identity_cache.clear()
+    return record
 
 
 def get_user_account(userid):
@@ -1149,7 +1366,7 @@ def _supabase_request(table, method="GET", params=None, data=None, extra_headers
     body = json.dumps(data).encode("utf-8") if data is not None else None
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with pooled_urlopen(req, timeout=15) as resp:
             raw = resp.read()
             return json.loads(raw) if raw else []
     except Exception as e:
@@ -1555,6 +1772,6 @@ def _supabase_request_strict(table, method="GET", params=None, data=None, extra_
         headers.update(extra_headers)
     body = json.dumps(data).encode("utf-8") if data is not None else None
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with pooled_urlopen(req, timeout=15) as resp:
         raw = resp.read()
         return json.loads(raw) if raw else []

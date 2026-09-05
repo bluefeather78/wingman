@@ -79,9 +79,52 @@ summary.
    belongs.
 4. **Leave `CSP_ENFORCE` unset** until the report-only violations have been read against a
    real exported bundle. Turning it on blind can white-screen the app.
-5. **Decisions 2 and 3 below are still open** — the real per-user daily allowance
-   (`USER_DAILY_BUDGET_USD` is still the conservative $0.50 placeholder, not the measured
-   5x-median this plan asks for) and the paid Render tier.
+5. ~~Decisions 2 and 3 below are still open.~~ **Both ANSWERED 2026-09-05** — the $0.50/day
+   allowance stays as-is and Render stays on the free plan until launch. Neither is now a
+   blocker or a to-do. See "Phase 2 approvals and scope" immediately below.
+
+### Phase 2 approvals and scope (logged 2026-09-05, before any Phase 2 code was written)
+
+Shama reviewed the ten Phase 2 items and gave three rulings. They are recorded here **before**
+implementation so the phase is executed against the scope that was actually approved, not the
+scope this document originally proposed.
+
+1. **M9 APPROVED — Phase 2 items 1 and 2 may proceed.** Removing the process-wide Gemini
+   `time.sleep` from the web path (finding M5, `wingman/gemini_common.py`) and rebuilding the AI
+   call path as an async lane (`app/routes/ai.py`) both sit on code that makes paid API calls, so
+   both are **marquee M9**. Shama said yes on 2026-09-05. Standing conditions from
+   MARQUEE_DECISIONS.md still apply: **each lands as its own dedicated commit naming M9**, never
+   bundled into another change. **No prompt text moves in either — this is NOT an M8 change**, and
+   if an implementation turns out to need prompt edits after all, that is a fresh approval, not a
+   consequence of this one.
+
+2. **Hosting stays free until launch — so Phase 2's exit test is intentionally NOT met.** The
+   original exit test ("50 rps x 10 min on staging, p95 < 1 s") assumed a paid tier. Render Free
+   is 0.1 CPU and sleeps when idle; **50 rps is not physically reachable on it**, and Shama has
+   decided that is fine because no students have access yet. The revised bar for calling Phase 2
+   done is therefore: *the code changes are in and verified correct, and the laptop probe shows
+   the shape of the fix* — **not** an absolute throughput number. Bump the plan and re-run for
+   real before opening to students; that re-run is Phase 6 / launch-gate work, not Phase 2.
+
+3. **No staging environment; the load test runs on the laptop.** Same method the original review
+   used — boot a copy of the service on a spare port with AI keys withheld and probe at
+   concurrency 1/8/32 (`docs/review-2026-09-02/load_probe.py`, results in `load_results.json`).
+   These numbers are **indicative, not proof**: a laptop is not Render, so report them as
+   before/after deltas on the same machine and never as a production capacity claim. The k6
+   -on-staging line in the phase table below is deferred, not cancelled.
+
+4. **Item 9 (observability) is DROPPED, 2026-09-05.** No `/healthz`, no structured-logging
+   rework, no alerting. Shama will use Datadog's free tier when traffic warrants it. See
+   decision 7 below.
+
+5. **Item 8's shedding behaviour is APPROVED (M9), 2026-09-05.** Capping fresh deadline/checklist
+   work at 4 in flight means the 5th concurrent caller is **turned away rather than triggering a
+   paid check**. Shama: "ok to turn student away for now... we will revisit when I buy hosting on
+   Render." So the shed is the intended behaviour pre-launch, and revisiting it is a launch-gate
+   task, not a bug report.
+
+**Net effect on the ten items: NINE get built, not ten.** Item 9 is out. Only how the rest are
+*verified* changed.
 
 ---
 
@@ -101,16 +144,30 @@ summary.
 1. ~~Move AI prompts server-side (M8)?~~ **ANSWERED yes; shipped 2026-09-04** as S1-1, its own
    dedicated M8 commit. The prompt text was moved verbatim and that was verified character by
    character against the originals.
-2. **STILL OPEN — daily AI allowance per student.** `USER_DAILY_BUDGET_USD` shipped at a
-   conservative $0.50 placeholder. Read the median off the console's Cost-per-user tab and set
-   it to ~5x that, with the `BUDGET_EXEMPT_USERIDS` override.
-3. **STILL OPEN — hosting.** `render.yaml` still says `plan: free`.
+2. ~~Daily AI allowance per student.~~ **ANSWERED (Shama, 2026-09-05): keep the $0.50/day
+   placeholder; do not tune it now.** The measured-5x-median exercise is deliberately deferred —
+   there is no student traffic yet, so the Cost-per-user tab has nothing meaningful to take a
+   median of. Shama will raise `USER_DAILY_BUDGET_USD` directly in the Render dashboard when it
+   starts biting. **No code change is wanted here**; the env var is already the knob. A future
+   session must not "helpfully" re-tune this default.
+3. ~~Hosting.~~ **ANSWERED (Shama, 2026-09-05): stay on `plan: free` until the app actually opens
+   to students.** This is a deliberate, informed choice, not an oversight — see "Phase 2 approvals
+   and scope" above for what it means for Phase 2's exit test. Do not open a PR bumping the plan;
+   `render.yaml` saying `plan: free` is the intended state today.
 4. Retire `opportunity-matching` as a branch (archive tag, extract per decision)? Recommended yes.
 5. ~~Keep logging chat turns + IP to `conversations`?~~ **ANSWERED (Shama, 2026-09-04): keep
    the turns, drop the IP.** Shipped as S1-9 — `client_ip` is no longer written and the column
    is dropped, RLS is on and confirmed live, and userids/emails no longer go to stdout.
 6. Split the catalog cache and refresh embeddings on a **24 h** backstop instead of 5 min?
    **Decided yes (Shama, 2026-09-02).** See "Live finding" below.
+7. Observability — `/healthz`, structured logs, alerting (Phase 2 item 9)?
+   **ANSWERED (Shama, 2026-09-05): DROPPED from Phase 2 entirely — do not build it.** Shama
+   intends to use **Datadog's free tier** for logs and alerting, and does not want it before
+   there is real traffic. This supersedes the earlier in-session suggestion to ship `/healthz`
+   plus structured logs now and defer only the alert wiring: **none of item 9 is in scope.** A
+   future session must not add a health endpoint, a logging framework, or an alert integration
+   under the banner of "finishing Phase 2" — Phase 2 is complete without it. Revisit when
+   traffic justifies it, alongside the paid Render tier (decision 3).
 
 ## Live finding (2026-09-02): catalog fetch statement-timeout + cache decoupling
 
@@ -196,7 +253,7 @@ body → `413`.
 |---|---|---|---|---|
 | **0 DONE** Stop the bleeding — numpy + exact pins; proxy requires subscribed caller on live path; Anthropic timeout + `max_uses`; per-user daily budget + forced-recheck cooldown + circuit breaker; static allow-list; `FORWARDED_ALLOW_IPS` + login key (ip,user); `email_verified` + exact redirect host; paid tier; delete tracked logs/dumps/stray Render CLI README+CHANGELOG; rotate the PAT in the git remote | Days 1–3 | 2 d | M9 (proxy) | signed-out proxy POST → 401; clean Render build passes; `/ops/admin_console.html` → 404 |
 | **1 DONE** Security — prompts server-side by feature id; refresh-token rotation; calendar handoff nonce; `url_is_public()` + auth on submissions; body limits + security headers (CSP report-only) + Secure cookies; conditional promo PATCH; single login-failure message; ops token; `conversations` RLS or stop; promo table; argon2-wrap legacy rows | Wk 1–2 | 5 d | M8 | no High/Medium open; replayed refresh token revokes lineage |
-| **2 NEXT** Capacity — no Gemini sleep on web path; async AI lane (httpx, semaphore 30, timeouts, 503+Retry-After); 60 s identity cache; pooled HTTP; pre-serialized gzip+ETag catalog with background refresh + client cache; batched cost accounting; OWASP argon2; semaphore 4 on fresh deadline/checklist; `/healthz` + structured logs + alerts; k6 load test on staging; confirm provider tiers | Wk 2–4 | 7 d | M9 flag (sleep) | 50 rps × 10 min on staging, p95 < 1 s data routes, AI sheds not stalls |
+| **2 NEXT** Capacity — no Gemini sleep on web path; async AI lane (httpx, semaphore 30, timeouts, 503+Retry-After); 60 s identity cache; pooled HTTP; pre-serialized gzip+ETag catalog with background refresh + client cache; batched cost accounting; OWASP argon2; semaphore 4 on fresh deadline/checklist; ~~`/healthz` + structured logs + alerts~~ **DROPPED 2026-09-05 (Datadog free tier later, decision 7)**; ~~k6 load test on staging~~ laptop probe; confirm provider tiers | Wk 2–4 | 7 d | **M9 granted 2026-09-05** | **REVISED 2026-09-05** (see "Phase 2 approvals and scope"): laptop before/after probe, p95 < 1 s data routes, AI sheds not stalls. The absolute *50 rps on staging* bar is **deferred to launch** — Render Free cannot reach it and that is a deliberate choice |
 | 3 Pipeline + repo — insert ladder degrades only on missing column; one URL key, no re-stamp on commit, all snapshot families committable; DB-sequence ids + run lock in `agent_runs`; bank cost before parse; merges → review queue; discontinued needs page evidence; reject unsourced URLs; ordered pagination; service key required; branch cleanup + merge `local-discovery-engine`; CI marquee-tag check; move one-offs/eval out of root; `scrape_common.py`; tests for untested paid paths | Wk 3–5 | 6 d | M8 if prompt text moves; decision 4 | two agents at once refuse to overlap; simulated insert timeout fails loudly; snapshot commit inserts 0 dupes |
 | 4 Shared state — shared cache or signed handoff tokens; lock file batch-only; idempotent rollups via RPC; `jsonb_set` RPC for saves; leads + snapshots in tables; scheduled worker (free agents first, paid behind toggle + dollar ceiling); optional direct Postgres for hot queries | Wk 5–7 | 6 d | M3 per scheduled paid run | two instances pass the 50 rps test; second machine sees same lead queue |
 | 5 Product accuracy — grade parser context; date validation; sort-on-refresh + calendar ids by label; synthesis failure keeps transcript; unreachable ≠ revoked; reset singletons on logout; one retry per action; client timeouts; drop icon fonts + dead prompts/code; Vitest ~40 cases; a11y labels; split big screens | Wk 6–8 | 5 d | none | frontend tests in CI; golden-set score holds; bundle −300 KB |

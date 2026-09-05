@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request, Depends
 
 from app.core import (
     get_user_account, ensure_trial_started, subscription_state, touch_user_activity,
-    update_subscription,
+    update_subscription, redeem_promo_conditional,
 )
 from app.deps import json_body, json_response, json_error
 from app.services.email import send_lifecycle_email_async
@@ -152,13 +152,34 @@ def handle_redeem_promo(body: dict = Depends(json_body),
                    if (record.get("subscription_status") or "") == "beta"
                    else record.get("trial_ends_at"))
     new_end = extend_from(current_end, grant_days)
-    used.append(code)
+
+    # The check above is advisory only — it answers a nicer error for the ordinary
+    # "I already redeemed this" case. The check that MATTERS is inside the PATCH:
+    # redeem_promo_conditional carries `used` into the WHERE clause, so N parallel
+    # redeems of the same code cannot each pass a stale read and compound the grant.
+    # SECURITY_HARDENING_PLAN.md S1-6, finding M6.
     try:
-        update_subscription(userid, {
+        won = redeem_promo_conditional(userid, code, used, {
             "subscription_status": status,
             "subscription_end_at": new_end,
-            "promo_codes_used": used,
+            "promo_codes_used": used + [code],
         })
+    except Exception as e:
+        return json_error(502, f"Could not reach Supabase: {e}")
+
+    if not won:
+        # Zero rows matched: somebody else redeemed on this account between our read and
+        # our write. Re-read to say which of the two it was, and never re-attempt — a
+        # retry loop here is the exploit with extra steps.
+        try:
+            record = get_user_account(userid) or record
+        except Exception:
+            pass
+        if code in list(record.get("promo_codes_used") or []):
+            return json_error(400, "You have already used this promo code.")
+        return json_error(409, "Your subscription just changed — reload and try again.")
+
+    try:
         record = get_user_account(userid)
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")

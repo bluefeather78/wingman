@@ -592,7 +592,13 @@ def log_conversation_async(userid, client_ip, mode, system_prompt, user_content,
     ).start()
 
 
-def _users_request(method, query="", data=None):
+def _users_request(method, query="", data=None, prefer=None):
+    """One PostgREST call against `users`.
+
+    `prefer` overrides the default `return=minimal`. The only caller that needs it is the
+    conditional promo write, which has to know how many rows its filter actually matched —
+    and `return=minimal` answers with an empty body either way.
+    """
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
@@ -602,6 +608,8 @@ def _users_request(method, query="", data=None):
         headers["Prefer"] = "return=minimal"
     elif method == "PATCH":
         headers["Prefer"] = "return=minimal"
+    if prefer:
+        headers["Prefer"] = prefer
     req = urllib.request.Request(
         f"{SUPABASE_URL}/rest/v1/users{query}",
         data=json.dumps(data).encode() if data is not None else None,
@@ -870,6 +878,62 @@ def update_subscription(userid, updates):
     query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
     _users_request("PATCH", query, data=updates)
     return True
+
+
+# A promo code is about to be interpolated into a PostgREST filter, so its shape is
+# checked rather than assumed. Today every code comes from the hard-coded PROMO_CODES
+# table and cannot be anything else — but S1-10 moves them into a database table, at
+# which point they become data, and a code containing `,` or `}` would otherwise rewrite
+# the filter around it.
+_PROMO_CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9_.-]{0,63}$")
+
+
+def redeem_promo_conditional(userid, code, previous_codes, updates):
+    """Apply a promo grant with a compare-and-swap on users.promo_codes_used.
+
+    Returns True when THIS call is the one that redeemed the code, False when the row
+    moved under us — which is the whole point. SECURITY_HARDENING_PLAN.md S1-6, finding M6.
+
+    The old shape was read-check-write across two round trips with an unconditional
+    PATCH: N parallel redeems of a 7-day code all read `promo_codes_used == []`, all
+    passed the "already used?" check, and interleavings where a later reader saw an
+    earlier writer's `subscription_end_at` COMPOUNDED the grant (7 -> 14 -> 21 days).
+    Free access indefinitely from one beta code.
+
+    The fix is to let Postgres arbitrate. The UPDATE carries the state we read as part of
+    its WHERE clause, so concurrent writers serialize on the row and every one after the
+    first re-evaluates the qualification against the winner's row, matches nothing, and
+    reports False. No migration, one filter on a request that already existed.
+
+    The filter is a full compare-and-swap on the array, not just `not.cs.{CODE}` as the
+    plan wrote it. `not.cs` alone closes the compounding-one-code exploit but leaves the
+    two-different-codes case: redeem BETAUSER and a second grant code concurrently and
+    both filters pass, both grants apply, and last-write-wins drops one code from the
+    array — so the dropped one can be redeemed again. Comparing the whole array closes
+    both with the same round trip.
+    """
+    if not _PROMO_CODE_RE.match(code or ""):
+        return False
+
+    filters = [("userid", f"eq.{userid}")]
+    if previous_codes:
+        if not all(_PROMO_CODE_RE.match(c or "") for c in previous_codes):
+            # An already-stored code we cannot safely express as a filter. Refuse rather
+            # than fall back to an unconditional write, which is the bug being fixed.
+            return False
+        literal = "{" + ",".join(previous_codes) + "}"
+        filters.append(("promo_codes_used", f"eq.{literal}"))
+        filters.append(("promo_codes_used", "not.cs.{" + code + "}"))
+    else:
+        # NULL and '{}' both mean "no codes yet", and EVERY array operator against NULL
+        # evaluates to NULL — i.e. no match. A row predating the column's DEFAULT would
+        # therefore never be able to redeem anything, so the empty case has to name
+        # `is.null` explicitly instead of reusing the `eq`/`not.cs` pair above.
+        filters.append(("or", "(promo_codes_used.is.null,promo_codes_used.eq.{})"))
+
+    query = "?" + urllib.parse.urlencode(filters)
+    rows = _users_request("PATCH", query, data=updates, prefer="return=representation")
+    return bool(rows)
 
 
 def bump_token_version(userid):

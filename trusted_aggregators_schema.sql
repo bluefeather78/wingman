@@ -1,6 +1,6 @@
 -- trusted_aggregators — the operator-controlled trusted-domain allowlist (P5).
 --
--- ONE table shared by BOTH features (see DEADLINE_AND_TASK_PLAN.md §5):
+-- ONE table shared by BOTH features (see docs/plans/DEADLINE_AND_TASK_PLAN.md §5):
 --   * DEADLINES use the READ side only: the escalation loop's 4th rung keeps an off-domain
 --     date only if the page's domain is trusted here, and forces it estimated=true.
 --   * TASKS (P6) use the full park-and-approve flywheel: discovery may surface any domain;
@@ -41,7 +41,7 @@ alter table trusted_aggregators add column if not exists added_by   text;
 alter table trusted_aggregators add column if not exists created_at timestamptz not null default now();
 alter table trusted_aggregators add column if not exists updated_at timestamptz not null default now();
 
--- Seed lumiere-education.com as trusted on day one (DEADLINE_AND_TASK_PLAN.md decision,
+-- Seed lumiere-education.com as trusted on day one (docs/plans/DEADLINE_AND_TASK_PLAN.md decision,
 -- 2026-08-25) so its tasks — and THINK Scholars', which lumiere describes — show from the
 -- first pass. EVERY other discovered domain still starts pending and goes through the
 -- park-and-approve queue. `do nothing` on conflict so re-running this file never clobbers a

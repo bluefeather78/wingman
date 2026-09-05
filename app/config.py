@@ -1,6 +1,6 @@
 """Configuration and environment for the Wingman web service.
 
-Extracted verbatim from the former server.py monolith (PLAN_1_decompose.md).
+Extracted verbatim from the former server.py monolith (docs/archive/PLAN_1_decompose.md).
 Importing this module loads .env (see load_dotenv() call below), so import it
 before anything that reads os.environ. Holds only shared constants; process
 state and functions live in app.core and the service modules.
@@ -194,7 +194,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")  # Kept for other uses; no
 EMAIL_RE = re.compile(r"^[^\s@,()\x22\x27]+@[^\s@,()\x22\x27]+\.[^\s@,()\x22\x27]{2,}$")
 
 
-# ---------- Session auth (Phase 2 — PLAN_2_auth.md) ----------
+# ---------- Session auth (Phase 2 — docs/archive/PLAN_2_auth.md) ----------
 # Identity is carried in a signed JWT, never in the request body — that is what closes
 # the pre-migration IDOR on /api/data/*. Two-token model:
 #   * a short-lived ACCESS token, verified statelessly on every gated request (no DB hit);
@@ -321,7 +321,7 @@ TRIAL_REMINDER_DAYS = int(os.environ.get("TRIAL_REMINDER_DAYS", "2") or 2)
 # firing) is what makes the ladder self-healing — a missed cron day still fires the item at
 # T-2 under the rung-3 window, and an item tracked late lands in one rung rather than
 # replaying the whole backlog. Ordered high-to-low for readability; assign_rung sorts it.
-# See DEADLINE_EMAIL_ALERTS_PLAN.md §3. Deliberately a constant, not env-tunable: the values
+# See docs/plans/DEADLINE_EMAIL_ALERTS_PLAN.md §3. Deliberately a constant, not env-tunable: the values
 # become permanent the moment they are written into email_sends dedupe keys.
 DEADLINE_ALERT_RUNGS = (7, 3, 1)
 

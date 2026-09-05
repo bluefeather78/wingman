@@ -82,7 +82,7 @@ def client_ip(request: Request):
 
 def login_response(record):
     """The signed-in payload every login path returns: the identity block _login_payload
-    already built, plus a freshly minted access+refresh token pair (PLAN_2_auth.md).
+    already built, plus a freshly minted access+refresh token pair (docs/archive/PLAN_2_auth.md).
 
     This is the single convergence point the plan asks for — password login
     (handle_login), Google sign-in (handle_google_session) and Google signup

@@ -2,7 +2,7 @@
 
 > **Status note (later thread):** this document describes the feature as first built.
 > Several details here were wrong or have since changed — the checkout URL, cancel
-> semantics, trial-day rounding, and the migration. **`SUBSCRIPTION_SETUP.md` and
+> semantics, trial-day rounding, and the migration. **`../SUBSCRIPTION_SETUP.md` and
 > `CLAUDE.md` are current; this file is kept for the file-by-file diff summary.**
 
 ## Overview
@@ -24,7 +24,7 @@ A complete end-to-end subscription/payment system has been added to the Wingman 
    - Trial and subscription status helpers
    - Payment session creation
    
-2. **`SUBSCRIPTION_SETUP.md`** - Complete setup guide
+2. **`../SUBSCRIPTION_SETUP.md`** - Complete setup guide
    - Database schema SQL migrations
    - Stripe account setup steps
    - Environment variable configuration
@@ -184,7 +184,7 @@ PLAN_PRICE_ID = "price_..."  # Update Stripe Price ID
 ## Next Steps for Production
 
 1. ✅ Implement subscription system
-2. ⏳ Set up Stripe account (see SUBSCRIPTION_SETUP.md)
+2. ⏳ Set up Stripe account (see ../SUBSCRIPTION_SETUP.md)
 3. ⏳ Configure webhook endpoint for payment events
 4. ⏳ Run database migration SQL
 5. ⏳ Set environment variables (.env)
@@ -192,7 +192,7 @@ PLAN_PRICE_ID = "price_..."  # Update Stripe Price ID
 7. ⏳ Test payment flow end-to-end
 8. ✅ Add access control to app features — an expired trial now blocks the whole app
        (client `#page-locked` + a server-side 402 on the four paid endpoints). See
-       SUBSCRIPTION_SETUP.md §9 "Trial expiry: how the gate works".
+       ../SUBSCRIPTION_SETUP.md §9 "Trial expiry: how the gate works".
 9. ⏳ Set up email notifications for:
        - Trial ending soon
        - Payment successful
@@ -201,7 +201,7 @@ PLAN_PRICE_ID = "price_..."  # Update Stripe Price ID
 
 ## Support
 
-Refer to `SUBSCRIPTION_SETUP.md` for:
+Refer to `../SUBSCRIPTION_SETUP.md` for:
 - Detailed setup instructions
 - Troubleshooting guide
 - API endpoint reference

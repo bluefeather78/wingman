@@ -1,6 +1,6 @@
 """Mailing-list routes: button state, this user's past signups, and the subscribe
 action. Translated from server.py's handle_mailing_list_* / handle_mailing_list_subscribe
-(PLAN_1_decompose.md).
+(docs/archive/PLAN_1_decompose.md).
 """
 from fastapi import APIRouter, Request, Depends
 

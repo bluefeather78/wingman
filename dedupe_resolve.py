@@ -1,6 +1,6 @@
 """Resolve ONE dedupe verdict per catalog row and (optionally) stamp `dup_verdict`. FREE.
 
-Phase 1 of DEDUPE_SIMPLIFICATION_PLAN.md — the shadow-mode runner. It generates candidate pairs
+Phase 1 of docs/plans/DEDUPE_SIMPLIFICATION_PLAN.md — the shadow-mode runner. It generates candidate pairs
 from BOTH detection tracks and hands each to dup_verdict.resolve_dup_verdict (which fuses them via
 dedupe_confidence into one label). It writes ONLY the new `dup_verdict` column and reads/changes
 nothing else, so nothing in the app or console behaves differently yet — this exists to VERIFY the

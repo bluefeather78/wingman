@@ -2981,7 +2981,7 @@ function dupVerdictLine(v) {
 // (url_dedupe + embedding HINTS), not a resolved verdict. Collapse that pile into the SAME single
 // line the Duplicate queue shows by taking the strongest candidate. This is derived at READ from
 // data already on the row — it edits no insert path. (Storing a real dup_verdict at insert across
-// the paid feeders is the deferred deeper half; see DEDUPE_SIMPLIFICATION_PLAN.md Phase 4.)
+// the paid feeders is the deferred deeper half; see docs/plans/DEDUPE_SIMPLIFICATION_PLAN.md Phase 4.)
 const CAND_RANK = { proof: 4, confident: 3, strong: 3, adjudicate: 2, match: 1, hint: 1, weak: 0 };
 const CAND_TO_CONF = { proof: 'certain', confident: 'likely', strong: 'likely',
                        adjudicate: 'possible', match: 'possible', hint: 'possible', weak: 'possible' };

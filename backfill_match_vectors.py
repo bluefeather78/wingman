@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """One-time (and re-runnable) backfill of opportunities.match_vector — the embeddings the
-curated-matching recall stage needs (OPPORTUNITY_MATCHING_PLAN.md, Phase 5).
+curated-matching recall stage needs (docs/plans/OPPORTUNITY_MATCHING_PLAN.md, Phase 5).
 
 MARQUEE M9: this makes paid Gemini embedding calls. Approved for the matching pipeline.
 It is idempotent and cheap to re-run: a row is embedded only when its match_vector_hash

@@ -1,5 +1,5 @@
 """The zero-hallucination guard for Phase 1's live eligibility reasoning
-(OPPORTUNITY_MATCHING_PLAN.md). Pure, offline-testable — the model CALL that produces a
+(docs/plans/OPPORTUNITY_MATCHING_PLAN.md). Pure, offline-testable — the model CALL that produces a
 verdict lives with the curation orchestration; this module only decides whether a verdict's
 claimed exclusion is trustworthy enough to act on.
 

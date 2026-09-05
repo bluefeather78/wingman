@@ -1,4 +1,4 @@
-"""D0/D1 — offline unit tests for sitemap_common (DEADLINE_AND_TASK_PLAN.md §4/§9 G-D1).
+"""D0/D1 — offline unit tests for sitemap_common (docs/plans/DEADLINE_AND_TASK_PLAN.md §4/§9 G-D1).
 
 No network: every fetch is a fake mapping URL -> recorded fixture bytes. Proves the discovery
 brain end to end (locate -> parse -> scope -> rank) plus the fallback triggers ([] on no

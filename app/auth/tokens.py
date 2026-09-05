@@ -1,4 +1,4 @@
-"""Mint and verify the access + refresh JWTs (PLAN_2_auth.md).
+"""Mint and verify the access + refresh JWTs (docs/archive/PLAN_2_auth.md).
 
 Two token types, both HS256-signed with JWT_SECRET:
 

@@ -1,4 +1,4 @@
-"""Session auth (Phase 2 — PLAN_2_auth.md).
+"""Session auth (Phase 2 — docs/archive/PLAN_2_auth.md).
 
 Identity travels in a signed JWT, never in the request body: this is what closes the
 pre-migration IDOR on the per-account data routes. The public surface:

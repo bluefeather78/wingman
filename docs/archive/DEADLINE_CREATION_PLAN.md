@@ -1,7 +1,7 @@
 # Deadline creation — gap analysis and fix plan
 
 > **⛔ SUPERSEDED (2026-08-25) — do not edit. Merged into
-> [`DEADLINE_AND_TASK_PLAN.md`](DEADLINE_AND_TASK_PLAN.md), the single main plan for the
+> [`../plans/DEADLINE_AND_TASK_PLAN.md`](../plans/DEADLINE_AND_TASK_PLAN.md), the single main plan for the
 > deadline and task creators.** This file is kept only as history / detailed rationale for the
 > deadline gaps (G1–G4). All decisions and the unified phased plan now live in the merged doc.
 

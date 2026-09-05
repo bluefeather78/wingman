@@ -1,5 +1,5 @@
 """Per-account data + location routes. Translated from server.py's handle_data_save /
-handle_data_load / handle_update_location (PLAN_1_decompose.md).
+handle_data_load / handle_update_location (docs/archive/PLAN_1_decompose.md).
 """
 from fastapi import APIRouter, Depends
 
@@ -11,7 +11,7 @@ from app.auth import AuthedUser
 router = APIRouter()
 
 
-# These three routes were the IDOR (PLAN_2_auth.md): they read `userid` straight from the
+# These three routes were the IDOR (docs/archive/PLAN_2_auth.md): they read `userid` straight from the
 # request body and returned/wrote THAT account's data with no proof the caller owned it.
 # Identity now comes only from the verified access token (user.id); any userid in the body
 # is ignored. require_subscription wraps get_current_user, so a missing/invalid token is

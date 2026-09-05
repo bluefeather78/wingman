@@ -1,4 +1,4 @@
-"""FastAPI auth dependencies (PLAN_2_auth.md).
+"""FastAPI auth dependencies (docs/archive/PLAN_2_auth.md).
 
 Two dependencies, matching the plan's two route classes:
 

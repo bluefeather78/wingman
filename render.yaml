@@ -1,4 +1,4 @@
-# Render Web Service for the Highschool Wingman FastAPI app (PLAN_1_decompose.md).
+# Render Web Service for the Highschool Wingman FastAPI app (docs/archive/PLAN_1_decompose.md).
 #
 # Ships app/ only. WINGMAN_ENABLE_OPS is deliberately NOT set here, so the deployed
 # service mounts no /api/agents/*, /api/seeds, or /admin route — the ops console and the
@@ -37,11 +37,11 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
-      # Signing secret for session-auth JWTs (Phase 2, PLAN_2_auth.md). Set this in the
+      # Signing secret for session-auth JWTs (Phase 2, docs/archive/PLAN_2_auth.md). Set this in the
       # Render dashboard; if it is unset the auth layer fails closed. Never commit its value.
       - key: JWT_SECRET
         sync: false
-      # Phase 3 (PLAN_3_rn.md): where Google sign-in may hand the one-time token back to the
+      # Phase 3 (docs/archive/PLAN_3_rn.md): where Google sign-in may hand the one-time token back to the
       # Expo app. Set this in the dashboard to the static site's origin once it's live
       # (e.g. https://wingman-web.onrender.com). Until set, the allowlist default covers only
       # local dev, so Google sign-in from the deployed web app won't complete.

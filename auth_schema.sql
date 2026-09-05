@@ -1,4 +1,4 @@
--- Session auth (Phase 2 — PLAN_2_auth.md): the revocation counter.
+-- Session auth (Phase 2 — docs/archive/PLAN_2_auth.md): the revocation counter.
 --
 -- Run this ONCE in the Supabase SQL editor. It adds a single column to the `users` table.
 -- Everything about auth works before it runs — the code reads a missing value as 0 — EXCEPT

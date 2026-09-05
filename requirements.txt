@@ -2,12 +2,12 @@
 #
 # The offline agent toolkit at the repo root is still stdlib-only (http.server was
 # dropped from the *web* layer only); those scripts add no third-party deps here.
-# Phase 1 of the rearchitecture (PLAN_1_decompose.md) moved the public web layer from
+# Phase 1 of the rearchitecture (docs/archive/PLAN_1_decompose.md) moved the public web layer from
 # a hand-rolled http.server monolith to FastAPI + uvicorn.
 fastapi>=0.115
 uvicorn[standard]>=0.30
 
-# Session auth (Phase 2, PLAN_2_auth.md): PyJWT signs/verifies the access+refresh tokens;
+# Session auth (Phase 2, docs/archive/PLAN_2_auth.md): PyJWT signs/verifies the access+refresh tokens;
 # argon2-cffi hashes the (already client-SHA-256'd) password server-side. Both ship Linux
 # wheels, so Render installs them without a compiler.
 PyJWT>=2.8

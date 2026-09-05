@@ -1,5 +1,5 @@
 """POST /api/match — semantic recall + eligibility, for the main-style grid
-(RECALL_GRID_MERGE_PLAN.md).
+(docs/plans/RECALL_GRID_MERGE_PLAN.md).
 
 The trimmed, funnel-free endpoint: embed the student's selected profile themes (+ projects),
 recall the top-N by cosine, drop verified-ineligible rows, and return the whole scored pool for

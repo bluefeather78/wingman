@@ -1,4 +1,4 @@
-"""Eligibility-only gate over a recall pool (RECALL_GRID_MERGE_PLAN.md).
+"""Eligibility-only gate over a recall pool (docs/plans/RECALL_GRID_MERGE_PLAN.md).
 
 Unlike curation (which verdicts only the rows it PICKS), the main-style grid shows the whole
 recall pool, so every row that could carry a restriction must be verdicted. This runs one

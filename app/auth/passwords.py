@@ -1,4 +1,4 @@
-"""Server-side password hashing (PLAN_2_auth.md).
+"""Server-side password hashing (docs/archive/PLAN_2_auth.md).
 
 The client already SHA-256s the password before it leaves the browser (hashPassword in
 script.js) and the server never sees plaintext — so "hash server-side" here means hashing

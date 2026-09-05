@@ -39,7 +39,7 @@ That is the EXACT mechanism behind the scraper's measured 26% dead-link rate: wi
 the model writes URLs from memory, and they come back with the right host and a path off by
 one segment (`juilliard.edu/music/pre-college` for the real
 `.../music/preparatory-division/juilliard-pre-college`). Every one of those 30 dead URLs was
-a constructed deep path. See SCRAPER_PLAN.md and url_validate.py.
+a constructed deep path. See docs/archive/SCRAPER_PLAN.md and url_validate.py.
 
 The scraper's fix — take the URL from `groundingChunks[].web.uri`, i.e. a page the search
 actually retrieved — is not available here, because there is no search to ground against.

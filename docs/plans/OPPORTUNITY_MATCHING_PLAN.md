@@ -452,7 +452,7 @@ become a re-evaluation trigger (a fourth scraper touchpoint — see below); the 
 
 ---
 
-## Interaction with the scraper v2 work (SCRAPER_IMPROVEMENT_PLAN.md, other session)
+## Interaction with the scraper v2 work (../archive/SCRAPER_IMPROVEMENT_PLAN.md, other session)
 
 Mostly decoupled. Two touchpoints to reserve NOW so that session doesn't retrofit:
 1. **`match_vector` (and eligibility gate flags) are downstream enrichment columns**, owned
@@ -497,7 +497,7 @@ findings, not features.
 - Location/residential inference feasibility (keywords) — for ranking only, not blocking.
 **Gate:** a one-page findings note appended here; each later phase's schema references it.
 
-#### Phase 0 FINDINGS (2026-08-28, read-only live pull; full report + verbatim ground-truth samples in [PHASE0_ELIGIBILITY_FINDINGS.md](PHASE0_ELIGIBILITY_FINDINGS.md))
+#### Phase 0 FINDINGS (2026-08-28, read-only live pull; full report + verbatim ground-truth samples in [PHASE0_ELIGIBILITY_FINDINGS.md](../archive/PHASE0_ELIGIBILITY_FINDINGS.md))
 
 **Catalog has grown: 1488 active rows** (was ~1261 on 2026-08-26). Eligibility text present on
 **1073 (72%)**. Numbers below supersede the "Measured data state" table above where they differ.

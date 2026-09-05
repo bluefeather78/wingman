@@ -1,6 +1,6 @@
 """Local-only ops console router: /api/agents/*, /api/seeds, /admin.
 
-Translated from the admin half of server.py's Handler (PLAN_1_decompose.md). This
+Translated from the admin half of server.py's Handler (docs/archive/PLAN_1_decompose.md). This
 router is mounted ONLY when WINGMAN_ENABLE_OPS is set (see app.main), so the shipped
 web service exposes none of these routes — they 404 there. Every route is additionally
 gated to localhost by require_local, exactly like the old _require_local, because these

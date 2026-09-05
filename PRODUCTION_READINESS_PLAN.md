@@ -36,7 +36,7 @@ The five specialist reports it summarises, with file:line for every finding, are
 
 Surfaced by a real user report ("search a profile theme → *Search failed: Could not reach
 Supabase: HTTP Error 500*"), investigated live. Full detail in
-[docs/review-2026-09-02/perf_report.md](docs/review-2026-09-02/perf_report.md) §F.
+[perf_report.md](docs/review-2026-09-02/perf_report.md) §F.
 
 - **Bug (confirmed live).** `fetch_opportunities()` pulls the server-only 768-dim `match_vector`
   for all **1,686** active rows in 1,000-row pages; a full vector page sits at Supabase's

@@ -1,5 +1,5 @@
 """On-demand deadline-check cache helpers (read/write the opportunities row and
-the deadline_check_log). Extracted verbatim from server.py (PLAN_1_decompose.md).
+the deadline_check_log). Extracted verbatim from server.py (docs/archive/PLAN_1_decompose.md).
 The actual paid Claude check lives in check_deadlines.check_one(), called from the
 route; this module only handles caching, logging, and the mock payload.
 """

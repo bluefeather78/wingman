@@ -12,7 +12,7 @@
   gitignored `discovered_leads.jsonl`, so the console's lead counts follow whichever worktree the
   server runs from (this caused a "leads count dropped" scare — it was just the serving worktree
   changing, not data loss).
-- Read `CLAUDE.md` (marquee rules — M8 prompts, M9 paid calls) and `SCRAPER_IMPROVEMENT_PLAN.md`.
+- Read `CLAUDE.md` (marquee rules — M8 prompts, M9 paid calls) and `../archive/SCRAPER_IMPROVEMENT_PLAN.md`.
   The **Scraper Logic Map** artifact is the plain-English picture:
   https://claude.ai/code/artifact/5a5c5614-e561-4f28-9f0f-cac1c30ada99 (updated this session; WebFetch
   it before republishing — a republish overwrites, it does not merge).

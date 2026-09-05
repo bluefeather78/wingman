@@ -1,6 +1,6 @@
 """FastAPI application for the Highschool Wingman web service.
 
-Phase 1 of the rearchitecture (PLAN_1_decompose.md): this replaces the hand-rolled
+Phase 1 of the rearchitecture (docs/archive/PLAN_1_decompose.md): this replaces the hand-rolled
 http.server monolith (server.py) with domain routers, while serving the existing
 static SPA unchanged. Run locally or on Render with:
 
@@ -30,7 +30,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 app = FastAPI(title="Highschool Wingman", docs_url=None, redoc_url=None, openapi_url=None)
 
 # ---------------- CORS ----------------
-# Phase 3 (PLAN_3_rn.md): the Expo/RN-web client is a SEPARATE ORIGIN from this API — in dev
+# Phase 3 (docs/archive/PLAN_3_rn.md): the Expo/RN-web client is a SEPARATE ORIGIN from this API — in dev
 # (Metro on :8081 -> API on :8000) and in prod (Render Static Site -> Render Web Service) —
 # so the browser needs CORS to call it. Auth is a Bearer header, not a cookie, so credentials
 # mode is off and a "*" origin is safe (nothing rides on the ambient session). Set

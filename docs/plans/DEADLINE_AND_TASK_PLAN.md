@@ -62,7 +62,7 @@ handles a STALE `web_fetch` of it (the Tisch ec17543 confidently-wrong-date case
 ---
 
 > **This is the single source of truth for the deadline creator and the task creator.**
-> It merges and supersedes `DEADLINE_CREATION_PLAN.md` and `ACTION_ITEMS_TRUST_PLAN.md` — both
+> It merges and supersedes `../archive/DEADLINE_CREATION_PLAN.md` and `../archive/ACTION_ITEMS_TRUST_PLAN.md` — both
 > are retained only as history and carry a banner pointing here. Edit THIS doc going forward.
 
 ## HANDOFF — read this first in a new thread
@@ -1612,8 +1612,8 @@ deadline."
     escalation loop's own-site rungs — rung 4 is genuinely rare, which is the intended shape.
   - **Not done (as scoped — checkpoint before P6/P7):** the task aggregator discovery (P6)
     and frontend trust gradient (P7).
-- **2026-08-25** — Created as the merged main plan from `DEADLINE_CREATION_PLAN.md` and
-  `ACTION_ITEMS_TRUST_PLAN.md`. Deadline decisions all resolved; task-trust decisions carried
+- **2026-08-25** — Created as the merged main plan from `../archive/DEADLINE_CREATION_PLAN.md` and
+  `../archive/ACTION_ITEMS_TRUST_PLAN.md`. Deadline decisions all resolved; task-trust decisions carried
   forward as open. Nothing implemented.
 - **2026-08-25** — **P0–P4 IMPLEMENTED** (operator go-ahead; model decision: Haiku everywhere,
   no A/B; paid-run policy: ask each time). All verified via unit tests + tsc; NO paid run yet.

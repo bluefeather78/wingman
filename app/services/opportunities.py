@@ -1,5 +1,5 @@
 """Opportunities catalog fetch + in-process cache for /api/opportunities.
-Extracted verbatim from server.py (PLAN_1_decompose.md).
+Extracted verbatim from server.py (docs/archive/PLAN_1_decompose.md).
 """
 import io
 import json

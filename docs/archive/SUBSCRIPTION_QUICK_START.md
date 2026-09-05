@@ -35,7 +35,7 @@ STRIPE_WEBHOOK_SECRET=whsec_YOUR_WEBHOOK_SECRET_HERE
 In Supabase SQL editor, run:
 ```sql
 -- Don't paste this list by hand — it is incomplete (the consent columns are
--- missing from it). Run subscription_schema.sql instead; see SUBSCRIPTION_SETUP.md §1.
+-- missing from it). Run subscription_schema.sql instead; see ../SUBSCRIPTION_SETUP.md §1.
 ```
 
 ### Step 4: Test It!
@@ -158,7 +158,7 @@ PROMO_CODES = {
 | `server.py` | Backend endpoints for subscription |
 | `index.html` | UI for subscription management |
 | `script.js` | Frontend logic and page rendering |
-| `SUBSCRIPTION_SETUP.md` | Detailed setup and troubleshooting |
+| `../SUBSCRIPTION_SETUP.md` | Detailed setup and troubleshooting |
 
 ## Testing with Stripe
 
@@ -222,8 +222,8 @@ Current implementation:
 ## Support
 
 Detailed documentation:
-- Setup: `SUBSCRIPTION_SETUP.md`
+- Setup: `../SUBSCRIPTION_SETUP.md`
 - Implementation details: `SUBSCRIPTION_IMPLEMENTATION.md`
-- API reference: See SUBSCRIPTION_SETUP.md section 6
+- API reference: See ../SUBSCRIPTION_SETUP.md section 6
 
 For issues, check the server logs or browser console for error messages.

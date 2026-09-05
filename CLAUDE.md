@@ -68,7 +68,7 @@ never rebundle. `cd frontend && npx tsc --noEmit` must stay clean. Web deploys v
 ships via EAS. The API's root path returns a JSON status (or redirects when the
 `WEB_APP_URL` env var is set to the web origin).
 
-**As of the Phase 1 rearchitecture (2026-08-23, `PLAN_1_decompose.md`), the web layer is a
+**As of the Phase 1 rearchitecture (2026-08-23, `docs/archive/PLAN_1_decompose.md`), the web layer is a
 FastAPI app under `app/`, not the old `http.server` monolith.** `server.py` is now a thin
 shim that boots uvicorn (`app.main:app`) with the local ops console enabled — so
 `python server.py` still works and still serves `/admin`. See the **Web layer** section
@@ -149,7 +149,7 @@ Retired at tag `workingwithauth`: `index.html`, `script.js`, the old icon SVGs. 
 `script.js` / `index.html` reference below is **historical** — the reasoning was ported
 into `frontend/src/lib/*` and still holds; the DOM mechanics described do not exist.
 
-**Frontend: the Expo app in `frontend/`** (see `PLAN_3_rn.md` for the full build log).
+**Frontend: the Expo app in `frontend/`** (see `docs/archive/PLAN_3_rn.md` for the full build log).
 Routes in `frontend/app/` (expo-router: landing, login, google-auth, and the authed
 `(app)/` group — Home Base / My Vibe / Fresh Finds / Quest Log / subscription); ported
 pure logic in `frontend/src/lib/` (ranking, profile, profileChat, tracker, status,
@@ -754,7 +754,7 @@ per status, not positional**, exactly like the provider colours; and `money()` i
 deliberately not used for MRR, because its magnitude-keyed precision renders `$0.0000`,
 which looks like a rounding artefact rather than nobody paying yet.
 
-See [USER_METRICS_PLAN.md](USER_METRICS_PLAN.md) for the design rationale and the one
+See [USER_METRICS_PLAN.md](docs/archive/USER_METRICS_PLAN.md) for the design rationale and the one
 phase still unbuilt (event-level funnel timing — *how long* from signup to first tracked
 opportunity, which needs real events and is not worth it at this account count).
 

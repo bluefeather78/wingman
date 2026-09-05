@@ -95,7 +95,7 @@ def patch_action_items(opp_id, patch):
 
 # Tiers that must NEVER reach a student (P5). Independent of how the item was tagged at
 # generation time — the serve path filters again so a generation bug can't leak an
-# un-approved aggregator source (DEADLINE_AND_TASK_PLAN.md §4, "enforced at BOTH generation
+# un-approved aggregator source (docs/plans/DEADLINE_AND_TASK_PLAN.md §4, "enforced at BOTH generation
 # and serve time"). A no-op today: nothing writes source_tier until P6, and legacy items
 # (no tier / basis:'page' / basis:'generic') carry none, so they all pass.
 WITHHELD_TIERS = {"pending", "blocked"}

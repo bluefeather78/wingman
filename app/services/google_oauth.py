@@ -1,5 +1,5 @@
 """Google Sign-In / Calendar in-process token stores and pruning helpers.
-Extracted verbatim from server.py (PLAN_1_decompose.md). These are process-local
+Extracted verbatim from server.py (docs/archive/PLAN_1_decompose.md). These are process-local
 dicts (one uvicorn worker); the OAuth request/redirect glue lives in
 app.routes.google_oauth, which also holds the calendar token-refresh helpers.
 """
@@ -60,7 +60,7 @@ def _prune_google_calendar_states():
         del _google_calendar_states[s]
 
 
-# state -> {"app_redirect": ..., "expires_at": ...}. Phase 3 (PLAN_3_rn.md): the sign-in
+# state -> {"app_redirect": ..., "expires_at": ...}. Phase 3 (docs/archive/PLAN_3_rn.md): the sign-in
 # redirect flow historically ended at the SPA served from the backend root ("/"). The Expo
 # app is a SEPARATE origin (web) or a native app (custom scheme), so it passes its own
 # redirect URI to /start; the callback sends the one-time google_token there instead of to
@@ -77,7 +77,7 @@ def _prune_google_login_redirects():
 
 
 # ---------- Google Calendar token refresh + dedicated-calendar helpers ----------
-# Converted from Handler methods in server.py (PLAN_1_decompose.md). The redirect-uri
+# Converted from Handler methods in server.py (docs/archive/PLAN_1_decompose.md). The redirect-uri
 # derivation stays in the route (it needs the request Host header); these need only the
 # userid/record and are pure service logic.
 

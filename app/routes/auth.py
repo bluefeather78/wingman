@@ -1,4 +1,4 @@
-"""Session-token routes (PLAN_2_auth.md): refresh and revoke-all.
+"""Session-token routes (docs/archive/PLAN_2_auth.md): refresh and revoke-all.
 
   POST /api/auth/refresh     {refresh_token} -> a fresh access+refresh pair (+ identity).
                              This is the ONLY place users.token_version is checked, so it

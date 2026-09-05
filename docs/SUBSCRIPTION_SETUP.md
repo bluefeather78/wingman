@@ -8,7 +8,7 @@ This guide explains how to set up the subscription/payment system for Wingman.
 > live. This section is kept for rebuilding the table, or for standing up a second
 > environment.
 
-The migration lives in **[subscription_schema.sql](subscription_schema.sql)**. Open the
+The migration lives in **[subscription_schema.sql](../subscription_schema.sql)**. Open the
 Supabase SQL editor, paste the whole file in, run it. That is the only step here.
 
 There is no way to do this from the app: PostgREST — all `server.py` can reach — exposes

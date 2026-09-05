@@ -1,4 +1,4 @@
-"""The final cross-kind curation pass (OPPORTUNITY_MATCHING_PLAN.md, Phase 3 / the second
+"""The final cross-kind curation pass (docs/plans/OPPORTUNITY_MATCHING_PLAN.md, Phase 3 / the second
 live call of Phase 1). ONE call, at the end: the funnel's survivors + the student blob in,
 the curated shortlist out (up to ~13, cap CURATED_LIMIT), each with a "why you" reason, a tier,
 and an eligibility verdict.

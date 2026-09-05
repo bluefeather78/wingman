@@ -1,5 +1,5 @@
 -- dup_verdict — the single resolved dedupe verdict per opportunity row.
--- Phase 1 of DEDUPE_SIMPLIFICATION_PLAN.md. One manual step in the Supabase SQL editor
+-- Phase 1 of docs/plans/DEDUPE_SIMPLIFICATION_PLAN.md. One manual step in the Supabase SQL editor
 -- (PostgREST has no DDL endpoint, so nothing in this repo can run it).
 --
 -- Shape (written by dedupe_resolve.py / dup_verdict.Verdict.as_dict):

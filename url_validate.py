@@ -29,7 +29,7 @@ check_urls()
     two-pass confirmation cheap enough to be worth doing and honest enough to act on.
 
 Nothing here ever decides to discard a row. Callers turn these results into review flags —
-see scrape_opportunities.py's FLAG_* constants and SCRAPER_PLAN.md's "discard almost
+see scrape_opportunities.py's FLAG_* constants and docs/archive/SCRAPER_PLAN.md's "discard almost
 nothing, explain everything" rule.
 """
 import concurrent.futures

@@ -13,7 +13,7 @@ This module answers two questions and touches no network:
 
   2. ENGINE (assign_rung / due_alerts): given the units and today, which (unit, rung) pairs a
      sweep would send right now, and what dedupe key does each claim under? See
-     DEADLINE_EMAIL_ALERTS_PLAN.md §3-§4.
+     docs/plans/DEADLINE_EMAIL_ALERTS_PLAN.md §3-§4.
 
 WHY THE READER IS DEFENSIVE TO A FAULT. The blob was written by whatever bundle version the
 student last ran, so its shape drifts: dates are camelCase `dateISO` off the client but

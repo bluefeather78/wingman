@@ -1,5 +1,5 @@
 """Subscription routes (dormant — Stripe unconfigured, trial gate left open per
-PLAN_1_decompose.md). Translated from server.py's handle_subscription_* handlers.
+docs/archive/PLAN_1_decompose.md). Translated from server.py's handle_subscription_* handlers.
 """
 import datetime
 

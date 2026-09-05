@@ -68,7 +68,7 @@ The prompt is one of eleven things that move. The rest of this document is the e
 > `refresh_opportunities.py` now READS THE LIVE PAGE (a free plain-HTTP GET) and extracts
 > fields from it; a fetch failure skips the row rather than answering from memory. It was
 > discovered that the agent had been silently flipped to memory-only (`use_web_search=False`,
-> "YOU HAVE NO WEB ACCESS") inside an unrelated commit — see [MARQUEE_DECISIONS.md](MARQUEE_DECISIONS.md)
+> "YOU HAVE NO WEB ACCESS") inside an unrelated commit — see [MARQUEE_DECISIONS.md](../../MARQUEE_DECISIONS.md)
 > M1. What REMAINS of this blocker: the agent still selects `is_active = true` rows only, so it
 > cannot yet be pointed at queued rows — the `--ids` / `--pending` mode below is still to build.
 

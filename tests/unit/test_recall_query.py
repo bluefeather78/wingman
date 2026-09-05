@@ -1,4 +1,4 @@
-"""Unit tests for the funnel-free recall-query helpers (RECALL_GRID_MERGE_PLAN.md)."""
+"""Unit tests for the funnel-free recall-query helpers (docs/plans/RECALL_GRID_MERGE_PLAN.md)."""
 from app.services import recall_query
 from app.services.recall_query import (
     theme_embed_text, project_embed_text, student_embed_texts, recall_pool, attach_display,

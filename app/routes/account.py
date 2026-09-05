@@ -1,5 +1,5 @@
 """Account routes: register and login. Translated from server.py's handle_register /
-handle_login (PLAN_1_decompose.md). Paths and JSON shapes unchanged.
+handle_login (docs/archive/PLAN_1_decompose.md). Paths and JSON shapes unchanged.
 """
 import json
 import urllib.error

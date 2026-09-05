@@ -1,4 +1,4 @@
-"""Unit tests for the eligibility-only pool gate (RECALL_GRID_MERGE_PLAN.md)."""
+"""Unit tests for the eligibility-only pool gate (docs/plans/RECALL_GRID_MERGE_PLAN.md)."""
 import json
 
 from app.services.pool_eligibility import (

@@ -510,7 +510,7 @@ def estimate_cost(usage):
 
 # --------------------------------------------------------------------------- embeddings
 #
-# The catalog-matching pipeline (OPPORTUNITY_MATCHING_PLAN.md, Phase 5) embeds each active
+# The catalog-matching pipeline (docs/plans/OPPORTUNITY_MATCHING_PLAN.md, Phase 5) embeds each active
 # opportunity and each student profile theme, then matches by cosine similarity. The SAME
 # pinned model + dimensionality MUST be used on both sides, or the cosine between a row vector
 # and a theme vector is meaningless — that is why this is one pin, here, next to the pricing.

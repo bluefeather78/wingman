@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 7 eval for the eligibility reasoning (OPPORTUNITY_MATCHING_PLAN.md).
+"""Phase 7 eval for the eligibility reasoning (docs/plans/OPPORTUNITY_MATCHING_PLAN.md).
 
 Grades the curation call's eligibility verdicts against a labeled set, in BOTH error
 directions — because they are not symmetric and the worse one has no code guard:

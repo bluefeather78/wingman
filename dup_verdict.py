@@ -1,6 +1,6 @@
 """Resolve ONE dedupe verdict per row: {confidence, best-guess duplicate}. Pure, free.
 
-Phase 1 of DEDUPE_SIMPLIFICATION_PLAN.md. This is the SINGLE place the three detection logics
+Phase 1 of docs/plans/DEDUPE_SIMPLIFICATION_PLAN.md. This is the SINGLE place the three detection logics
 collapse into one label the reviewer acts on, replacing the four-writer `dup_candidates` pile:
 
     url_dedupe (URL/name)  ─┐

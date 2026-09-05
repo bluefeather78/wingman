@@ -16,7 +16,7 @@ search-results step" was rejected because at that point we hold the URL string a
 NOT the pages. This classifier FETCHES the full page first and judges from its text — the missing
 premise — and it is a SEPARATE no-search call, never folded into phase-2 extract (whose 6000-token
 budget and silent truncation-repair are the other half of that rejection). See
-SCRAPER_IMPROVEMENT_PLAN.md, "Session 2026-08-30".
+docs/archive/SCRAPER_IMPROVEMENT_PLAN.md, "Session 2026-08-30".
 
 Two design choices worth stating up front, both matching rules already load-bearing elsewhere:
 
@@ -36,7 +36,7 @@ Two design choices worth stating up front, both matching rules already load-bear
 The only drop here is the deterministic date rule. Nothing auto-activates.
 
 FREE to import and unit-test. The single model call is PAID (M9) and only fires when a run is
-triggered; the prompt is MARQUEE (M8). Both are gated per SCRAPER_IMPROVEMENT_PLAN.md.
+triggered; the prompt is MARQUEE (M8). Both are gated per docs/archive/SCRAPER_IMPROVEMENT_PLAN.md.
 """
 import dataclasses
 import datetime

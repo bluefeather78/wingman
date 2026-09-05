@@ -1,6 +1,6 @@
 """Mailing-list signup: recipe lookup, per-user availability, and the execution
 path that replays a *verified* recipe against a real address. Extracted verbatim
-from server.py (PLAN_1_decompose.md). Recipe review/moderation (writes) lives in
+from server.py (docs/archive/PLAN_1_decompose.md). Recipe review/moderation (writes) lives in
 ops.core; this module is the read + student-facing subscribe half.
 """
 import datetime

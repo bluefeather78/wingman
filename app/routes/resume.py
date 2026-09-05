@@ -1,6 +1,6 @@
 """Resume/LinkedIn import + user-submitted opportunity routes. Translated from
 server.py's handle_extract_from_resume / handle_extract_from_linkedin /
-handle_user_submitted_opportunity (PLAN_1_decompose.md). The extraction/insert logic
+handle_user_submitted_opportunity (docs/archive/PLAN_1_decompose.md). The extraction/insert logic
 lives in app.services.resume; these are the HTTP glue.
 """
 

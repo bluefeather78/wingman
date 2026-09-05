@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sitemap-first page discovery (G-D1, phases D0-D5; DEADLINE_AND_TASK_PLAN.md §4/§9).
+"""Sitemap-first page discovery (G-D1, phases D0-D5; docs/plans/DEADLINE_AND_TASK_PLAN.md §4/§9).
 
 THE PRINCIPLE: enumerate a site's OWN pages, then choose — never guess page NAMES. The task
 capture and the deadline ladder both hunt for pages named How-to-Apply / FAQ / Requirements /

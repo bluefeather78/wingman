@@ -2,7 +2,7 @@
 
 Written 2026-08-22. **Phases 0–2 built 2026-08-23**; see §7 for what landed and what
 did not. The design rationale below is the record of *why* it is shaped this way — the
-implementation notes that matter day to day are in [CLAUDE.md](CLAUDE.md) under
+implementation notes that matter day to day are in [CLAUDE.md](../../CLAUDE.md) under
 "User metrics — the Metrics view".
 
 A fifth admin-console view answering *"is anyone actually using this, and are they
@@ -135,7 +135,7 @@ week in the denominator as a failure. The tile must show `n/d` alongside the
 percentage so a 1-of-2 reads as 1-of-2.
 
 **`has_access` is not a status.** Derive every gate from `subscription_state(record)`
-([server.py:149](server.py:149)) rather than re-reading the columns, for the same reason
+([server.py:149](../../server.py:149)) rather than re-reading the columns, for the same reason
 the client paywall does — two implementations of "may this account use the app" will
 eventually disagree.
 
@@ -415,9 +415,9 @@ a `?stage=` filter and paginate.
   strip and the default view, with KPI tiles, the signups/DAU chart, and the four paged
   panels (Funnel, Retention, Subscriptions, Users). Funnel bars expand to name the
   accounts each step lost.
-- [user_activity_schema.sql](user_activity_schema.sql) + `touch_user_activity()`, wired
+- [user_activity_schema.sql](../../user_activity_schema.sql) + `touch_user_activity()`, wired
   into the nine handlers that carry a userid, buffered in memory and flushed every 30s.
-- [user_metrics_daily_schema.sql](user_metrics_daily_schema.sql) + `record_metrics_snapshot()`,
+- [user_metrics_daily_schema.sql](../../user_metrics_daily_schema.sql) + `record_metrics_snapshot()`,
   written from the read path and throttled to one write per 5 minutes.
 
 **Both .sql files still need running once in the Supabase SQL editor** — PostgREST exposes

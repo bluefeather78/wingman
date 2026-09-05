@@ -51,12 +51,12 @@ Legend: **(a)** shared library, **(b)** agent/CLI entry point wired into `ops/co
 |---|---|---|---|
 | `agent_common.py` | a | 14 importers | keep |
 | `aggregators_common.py` | a | 7 | keep |
-| `backfill_match_vectors.py` | c (re-runnable) | `ops/core` MAINTENANCE? no — referenced in `dedupe_embed_store`, `logic_map.html`, `RECALL_GRID_MERGE_PLAN.md`, `ops/core.py` (text), test | keep (still the match_vector backfill), move to `scripts/backfill/` |
-| `backfill_seed_attribution.py` | c | test + `SCRAPER_IMPROVEMENT_PLAN.md` | one-off done 2026-08-26; move to `scripts/one-off/` |
+| `backfill_match_vectors.py` | c (re-runnable) | `ops/core` MAINTENANCE? no — referenced in `dedupe_embed_store`, `logic_map.html`, `../plans/RECALL_GRID_MERGE_PLAN.md`, `ops/core.py` (text), test | keep (still the match_vector backfill), move to `scripts/backfill/` |
+| `backfill_seed_attribution.py` | c | test + `../archive/SCRAPER_IMPROVEMENT_PLAN.md` | one-off done 2026-08-26; move to `scripts/one-off/` |
 | `backfill_subject_tags.py` | c (paid, Gemini) | CLAUDE.md only | done; move to `scripts/one-off/` |
 | `backfill_summaries_from_xlsx.py` | c | `merge_description_into_summary.py` comment only | done; depends on `Opportunities.xlsx`; move to `scripts/one-off/` |
 | `build_catalog_embeddings.py` | b (console tool `embedindex`) | `ops/core` | keep |
-| `build_fixture.py` | d | `SCRAPER_IMPROVEMENT_PLAN.md` | keep under `eval/` or `scripts/grading/` |
+| `build_fixture.py` | d | `../archive/SCRAPER_IMPROVEMENT_PLAN.md` | keep under `eval/` or `scripts/grading/` |
 | `build_legal.py` | b (console tool `legal`) | `ops/core`, test | keep |
 | `check_deadlines.py` | b + a | `ops/core`, `app/routes/opportunities`, `generate_action_items` | keep |
 | `check_links.py` | b | `ops/core` | keep |
@@ -72,9 +72,9 @@ Legend: **(a)** shared library, **(b)** agent/CLI entry point wired into `ops/co
 | `db_health_check.py` | a + b (console Health tab) | `ops/core` | keep |
 | `dedupe_confidence.py` | a | 5 | keep |
 | `dedupe_embed_store.py` | a | 9 | keep |
-| `dedupe_eval.py` | d (paid) | test, `SCRAPER_IMPROVEMENT_PLAN.md` | move to `eval/` |
+| `dedupe_eval.py` | d (paid) | test, `../archive/SCRAPER_IMPROVEMENT_PLAN.md` | move to `eval/` |
 | `dedupe_queue.py` | b (console tool `dedupequeue`) | `ops/core` | keep |
-| `dev_test_account.py` | dev utility | `DEADLINE_AND_TASK_PLAN.md` | keep, move to `scripts/dev/` |
+| `dev_test_account.py` | dev utility | `../plans/DEADLINE_AND_TASK_PLAN.md` | keep, move to `scripts/dev/` |
 | `discovered_leads.py` | a + CLI | 11 | keep |
 | `dryrun_common.py` | a | `ops/*` | keep |
 | `embed_common.py` | a | 10 | keep |
@@ -89,7 +89,7 @@ Legend: **(a)** shared library, **(b)** agent/CLI entry point wired into `ops/co
 | `grade_url_truth.py` | d | **nothing** (0 references anywhere) | **orphan** — delete or move to `eval/` |
 | `harvest_names.py` | b (console tool `harvestnames`) + a | `ops/core`, `scrape_opportunities` | keep |
 | `mailing_list_common.py` | a | 6 | keep |
-| `matching_eval.py` | d | test, `RECALL_GRID_MERGE_PLAN.md` | move to `eval/` |
+| `matching_eval.py` | d | test, `../plans/RECALL_GRID_MERGE_PLAN.md` | move to `eval/` |
 | `merge_description_into_summary.py` | c | only the other merge script's comment | done; move to `scripts/one-off/` |
 | `merge_opens_date_into_important_dates.py` | c | `check_opp_data` comment | done; move to `scripts/one-off/` |
 | `migrate_seeds_to_supabase.py` | c | plans, console HTML | done; move |
@@ -132,13 +132,13 @@ Orphans (imported by nothing, referenced by nothing outside their own file): **`
 | `refresh_run.log` | 18 KB | nothing; **listed in `.gitignore` yet tracked** | `git rm --cached` |
 | `find_contact_emails_full_run.log` | 103 KB | nothing | delete |
 | `review_check_dry_run_20260818.json` / `..._20260819.json` | 4 KB / 232 KB | nothing; matches `*_dry_run_*.json` in `.gitignore` yet tracked | `git rm --cached` (they are still committable via the console, but they are 2 weeks stale: `dryrun_common.STALE_DAYS=7`) |
-| `scrape_review_national_20260818.json`, `...run1-backup.json`, `..._20260820.json`, `scrape_review_seattle_20260818.json` | 1.5 KB–141 KB | `_20260820` cited in `url_validate.py:7` and `SCRAPER_PLAN.md` as a measurement; the others by nothing; all match ignored glob `scrape_review_*.json` yet tracked | `git rm --cached`; keep `_20260820` under `tests/fixtures/` if the measurement matters |
+| `scrape_review_national_20260818.json`, `...run1-backup.json`, `..._20260820.json`, `scrape_review_seattle_20260818.json` | 1.5 KB–141 KB | `_20260820` cited in `url_validate.py:7` and `../archive/SCRAPER_PLAN.md` as a measurement; the others by nothing; all match ignored glob `scrape_review_*.json` yet tracked | `git rm --cached`; keep `_20260820` under `tests/fixtures/` if the measurement matters |
 | `test_resume.docx` | 37 KB | nothing (no test imports it; `tests/unit/test_resume_multipart.py` builds its own) | delete or move to `tests/fixtures/` |
 | `Opportunities.xlsx` | 401 KB | `backfill_summaries_from_xlsx.py` only | move with that script |
 | `.tmp_landing_zip/` (17 tracked files, design-canvas export) | — | nothing | delete from tracking |
 | `test_server_debug.sh` | 512 B | nothing | delete |
 | `hub_pilot_national.json`, `hubs_seattle.json` | <1 KB | `discovered_leads.py`, `harvest_names.py` docstrings; superseded by `discovered_leads.jsonl` | keep as sample input or move to `eval/` |
-| `duplicate_cleanup_2026-08-28.md` | 6 KB | nothing | move to a `notes/` dir |
+| `../archive/duplicate_cleanup_2026-08-28.md` | 6 KB | nothing | move to a `notes/` dir |
 | `opportunities.json` | 1.2 MB | 10 files (documented backup snapshot) | keep |
 | `logic_map.html` | 55 KB | `ops/` serves it | keep |
 | `agent_settings.json`, `discovered_leads.jsonl` (208 KB), `agent_logs/` (123 files), 33 untracked `*_review_*/*_dry_run_*` snapshots | — | local state (see §5) | not tracked, correct |

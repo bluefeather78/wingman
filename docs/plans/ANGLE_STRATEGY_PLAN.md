@@ -3,7 +3,7 @@
 Working document, opened 2026-08-27. Scope: the **angle layer only** — the thing that decides
 *what the scraper goes looking for* and *how that intent reaches a search engine*. Everything
 downstream of a returned page (URL truth, dedupe, merge, review) is
-[SCRAPER_IMPROVEMENT_PLAN.md](SCRAPER_IMPROVEMENT_PLAN.md)'s territory and is not re-litigated here.
+[SCRAPER_IMPROVEMENT_PLAN.md](../archive/SCRAPER_IMPROVEMENT_PLAN.md)'s territory and is not re-litigated here.
 
 This file starts as a **survey plus measurements**, not a proposal. Section 5 is the open-questions
 list; nothing in it is decided.
@@ -31,9 +31,9 @@ addendum is appended to the research prompt and is the console's National/Seattl
 prompt (`RESEARCH_SYSTEM`) and once into the user turn. Nothing in this repo writes a search query
 for the scraper. See section 3.
 
-Loading, selection and crediting live in [seeds_common.py](seeds_common.py):
+Loading, selection and crediting live in [seeds_common.py](../../seeds_common.py):
 `load_seeds()` (Supabase, falling back loudly to the `NATIONAL_SEEDS` / `SEATTLE_SEEDS` literals in
-[scrape_opportunities.py](scrape_opportunities.py)), `select_seeds()` (`--seed-ids` stable,
+[scrape_opportunities.py](../../scrape_opportunities.py)), `select_seeds()` (`--seed-ids` stable,
 `--seed-indices` deprecated), `record_seed_result()` (read-modify-write of the lifetime counters,
 re-read immediately before crediting so a mid-run console edit is not clobbered).
 
@@ -290,7 +290,7 @@ that would learn from what actually got approved is unbuilt (4b).
 `GET /api/seeds/queries` (localhost-gated like every ops route). Free: it reads local files, makes no
 model call and writes nothing.
 
-- **[query_telemetry.py](query_telemetry.py)** — pure, stdlib-only, the judgement half.
+- **[query_telemetry.py](../../query_telemetry.py)** — pure, stdlib-only, the judgement half.
   `classify_query` / `summarize_queries` / `summarize_seed` / `summarize_run`. 17 unit tests, every
   case a real query string out of the logs.
 - **`ops/core.list_seed_query_runs()`** — the disk half: scans `agent_logs/scraper_<stamp>_seed<id>.json`,
@@ -524,5 +524,5 @@ Do not ship the prompt on argument. Ship it on that table.
 
 URL truth and title-proof, dedupe/merge, the review queue and its reason codes as a *UI*, hub mining
 and name harvest as *channels*, Phase 4L local strategy (pinned by the operator). Each is covered in
-[SCRAPER_IMPROVEMENT_PLAN.md](SCRAPER_IMPROVEMENT_PLAN.md); this file touches them only where they
+[SCRAPER_IMPROVEMENT_PLAN.md](../archive/SCRAPER_IMPROVEMENT_PLAN.md); this file touches them only where they
 constrain the angle layer.

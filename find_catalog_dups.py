@@ -7,7 +7,7 @@ module's blind spot (its candidate generation never pairs same-program rows whos
 overlap, the SYCCL case). But `find_duplicate_pairs` is STILL imported by `dedupe_queue.py`, the
 live 'Dedupe the Review Queue' tool, so this file is NOT dead and cannot be deleted until the
 review-queue dedupe path is also migrated (the deferred insert-time half of Phase 4). Do not
-build NEW callers on it. See DEDUPE_SIMPLIFICATION_PLAN.md.
+build NEW callers on it. See docs/plans/DEDUPE_SIMPLIFICATION_PLAN.md.
 
 
 2026-08-30: this was briefly rewritten to a pure embedding nearest-neighbor sweep (search every

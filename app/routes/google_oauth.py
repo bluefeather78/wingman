@@ -1,5 +1,5 @@
 """Google Sign-In and Google Calendar routes. Translated from server.py's
-handle_google_* / handle_calendar_sync (PLAN_1_decompose.md). The four-step redirect
+handle_google_* / handle_calendar_sync (docs/archive/PLAN_1_decompose.md). The four-step redirect
 flow (start -> Google -> callback -> session|finish) and the calendar connect/sync are
 preserved exactly; redirect URIs are still derived from the request Host header.
 """

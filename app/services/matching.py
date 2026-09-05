@@ -1,4 +1,4 @@
-"""Recall stage for the curated-matching pipeline (OPPORTUNITY_MATCHING_PLAN.md, Phase 5).
+"""Recall stage for the curated-matching pipeline (docs/plans/OPPORTUNITY_MATCHING_PLAN.md, Phase 5).
 
 The recall stage takes the whole active catalog and narrows it to a ~100-row candidate pool
 by SEMANTIC similarity (cosine between a row's embedding and each of the student's per-theme

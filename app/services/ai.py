@@ -1,6 +1,6 @@
 """Mock AI generation and the JSON-ish extraction helpers for /api/messages.
 
-Extracted verbatim from server.py (PLAN_1_decompose.md). generate_mock_text()
+Extracted verbatim from server.py (docs/archive/PLAN_1_decompose.md). generate_mock_text()
 fabricates plausible pattern-matched responses so the app is click-through-able
 with no API key; the live proxies live in app.routes.ai.
 """

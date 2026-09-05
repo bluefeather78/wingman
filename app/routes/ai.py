@@ -1,7 +1,7 @@
 """AI proxy routes: /api/messages (Gemini) and /api/messages-claude (Anthropic).
 
 Translated from server.py's handle_messages / proxy_to_gemini / mock_response /
-handle_messages_claude / proxy_to_anthropic (PLAN_1_decompose.md). The client sends a
+handle_messages_claude / proxy_to_anthropic (docs/archive/PLAN_1_decompose.md). The client sends a
 plain {system, userContent, useWebSearch, userid} body either way; the response is the
 {"content":[{"type":"text","text":...}]} envelope for both live and mock, so script.js
 doesn't branch on mode.

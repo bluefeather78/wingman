@@ -18,7 +18,7 @@ Three properties of the old design made that inevitable, and this agent inverts 
      no web_fetch, no urlContext — while the prompt instructed it to "Fetch this URL". The
      two tools it was told to use did not exist in the call. Here the page is fetched by the
      shared CAPTURE substrate (source_capture.fetch_and_capture, Claude web_fetch — reads
-     PDFs and SPAs our urllib cannot; see DEADLINE_AND_TASK_PLAN.md §5a) and its content is
+     PDFs and SPAs our urllib cannot; see docs/plans/DEADLINE_AND_TASK_PLAN.md §5a) and its content is
      handed to the extract call as text AND kept for the code-side verification below. The
      extract call itself still has no tools.
   2. Nothing could check the answer. The proxy returns only the response text; grounding

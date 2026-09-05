@@ -1,7 +1,7 @@
 """Local-only operations core: agent orchestration, run history, cost/metrics
 dashboards, snapshot commit, review-queue moderation, and scraper seeds.
 
-Extracted verbatim from server.py (PLAN_1_decompose.md). Imported ONLY by the
+Extracted verbatim from server.py (docs/archive/PLAN_1_decompose.md). Imported ONLY by the
 local ops console (ops.admin) and never mounted on the shipped web service, so
 none of the /api/agents/* or /api/seeds routes exist there. Imports the shared
 seam from app.core (one-way: ops depends on app, never the reverse).

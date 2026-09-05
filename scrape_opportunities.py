@@ -4,7 +4,7 @@
 etc.) that don't explicitly market themselves as "high school programs" but a motivated
 student could turn into one.
 
-THE CONTRACT (rewritten 2026-08-23 — see SCRAPER_PLAN.md):
+THE CONTRACT (rewritten 2026-08-23 — see docs/archive/SCRAPER_PLAN.md):
 
     seed = (mode, angle)
       -> Gemini turns the angle into its own search terms

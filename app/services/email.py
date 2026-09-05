@@ -515,7 +515,7 @@ def run_trial_sweep(days=None, dry_run=False, limit=500):
 # Unlike the trial sweep, this is a DIGEST: one email per student listing all their due
 # deadlines, but one email_sends claim per (opportunity, date, rung) so each reminder fires
 # exactly once. The claim is per-unit; the SEND is per-student. See
-# DEADLINE_EMAIL_ALERTS_PLAN.md §4.
+# docs/plans/DEADLINE_EMAIL_ALERTS_PLAN.md §4.
 
 # The roster read needs the `data` blob (the tracker lives there) alongside the subscription
 # columns the access gate reads. get_user_account deliberately omits `data`, so this is its

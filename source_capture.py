@@ -3,7 +3,7 @@
 into verifiable, tier-tagged text — the "page text we hold locally" that the code-side
 verifiers (`page_text.quote_is_on_page` / `claim_is_supported`) check a model's claims against.
 
-WHY THIS REPLACES THE urllib FETCH (see DEADLINE_AND_TASK_PLAN.md §5a / decision 6). The task
+WHY THIS REPLACES THE urllib FETCH (see docs/plans/DEADLINE_AND_TASK_PLAN.md §5a / decision 6). The task
 agent used to fetch `opp.url` with stdlib `urllib` (`page_text.fetch_page_text`), which reads
 ~490 bytes of an SPA shell and rejects PDFs outright — so the richest requirement source (a
 program's guidelines PDF, or a JS-rendered page) was invisible and tasks fell to generic. The

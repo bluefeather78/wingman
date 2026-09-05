@@ -20,7 +20,7 @@ the ambiguous band toward the paid adjudicator.
     low cosine ...................................... NONE
 
 All pure and FREE. The adjudicator (paid) and auto-merge live elsewhere; this decides which pairs
-reach them. See SCRAPER_IMPROVEMENT_PLAN.md "Dedupe CONFIDENCE".
+reach them. See docs/archive/SCRAPER_IMPROVEMENT_PLAN.md "Dedupe CONFIDENCE".
 """
 import dataclasses
 import re

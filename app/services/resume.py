@@ -1,6 +1,6 @@
 """Resume / LinkedIn profile extraction and user-submitted-opportunity insertion.
 
-Converted from the former Handler methods in server.py (PLAN_1_decompose.md) into
+Converted from the former Handler methods in server.py (docs/archive/PLAN_1_decompose.md) into
 plain module functions — the HTTP glue (multipart read, response) now lives in
 app.routes.resume; the logic here is unchanged.
 """

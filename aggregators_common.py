@@ -16,7 +16,7 @@ the `trusted_aggregators` table:
 
 Pending is the safe default: an unknown domain never ships to a student. So a missing table,
 an unreachable Supabase, or a domain nobody has ruled on all collapse to the same
-withhold-by-default behaviour — degrade-not-break, exactly what DEADLINE_AND_TASK_PLAN.md §5
+withhold-by-default behaviour — degrade-not-break, exactly what docs/plans/DEADLINE_AND_TASK_PLAN.md §5
 asks for.
 """
 import time

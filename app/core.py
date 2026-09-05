@@ -1,6 +1,6 @@
 """Shared core: Supabase plumbing, user accounts, cost/activity accounting, and
 the subscription-state helpers that both the public app and the local ops console
-read and write. Extracted verbatim from server.py (PLAN_1_decompose.md).
+read and write. Extracted verbatim from server.py (docs/archive/PLAN_1_decompose.md).
 
 This is the seam module: public request handlers WRITE the cost/activity tables
 here and the ops dashboards READ them, so both app.* and ops.* import from here.
@@ -369,7 +369,7 @@ def provider_for_model(model, surface=None):
 # longer one has to be checked first — the same ordering constraint generate_mock_text()
 # already lives under.
 _FEATURE_SIGNATURES = [
-    # The eligibility-only gate over a recall pool (RECALL_GRID_MERGE_PLAN.md). Distinctive
+    # The eligibility-only gate over a recall pool (docs/plans/RECALL_GRID_MERGE_PLAN.md). Distinctive
     # opening line, so position is unimportant — it collides with nothing else here.
     ("Wingman's eligibility checker",                            "match_eligibility"),
     # The merged tags+basics pass. FIRST, because it does the work of `infer_subjects`'s tag
@@ -836,7 +836,7 @@ def update_user_location(userid, location):
 
 def update_password_hash(userid, password_hash):
     """Overwrite an account's stored password hash. Used by the login-time upgrade that
-    rewrites a legacy client-SHA-256 row as argon2 (PLAN_2_auth.md)."""
+    rewrites a legacy client-SHA-256 row as argon2 (docs/archive/PLAN_2_auth.md)."""
     query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
     _users_request("PATCH", query, data={"password_hash": password_hash})
     return True
@@ -865,7 +865,7 @@ def update_subscription(userid, updates):
 
 
 def bump_token_version(userid):
-    """Invalidate every outstanding refresh token for this account (PLAN_2_auth.md).
+    """Invalidate every outstanding refresh token for this account (docs/archive/PLAN_2_auth.md).
 
     The refresh route compares a token's `ver` claim against users.token_version, so
     incrementing that column makes all existing refresh tokens fail to renew — sessions

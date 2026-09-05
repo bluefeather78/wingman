@@ -1,4 +1,4 @@
-"""Recall-query helpers for the main-style grid (RECALL_GRID_MERGE_PLAN.md).
+"""Recall-query helpers for the main-style grid (docs/plans/RECALL_GRID_MERGE_PLAN.md).
 
 The funnel-free half of what `match_pipeline` does on the branch: turn a student blob into the
 embed texts, run recall, and attach the per-row cosine SCORE so the grid can show a
@@ -26,7 +26,7 @@ RESULT_DISPLAY_FIELDS = (
     "eligibility", "status",
 )
 
-# The fixed cosine cut for the "strong match" badge (RECALL_GRID_MERGE_PLAN.md decision 2).
+# The fixed cosine cut for the "strong match" badge (docs/plans/RECALL_GRID_MERGE_PLAN.md decision 2).
 # PROVISIONAL — calibrate against the live gemini-embedding-001 score distribution before
 # trusting it (log real recall scores, pick the value that separates the on-lane cluster from
 # the tail). Env-tunable so calibration needs no code change. A fixed bar (not top-N%) means

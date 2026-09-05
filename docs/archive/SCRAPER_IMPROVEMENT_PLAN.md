@@ -147,7 +147,7 @@ off-domain, since every lead already on file came from the router.
    help. Deferred by the operator.
 7. **4L (local) stays PINNED.** Two designs measured, neither worked.
 8. Two files from a concurrent session sit untracked and were deliberately left alone:
-   `ANGLE_STRATEGY_PLAN.md`, `MATCHING_UX_REQUIREMENTS.md`. That session is also editing
+   `../plans/ANGLE_STRATEGY_PLAN.md`, `../MATCHING_UX_REQUIREMENTS.md`. That session is also editing
    `ops/admin.py`, `ops/admin_console.html` and `ops/core.py` in this working tree (angle
    query telemetry) — do not stage those with scraper work.
 9. **The plain-English picture of all of this is the published *Scraper Logic Map* artifact**

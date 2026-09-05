@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deprecated entrypoint — kept so `python server.py` still boots the local dev server.
 
-Phase 1 of the rearchitecture (PLAN_1_decompose.md) replaced the old 6,956-line
+Phase 1 of the rearchitecture (docs/archive/PLAN_1_decompose.md) replaced the old 6,956-line
 http.server monolith that lived here with a FastAPI application under app/ (public web
 service) plus a local-only ops console under ops/. The whole former contents of this
 file were sliced verbatim into:
@@ -36,5 +36,5 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", "8000"))
     print("[server.py] The web layer moved to app.main (FastAPI). Booting uvicorn — this "
-          "shim keeps `python server.py` working. See PLAN_1_decompose.md.")
+          "shim keeps `python server.py` working. See docs/archive/PLAN_1_decompose.md.")
     uvicorn.run("app.main:app", host="0.0.0.0", port=port, log_level="info")

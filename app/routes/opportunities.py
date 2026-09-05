@@ -2,7 +2,7 @@
 on-demand action-item generation.
 
 Translated from server.py's handle_opportunities / handle_deadline_check
-(PLAN_1_decompose.md). Paths and JSON shapes are unchanged.
+(docs/archive/PLAN_1_decompose.md). Paths and JSON shapes are unchanged.
 """
 import datetime
 import json

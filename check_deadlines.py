@@ -66,7 +66,7 @@ phase 2 once over the UNION of everything fetched. This fixes the old single-cal
 MAX_SEARCHES=1 meant only the FIRST of the prompt's ordered searches (current cycle) ever ran,
 so the prior-cycle estimation basis never did. check_one() now returns a 5-tuple ending in
 `site_reached`; deadline_write_decision() gained an `unreachable-fallback` outcome and a
-`rolling` status carve-out. See DEADLINE_AND_TASK_PLAN.md P2-P4.
+`rolling` status carve-out. See docs/plans/DEADLINE_AND_TASK_PLAN.md P2-P4.
 
 SETUP:
     .env needs SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY.
@@ -134,7 +134,7 @@ import page_text
 # distinct from "running" (has or will have dated cycles) and from "unknown" (we could not
 # find out). The client maps it to an "open now — apply anytime" state; deadline_write_decision
 # writes it even with zero dates, the same carve-out "not_running" gets, because the empty
-# list is the answer rather than a search miss. See G3 in DEADLINE_AND_TASK_PLAN.md.
+# list is the answer rather than a search miss. See G3 in docs/plans/DEADLINE_AND_TASK_PLAN.md.
 VALID_STATUS = {"running", "not_running", "rolling", "unknown"}
 
 # Statuses whose CORRECT answer is an empty important_dates, so the "found nothing, keep the
@@ -722,7 +722,7 @@ RUNG_TRUSTED_THIRD_PARTY = "trusted third-party"
 def _load_trusted_domains():
     """The operator's trusted third-party domains for rung 4, or [] when the allowlist is
     absent/unreachable. [] makes rung 4 a no-op — 'keep nothing off-domain', the degrade-not-
-    break behaviour DEADLINE_AND_TASK_PLAN.md §5 specifies. Reads env creds (batch main()
+    break behaviour docs/plans/DEADLINE_AND_TASK_PLAN.md §5 specifies. Reads env creds (batch main()
     has run load_dotenv; the interactive process has them from app.config) and goes through
     aggregators_common's cached policy so a burst of checks is one Supabase read."""
     policy = aggregators_common.get_policy(
@@ -836,7 +836,7 @@ def research_deadlines(opp, api_key, retry_on_silent=True, trusted_domains=None,
 # above); tasks want requirement-bearing pages (how-to-apply / FAQ / guidelines PDF). The SAME
 # pages usually carry both, so reading a program once and running both extracts over that one
 # capture is more accurate for tasks (they stop missing FAQ-buried steps) AND cheaper (a
-# program is fetched once, not twice). See DEADLINE_AND_TASK_PLAN.md §5a / decision 6 (T6).
+# program is fetched once, not twice). See docs/plans/DEADLINE_AND_TASK_PLAN.md §5a / decision 6 (T6).
 #
 # The date half stays research_deadlines UNCHANGED (proven, P2-P5), so a dates-only call
 # behaves exactly as before. The requirements half reuses source_capture.fetch_and_capture

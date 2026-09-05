@@ -216,13 +216,13 @@ def mock_profile_chat_findings(user_content):
 
 def mock_profile_basics(user_content):
     """Regex what the real extraction infers, and leave the rest null — a mock that
-    invented a grade or a gender would make the "No info" tiles untestable offline."""
+    invented a grade would make the "No info" tiles untestable offline. Gender is no longer
+    a basics field (it is not stored anywhere), so it is not returned."""
     grade = re.search(r'\b(9th|10th|11th|12th|freshman|sophomore|junior|senior)\b', user_content, re.I)
     state = re.search(r'\b(?:in|from) (Washington|California|New York|Texas|Oregon)\b', user_content, re.I)
     return json.dumps({
         "grade": grade.group(1).lower() if grade else None,
         "state": state.group(1) if state else None,
-        "gender": None,
     })
 
 

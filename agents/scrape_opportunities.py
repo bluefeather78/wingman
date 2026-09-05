@@ -572,6 +572,11 @@ def spans_for_name(name, spans):
     return [u for span in hits for u in span["urls"]]
 
 
+# MARQUEE M4 (MARQUEE_DECISIONS.md): the URL of record is never a model-typed or remembered
+# one. Everything reconcile_url returns must be grounding-resolved or title-proven; its final
+# rung labels the unsourced case and main() rejects it rather than storing it (audit 4.1). This
+# is the fix for the measured 26% dead-link rate — do not add a path that stores an unproven
+# address, and do not soften the rejection back into a flag.
 def reconcile_url(model_url, resolved_urls, span_urls):
     """Decide the URL to store, and say why.
 

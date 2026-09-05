@@ -776,3 +776,35 @@ def test_finder_retiers_captured_by_own_domain(monkeypatch):
     tiers = {c.domain: c.tier for c in captured}
     assert tiers["prog.example"] == "official"           # own page, re-tiered from pending
     assert tiers["lumiere-education.com"] == "pending"   # no allowlist in the test env
+
+
+# --------------------------------------------------------- past-opens carve-out (Happening Now)
+# Regression guard for the AMC 10/12 bug (2026-09-05): a currently-open registration whose
+# opening date has already passed was reading as a FUTURE event, because both prompt phases
+# said "never report a past date" and phase 2 explicitly told the model to OMIT a past "opens"
+# entry. The frontend's computeProgressStatus marks an item HAPPENING NOW only when its FIRST
+# important_date is on or before today — so dropping the past opens date left a future deadline
+# as the earliest date and the open program read "not started yet". The fix carves out "opens":
+# a past opening is the one past date that must be KEPT, because it is the Happening-Now signal.
+# These assert the carve-out is present in both prompts, so the marquee (M8) change can't be
+# silently reverted. They build the prompts the same way production does (no network, no cost).
+
+def test_phase1_prompt_keeps_a_past_opening_date():
+    sys = cd.build_system({"url": "https://maa.org/student-programs/amc/", "name": "AMC 10/12"})
+    low = sys.lower()
+    # It must tell the model that an already-passed opening is reported as its real past date,
+    # not rolled forward or dropped.
+    assert "already happened" in low or "already passed" in low
+    assert "past date" in low
+    assert "happening now" in low
+
+
+def test_phase2_prompt_keeps_a_past_opening_date():
+    sys = cd.build_extract_system()
+    low = sys.lower()
+    # The old text ("OMIT the structured entry" for a past opens) is the bug; the fix must make
+    # keeping the real past date the primary branch and only omit when the DAY is unknown.
+    assert "past date" in low
+    assert "keep" in low                      # KEEP a structured "opens" entry with its real PAST date
+    # The omit branch must be gated on not knowing WHEN it opened, not merely on it being past.
+    assert "not when" in low or "not WHEN".lower() in low

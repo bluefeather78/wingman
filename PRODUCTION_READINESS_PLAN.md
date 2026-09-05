@@ -299,7 +299,7 @@ Pipeline + repo. Branched off `origin/main` (which already carried the Phase 2 m
 | Exit test | **all three met**, each pinned by a named test: two agents at once refuse to overlap (`test_two_agents_at_once_refuse_to_overlap_db` / `_file`), a simulated insert timeout fails loudly (`test_statement_timeout_raises_and_never_narrows`), a snapshot commit inserts 0 dupes (`test_snapshot_commit_inserts_zero_dupes`) |
 | Tests | **2626 passing**, up from 2447 at the end of Phase 2. 7 new test files |
 | Verified how | unit suite + `tsc` + a **live smoke test**: the real server booted, the real console route exercised. That smoke test found two run-lock bugs every mocked test had missed (see below) — worth repeating in Phase 4 rather than trusting green units alone |
-| Marquee | **none taken.** No prompt text moved and no paid call changed. The one item that would have been M8+M9 is deliberately left undone — see "Left for Shama" below |
+| Marquee | **none taken.** No prompt text moved and no paid call changed. The one item that would have been M8+M9 is deliberately left undone and **parked, not pending** — see below |
 | Approvals used | decision 4 (retire `opportunity-matching`) answered yes; new decision 9 (do not touch the merge logic) recorded |
 
 ### What shipped
@@ -319,11 +319,14 @@ Pipeline + repo. Branched off `origin/main` (which already carried the Phase 2 m
 | tests for the untested paid paths | `tests/unit/test_paid_call_plumbing.py` |
 | branch cleanup | 13 merged branches deleted from `origin`; `opportunity-matching` archived + deleted |
 
-### Left for Shama — the one thing not done, and why
+### Parked, not pending — the one thing not done, and why
 
-**`local_org_discovery.py` from `local-discovery-engine` is NOT ported. It needs an M8 + M9
-approval, which is a human gate this session could not pass on its own.** Its own header
-declares both: three prompts sent to a model, and a paid Gemini path.
+**`local_org_discovery.py` from `local-discovery-engine` is NOT ported, and that is settled
+rather than outstanding.** Its own header declares both marquee entries — three prompts sent to
+a model (M8) and a paid Gemini path (M9) — so porting it needs approval first. Asked and
+answered: **Shama, 2026-09-05, "leave it as is, I will decide later."** Nothing is blocked on
+it and no future session should re-raise it as an open question; it is a thing to pick up if
+and when the local-discovery work is wanted, not a loose end.
 
 Merging the branch would also have done harm, which is why "merge `local-discovery-engine`" was
 not executed as written. It predates the 2026-09-04 reorganisation, so it edits

@@ -1,10 +1,10 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
-import { countProfileWords, profileHasTruncatedTail, repairProfileText, synthesizeProfile, transcriptStudentLines } from '@/lib/profile';
+import { PROFILE_STALE_DAYS, countProfileWords, profileHasTruncatedTail, repairProfileText, synthesizeProfile, transcriptStudentLines } from '@/lib/profile';
 import { diffNewProfileSentences, PROFILE_HIGHLIGHT_MS, profileSentenceKey, splitProfileSentences } from '@/lib/profileHighlight';
 import { beginProfileWrite, endProfileWrite } from '@/lib/profileWrites';
 import {
@@ -98,10 +98,33 @@ export default function Profile() {
   const [basics, setBasics] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  // The last merge saved the student's words but could not rewrite them into a profile
+  // (Phase 5, finding 10). Cleared by the next successful merge.
+  const [synthFailed, setSynthFailed] = useState(false);
   const [starters, setStarters] = useState<string[] | null>(null);
   const [startersLoading, setStartersLoading] = useState(false);
-  const [history, setHistory] = useState<ChatMessage[]>([]);
-  const [draft, setDraft] = useState('');
+  const [history, setHistoryState] = useState<ChatMessage[]>([]);
+  const [draft, setDraftState] = useState('');
+  // Phase 5, frontend_report finding 16. Two handlers here need the CURRENT chat history and
+  // draft from outside a render — the speech-recognition `onend` callback, which is created
+  // once and closes over whatever render made it, and the reply that lands after an await.
+  // Both used to reach for that through a state UPDATER, which is a bug rather than a trick:
+  // a state updater must be a pure function of its argument, React is free to call it more
+  // than once for one update (StrictMode does, in development), and each extra invocation
+  // fired another PAID model call for the same message.
+  //
+  // Refs give the same currentness without the purity violation, and the two setters below
+  // keep state and ref in step so there is no second source of truth to drift.
+  const historyRef = useRef<ChatMessage[]>([]);
+  const draftRef = useRef('');
+  const setHistory = useCallback((next: ChatMessage[]) => {
+    historyRef.current = next;
+    setHistoryState(next);
+  }, []);
+  const setDraft = useCallback((next: string) => {
+    draftRef.current = next;
+    setDraftState(next);
+  }, []);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [clearArmed, setClearArmed] = useState(false);
   const clearArmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -198,9 +221,22 @@ export default function Profile() {
     beginProfileWrite();
     try {
       let merged: string;
+      // Phase 5, frontend_report finding 10. On a synthesis failure this fell back to
+      // concatenating the student's raw lines onto the profile and then carried on as if the
+      // merge had SUCCEEDED — highlighting the raw transcript as new profile content, and
+      // firing five background model calls to derive tags, subjects and basics from it.
+      //
+      // Keeping the text is right: the student typed it and a failed rewrite must not lose it
+      // (that is why the phase row reads "synthesis failure keeps transcript"). Pretending it
+      // is a profile is not. So the fallback still runs, and everything downstream that
+      // assumes a real synthesis is skipped — including the derivation, which was money spent
+      // computing tags from an unsynthesized chat log.
+      let synthesized = true;
       try {
         merged = await synthesizeProfile(callFeature, before, newText, isTranscript);
-      } catch {
+      } catch (e) {
+        synthesized = false;
+        console.warn('Profile synthesis failed; keeping the raw text unmerged:', (e as Error).message);
         const fb = isTranscript ? transcriptStudentLines(newText) : newText;
         merged = fb ? (before ? `${before} ${fb}` : fb) : before;
       }
@@ -214,6 +250,16 @@ export default function Profile() {
         updatedAt: new Date().toISOString(),
         chatRounds: profile.chatRounds + (isTranscript ? 1 : 0),
       });
+      if (!synthesized) {
+        // Say so, and stop. Highlighting the raw lines would present them as newly written
+        // profile content, and refreshing the derived slots would pay for five model calls
+        // over an unsynthesized transcript — the slots stay on the LAST good profile, which
+        // is a better answer than a fresh one derived from noise. "Tidy it up" re-runs the
+        // synthesis over exactly this text, so the retry is one tap away.
+        setSynthFailed(true);
+        return merged !== before;
+      }
+      setSynthFailed(false);
       showMergeHighlights(before, merged);
       // The profile changed, so every derived slot is now stale. Refresh them all in the
       // background (fire-and-forget, failures are not user-facing) so the next search, the
@@ -331,10 +377,10 @@ export default function Profile() {
       };
       rec.onend = () => {
         setListening(false);
-        setDraft((current) => {
-          if (current.trim()) void sendText(current.trim());
-          return current;
-        });
+        // draftRef, not a setDraft updater: dictating one sentence used to be able to send it
+        // twice, and each send is a paid call (finding 16).
+        const current = draftRef.current.trim();
+        if (current) void sendText(current);
       };
       rec.onerror = () => setListening(false);
       recognition.current = rec;
@@ -348,19 +394,26 @@ export default function Profile() {
   async function sendText(text: string) {
     if (!text || busy) return;
     setDraft('');
-    setHistory((prev) => {
-      const next: ChatMessage[] = [...prev, { role: 'user', text }];
-      setBusy('thinking');
-      profileChatNextQuestion(callFeature, profile.synthesized, next, profile.chatRounds)
-        .then((q) => {
-          const bot = q || 'Tell me something else about yourself.';
-          setHistory([...next, { role: 'bot', text: bot }]);
-          speak(bot);
-        })
-        .catch(() => setHistory([...next, { role: 'bot', text: "Couldn't think of a question — tell me something about yourself." }]))
-        .finally(() => setBusy(null));
-      return next;
-    });
+    // Phase 5, frontend_report finding 16. The side effects below used to live INSIDE a
+    // setHistory updater. A state updater must be a pure function of its argument: React is
+    // free to call it more than once for one update — StrictMode does exactly that in
+    // development, and concurrent rendering may in production — and each extra invocation
+    // fired another PAID Claude call for the same message, plus a competing setBusy.
+    //
+    // historyRef, not the `history` binding: the speech-recognition handlers are created once
+    // and close over the render that made them, so a voice message read from `history` would
+    // append to a stale list and silently drop everything typed since.
+    const next: ChatMessage[] = [...historyRef.current, { role: 'user', text }];
+    setHistory(next);
+    setBusy('thinking');
+    profileChatNextQuestion(callFeature, profile.synthesized, next, profile.chatRounds)
+      .then((q) => {
+        const bot = q || 'Tell me something else about yourself.';
+        setHistory([...next, { role: 'bot', text: bot }]);
+        speak(bot);
+      })
+      .catch(() => setHistory([...next, { role: 'bot', text: "Couldn't think of a question — tell me something about yourself." }]))
+      .finally(() => setBusy(null));
   }
   async function send() {
     await sendText(draft.trim());
@@ -472,7 +525,7 @@ export default function Profile() {
   const truncated = profileHasTruncatedTail(profile.synthesized);
   const days = profile.updatedAt ? daysSince(profile.updatedAt) : null;
   const updatedLabel = days === null ? '' : days === 0 ? 'Updated today' : days === 1 ? 'Updated yesterday' : `Updated ${days} days ago`;
-  const isStale = hasProfile && days !== null && days >= 30;
+  const isStale = hasProfile && days !== null && days >= PROFILE_STALE_DAYS;
   const { general, passion, research } = splitProfile(profile.synthesized);
 
   // A paragraph with any newly-merged sentences rendered highlighted (profileTextHTML).
@@ -542,6 +595,19 @@ export default function Profile() {
           <View style={styles.synthStatus}>
             <ActivityIndicator size="small" color="#C2743A" />
             <Text style={styles.synthText}>Synthesis into profile in progress…</Text>
+          </View>
+        )}
+
+        {synthFailed && busy !== 'saving' && (
+          <View
+            style={styles.synthStatus}
+            accessibilityRole="alert"
+            accessibilityLabel="Profile rewrite failed. Your words were saved."
+          >
+            <Text style={styles.synthText}>
+              We saved what you wrote, but couldn’t rewrite it into your profile just now.
+              Tap “Tidy it up” to try again.
+            </Text>
           </View>
         )}
 

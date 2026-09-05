@@ -428,6 +428,11 @@ export default function Tracker() {
     setAddProgress({ done: 0, total: ids.length });
     const addedIds: string[] = [];
     const duplicates: string[] = [];
+    // A failure is not a duplicate (Phase 5, frontend_report finding 17). These used to share
+    // one list, so an add that ERRORED was reported as "Already tracked: <name> (<message>)" —
+    // a claim about the student's Quest Log that is not true, with a stack-trace-ish aside
+    // stapled to it, and no suggestion that trying again would help.
+    const failed: string[] = [];
     try {
       for (let i = 0; i < ids.length; i++) {
         const opp = byId.get(ids[i]);
@@ -437,7 +442,8 @@ export default function Tracker() {
             if (outcome.added) addedIds.push(opp.id);
             else duplicates.push(outcome.existingName || opp.name);
           } catch (err) {
-            duplicates.push(`${opp.name} (${(err as Error).message})`);
+            console.warn(`Could not add ${opp.name}:`, (err as Error).message);
+            failed.push(opp.name);
           }
         }
         setAddProgress({ done: i + 1, total: ids.length });
@@ -448,9 +454,14 @@ export default function Tracker() {
         markNewlyAdded(addedIds);
         setNewIds(new Set(addedIds));
       }
-      const dupNote = duplicates.length
-        ? ` Already tracked: ${duplicates.slice(0, 3).join(', ')}${duplicates.length > 3 ? ` +${duplicates.length - 3} more` : ''}.`
-        : '';
+      const listOf = (names: string[]) => {
+        const shown = names.slice(0, 3).join(', ');
+        return names.length > 3 ? `${shown} +${names.length - 3} more` : shown;
+      };
+      const dupNote = [
+        duplicates.length ? ` Already tracked: ${listOf(duplicates)}.` : '',
+        failed.length ? ` Couldn't add ${listOf(failed)} — try again.` : '',
+      ].join('');
       if (addedIds.length) {
         // Close the drawer and jump to the first new card — the point of adding is to go
         // look at what you added.

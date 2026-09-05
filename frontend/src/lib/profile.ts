@@ -8,8 +8,15 @@ import { PROFILE_SUFFICIENT_LENGTH } from './constants';
 // The synthesis output budget and its retry-at-the-ceiling now live server-side, in
 // app/services/prompts.py, along with the prompt they belong to (S1-1). A client that could
 // name its own token budget could also name an 8k one on every call.
-// Past this many days without an update, the Dashboard nudges a refresh.
-export const PROFILE_STALE_DAYS = 14;
+// Past this many days without an update, My Vibe nudges a refresh.
+//
+// Phase 5, frontend_report finding 15: this constant said 14, was exported, and had NO
+// consumers — the screen hard-coded `days >= 30` beside it. Two numbers, one of them dead,
+// and no way to tell which one the product meant. THIRTY is what shipped and what students
+// have been seeing, so 30 is the number kept: changing the threshold would change when every
+// existing account is told its profile is stale, which is a product decision and not a
+// tidy-up. The constant is now the only place it is written down.
+export const PROFILE_STALE_DAYS = 30;
 // A dangling final paragraph shorter than this is "sloppy, not truncated".
 export const PROFILE_MIN_HIGHLIGHT_WORDS = 4;
 

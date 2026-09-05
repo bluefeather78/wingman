@@ -1038,12 +1038,25 @@ export default function Finder() {
       // being silently dropped behind a "In Quest Log" label.
       const addedIds: string[] = [];
       const duplicates: string[] = [];
+      const failed: string[] = [];
       for (let i = 0; i < ids.length; i++) {
         const r = results.find((x) => x.opp.id === ids[i]);
         if (r) {
-          const outcome = await addOneToTracker(r.opp, r.reason, r.kind);
-          if (outcome.added) addedIds.push(ids[i]);
-          else duplicates.push(outcome.existingName || r.opp.name);
+          // Per-item, so one failure costs one item (Phase 5, frontend_report finding 17).
+          // The whole loop used to sit inside a single try: a throw on item three abandoned
+          // the rest AND skipped markNewlyAdded/setTrackedIds below, so the two that HAD been
+          // written to the Quest Log were never marked tracked here — the student was told
+          // "Couldn't add" about opportunities that were now in their tracker.
+          try {
+            const outcome = await addOneToTracker(r.opp, r.reason, r.kind);
+            if (outcome.added) addedIds.push(ids[i]);
+            else duplicates.push(outcome.existingName || r.opp.name);
+          } catch (err) {
+            // A FAILURE, not a duplicate. Collapsing the two read as "Already in your Quest
+            // Log: <name>", which is a claim about the student's tracker that is not true.
+            console.warn(`Could not add ${r.opp.name}:`, (err as Error).message);
+            failed.push(r.opp.name);
+          }
         }
         setAddProgress({ done: i + 1, total: ids.length });
       }
@@ -1051,14 +1064,19 @@ export default function Finder() {
       markNewlyAdded(addedIds);
       setTrackedIds((p) => new Set([...p, ...addedIds]));
       setSelected(new Set());
-      if (duplicates.length) {
-        const names = duplicates.slice(0, 3).join(', ');
-        const more = duplicates.length > 3 ? ` and ${duplicates.length - 3} more` : '';
-        setNote(
-          addedIds.length
-            ? `Added ${addedIds.length}. Already in your Quest Log: ${names}${more}.`
-            : `Already in your Quest Log: ${names}${more}. Nothing new to add.`,
-        );
+      // Three outcomes, three sentences. Every one of them is a different thing for the
+      // student to do about it: nothing, nothing, and try again.
+      const listOf = (names: string[]) => {
+        const shown = names.slice(0, 3).join(', ');
+        return names.length > 3 ? `${shown} and ${names.length - 3} more` : shown;
+      };
+      if (duplicates.length || failed.length) {
+        const parts: string[] = [];
+        if (addedIds.length) parts.push(`Added ${addedIds.length}.`);
+        if (duplicates.length) parts.push(`Already in your Quest Log: ${listOf(duplicates)}.`);
+        if (failed.length) parts.push(`Couldn't add ${listOf(failed)} — try again.`);
+        if (!addedIds.length && !failed.length) parts.push('Nothing new to add.');
+        setNote(parts.join(' '));
       }
       // Adding is the point of departure to the Quest Log — land there instead of leaving
       // the student on a Fresh Finds page that now just shows the same cards as "tracked".

@@ -1727,8 +1727,12 @@ def _existing_opportunity_urls():
     urls = set()
     offset, page_size = 0, 1000
     while True:
+        # order: unordered offset pagination is not stable in Postgres — a row updated
+        # mid-scan can be returned twice or SKIPPED, and a skipped row here means a snapshot
+        # commit re-inserts a program that is already in the catalog (audit 4.14).
         page = _supabase_request("opportunities", params={
-            "select": "url", "limit": str(page_size), "offset": str(offset)}) or []
+            "select": "url", "order": "id",
+            "limit": str(page_size), "offset": str(offset)}) or []
         urls.update(dryrun_common.normalize_url(r.get("url")) for r in page if r.get("url"))
         if len(page) < page_size:
             break
@@ -1736,7 +1740,7 @@ def _existing_opportunity_urls():
     return urls
 
 
-def commit_dryrun_snapshot(file_name, dry=False):
+def commit_dryrun_snapshot(file_name, dry=False, allow_stale=False):
     """Apply a snapshot's pending writes. Free — no API call happens anywhere in here.
 
     A real commit is logged to agent_runs with a `-commit` mode suffix and cost_usd 0. That
@@ -1747,7 +1751,8 @@ def commit_dryrun_snapshot(file_name, dry=False):
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
     result = dryrun_common.commit_snapshot(
-        file_name, _commit_patch, _commit_insert, _existing_opportunity_urls, dry=dry)
+        file_name, _commit_patch, _commit_insert, _existing_opportunity_urls, dry=dry,
+        allow_stale=allow_stale)
     if dry or not result.get("ok") or not result.get("applied"):
         return result
 

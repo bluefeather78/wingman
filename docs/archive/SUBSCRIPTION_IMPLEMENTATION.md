@@ -18,7 +18,7 @@ A complete end-to-end subscription/payment system has been added to the Wingman 
 
 ### New Files Created
 
-1. **`subscription_common.py`** - Core subscription logic
+1. **`wingman/subscription_common.py`** - Core subscription logic
    - Stripe API integration (HTTP-based, no external dependencies)
    - Promo code validation
    - Trial and subscription status helpers
@@ -164,7 +164,7 @@ Use Stripe test cards for checkout testing:
 
 ### Add New Promo Codes
 
-Edit `subscription_common.py`:
+Edit `wingman/subscription_common.py`:
 ```python
 PROMO_CODES = {
     "SUMMER30": {"discount_percent": 30, "description": "30% off summer"},
@@ -174,7 +174,7 @@ PROMO_CODES = {
 
 ### Change Pricing
 
-Update in `subscription_common.py`:
+Update in `wingman/subscription_common.py`:
 ```python
 TRIAL_DAYS = 7  # Change trial length
 PLAN_PRICE_CENTS = 999  # Change to $X.XX

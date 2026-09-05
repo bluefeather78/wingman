@@ -9,7 +9,7 @@ import pathlib
 
 import pytest
 
-import sitemap_common as sm
+from wingman import sitemap_common as sm
 
 FIX = pathlib.Path(__file__).resolve().parent.parent / "fixtures" / "sitemaps"
 

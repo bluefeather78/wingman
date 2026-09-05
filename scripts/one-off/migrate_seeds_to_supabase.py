@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""One-off: move scrape_opportunities.py's hardcoded seed lists into the Supabase
+"""One-off: move agents/scrape_opportunities.py's hardcoded seed lists into the Supabase
 `scraper_seeds` table, so the admin console can manage them.
 
 Not part of the regular dev loop — run it once after creating the table, same as
 migrate_to_supabase.py / migrate_users_to_supabase.py were run once each.
 
-The literals stay in scrape_opportunities.py afterwards as a fallback for when the table
+The literals stay in agents/scrape_opportunities.py afterwards as a fallback for when the table
 is empty or unreachable (see seeds_common.load_seeds), so this migration COPIES rather
 than moves.
 
-SETUP: create the table first (see seeds_common.py's docstring for the DDL), then:
+SETUP: create the table first (see wingman/seeds_common.py's docstring for the DDL), then:
 
     python migrate_seeds_to_supabase.py --dry-run   # show what would be inserted
     python migrate_seeds_to_supabase.py             # actually insert
@@ -28,8 +28,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
-from scrape_opportunities import NATIONAL_SEEDS, SEATTLE_SEEDS
-from supabase_common import load_dotenv, supabase_get, supabase_post
+from agents.scrape_opportunities import NATIONAL_SEEDS, SEATTLE_SEEDS
+from wingman.supabase_common import load_dotenv, supabase_get, supabase_post
 
 
 def main():
@@ -63,7 +63,7 @@ def main():
             rows.append({
                 "mode": mode,
                 # `category` is still not-null in the table but is no longer part of a
-                # seed — see seeds_common.py's docstring. Placeholder only; nothing reads it.
+                # seed — see wingman/seeds_common.py's docstring. Placeholder only; nothing reads it.
                 "category": "unused",
                 "angle": angle,
                 "is_enabled": True,

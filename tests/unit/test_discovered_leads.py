@@ -7,8 +7,8 @@ import json
 
 import pytest
 
-import discovered_leads as dl
-import url_validate
+from wingman import discovered_leads as dl
+from wingman import url_validate
 
 
 # ---------- what can never be a lead ----------
@@ -370,7 +370,7 @@ def test_strip_site_name_never_empties_a_title():
 # ---------- the reject REASON is the trigger, not the rejection ----------
 
 def _stub_links(monkeypatch, n):
-    import mine_hub_pages
+    from agents import mine_hub_pages
     html = "".join(f'<a href="https://site{i}.org/p">Program {i}</a>' for i in range(n))
     monkeypatch.setattr(mine_hub_pages, "fetch_html", lambda u, t=None: html)
 
@@ -385,14 +385,14 @@ def test_confirmed_roundup_defaults_to_names_never_to_nothing(monkeypatch):
     """Dropping a lead a person explicitly flagged is the one outcome this path must not
     produce. An unreadable page still costs nothing to queue — harvest_names makes no model
     call when a page yields no text."""
-    import mine_hub_pages
+    from agents import mine_hub_pages
     monkeypatch.setattr(mine_hub_pages, "fetch_html", lambda u, t=None: "")
     kind, _ = dl.classify_confirmed_roundup("https://blocked.example/list")
     assert kind == dl.KIND_NAMES
 
 
 def test_confirmed_roundup_survives_a_fetch_explosion(monkeypatch):
-    import mine_hub_pages
+    from agents import mine_hub_pages
 
     def boom(u, t=None):
         raise RuntimeError("network on fire")
@@ -427,7 +427,7 @@ def test_zero_anchors_means_we_did_not_get_the_page(monkeypatch):
     lists present anywhere in the bytes. Scoring that as '0 outside sites' routed it to name
     harvest as though its programs were in prose — where the identical fetch finds the identical
     nothing. An honest no-verdict beats a confident wrong answer."""
-    import mine_hub_pages
+    from agents import mine_hub_pages
     monkeypatch.setattr(mine_hub_pages, "fetch_html",
                         lambda u, t=None: "<html><title>15 Summer Programs</title>" + "x" * 5000)
     kind, sig = dl.classify_page("https://js-built.example/15-summer-programs")
@@ -437,7 +437,8 @@ def test_zero_anchors_means_we_did_not_get_the_page(monkeypatch):
 def test_a_page_with_anchors_but_few_outside_sites_still_reaches_the_names_branch(monkeypatch):
     """The guard must not swallow the real case it sits next to: a genuine article links its
     own nav and footer, just not the programs."""
-    import mine_hub_pages, page_text
+    from agents import mine_hub_pages
+    from wingman import page_text
     html = ('<html><title>15 Summer Programs for High School Students</title>'
             '<a href="/about">About</a><a href="/contact">Contact</a>')
     monkeypatch.setattr(mine_hub_pages, "fetch_html", lambda u, t=None: html)
@@ -457,7 +458,7 @@ def test_stylesheet_text_is_not_prose():
 def test_confirmed_roundup_says_so_when_it_cannot_read_the_page(monkeypatch):
     """Still queued — never drop what a person flagged — but the signal must not claim the
     programs were 'named, not linked' when we saw nothing at all."""
-    import mine_hub_pages
+    from agents import mine_hub_pages
     monkeypatch.setattr(mine_hub_pages, "fetch_html", lambda u, t=None: "")
     kind, sig = dl.classify_confirmed_roundup("https://blocked.example/list")
     assert kind == dl.KIND_NAMES and "cannot read this page" in sig

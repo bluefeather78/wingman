@@ -1,7 +1,7 @@
 """Phase-4 hub mining: the FREE harvest + two-stage audience filter. Pure, hermetic."""
 import pytest
 
-import mine_hub_pages as hub
+from agents import mine_hub_pages as hub
 
 
 @pytest.mark.parametrize("text", [
@@ -183,7 +183,7 @@ def test_each_lead_is_mined_the_way_it_qualified():
     the links the router did not count, i.e. the page's own navigation. All 25 queued leads were
     affected by that. A walk-up lead is the opposite: it is proven by linking a program on its
     OWN site. So the direction is carried on the lead, not decided by the miner."""
-    import discovered_leads
+    from wingman import discovered_leads
     leads = [{"url": "https://listicle.example/15-programs"},                       # router lead
              {"url": "https://ok.example/x", "scope": discovered_leads.SCOPE_OFF_DOMAIN},
              {"url": "https://x.edu/precollege/", "scope": discovered_leads.SCOPE_SAME_DOMAIN}]
@@ -218,7 +218,7 @@ def test_candidates_landing_on_the_same_page_are_extracted_once(monkeypatch):
         ("https://x.edu/pre-college/drama.html", "Drama for high school students")]))
     landings = {"https://x.edu/student-affairs/pre-college/art.html":
                 "https://x.edu/pre-college/art.html"}
-    import page_text
+    from wingman import page_text
     monkeypatch.setattr(page_text, "fetch_page_text_resolved",
                         lambda u, t=None: ("high school students " * 30, "ok",
                                            landings.get(u, u)))
@@ -234,7 +234,7 @@ def test_a_candidate_that_redirects_onto_the_hub_is_dropped(monkeypatch):
     HUB = "https://x.edu/pre-college/"
     monkeypatch.setattr(hub, "fetch_html", lambda u, t=None: _hub_html([
         ("https://x.edu/student-affairs/pre-college/gone.html", "Gone program for high school")]))
-    import page_text
+    from wingman import page_text
     monkeypatch.setattr(page_text, "fetch_page_text_resolved",
                         lambda u, t=None: ("high school students " * 30, "ok", HUB))
     found, trace = hub.discover(HUB, recurse=False)
@@ -251,7 +251,7 @@ def test_a_candidate_landing_above_the_hub_is_dropped(monkeypatch):
         ("https://x.edu/student-affairs/pre-college/ai.html", "AI for high school students"),
         ("https://x.edu/pre-college/academic-programs/art.html", "Art for high school")]))
     landing = {"https://x.edu/student-affairs/pre-college/ai.html": "https://x.edu/pre-college/"}
-    import page_text
+    from wingman import page_text
     monkeypatch.setattr(page_text, "fetch_page_text_resolved",
                         lambda u, t=None: ("high school students " * 30, "ok",
                                            landing.get(u, u)))
@@ -266,7 +266,7 @@ def test_a_sibling_section_is_not_treated_as_an_ancestor(monkeypatch):
     HUB = "https://x.edu/pre-college/academic-programs/"
     monkeypatch.setattr(hub, "fetch_html", lambda u, t=None: _hub_html([
         ("https://x.edu/pre-college/academic-programs/art-camp.html", "Art for high school")]))
-    import page_text
+    from wingman import page_text
     monkeypatch.setattr(page_text, "fetch_page_text_resolved",
                         lambda u, t=None: ("high school students " * 30, "ok",
                                            "https://x.edu/artcamp"))
@@ -323,7 +323,7 @@ def test_a_page_already_in_the_catalog_is_never_re_extracted():
     find_duplicates(url, "") whose exact rule is "same URL AND similar name", so an empty name
     always fell through to a hint the caller ignored. Mining CMU's index inserted 14 rows of
     which 12 were pages the catalog already held -- and the walk-up lead had said so in advance."""
-    import url_dedupe
+    from wingman import url_dedupe
     known = {url_dedupe.match_key("https://x.edu/pre-college/ai.html")}
     fresh, already, twice = hub.fresh_candidates(
         ["https://x.edu/pre-college/ai.html", "https://x.edu/pre-college/art.html"], known, set())

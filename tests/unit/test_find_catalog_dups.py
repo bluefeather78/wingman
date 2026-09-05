@@ -3,7 +3,7 @@ that replaced the old free heuristic cuts (exact URL, name-similarity ratio, acr
 overlap) on 2026-08-30. Pure, no network: `index` is always injected explicitly, matching the
 "every model call is injected" rule the rest of the dedupe stack follows.
 """
-import find_catalog_dups as fcd
+from wingman import find_catalog_dups as fcd
 
 
 def _row(id_, name, url, org=None, active=True, **fields):

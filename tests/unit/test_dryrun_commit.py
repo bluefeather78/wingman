@@ -1,4 +1,4 @@
-"""Unit tests for dryrun_common.py — snapshot commit (dependency-injected fakes, no DB),
+"""Unit tests for wingman/dryrun_common.py — snapshot commit (dependency-injected fakes, no DB),
 filename date parsing, the path-traversal guard in resolve(), snapshot-shape loading,
 pending counts, and URL normalization.
 
@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-import dryrun_common as dc
+from wingman import dryrun_common as dc
 
 
 # --------------------------------------------------------------------------- normalize_url

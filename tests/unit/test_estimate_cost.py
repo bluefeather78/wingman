@@ -6,8 +6,8 @@ values are computed FROM each module's own constants (never a hardcoded literal 
 source could drift away from) so a constant change forces a corresponding test change
 rather than passing silently.
 """
-import claude_common
-import gemini_common
+from wingman import claude_common
+from wingman import gemini_common
 
 
 # ===========================================================================

@@ -68,12 +68,12 @@ backend with zero frontend changes (same URLs, same request/response JSON).
   - **Localhost-only ops** (gated by `_require_local()`): all `/api/agents/*` and `/api/seeds`,
     plus the `/admin` console page.
   - Static file serving (the SPA).
-- Offline tooling (already fairly modular, ~34 files): the 6 agents (`scrape_opportunities.py`,
-  `check_reviews.py`, `check_deadlines.py`, `refresh_opportunities.py`, `find_mailing_lists.py`,
-  `check_links.py`) plus shared libs (`gemini_common.py`, `claude_common.py`, `agent_common.py`,
-  `dryrun_common.py`, `url_validate.py`, `url_repair.py`, `url_dedupe.py`, `seeds_common.py`,
-  `supabase_common.py`, `subscription_common.py`, `mailing_list_common.py`, `contact_email_common.py`,
-  the `migrate_*` one-offs, `admin_console.html`, `grade_mailing_lists.py`, etc.).
+- Offline tooling (already fairly modular, ~34 files): the 6 agents (`agents/scrape_opportunities.py`,
+  `agents/check_reviews.py`, `agents/check_deadlines.py`, `agents/refresh_opportunities.py`, `agents/find_mailing_lists.py`,
+  `agents/check_links.py`) plus shared libs (`wingman/gemini_common.py`, `wingman/claude_common.py`, `wingman/agent_common.py`,
+  `wingman/dryrun_common.py`, `wingman/url_validate.py`, `wingman/url_repair.py`, `wingman/url_dedupe.py`, `wingman/seeds_common.py`,
+  `wingman/supabase_common.py`, `wingman/subscription_common.py`, `wingman/mailing_list_common.py`, `wingman/contact_email_common.py`,
+  the `migrate_*` one-offs, `admin_console.html`, `agents/grade_mailing_lists.py`, etc.).
 - The monolith is the problem; the utility files are mostly fine and get *reused*, not rewritten.
 
 ## Target layout
@@ -138,7 +138,7 @@ Exact folder names are the implementer's call; what matters is the **two-package
    check. (Mock mode is fine if no keys — the point is the routes respond with the same shape.)
 3. The shipped `app/` exposes **no** `/api/agents/*`, `/api/seeds`, or `/admin` route
    (confirm they 404 on the web service — they now live only in `ops/`, run locally).
-4. Offline agents still run locally (spot-check one free one, e.g. `check_links.py --preview`)
+4. Offline agents still run locally (spot-check one free one, e.g. `agents/check_links.py --preview`)
    against Supabase, importing from wherever their shared libs now live.
 
 ## Hand-off to phase 2

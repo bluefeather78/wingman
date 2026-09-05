@@ -9,8 +9,8 @@
 -- Nothing breaks; the review queue just can't show provenance or duplicate hints.
 
 -- Why a separate column rather than reusing something that already exists:
---   * `state`         is the 2-letter US state code (see scrape_opportunities.py).
---   * `review_status` is check_reviews.py's ORG LEGITIMACY verdict, already shown to
+--   * `state`         is the 2-letter US state code (see agents/scrape_opportunities.py).
+--   * `review_status` is agents/check_reviews.py's ORG LEGITIMACY verdict, already shown to
 --                     students in the app. Overloading it would put a moderation value
 --                     in front of end users.
 -- Both names are taken and mean something else. Hence `moderation_status`.

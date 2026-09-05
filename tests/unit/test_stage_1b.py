@@ -4,8 +4,8 @@ resolve_missing_url must (a) never pay when a free gate rules the name out, (b) 
 per-name search otherwise, and (c) return the title-proven URL that best_resolved_url picks.
 The search + fetch are stubbed, so nothing touches the network.
 """
-import scrape_opportunities as so
-import harvest_names
+from agents import scrape_opportunities as so
+from agents import harvest_names
 
 
 NAME = "Marine Biology Research Academy"
@@ -73,7 +73,7 @@ def test_search_that_proves_nothing_returns_none(monkeypatch):
 
 
 def test_telemetry_keeps_resolution_out_of_breadth():
-    import query_telemetry as qt
+    from wingman import query_telemetry as qt
     row = qt.summarize_seed({
         "angle": "marine biology programs",
         "searches": 4,

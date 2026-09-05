@@ -32,7 +32,7 @@ _STUDENT_EMBED_MAX = 256
 
 
 def _student_embed_key(texts: list[str]) -> str:
-    from gemini_common import EMBED_MODEL
+    from wingman.gemini_common import EMBED_MODEL
     joined = "\x00".join(texts)
     return hashlib.sha256(f"{EMBED_MODEL}\x00{joined}".encode("utf-8")).hexdigest()
 
@@ -84,11 +84,11 @@ def refresh_row_embedding(row: dict, api_key: str, embed_fn=None):
         return None
 
     if embed_fn is None:
-        from gemini_common import call_gemini_embed, estimate_embed_cost
+        from wingman.gemini_common import call_gemini_embed, estimate_embed_cost
         embed_fn = call_gemini_embed
         cost_fn = estimate_embed_cost
     else:
-        from gemini_common import estimate_embed_cost as cost_fn
+        from wingman.gemini_common import estimate_embed_cost as cost_fn
 
     vectors, usage = embed_fn([embed_text(row)], api_key)
     vec = vectors[0] if vectors else []
@@ -124,11 +124,11 @@ def embed_student_themes(theme_texts: list[str], api_key: str, embed_fn=None, us
         if hit is not None:
             return hit, 0.0
     if embed_fn is None:
-        from gemini_common import call_gemini_embed, estimate_embed_cost
+        from wingman.gemini_common import call_gemini_embed, estimate_embed_cost
         embed_fn = call_gemini_embed
         cost_fn = estimate_embed_cost
     else:
-        from gemini_common import estimate_embed_cost as cost_fn
+        from wingman.gemini_common import estimate_embed_cost as cost_fn
     vectors, usage = embed_fn(texts, api_key)
     if caching and vectors:
         _cache_put(key, vectors)

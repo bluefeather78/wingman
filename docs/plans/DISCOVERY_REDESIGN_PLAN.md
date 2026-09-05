@@ -14,7 +14,7 @@ order to build it, and what has to be decided first.
 Three deltas, in dependency order.
 
 **D1 — Phase 1's brief becomes identity + home page.** `RESEARCH_SYSTEM` currently orders a ten-field
-write-up per opportunity under "never guess". `refresh_opportunities.py` declares its own scope as
+write-up per opportunity under "never guess". `agents/refresh_opportunities.py` declares its own scope as
 *name, org, summary, type, price, state, location, intl, season, category, eligibility, grade_min,
 grade_max, cost, subject_tags, contact_email* — every one of those fields — and it refuses to write
 `url` on principle. So phase 1 is paying a per-search fee for fifteen fields a free agent re-derives,
@@ -65,7 +65,7 @@ The prompt is one of eleven things that move. The rest of this document is the e
 ## 3. Downstream implications
 
 > **Update 2026-08-28 — the memory half of this blocker is FIXED (MARQUEE M1).**
-> `refresh_opportunities.py` now READS THE LIVE PAGE (a free plain-HTTP GET) and extracts
+> `agents/refresh_opportunities.py` now READS THE LIVE PAGE (a free plain-HTTP GET) and extracts
 > fields from it; a fetch failure skips the row rather than answering from memory. It was
 > discovered that the agent had been silently flipped to memory-only (`use_web_search=False`,
 > "YOU HAVE NO WEB ACCESS") inside an unrelated commit — see [MARQUEE_DECISIONS.md](../../MARQUEE_DECISIONS.md)
@@ -74,7 +74,7 @@ The prompt is one of eleven things that move. The rest of this document is the e
 
 ### 3.1 BLOCKER — a queued row can never be enriched, because the refresher only reads ACTIVE rows
 
-`refresh_opportunities.py` fetches with `"is_active": "eq.true"`. Scraped rows land
+`agents/refresh_opportunities.py` fetches with `"is_active": "eq.true"`. Scraped rows land
 `is_active=false`. So the agent that is supposed to own the fifteen fields phase 1 stops collecting
 **cannot see the rows that need them**, and the sequence D1 assumes —
 
@@ -85,9 +85,9 @@ activates a row that shows a student a name and nothing else.
 
 Three ways out, in order of preference:
 
-- **(a) Give `refresh_opportunities.py` a pending mode.** `--ids ID...` and `--pending` (rows with
+- **(a) Give `agents/refresh_opportunities.py` a pending mode.** `--ids ID...` and `--pending` (rows with
   `is_active=false` and `moderation_status` pending), ignoring the active filter. This mirrors
-  `check_deadlines.py --ids/--missing-opens`, which exists for exactly this reason: to re-check a
+  `agents/check_deadlines.py --ids/--missing-opens`, which exists for exactly this reason: to re-check a
   known set for cents instead of paying for a full pass. Cheapest, most in keeping with the repo.
   It is a **no-search** agent, so a 200-row pending pass is roughly $0.2, not $20.
 - **(b) Refresh on activation.** The console's activate endpoint fires a refresh for the activated
@@ -99,8 +99,8 @@ Three ways out, in order of preference:
 **Recommendation: (a), and it is a prerequisite for D1, not a follow-up.** D1 must not merge before
 it.
 
-Second-order: `refresh_opportunities.py` is the only writer of `subject_tags`, and
-`propose_angles.py` measures subject coverage from `subject_tags + name + summary`. If new rows carry
+Second-order: `agents/refresh_opportunities.py` is the only writer of `subject_tags`, and
+`agents/propose_angles.py` measures subject coverage from `subject_tags + name + summary`. If new rows carry
 no tags, the coverage-gap angle generator reads the catalog as thinner than it is and proposes angles
 for subjects that are actually covered — a self-reinforcing error in the one place new angles come
 from.
@@ -161,9 +161,9 @@ Cost per program falls; **cost per pass rises about 3x** and needs explicit appr
 run. The bigger number is not this agent at all:
 
     a 4x row yield means 4x the rows flowing into every downstream agent that is priced per row
-    check_reviews.py         ~$0.0166/row   800 new approved rows -> ~$13
-    generate_action_items.py ~$0.0016/row                          -> ~$1.3
-    check_deadlines.py       ~$0.0676/row   on-demand, so it lands as student traffic, not a batch
+    agents/check_reviews.py         ~$0.0166/row   800 new approved rows -> ~$13
+    agents/generate_action_items.py ~$0.0016/row                          -> ~$1.3
+    agents/check_deadlines.py       ~$0.0676/row   on-demand, so it lands as student traffic, not a batch
 
 **State this to the operator before building, not after the first pass.** Discovery is the cheap end
 of this pipeline; admitting rows is what costs money, and D1/D2 are a request to admit far more of
@@ -258,7 +258,7 @@ otherwise blank good data.
 ### 3.11 Local surface area (D3, gated on the 4L pin)
 
 `mode` is hardcoded to `national | seattle` in four places: the console's angle tabs, the seed modal,
-the run modal, and `propose_angles.py --mode` choices plus its `scope` string. Generalising to
+the run modal, and `agents/propose_angles.py --mode` choices plus its `scope` string. Generalising to
 locales means those become data-driven off a `LOCALES` dict (display name + `sub_places`), keyed by
 the same `mode` value — **no migration**, since `mode` is already a free-text column.
 
@@ -284,8 +284,8 @@ Each step is independently mergeable and independently useful. Free unless marke
 
 | # | Step | Cost | Gate to the next step |
 |---|---|---|---|
-| P0a | **DONE 2026-08-28 (MARQUEE M1)** — `refresh_opportunities.py` reads the live page (free HTTP) instead of memory | fetch is free; only the Gemini extract costs, ~fraction of a ¢/fetched row | metadata is filled from the real page, not invented |
-| P0b | **DONE 2026-08-28** — `refresh_opportunities.py --ids / --pending` point it at queued/new rows | free | a queued or just-activated row can now be enriched (--pending found 174 queued rows live) |
+| P0a | **DONE 2026-08-28 (MARQUEE M1)** — `agents/refresh_opportunities.py` reads the live page (free HTTP) instead of memory | fetch is free; only the Gemini extract costs, ~fraction of a ¢/fetched row | metadata is filled from the real page, not invented |
+| P0b | **DONE 2026-08-28** — `agents/refresh_opportunities.py --ids / --pending` point it at queued/new rows | free | a queued or just-activated row can now be enriched (--pending found 174 queued rows live) |
 | P1 | **DONE 2026-08-28** — resolution queries kept OUT of `queries`, so breadth is discovery-only by construction; resolution reported on its own axis | free | the A/B in P4 is measurable |
 | P2 | **DONE 2026-08-28 (M5/M8)** — `DISCOVERY_SYSTEM` split from `RESOLVE_SYSTEM`; opportunity + broad/named queries defined with examples | free to build | breadth% rises on one angle (verify in P4) |
 | P3 | **DONE 2026-08-28 (M8/M9)** — `resolve_missing_url` (free gates + 1 search + best_resolved_url), `--resolve-per-angle/-per-run` ceilings, `--no-resolve` | free to build | resolution rate + proof rate (verify in P4) |

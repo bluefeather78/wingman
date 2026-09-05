@@ -14,7 +14,7 @@ PyJWT>=2.8
 argon2-cffi>=23.1
 
 # PyPDF2: the resume/LinkedIn import endpoint AND the action-item substrate's capture layer
-# (source_capture.py — decodes the base64 PDF bytes Claude web_fetch returns, so a program's
+# (wingman/source_capture.py — decodes the base64 PDF bytes Claude web_fetch returns, so a program's
 # guidelines PDF can be read and verified). Both degrade gracefully if it is missing (resume
 # falls back to plain text; capture yields no text for a PDF, so that source backs nothing),
 # so it is not a hard dep — but the Render service should install it so PDFs parse.

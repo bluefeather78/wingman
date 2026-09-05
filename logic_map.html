@@ -509,7 +509,7 @@
         </svg>
       </div>
       <figcaption>&ldquo;Mine Hub Pages&rdquo; (Fig. 02) drains this queue — this is how it fills, and
-        it is nearly all FREE. <strong>The router</strong> (<code>discovered_leads.py</code>) is the
+        it is nearly all FREE. <strong>The router</strong> (<code>wingman/discovered_leads.py</code>) is the
         largest feeder: a paid search consults ~660 pages and keeps ~126 as programs; the router
         catches what it <em>discards</em> and, by plain HTTP + a title check, sorts each — a page that
         <strong>links programs on &ge; 6 distinct off-domain sites</strong> becomes a <em>hub</em> lead
@@ -615,7 +615,7 @@
       linking ≥ 6 distinct other sites is almost always a listicle, so its programs are on those other
       sites and it is mined <em>off-domain</em>. That is blind to a university's <em>own</em>
       pre-college index, which links its programs on its <em>own</em> domain and looks like every other
-      page on the site. <strong>Walk-up</strong> (<code>walk_up_hubs.py</code>, free) fills that half:
+      page on the site. <strong>Walk-up</strong> (<code>wingman/walk_up_hubs.py</code>, free) fills that half:
       starting from a program the catalog <em>already trusts</em>, it fetches the page's parent URL and
       asks one question — <em>does the parent link back to the child?</em> If yes, the parent is proven
       to be that program's index (never guessed from the URL's shape), and it is queued as a
@@ -684,7 +684,7 @@
         depends on</strong> (hash-gated, so only a genuinely-changed row re-embeds, and only the vectors
         whose fields moved). A row is never embedded while it sits pending; its vectors appear the
         instant it goes live. Two one-off backfill scripts exist to catch up rows activated before this
-        (<code>build_catalog_embeddings.py</code> for dedupe, <code>scripts/backfill/backfill_match_vectors.py</code> for
+        (<code>agents/build_catalog_embeddings.py</code> for dedupe, <code>scripts/backfill/backfill_match_vectors.py</code> for
         match). The dashed arrows only READ — the Scraper and Hub Miner compare a new candidate against
         <code>dedupe_vector</code>; Fresh Finds compares a student against <code>match_vector</code> —
         neither ever writes. <strong>The two vectors never mix:</strong> different fields, different job,
@@ -766,7 +766,7 @@
     <div class="job-grid">
       <article class="job-card">
         <div class="top"><h3>Metadata Refresh</h3><span class="badge paid">Paid</span></div>
-        <p class="script">refresh_opportunities.py</p>
+        <p class="script">agents/refresh_opportunities.py</p>
         <p>Re-checks name, org, summary, eligibility and pricing — the core facts on a row. Never
           touches the URL; that's Link Health's job. Both discovery paths (Fig. 02) now fill these
           same fields at intake, so this is a periodic sanity/backfill pass, not the first fill.
@@ -777,35 +777,35 @@
       </article>
       <article class="job-card">
         <div class="top"><h3>Org Reviews</h3><span class="badge paid">Paid</span></div>
-        <p class="script">check_reviews.py</p>
+        <p class="script">agents/check_reviews.py</p>
         <p>Checks a program's legitimacy against independent sources and stores the verdict students
           see. Self-limiting — it only re-checks rows unreviewed or over 30 days stale.</p>
         <div class="meta"><span><b>Cadence:</b> safe to run anytime, does nothing if nothing's due</span></div>
       </article>
       <article class="job-card">
         <div class="top"><h3>Action Items</h3><span class="badge paid">Paid</span></div>
-        <p class="script">generate_action_items.py</p>
+        <p class="script">agents/generate_action_items.py</p>
         <p>Builds each row's application checklist, verified line-by-line against the program's own
           page. A page it can't read gets an honest generic checklist for free.</p>
         <div class="meta"><span><b>Cadence:</b> after new rows activate</span></div>
       </article>
       <article class="job-card">
         <div class="top"><h3>Link Health</h3><span class="badge free">Free</span></div>
-        <p class="script">check_links.py</p>
+        <p class="script">agents/check_links.py</p>
         <p>Verifies every URL. Deactivates only what's provably gone (404 / 410 / unresolvable),
           flags the rest without touching it, and tries a proven repair before giving up.</p>
         <div class="meta"><span><b>Cadence:</b> run often — weekly is fine, no cost to weigh</span></div>
       </article>
       <article class="job-card">
         <div class="top"><h3>Mailing Lists</h3><span class="badge free">Free*</span></div>
-        <p class="script">find_mailing_lists.py</p>
+        <p class="script">agents/find_mailing_lists.py</p>
         <p>Looks for a program's signup form and proposes a recipe. Nothing goes out to a student
           until you promote a recipe to <strong>verified</strong> yourself.</p>
         <div class="meta"><span><b>Cadence:</b> after a batch of activations, then verify what it found</span></div>
       </article>
       <article class="job-card">
         <div class="top"><h3>Deadlines</h3><span class="badge auto">Auto</span></div>
-        <p class="script">check_deadlines.py</p>
+        <p class="script">agents/check_deadlines.py</p>
         <p>Fires automatically the first time a student opens a row, cached for 7 days. You only
           touch this one to force a re-check or fix a known gap in a handful of rows.</p>
         <div class="meta"><span><b>Cadence:</b> leave it alone; targeted re-checks only</span></div>

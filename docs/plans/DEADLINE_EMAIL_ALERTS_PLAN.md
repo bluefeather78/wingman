@@ -213,7 +213,7 @@ click-wrapping, text/plain part, `EMAIL_POSTAL_ADDRESS` footer, unsubscribe link
   reports each sweep's summary separately. Same `X-Cron-Secret` header (never query
   string), same fail-closed 503 on unset secret, same `verbose`-gated detail so a roster of
   minors' addresses never lands in an Actions log.
-- **`send_lifecycle_emails.py` gains the kind** with the same free tiers: `--preview`
+- **`wingman/send_lifecycle_emails.py` gains the kind** with the same free tiers: `--preview`
   (who is due, zero writes) and `--dry-run` (resolve + render, send nothing). All tiers
   stay free — no model in this path; what preview protects is inboxes, not money.
 - **The cron is disarmed today, and this plan does not re-arm it.** The workflow carries
@@ -357,7 +357,7 @@ nonexistent.
 - **`app/routes/email.py`**: the existing `POST /api/email/sweep` runs both sweeps and
   returns `{ok, trial: {...}, deadline_alerts: {...}}` — one cron, one secret; `verbose`
   gating and the fail-closed 503 unchanged.
-- **`send_lifecycle_emails.py`** (local runner): gains the deadline sweep with the same
+- **`wingman/send_lifecycle_emails.py`** (local runner): gains the deadline sweep with the same
   free tiers — `--preview` (who is due, zero writes) and `--dry-run` (resolve + render,
   send nothing) — and a `--kind trial|deadline|all` selector defaulting to `all`.
 - **`email_status()`**: add `deadline_due_now` (userid + unit count per due digest) with
@@ -370,7 +370,7 @@ nonexistent.
   lapsed / no-email exclusions, dry-run makes no writes and no sends, and the route test
   for the combined sweep response + secret gating.
 
-*Done when:* `python send_lifecycle_emails.py --kind deadline --preview` prints an honest
+*Done when:* `python -m wingman.send_lifecycle_emails --kind deadline --preview` prints an honest
 due-list against local data, and the full suite (currently 945 green) stays green.
 
 ### P4 — ~~First real sends, manually~~ DROPPED (2026-08-26)

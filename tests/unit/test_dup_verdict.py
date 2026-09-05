@@ -1,10 +1,10 @@
-"""Unit tests for the pure dedupe-verdict resolver (dup_verdict.py). Free, offline.
+"""Unit tests for the pure dedupe-verdict resolver (wingman/dup_verdict.py). Free, offline.
 
 These pin the RESOLVER's own behaviour — tier->confidence mapping, the sibling cosine floor,
 single-strongest selection, self-skip — over the real dedupe_confidence engine, using synthetic
 rows constructed to land each engine tier deterministically.
 """
-import dup_verdict as dv
+from wingman import dup_verdict as dv
 
 
 def _row(id, name, org="City STEM Alliance", url=None, **over):

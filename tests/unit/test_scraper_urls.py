@@ -1,11 +1,11 @@
-"""Unit tests for the pure URL/row helpers in scrape_opportunities.py.
+"""Unit tests for the pure URL/row helpers in agents/scrape_opportunities.py.
 
 Only the non-Gemini functions are imported/exercised: reconcile_url, spans_for_name,
 build_row, next_id_generator, clean_value, _name_key. Nothing here calls the model.
 """
 import pytest
 
-import scrape_opportunities as so
+from agents import scrape_opportunities as so
 
 
 # ------------------------------------------------------------------- next_id_generator

@@ -1,4 +1,4 @@
-"""Unit tests for mailing_list_common.py — provider detection, form extraction,
+"""Unit tests for wingman/mailing_list_common.py — provider detection, form extraction,
 field resolution, JSON/JSONP parsing, and recipe execution (with _post monkeypatched).
 
 All hermetic: the only network seam is `_post`, which every test that reaches an adapter
@@ -6,7 +6,7 @@ replaces with a canned (status, body) tuple. Nothing here fetches a page.
 """
 import pytest
 
-import mailing_list_common as mlc
+from wingman import mailing_list_common as mlc
 
 
 # --------------------------------------------------------------------------- extract_forms

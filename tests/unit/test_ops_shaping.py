@@ -625,16 +625,16 @@ class TestMaintenanceTools:
 
     def test_inspect_accepts_commas_or_spaces(self):
         args = core.build_tool_args("inspect", {"ids": "ec1, ec2 ec3"})
-        assert args[2:] == ["check_opp_data.py", "ec1", "ec2", "ec3"]
+        assert args[2:] == ["-m", "agents.check_opp_data", "ec1", "ec2", "ec3"]
 
     def test_contactemail_all_and_force(self):
         args = core.build_tool_args("contactemail", {"scope": "all", "force": True})
-        assert args[2:] == ["find_contact_emails.py", "--all", "--force"]
+        assert args[2:] == ["-m", "agents.find_contact_emails", "--all", "--force"]
 
     def test_contactemail_ids_limit_dryrun(self):
         args = core.build_tool_args(
             "contactemail", {"scope": "ids", "ids": "ec9", "limit": "5", "dryRun": True})
-        assert args[2:] == ["find_contact_emails.py", "--ids", "ec9", "--limit", "5", "--dry-run"]
+        assert args[2:] == ["-m", "agents.find_contact_emails", "--ids", "ec9", "--limit", "5", "--dry-run"]
 
     def test_contactemail_defaults_to_all_without_ids(self):
         # scope=ids but no ids given must not emit a bare --ids; falls back to --all.
@@ -642,8 +642,8 @@ class TestMaintenanceTools:
         assert "--all" in args and "--ids" not in args
 
     def test_fixed_args_and_no_params(self):
-        assert core.build_tool_args("mlgrader", {})[2:] == ["grade_mailing_lists.py", "--sample"]
-        assert core.build_tool_args("export", {})[2:] == ["export_json.py"]
+        assert core.build_tool_args("mlgrader", {})[2:] == ["-m", "agents.grade_mailing_lists", "--sample"]
+        assert core.build_tool_args("export", {})[2:] == ["-m", "agents.export_json"]
 
     def test_paid_tools(self):
         # The paid tools: the contact-email backfill, the dead-link re-finder, hub mining (its
@@ -659,7 +659,7 @@ class TestMaintenanceTools:
         # Operator-pointed only — the router never sends work here. Free preview by default;
         # a paid run drops --preview, and the name cap is a spend ceiling.
         prev = core.build_tool_args("harvestnames", {"url": "https://x.edu/list"})
-        assert prev[2:] == ["harvest_names.py", "--hubs", "https://x.edu/list", "--preview"]
+        assert prev[2:] == ["-m", "agents.harvest_names", "--hubs", "https://x.edu/list", "--preview"]
         run = core.build_tool_args("harvestnames", {"url": "https://x.edu/list", "mode": "run",
                                                     "maxNames": "8"})
         assert "--preview" not in run and run[-2:] == ["--max-names", "8"]
@@ -667,22 +667,22 @@ class TestMaintenanceTools:
     def test_minehub_args(self):
         # Needs a url; defaults to the free preview; a paid run drops --preview.
         prev = core.build_tool_args("minehub", {"url": "https://x.edu/programs"})
-        assert prev[2:] == ["mine_hub_pages.py", "--hubs", "https://x.edu/programs", "--preview"]
+        assert prev[2:] == ["-m", "agents.mine_hub_pages", "--hubs", "https://x.edu/programs", "--preview"]
         run = core.build_tool_args("minehub", {"url": "https://x.edu/programs", "mode": "run",
                                                "offDomain": True})
         assert "--preview" not in run and "--off-domain" in run and "--hubs" in run
 
     def test_proposeangles_args(self):
         assert core.build_tool_args("proposeangles", {})[2:] == [
-            "propose_angles.py", "--mode", "national", "--preview"]
+            "-m", "agents.propose_angles", "--mode", "national", "--preview"]
         commit = core.build_tool_args("proposeangles", {"mode": "seattle", "action": "commit"})
-        assert commit[2:] == ["propose_angles.py", "--mode", "seattle", "--commit"]
+        assert commit[2:] == ["-m", "agents.propose_angles", "--mode", "seattle", "--commit"]
 
     def test_refind_defaults_to_free_preview(self):
         # A paid run must be chosen explicitly; anything else previews (free, no writes).
-        assert core.build_tool_args("refind", {})[2:] == ["refind_dead_links.py", "--preview"]
+        assert core.build_tool_args("refind", {})[2:] == ["-m", "agents.refind_dead_links", "--preview"]
         assert core.build_tool_args("refind", {"mode": "preview"})[-1] == "--preview"
         run = core.build_tool_args("refind", {"mode": "run", "limit": 15})
-        assert run[2:] == ["refind_dead_links.py", "--limit", "15"]
+        assert run[2:] == ["-m", "agents.refind_dead_links", "--limit", "15"]
         # missing limit on a paid run falls back to the script's own default of 20.
         assert core.build_tool_args("refind", {"mode": "run"})[-1] == "20"

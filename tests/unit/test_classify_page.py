@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-import classify_page as cp
+from wingman import classify_page as cp
 
 _PAGE = ("Apply now for the Stanford AI4ALL Summer Program. "
          "Applications open October 1 2026 and close in March. How to apply: submit online.")

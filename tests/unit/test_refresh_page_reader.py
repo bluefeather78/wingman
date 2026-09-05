@@ -10,7 +10,7 @@ import urllib.error
 
 import pytest
 
-import refresh_opportunities as r
+from agents import refresh_opportunities as r
 
 
 OPP = {"id": "ec1", "name": "Marine Bio Institute", "org": "Woods Hole",

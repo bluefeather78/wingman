@@ -26,7 +26,7 @@
 -- Revisit only if the catalog grows an order of magnitude past where brute-force is comfortable.
 --
 -- WHEN THIS GETS WRITTEN. Per Phase 5's activation-gated hook: whenever a write leaves the
--- row's `is_active` as true — whether it was already true (a routine refresh_opportunities.py
+-- row's `is_active` as true — whether it was already true (a routine agents/refresh_opportunities.py
 -- pass) or is becoming true right now (the activation endpoint). A row that stays inactive
 -- (a fresh scrape insert, a console edit on a pending row) is skipped — it may never activate,
 -- and computing its embedding early is often wasted cost. See Phase 5's write-path table for

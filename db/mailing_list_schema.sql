@@ -5,7 +5,7 @@
 -- can run it for you. Same one-time-manual-step pattern as db/subscription_schema.sql,
 -- db/user_costs_schema.sql and db/user_submissions_schema.sql.
 --
--- Until this runs: find_mailing_lists.py exits with an error naming this file, the admin
+-- Until this runs: agents/find_mailing_lists.py exits with an error naming this file, the admin
 -- console's Mailing lists tab shows the setup step instead of a queue, and
 -- POST /api/opportunities/<id>/subscribe answers "no automated signup available" for
 -- every row — i.e. every opportunity degrades to the "Open signup page" handoff, which
@@ -22,7 +22,7 @@
 
 -- ---------- opportunity_signups: one signup RECIPE per opportunity ----------
 --
--- A recipe is what find_mailing_lists.py discovered about how to join this program's
+-- A recipe is what agents/find_mailing_lists.py discovered about how to join this program's
 -- mailing list, in a form server.py can replay deterministically for any user. One row
 -- per opportunity: the primary key is the opportunity id, so a re-check with --force
 -- replaces the recipe rather than accumulating duplicates.

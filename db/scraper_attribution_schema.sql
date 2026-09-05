@@ -4,7 +4,7 @@
 -- that row becomes live feedback on the angle (or hub) that found it. The per-angle funnel
 -- in the admin console is a GROUP BY over these columns joined with scraper_seeds — there
 -- are no writeback counters to drift, so a verdict change retroactively corrects the angle's
--- score on the next read. See seed_ledger.py.
+-- score on the next read. See wingman/seed_ledger.py.
 --
 --   seed_id   -> the scraper_seeds row whose ANGLE found this opportunity (search rows).
 --                NULL for hand-added, migrated, or fallback-angle rows (no stable id).

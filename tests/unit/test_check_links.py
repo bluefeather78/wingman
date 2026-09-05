@@ -1,4 +1,4 @@
-"""Unit tests for check_links.py — the free link-health agent's decision logic.
+"""Unit tests for agents/check_links.py — the free link-health agent's decision logic.
 
 Only pure functions are exercised (classify / merge_flags / build_update / _path_of /
 _parse_iso). Nothing here touches Supabase or the network.
@@ -7,8 +7,8 @@ import datetime
 
 import pytest
 
-import check_links as cl
-import url_validate as uv
+from agents import check_links as cl
+from wingman import url_validate as uv
 
 
 NOW = "2026-08-23T12:00:00+00:00"

@@ -2,7 +2,7 @@
 
 Both talk to Supabase through module-level helpers, monkeypatched here — no sockets.
 """
-import scrape_opportunities as so
+from agents import scrape_opportunities as so
 
 
 def _rows():

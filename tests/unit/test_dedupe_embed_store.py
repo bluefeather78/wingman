@@ -2,8 +2,8 @@
 the per-row PATCH builder, and the entry-shape reader. Hermetic — the paid embed call is injected."""
 import urllib.error
 
-import dedupe_embed_store as des
-import supabase_common
+from wingman import dedupe_embed_store as des
+from wingman import supabase_common
 
 
 def _row(rid="ec1", name="MIT PRIMES", active=True, stored_hash=None):

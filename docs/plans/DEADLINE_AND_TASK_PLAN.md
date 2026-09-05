@@ -21,7 +21,7 @@ coverage (item 1).
 
 **GAP-HUNT FOLLOW-UP SHIPPED 2026-08-28 (origin/main `14e0b81`).** The 2026-08-27 gap-hunt's fixes
 are live: **G6a** (today-anchored deadline dates demoted to estimates) and the **sitemap-first
-discovery series D0–D5** (`sitemap_common.py`: a free stdlib helper that reads a program's own
+discovery series D0–D5** (`wingman/sitemap_common.py`: a free stdlib helper that reads a program's own
 sitemap to reach its real steps/dates pages, wired into BOTH the task capture and the deadline
 ladder behind the `web_search` fallback; plus a shallow-capture no-stamp guard). Validated live
 read-only (D4 $0.178, D5 $0.236); 4 real task rows written live ($0.174). Code-only — no schema/env
@@ -47,7 +47,7 @@ change log (2026-08-28 entries), the section anchors named, and §9 for the phas
 | **G6a** | Today-anchored unverified `opens` reached the student (Tisch ec17543). | §3 **G6a** | ✅ **BUILT** — `verify_dates_against_capture` demotes an `estimated:false, verified:false` date equal to the check date to `estimated:true` + note. |
 | **G6b** | `verified:true` cannot detect a STALE/pre-JS `web_fetch` capture, so it can be confidently wrong. | §3 **G6b** | OPEN — needs rendered re-fetch / thin-shell detection (paid or SPA-render); DEFERRED. |
 | **G-task-1** | Rich steps page never discovered — Congressional Award (ec18244): 2 throwaway tasks while `/the-program/` carries a full verifiable step list. | §4 **G-task-1a/b/c** | ✅ **ADDRESSED** by D1/D2 (discovery) + D3 (no-stamp); durable fix pending PAID D4 validation on the real row. |
-| **G-D1 / D0–D3** | **Sitemap-first page discovery** (shared free helper) + shallow-capture no-stamp. | §9 D0–D3 | ✅ **BUILT** — `sitemap_common.py` + fixtures/tests (D0/D1), wired into `fetch_and_capture` behind the `web_search` fallback (D2), furniture no-stamp signal (D3). |
+| **G-D1 / D0–D3** | **Sitemap-first page discovery** (shared free helper) + shallow-capture no-stamp. | §9 D0–D3 | ✅ **BUILT** — `wingman/sitemap_common.py` + fixtures/tests (D0/D1), wired into `fetch_and_capture` behind the `web_search` fallback (D2), furniture no-stamp signal (D3). |
 | **D4** | PAID validation on 4 real rows. | §9 D4 | ✅ **DONE 2026-08-28 ($0.1781, read-only)** — proof row ec18244 fixed (furniture CTA → real $35-fee/Record-Book tasks); 0→3 page-backed on ec18676; no-sitemap control OK; SLIYS demotion-rate signal noted. A ranker bug was caught & fixed FREE first. |
 | **D5** | Deadline-ladder adoption + optional backfill. | §9 D5 | ✅ **CODE DONE + VALIDATED 2026-08-28 ($0.2358, read-only)** — sitemap fires + reaches site on all 3, no regression; search-count drop did NOT show on off-season rows (climb to rung 2 for estimation regardless), so benefit here is recall not cost. Optional backfill still deferred. |
 
@@ -90,7 +90,7 @@ failure.**
 | dates / status | `/api/opportunities/<id>/deadline` | **Claude Haiku 4.5** | web_search two-phase, escalation loop |
 | action items | `/api/opportunities/<id>/action-items` | **Claude Haiku 4.5** | code-side quote check (`page_text`) |
 | meta / fit | `extractTrackerInfo` (client) | Gemini (slimmed) | none needed (descriptive only) |
-| apply url | static `opp.url` | — | link-checked by `check_links.py` |
+| apply url | static `opp.url` | — | link-checked by `agents/check_links.py` |
 
 **Architecture decisions that govern both features (confirmed 2026-08-25; decision 6
 superseded 2026-08-26):**
@@ -425,7 +425,7 @@ Three distinct gaps:
 
 - **G-task-1c — the CTA task itself is low value.** "Sign up for emails from us" is a real,
   quoted phrase that passes both verifier gates yet is not an application step — exactly the
-  navigation-label class the extract prompt names as non-steps (`generate_action_items.py:203`).
+  navigation-label class the extract prompt names as non-steps (`agents/generate_action_items.py:203`).
   On a marketing homepage the CTA is the *only* quotable "step", so it survives. Fixing G-task-1a
   (fetch the real steps page) mostly moots this; a stricter furniture filter is the backstop.
 
@@ -436,7 +436,7 @@ on the current substrate, may or may not reach it; that uncertainty is exactly t
 ### G-D1 — Sitemap-first page discovery (shared, free) — DESIGNED & VALIDATED 2026-08-27
 
 **Principle: enumerate the site's real pages, then choose; never guess page names.** A new free,
-stdlib-only helper (proposed `sitemap_common.py`) that both the deadline finder and the task
+stdlib-only helper (proposed `wingman/sitemap_common.py`) that both the deadline finder and the task
 capture call BEFORE spending a `web_search`:
 
 1. **Locate the sitemap (free HTTP).** Read `robots.txt` for `Sitemap:` lines; else probe
@@ -595,7 +595,7 @@ step. Build it once; deadlines and tasks are thin extracts on top.
 ### 5b. Trusted-domain allowlist
 
 **Trusted-domain allowlist (`trusted_aggregators`).** One table + one shared lib
-(`aggregators_common.py`: `normalize_domain`, `load_aggregator_policy`, `classify_source`) +
+(`wingman/aggregators_common.py`: `normalize_domain`, `load_aggregator_policy`, `classify_source`) +
 one console **Sources** tab. Serves **both** features:
 - **Deadlines** use the read side only — the escalation loop's rung 4 keeps a date only if its
   domain is trusted.
@@ -827,7 +827,7 @@ which are independent until the client consolidation.
 
 **Foundation**
 - **P0 — Tasks → Claude (Haiku 4.5). ✅ DONE 2026-08-25.** Swap `call_gemini`→`call_claude` in
-  `generate_action_items.py`; cost via `claude_common`; verification untouched; gate
+  `agents/generate_action_items.py`; cost via `claude_common`; verification untouched; gate
   `app/services/action_items.py` on `ANTHROPIC_API_KEY`; cost-attribution signature. No
   user-visible change beyond quality. *(Not yet run on real rows — a graded Claude sample
   would cost money; correctness is structural + unit-tested.)*
@@ -837,7 +837,7 @@ which are independent until the client consolidation.
 
 **Deadline coverage & accuracy**
 - **P2 — Escalation loop rungs 1–3 + prompt caching (G1). ✅ DONE 2026-08-25.** In
-  `check_deadlines.py` (`RUNGS`/`ESCALATION_RUNGS`/`_search_round`/`_parse_signals`); batch +
+  `agents/check_deadlines.py` (`RUNGS`/`ESCALATION_RUNGS`/`_search_round`/`_parse_signals`); batch +
   interactive inherit. Built as the reusable "program source finder" helper (§5) for P6. Loop
   orchestration unit-tested (monkeypatched). Verified live on the 3 traced rows
   (dry-run→committed): THINK→running+4 dates, KCLS→rolling, Harvard→running+6 dates, $0.1333.
@@ -880,9 +880,9 @@ operator decisions resolved; T1–T8 at build time)*
     under the urllib fetcher — now yields **4 page-backed OFFICIAL-tier tasks from its
     guidelines PDF**, each with a verbatim verified quote and a `source_url` to the PDF, plus 1
     generic; 1 demoted, 0 dropped, **no fabricated "algebra"**. The exact coverage win the
-    substrate was built for. New `source_capture.py` (parse
+    substrate was built for. New `wingman/source_capture.py` (parse
     `web_fetch` blocks → `{url,domain,media_type,text,tier}`; HTML text/plain direct, PDF via
-    PyPDF2; `web_search` ignored; tier via `aggregators_common`). `generate_action_items.py`:
+    PyPDF2; `web_search` ignored; tier via `aggregators_common`). `agents/generate_action_items.py`:
     `process_one` fetches via `source_capture.fetch_and_capture` (Claude web_fetch) instead of
     `page_text`/urllib; `verify_items` runs the EXISTING `quote_is_on_page` /
     `claim_is_supported` against the captured content and tags each task's tier by the SOURCE
@@ -998,7 +998,7 @@ calendar; and a `not_running` verdict now requires proof. Next work items live i
 
 **Loose ends carried out of the P0–P4 session (none blocking):**
 - P0 tasks-on-Claude never run on real rows — a graded sample costs money; do one when
-  convenient to confirm demotion/cost on Haiku (watch `generate_action_items.py`'s summary).
+  convenient to confirm demotion/cost on Haiku (watch `agents/generate_action_items.py`'s summary).
 - P2 interactive latency scales with rung count on hard rows (up to 3 sequential searched
   calls). If it bites real users, cap the interactive path to 2 rungs (one-line change).
 - P2 prompt caching may no-op if the system prompt is under Haiku's 2048-token cache minimum
@@ -1034,7 +1034,7 @@ now — sitemap-first only ADDS recall.
   garbage / large-multi-program cases built in-test. Deliverable landed:
   `tests/fixtures/sitemaps/*` + `tests/unit/test_sitemap_common.py` (17 tests).
 
-- **D1 — `sitemap_common.py` core (free, stdlib only). ✅ DONE 2026-08-28.** The whole discovery
+- **D1 — `wingman/sitemap_common.py` core (free, stdlib only). ✅ DONE 2026-08-28.** The whole discovery
   brain, no network in tests (fixtures injected via a fake `fetch`). Public surface:
   `discover_candidate_pages(opp, fetch=default_fetch, top_n=5) -> list[Candidate{url, score,
   lastmod}]`, returning `[]` cleanly whenever nothing usable is found (the fallback trigger).
@@ -1114,43 +1114,43 @@ now — sitemap-first only ADDS recall.
     coverage, which §13 item 1 defers, so it stays gated on the operator un-deferring it.
 
 **Order:** D0 → D1 → D2 → D3 → (free to here) → D4 → D5. D3 can land in parallel with D1/D2 (it
-touches the write decision, not discovery). Nothing here is a schema change — `sitemap_common.py`
-is new, additive, and stdlib-only, exactly like `page_text.py`.
+touches the write decision, not discovery). Nothing here is a schema change — `wingman/sitemap_common.py`
+is new, additive, and stdlib-only, exactly like `wingman/page_text.py`.
 
 ---
 
 ## 10. Touch list
 
-- `check_deadlines.py` — escalation loop; per-round `max_uses:1` + ladder; `FOUND_*` /
+- `agents/check_deadlines.py` — escalation loop; per-round `max_uses:1` + ladder; `FOUND_*` /
   `SITE_REACHED` tails; prompt caching; `VALID_STATUS`+`rolling`; `deadline_write_decision`
   + `SOURCE_UNREACHED`; rung-4 trusted filter.
-- **`source_capture.py` (new, DONE):** the substrate CAPTURE layer — `parse_captured_sources`
+- **`wingman/source_capture.py` (new, DONE):** the substrate CAPTURE layer — `parse_captured_sources`
   (`web_fetch` blocks → `CapturedSource{url,domain,media_type,text,tier}`; HTML text/plain direct,
   PDF base64 → PyPDF2; `web_search` ignored), `tier_for`, `fetch_and_capture` (Claude web_fetch),
   widened FETCH_SYSTEM (hunts how-to-apply/FAQ/key-dates/timeline/PDF).
-- **`sitemap_common.py` (new, PLANNED — G-D1 / phases D0–D5):** free stdlib discovery helper
+- **`wingman/sitemap_common.py` (new, PLANNED — G-D1 / phases D0–D5):** free stdlib discovery helper
   `discover_candidate_pages(opp)` — locate (robots→common paths) → parse (index recursion, gzip,
   caps) → scope (path-prefix / name tokens) → rank (slug scorer) → top-N URLs, `[]` on nothing.
   Consumed by `source_capture.fetch_and_capture` and `check_deadlines.find_program_sources` ahead
   of `web_search`, which stays as the fallback. Tests in `tests/test_sitemap_common.py` +
   `tests/fixtures/sitemaps/*`.
-- `check_deadlines.py` — **DONE:** `find_program_sources(want_dates, want_requirements)` (T6
+- `agents/check_deadlines.py` — **DONE:** `find_program_sources(want_dates, want_requirements)` (T6
   shared finder + `_shared_capture_cache` read-once); `call_claude(return_captured=True)`;
   `verify_dates_against_capture` (P6c) enriches each date with `verified`/`source_url`;
   `check_one(want_requirements=...)`. *(escalation loop, rung-4 filter, rolling, write-decision
   already done in P2–P5; date ladder UNCHANGED.)*
-- `generate_action_items.py` — **DONE:** `process_one(full_capture=...)` fetches via the shared
+- `agents/generate_action_items.py` — **DONE:** `process_one(full_capture=...)` fetches via the shared
   `find_program_sources` (not urllib); `verify_items(raw, opp, sources)` runs the UNCHANGED
   `quote_is_on_page`/`claim_is_supported` against captured content, tags each task's tier by the
   source holding its quote; page-backed items gain `source_tier`/`source_url`/`source_domain`.
-- `page_text.py` — **DONE:** `is_eligibility_claim` (T3), `date_is_on_page` (P6c); the urllib
+- `wingman/page_text.py` — **DONE:** `is_eligibility_claim` (T3), `date_is_on_page` (P6c); the urllib
   `fetch_page_text` is now an optional local fallback, its verify half retained.
 - `app/services/action_items.py` — **DONE:** interactive twin calls `process_one(full_capture=True)`;
   7-day TTL + serve-path `pending`/`blocked` filter (`_servable`) live.
 - `app/routes/opportunities.py` — **DONE:** deadline endpoint calls
   `check_one(want_requirements=True)` (read-once).
 - `app/routes/opportunities.py` — inherits `check_one`; new-outcome stamp handling.
-- `aggregators_common.py` (new), `../../db/trusted_aggregators_schema.sql` (new).
+- `wingman/aggregators_common.py` (new), `../../db/trusted_aggregators_schema.sql` (new).
 - `ops/core.py` + `ops/admin.py` + `ops/admin_console.html` — Sources tab (approve/block/park).
 - `frontend/src/lib/status.ts` — `rolling` in `computeProgressStatus` + list readers.
 - `frontend/src/lib/tracker.ts` — **DONE (P7/P8):** tier/verified fields in the raw types +
@@ -1166,7 +1166,7 @@ is new, additive, and stdlib-only, exactly like `page_text.py`.
   dates←deadline, tasks←action-items, `applyUrl=opp.url`; refresh reports both counts;
   trust-gradient rendering (3 tier groups + source chips + per-date verified marker); rolling
   badge; P10 task delete/add/restore UI; P11 calendar "Open now" band (`CalendarCard`).
-- `check_deadlines.py` — **DONE (2026-08-26, post-plan):** `verify_status_evidence()` + the
+- `agents/check_deadlines.py` — **DONE (2026-08-26, post-plan):** `verify_status_evidence()` + the
   not_running prompt fixes in both phases + the `FOUND_CONFIRMED_DATES` believed-dead guard
   (§3 G5).
 - cost attribution — `classify_feature` signature + Claude model pin for `provider_for_model`.
@@ -1294,7 +1294,7 @@ sufficient**. Seven things a source-of-truth product needs, roughly prioritized:
    remember to check is not "never miss." **DISPOSITION (2026-08-25): COMMITTED future
    standalone feature** — see §13a.
 4. **Measure accuracy — a ground-truth harness.** Precision/recall of dates & tasks vs a
-   sampled human audit (the `grade_mailing_lists.py` precedent) — you cannot claim a source of
+   sampled human audit (the `agents/grade_mailing_lists.py` precedent) — you cannot claim a source of
    truth you cannot measure — plus a **student-facing provenance/recency surface** (one
    confidence+provenance vocabulary across dates and tasks, "last verified N days ago", a
    per-date **source link** like tasks already carry; this is T4 elevated). **DISPOSITION
@@ -1349,7 +1349,7 @@ deadline."
 
 *Goal:* be a source of truth you can prove, and show the student why to believe each fact.
 - **Ground-truth harness.** A `grade_deadlines.py` / `grade_action_items.py` (mirroring
-  `grade_mailing_lists.py`): a deterministic adversarial sample, a human worksheet, and a
+  `agents/grade_mailing_lists.py`): a deterministic adversarial sample, a human worksheet, and a
   `--score` computing **precision/recall** of dates and tasks against reality. Recall needs a
   human (the check cannot report what it missed). Free; the thing it protects is trust.
 - **Provenance & recency, student-facing.** One confidence+provenance vocabulary across dates
@@ -1376,7 +1376,7 @@ deadline."
   the ranker dropping `/the-program/` & `/prospective-participants/` entirely: the old 400-page
   scope threshold tripped multi-program filtering, which kept name-matching chrome (news/gala:
   "congressional-award-…") and dropped the real content pages (which don't repeat the org name).
-  Fixed in `sitemap_common.py`: scope decides single-/multi-program by the stored URL's PATH not
+  Fixed in `wingman/sitemap_common.py`: scope decides single-/multi-program by the stored URL's PATH not
   page count (bare homepage → keep all); `name_tokens` drops host-derived tokens; `score_slug`
   gains an exact-nav-slug boost (+3 for the-program/apply/eligibility/…), a long-"sentence"-slug
   penalty (news headlines), and fundraiser NEG tokens (golf/poker/tournament/gala). Then the paid
@@ -1394,7 +1394,7 @@ deadline."
     `estimated:false, verified:false` date equal to the check date to `estimated:true` + a note
     (never drops, per T7). The today-anchoring fingerprint (ec17543's `opens` → HAPPENING NOW);
     a real same-day date verifies and is untouched. 3 tests.
-  - **D0/D1** (`sitemap_common.py` NEW + `tests/fixtures/sitemaps/*` + 17 tests): free,
+  - **D0/D1** (`wingman/sitemap_common.py` NEW + `tests/fixtures/sitemaps/*` + 17 tests): free,
     stdlib-only sitemap-first discovery — `discover_candidate_pages(opp, fetch)` locates
     (robots→common paths), parses (sitemapindex recursion one level, gzip, CDATA, lastmod; hard
     caps), scopes (single-program keeps all / multi-program filters by path-prefix + name tokens),
@@ -1462,7 +1462,7 @@ deadline."
   read as death. One wrong word cascades: Past Event pill (`computeProgressStatus` →
   completed), zero dates (the empty-write carve-out let it write instantly), item excluded
   from Home Base's task surface (its 2 page-verified tasks invisible) and from calendar sync.
-  Root causes fixed in `check_deadlines.py` (commit 3bc43de, 1070 pytest green):
+  Root causes fixed in `agents/check_deadlines.py` (commit 3bc43de, 1070 pytest green):
   (1) phase 2's own rule said "not running this cycle → not_running" — the exact conflation
   phase 1 guards against, now removed; not_running = permanently discontinued, nothing weaker;
   (2) phase 1: a closed cycle is never by itself discontinuation evidence, and a
@@ -1581,12 +1581,12 @@ deadline."
   - **`../../db/trusted_aggregators_schema.sql`** (new) — domain-pk allowlist, `status`
     trusted/blocked (absent row ⇒ pending), ALTER-then-CREATE, seeds `lumiere-education.com`
     as trusted. **Manual DDL step — not yet run in Supabase.**
-  - **`aggregators_common.py`** (new, stdlib-only, repo root) — the ONE read side both
+  - **`wingman/aggregators_common.py`** (new, stdlib-only, repo root) — the ONE read side both
     features share: `normalize_domain` (scheme-aware, subdomain-safe), `AggregatorPolicy`
     (`.classify` → trusted/blocked/pending, blocked wins, subdomain-suffix match),
     `domain_matches`, `load_aggregator_policy` (never raises; missing table ⇒ present=False,
     everything pending), `get_policy` cached + `invalidate_policy_cache`.
-  - **Deadline rung 4** wired into `check_deadlines.py`'s escalation loop: `RUNGS` gains
+  - **Deadline rung 4** wired into `agents/check_deadlines.py`'s escalation loop: `RUNGS` gains
     "trusted third-party" (focus filled with the allowlist at round time), `ESCALATION_RUNGS`
     4, reached only when rungs 1-3 fail AND the allowlist is non-empty, its sources
     trust-filtered before phase 2 (own-site rungs unfiltered — recall unchanged), dates
@@ -1617,14 +1617,14 @@ deadline."
   forward as open. Nothing implemented.
 - **2026-08-25** — **P0–P4 IMPLEMENTED** (operator go-ahead; model decision: Haiku everywhere,
   no A/B; paid-run policy: ask each time). All verified via unit tests + tsc; NO paid run yet.
-  - **P0** — `generate_action_items.py` runs on **Claude Haiku 4.5** (`call_gemini`→`call_claude`,
+  - **P0** — `agents/generate_action_items.py` runs on **Claude Haiku 4.5** (`call_gemini`→`call_claude`,
     cost via `claude_common`, `ANTHROPIC_API_KEY`); `app/services/action_items.py` gated on it;
     route records under surface `claude`/Haiku model so `provider_for_model` → Anthropic.
     Console `api` label updated. Verification layer untouched.
   - **P1** — task **7-day on-demand TTL** in `action_items.resolve()` via `_is_fresh` on
     `action_items_checked_at` (never-stamped/failed rows read stale and self-heal; verified
     lists served free 7 days). New tests in `test_action_items.py`.
-  - **P2** — **escalation loop** in `check_deadlines.py`: `RUNGS` (current→prior→subpages),
+  - **P2** — **escalation loop** in `agents/check_deadlines.py`: `RUNGS` (current→prior→subpages),
     `ESCALATION_RUNGS=3`, per-round `max_uses:1`, `_search_round` + `_parse_signals`
     (SITE_REACHED / FOUND_CONFIRMED_DATES / FOUND_PRIOR_CYCLE_BASIS tail lines), early-exit,
     union-of-sources into phase 2, **prompt caching** (`cache_system`). Built as the reusable

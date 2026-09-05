@@ -41,19 +41,19 @@ PORT = 8000
 # Interactive, in-page AI calls from script.js's callGemini() — ranking, profile chat,
 # tracker extraction, etc. Pinned to gemini-3.5-flash-lite: cheaper/faster than
 # gemini_common.MODEL ("gemini-3.6-flash", used by the offline batch scripts
-# check_deadlines.py/check_reviews.py/scrape_opportunities.py), which matters here since
+# agents/check_deadlines.py/check_reviews.py/scrape_opportunities.py), which matters here since
 # these calls block a real page interaction instead of running unattended. Revisit
 # alongside gemini_common.MODEL — see that module's docstring on model ID churn.
 # NOTE: "gemini-3.6-flash-lite" (as literally requested) does not exist in the Gemini API —
 # there is no lite variant of the 3.6 generation yet (confirmed via ListModels against the
 # live key on 2026-08-18). Pinned to gemini-3.5-flash-lite instead, the closest existing
-# lite model, following the same "pin an exact version" convention as gemini_common.py's
+# lite model, following the same "pin an exact version" convention as wingman/gemini_common.py's
 # MODEL constant. Swap this if/when a real gemini-3.6-flash-lite ships.
 MESSAGES_MODEL = "gemini-3.5-flash-lite"
 # Uniform cap across every /api/messages call site (mirrors the old Anthropic path's
 # uniform max_tokens=1000) — bumped above what each system prompt's own "stay well
 # within a 1000-token response" instruction asks for, to leave headroom for Gemini 3.x's
-# thinking tokens, which draw from this SAME budget (see gemini_common.py's "FOURTH
+# thinking tokens, which draw from this SAME budget (see wingman/gemini_common.py's "FOURTH
 # finding" docstring — at max_tokens=700 there, thinking alone consumed 673 of it).
 MESSAGES_MAX_TOKENS = 2000
 # Ceiling on a client-supplied "maxTokens", mirroring CLAUDE_MAX_TOKENS_CEILING below.
@@ -97,11 +97,11 @@ CLAUDE_MAX_TOKENS_CEILING = 8000
 # the table's Row Level Security policy only allows reading is_active=true rows.
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
-# `status` is check_deadlines.py's running/not_running/unknown verdict. It ships so the
+# `status` is agents/check_deadlines.py's running/not_running/unknown verdict. It ships so the
 # finder can drop discontinued programs from the results — it is NULL on 1195 of the
 # 1239 active rows (never deadline-checked), so any consumer must treat NULL as "no
 # verdict", never as "not running".
-# `eligibility` joined this list 2026-08-24. It is maintained by refresh_opportunities.py
+# `eligibility` joined this list 2026-08-24. It is maintained by agents/refresh_opportunities.py
 # and was the only curated record of a program's entry requirements anywhere in the repo,
 # yet it never left the database — so the tracker prompt that invents prerequisites could
 # not see the column that knows them. Adding a field here widens what the client receives
@@ -169,18 +169,18 @@ GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"
 
 
 # ---------- On-demand, shared/cached deadline check (Claude Haiku-backed) ----------
-# Replaces check_deadlines.py's batch/cron model as the primary way status/deadlines data
+# Replaces agents/check_deadlines.py's batch/cron model as the primary way status/deadlines data
 # gets populated: rather than proactively scanning the whole catalog on a schedule (which,
 # on 2026-08-18, burned through Gemini's daily grounding quota partway through a single
 # full pass), a check now only runs when a real user actually adds an opportunity to their
 # tracker, or loads the Tracker page with an already-tracked item whose cached data has
 # gone stale. Uses Claude Haiku (claude-haiku-4-5-20251001) with web search enforced.
-# See check_deadlines.py's docstring for the underlying Supabase columns
+# See agents/check_deadlines.py's docstring for the underlying Supabase columns
 # (status/important_dates/was_estimated/important_date_note/last_checked_at) — this endpoint
 # reads/writes the exact same columns, so the two mechanisms share one cache. important_dates
 # holds EVERY pertinent date for the opportunity (registration opens/closes, event start/end,
 # notifications, etc.), each tagged with a "type" — not just a single narrow "deadline"; see
-# check_deadlines.py's build_system() for the full schema. The batch script still exists for
+# agents/check_deadlines.py's build_system() for the full schema. The batch script still exists for
 # bulk backfill/cleanup (e.g. after a big scrape), but is no longer the primary way this data
 # gets kept current — see the plan doc's "On-demand deadline checking" section for the full
 # rationale.
@@ -244,7 +244,7 @@ API_ERRORS_SETUP_SQL = "db/api_errors_schema.sql"
 # there deliberately is no path in this repo that mails everybody at once.
 #
 # The sending half is Resend's HTTPS API, called with raw urllib exactly as
-# subscription_common.py calls Stripe (no SDK, matching the stdlib-only convention). What a
+# wingman/subscription_common.py calls Stripe (no SDK, matching the stdlib-only convention). What a
 # provider buys that cannot be rebuilt here is SPF/DKIM/DMARC on the sending domain, a
 # warmed IP, and bounce/complaint handling. Mail from a cold domain to a population living
 # on Gmail and school Google Workspace accounts goes to spam, and school MXes are the least

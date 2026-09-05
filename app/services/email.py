@@ -12,7 +12,7 @@ outsourced is the user roster: nothing here syncs accounts to a third party. Res
 handed one address at a time, at the moment of sending, which is the smallest disclosure
 that gets an email delivered. Anything that maintains a contact list over there would mean
 continuously exporting the names and addresses of minors, and would need a privacy-policy
-edit (build_legal.py) and a TERMS_VERSION bump before it could be switched on.
+edit (agents/build_legal.py) and a TERMS_VERSION bump before it could be switched on.
 
 THE CLAIM, WHICH IS THE WHOLE DESIGN. A row is written to email_sends BEFORE Resend is
 called, and the table's unique (userid, kind, dedupe_key) is what makes a repeated sweep
@@ -49,7 +49,7 @@ from app.core import (
     _supabase_request_strict, _missing_table_error, _error_body, get_user_account,
     get_user, subscription_state,
 )
-from subscription_common import TRIAL_DAYS
+from wingman.subscription_common import TRIAL_DAYS
 from app.services import email_templates
 from app.services.email_templates import EMAIL_KINDS
 
@@ -282,7 +282,7 @@ def release_claim(row):
 def _resend_post(to_email, subject, html_body, text_body):
     """POST one email to Resend. Returns (message_id, error).
 
-    Raw urllib rather than the SDK, matching subscription_common.py's Stripe client and
+    Raw urllib rather than the SDK, matching wingman/subscription_common.py's Stripe client and
     this repo's stdlib-only convention.
     """
     payload = {
@@ -308,7 +308,7 @@ def _resend_post(to_email, subject, html_body, text_body):
             # "client banned"), which is NOT a Resend error and carries none of Resend's
             # JSON, so it surfaced as a bare "Forbidden" naming nothing. Sending a real
             # UA makes the identical request succeed. Same class of problem as the 403s
-            # check_links.py documents — the server is refusing OUR CLIENT, not the
+            # agents/check_links.py documents — the server is refusing OUR CLIENT, not the
             # request.
             "User-Agent": RESEND_USER_AGENT,
         },

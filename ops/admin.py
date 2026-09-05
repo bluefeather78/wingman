@@ -12,7 +12,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
-import dryrun_common
+from wingman import dryrun_common
 from ops import core
 from app.deps import read_json_body, read_json_body_strict, json_response, json_error
 
@@ -257,7 +257,7 @@ async def handle_link_queue_resolve(request: Request):
 
 @router.get("/api/agents/metadata-refresh-queue")
 def handle_metadata_refresh_queue(request: Request):
-    """Read-only: rows activated but not yet run through refresh_opportunities.py. Backs the
+    """Read-only: rows activated but not yet run through agents/refresh_opportunities.py. Backs the
     Core Details card. Localhost-gated like the rest of /api/agents/* (this list carries row
     names/urls)."""
     limit = _qs_int(request, "limit", 200) or 200

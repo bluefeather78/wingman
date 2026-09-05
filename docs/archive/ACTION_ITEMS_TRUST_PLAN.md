@@ -9,7 +9,7 @@
 **Status:** planning (do NOT implement yet — nothing in this plan is built). Five decisions
 are open (see "Open issues & decisions"); build starts only after they are answered.
 **Owner:** _tbd_  **Started:** 2026-08-25
-**Related code:** `generate_action_items.py`, `page_text.py`, `app/services/action_items.py`,
+**Related code:** `agents/generate_action_items.py`, `wingman/page_text.py`, `app/services/action_items.py`,
 `app/routes/opportunities.py`, `../../db/action_items_schema.sql`, `frontend/src/lib/tracker.ts`,
 `frontend/src/api/trackerStore.ts`, `frontend/app/(app)/index.tsx`,
 `frontend/app/(app)/tracker.tsx`, `ops/admin.py`, `ops/core.py`, `ops/admin_console.html`.
@@ -114,7 +114,7 @@ whoever implements must build on the Claude version. The deltas:
   pass also needs; Playwright (C) is **DECIDED: deferred** in both docs (2026-08-25).
 - **The `trusted_aggregators` allowlist is now shared with deadlines (2026-08-25 decision).**
   The deadline escalation loop's 4th (off-domain) rung draws dates ONLY from operator-approved
-  domains in this same table — so `trusted_aggregators` + `aggregators_common.py` (read side)
+  domains in this same table — so `trusted_aggregators` + `wingman/aggregators_common.py` (read side)
   + the console Sources tab are joint infrastructure, not task-only. The deadline side needs
   only the read/classify path; this plan still owns the full park-and-approve flywheel. Build
   the table + read side once; whichever plan lands first creates it, the other consumes it.
@@ -264,16 +264,16 @@ Existing values (`page-verified`, `page-empty`, `generic-fallback`, `unparsed`) 
 
 ## Backend
 
-### New shared lib — `aggregators_common.py` (repo root)
+### New shared lib — `wingman/aggregators_common.py` (repo root)
 
-Mirrors `seeds_common.py`: stdlib-only, imported by the agent, `ops/core.py`, and
+Mirrors `wingman/seeds_common.py`: stdlib-only, imported by the agent, `ops/core.py`, and
 `app/services`. Provides `normalize_domain(url) -> host`, `load_aggregator_policy(supabase…)
 -> {domain: status}`, and `classify_source(url, official_domain, policy) -> 'official' |
 'trusted' | 'pending' | 'blocked'`. One definition, so the agent, the console and the serve
 path cannot disagree about what a domain is — the same reason `deadline_write_decision` and
 `action_items_write_decision` are single-sourced.
 
-### `page_text.py`
+### `wingman/page_text.py`
 
 No change to fetch mechanics (it already fetches any URL). Add nothing here beyond a domain
 helper if not reused from `url_validate`. The A/B/C fetch fixes (PDF, link-following,
@@ -281,7 +281,7 @@ SPA-render) from `project_action_items_spa_pdf_gap.md` are **complementary and o
 for this plan** — they widen what the *official* tier can read; this plan widens which
 *sources* count. They compose but ship independently.
 
-### `generate_action_items.py`
+### `agents/generate_action_items.py`
 
 - New `--aggregators` flag turns on the D1 discovery phase (search ON, cost-quoted, off by
   default). Without it the agent behaves exactly as today (official + generic only), so this
@@ -399,7 +399,7 @@ New `.vtab` **Sources** (`view-sources`), between Mailing lists and Cost per use
 ## Generation timing & user-added opportunities
 
 **Today.** Tasks are generated on two paths sharing one cache and one logic:
-- *Batch* (`generate_action_items.py`): sweeps the **active** catalog (`is_active=eq.true`),
+- *Batch* (`agents/generate_action_items.py`): sweeps the **active** catalog (`is_active=eq.true`),
   90-day staleness, **operator-run, not scheduled** (no cron; monthly job paused). Pre-warms
   rows so the on-demand path is a free cache hit.
 - *On-demand* (`app/services/action_items.resolve`, `GET
@@ -519,7 +519,7 @@ Suggested sequence, each step shippable and inert-by-default:
    the official tier immediately. (C/Playwright gated on decision 6.)
 2. **Schema** — `../../db/trusted_aggregators_schema.sql` + the additive `action_items` item fields
    (JSONB, no DDL). Console/agent degrade-not-break until run.
-3. **`aggregators_common.py`** — shared classify/normalize lib.
+3. **`wingman/aggregators_common.py`** — shared classify/normalize lib.
 4. **Serve-path pending filter** — `app/services/action_items.py` withholds `pending`/
    `blocked`. Safe even before any aggregator exists (no-op).
 5. **Agent `--aggregators` discovery pass** (engine per decision 1) + eligibility detector

@@ -1,10 +1,10 @@
-"""Unit tests for contact_email_common.py — email extraction, generic filtering,
+"""Unit tests for wingman/contact_email_common.py — email extraction, generic filtering,
 visible-text stripping, and contact-page URL guessing. Pure; scan_pages/resolve are
 NOT tested (network).
 """
 import pytest
 
-import contact_email_common as ce
+from wingman import contact_email_common as ce
 
 
 # --------------------------------------------------------------------------- _is_generic

@@ -190,7 +190,7 @@ into the S1-1 commit if you prefer to keep S0 free of M8, or take a separate app
 
 **Mechanism.** Two separate omissions on the Anthropic path:
 - The `web_search_20250305` tool is attached with **no `max_uses`** — contrast
-  `check_deadlines.py:256-260`, which caps it. Anthropic enforces `max_uses` server-side, so
+  `agents/check_deadlines.py:256-260`, which caps it. Anthropic enforces `max_uses` server-side, so
   this is a real ceiling, unlike Gemini's prompt-level `max_searches`.
 - `urllib.request.urlopen(req)` has **no `timeout`**. A hung socket permanently loses one of
   the 40 anyio threadpool slots — capacity that never returns until restart.
@@ -507,7 +507,7 @@ put the nonce in the URL. The sign-in flow already does exactly this with `_mint
 ### S1-4 — `url_is_public()` and auth on opportunity submission  `[M1, M10]`
 
 **Files:** `app/routes/resume.py:94-96` (`optional_subscribed_user`),
-`app/services/resume.py:169-258`, `:261-284`; `sitemap_common.py:92-106`, `:133-139`;
+`app/services/resume.py:169-258`, `:261-284`; `wingman/sitemap_common.py:92-106`, `:133-139`;
 `page_text._fetch_urllib`; `url_repair._fetch`; `mailing_list_common.fetch_page`;
 `app/routes/opportunities.py:77`
 
@@ -528,8 +528,8 @@ redirects followed**. Submit `{"url": "http://10.0.0.5:8080/"}` unauthenticated,
 inside Render's network. Responses are not echoed, but timing and the resulting status leak
 reachability, and a redirect on the attacker's host steers follow-up GETs.
 
-Worse, the operator's **free** agents (`check_links.py`, `url_repair.py`,
-`find_mailing_lists.py`) later fetch those URLs **from the operator's laptop** — an SSRF
+Worse, the operator's **free** agents (`agents/check_links.py`, `wingman/url_repair.py`,
+`agents/find_mailing_lists.py`) later fetch those URLs **from the operator's laptop** — an SSRF
 against your own LAN.
 
 **Fix.**
@@ -681,7 +681,7 @@ map still says.
 
 ### S1-10 — Promo codes into a table  `[L3]`
 
-`subscription_common.py:203-212` hard-codes `BETAUSER` (7 days), `FREEMONTH`, `WELCOME10`.
+`wingman/subscription_common.py:203-212` hard-codes `BETAUSER` (7 days), `FREEMONTH`, `WELCOME10`.
 Anyone who can read the repository gets free access — and with M6, repeatedly. Move to a table
 with per-code redemption counts and expiry. (Ship **after** S1-6, or the race outlives the
 move.)

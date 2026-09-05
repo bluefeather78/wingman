@@ -93,7 +93,7 @@ The frontend is already configured to:
 
 ## 4. Promo Codes
 
-Promo codes live in `PROMO_CODES` in `subscription_common.py`. **There are two kinds, and
+Promo codes live in `PROMO_CODES` in `wingman/subscription_common.py`. **There are two kinds, and
 they are not interchangeable** — `kind` on each entry decides which path applies it:
 
 | Code | Kind | Effect |
@@ -273,15 +273,15 @@ Cancels an active subscription:
 
 ## 8. File Structure
 
-- `subscription_common.py` - Stripe API integration and promo code logic
+- `wingman/subscription_common.py` - Stripe API integration and promo code logic
 - `server.py` - Backend endpoints for subscription management
 - `index.html` - Subscription management page UI
 - `script.js` - Frontend subscription logic and page rendering
 - `.env` - Stripe API keys (gitignored)
 - `../db/subscription_schema.sql` - the one-time DDL from §1
 - `legal/terms.md`, `legal/privacy.md` - source of record for the two legal documents
-- `terms.html`, `privacy.html` - generated from those by `build_legal.py`; do not hand-edit
-- `build_legal.py` - re-run after any edit under `legal/`
+- `terms.html`, `privacy.html` - generated from those by `agents/build_legal.py`; do not hand-edit
+- `agents/build_legal.py` - re-run after any edit under `legal/`
 
 ## 8b. Consent at signup
 
@@ -308,7 +308,7 @@ text are indistinguishable from rows accepted under new text.
 provided free of charge. We may introduce paid features, subscriptions, or other pricing in
 the future. If we do so, we will provide appropriate notice before charging you." That is a
 promise the $9.99 plan contradicts as written. Either update §3 (and re-run
-`build_legal.py`, and bump `TERMS_VERSION`) or treat the notice requirement as binding
+`agents/build_legal.py`, and bump `TERMS_VERSION`) or treat the notice requirement as binding
 before the first charge.
 
 ## 9. Troubleshooting
@@ -324,7 +324,7 @@ Make sure `STRIPE_API_KEY` is set in `.env`
 ### Promo code not working
 - Check spelling in `PROMO_CODES` dict
 - Verify user hasn't already used the code
-- Check that the code exists in `subscription_common.py`
+- Check that the code exists in `wingman/subscription_common.py`
 
 ### "Accounts are temporarily unavailable" on registration (503)
 The migration in §1 has not been run. Run `../db/subscription_schema.sql` in the Supabase SQL

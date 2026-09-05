@@ -622,7 +622,7 @@ tr.disabled-seed { opacity: .48; }
       <div class="agents" id="tools-core"></div>
 
       <!-- Rows the console activated but that have not yet been read from their live page by
-           refresh_opportunities.py. Activation enqueues them; the agent (run manually) drains
+           agents/refresh_opportunities.py. Activation enqueues them; the agent (run manually) drains
            them. Read-only. Off until db/activation_refresh_schema.sql is run. -->
       <div class="card">
         <div class="card-head">
@@ -805,8 +805,7 @@ tr.disabled-seed { opacity: .48; }
     <div class="view-lead">
       One read-only pass over the whole catalog &mdash; queue depths, coverage gaps, when each
       maintenance pass last ran, and the handful of numbers that are out of band. Nothing here
-      spends money or changes anything; it is the same data <span class="mono">python
-      db_health_check.py</span> prints.
+      spends money or changes anything; it is the same data <span class="mono">python -m wingman.db_health_check</span> prints.
     </div>
     <div style="margin:8px 0 20px"><button class="btn" id="healthRefresh">Refresh</button>
       <span id="healthStamp" style="margin-left:12px;color:var(--text-3);font-size:12px"></span></div>
@@ -1133,7 +1132,7 @@ tr.disabled-seed { opacity: .48; }
         </div>
         <div class="spacer"></div>
         <select id="pendingSource"><option value="">All sources</option></select>
-        <select id="pendingClass" title="Filter by page-classifier verdict (run classify_queue.py --write to populate)">
+        <select id="pendingClass" title="Filter by page-classifier verdict (run agents/classify_queue.py --write to populate)">
           <option value="">All classes</option>
           <option value="program">program</option>
           <option value="first_party_hub">first_party_hub</option>
@@ -2586,7 +2585,7 @@ async function loadLinkQueue() {
   renderLinkQueue();
 }
 
-// The link-owned finding flags, worded to match check_links.py's FLAG_* text. The reviewer
+// The link-owned finding flags, worded to match agents/check_links.py's FLAG_* text. The reviewer
 // hint (repair suggestion, "open it manually", the old URL of a repair) lives in quality_flags;
 // pick out the ones this agent wrote so the row explains itself without opening the record.
 const LINK_FLAG_PREFIXES = ['dead link (', 'link unverifiable (', 'link unreachable (',
@@ -2922,7 +2921,7 @@ const OPP_FIELDS = {
 // and WHY it matched. "Mark duplicate" opens the existing modal, which pre-selects from the
 // same list. Confidence drives the colour because strong/weak mean very different things
 // here — a strong match is usually a real duplicate, a weak one usually is not.
-// The page-classifier verdict, stamped by `classify_queue.py --write` as a `classify: ...` entry
+// The page-classifier verdict, stamped by `agents/classify_queue.py --write` as a `classify: ...` entry
 // in quality_flags. Rendered as a class-coloured pill so a reviewer reads the verdict at a glance:
 // program is a good row (ok/green), a hub belongs in mining not the queue (info), none/unreadable/
 // unparsed and any STALE program are the ones to look at (warn/danger).
@@ -3150,7 +3149,7 @@ async function openDupScan() {
     // Pre-select the near-certain (strong) pairs; leave the weak ones for a deliberate tick.
     S.dupScan.pairs.forEach((p, i) => { if (p.confidence === 'strong') S.dupScan.sel.add(i); });
     // unembedded rows were never compared by the embedding pass — surfaced, not silently
-    // skipped, so a quiet scan can't be misread as "nothing to find" (see find_catalog_dups.py).
+    // skipped, so a quiet scan can't be misread as "nothing to find" (see wingman/find_catalog_dups.py).
     const unembeddedNote = r.unembedded
       ? ` ${num(r.unembedded)} row(s) aren't in the dedupe index yet and were skipped — run `
         + `Refresh Dedupe Embeddings to cover them.`
@@ -4562,7 +4561,7 @@ async function loadLeads() {
   }
 }
 
-// Rows activated in the console but not yet run through refresh_opportunities.py. The agent
+// Rows activated in the console but not yet run through agents/refresh_opportunities.py. The agent
 // run stays manual — this is just the visible queue of what is waiting for it. Cleared per
 // row when a manual refresh reads that row's page.
 async function loadMetadataRefreshQueue() {
@@ -4580,14 +4579,14 @@ async function loadMetadataRefreshQueue() {
     if (!d.count) {
       el.innerHTML = `<div>Nothing waiting &mdash; every activated row has been read from its live page.</div>
         <div style="font-size:12px;color:var(--text-3);margin-top:4px">A row lands here the moment you
-        activate it, and clears when a manual <span class="mono">refresh_opportunities.py</span> run reads its page.</div>`;
+        activate it, and clears when a manual <span class="mono">agents/refresh_opportunities.py</span> run reads its page.</div>`;
       return;
     }
     const head = `<div style="padding:2px 0 10px">
       <b>${d.count}</b> activated row${d.count === 1 ? '' : 's'} still on their original (often scraper) metadata.
       <div style="font-size:12px;color:var(--text-3);margin-top:4px">Enrich them by running the Core Details
         agent above &mdash; a whole pass, or just these:
-        <span class="mono">python refresh_opportunities.py --ids ${esc((d.rows || []).slice(0, 8).map(r => r.id).join(','))}${d.count > 8 ? ',…' : ''}</span>.
+        <span class="mono">python -m agents.refresh_opportunities --ids ${esc((d.rows || []).slice(0, 8).map(r => r.id).join(','))}${d.count > 8 ? ',…' : ''}</span>.
         Oldest first.</div></div>`;
     const rows = (d.rows || []).map(r => {
       const when = r.activation_refresh_queued_at
@@ -5550,7 +5549,7 @@ $('emailSweepRun').onclick = () => runEmailSweep(false);
 /* ===========================================================================
    Health tab — a read-only, one-shot snapshot from GET /api/agents/health.
    FREE: no model call, no writes. Rendered from db_health_check.collect_health(),
-   so it can never disagree with `python db_health_check.py`.
+   so it can never disagree with `python -m wingman.db_health_check`.
 =========================================================================== */
 // Map the backend's severity string to a pill class. 'alert' is the danger pill.
 const HEALTH_PILL = { alert: 'danger', warn: 'warn', ok: 'ok' };

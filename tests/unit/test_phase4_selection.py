@@ -1,6 +1,6 @@
 """Phase-4 FREE selection cores: dead-link refind targeting and coverage-gap angle proposals."""
-import refind_dead_links as rf
-import propose_angles as pa
+from agents import refind_dead_links as rf
+from agents import propose_angles as pa
 
 
 # ---- refind selection -----------------------------------------------------------------

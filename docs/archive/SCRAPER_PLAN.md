@@ -64,7 +64,7 @@ is far too large for three samples to establish it.** Do not treat the format as
 Ruled out: **it is not the thinking budget.** Probe v2 spent 162 thinking tokens and did not
 search; v3 spent 107 and did.
 
-`gemini_common.py`'s "THIRD finding" docstring — that no reliable way exists to force
+`wingman/gemini_common.py`'s "THIRD finding" docstring — that no reliable way exists to force
 search — **is correct and should stand.**
 
 Consequences of a silent seed:
@@ -243,8 +243,8 @@ The fallback goes away. Invalid type -> flag 9, never a guess.
 
 | file | change |
 |---|---|
-| `scrape_opportunities.py` | `NATIONAL_SEEDS`/`SEATTLE_SEEDS` tuples -> strings; `build_row()` drops `seed_category`; lines 234, 250, 308, 349, 351, 396 |
-| `seeds_common.py` | `SEED_SELECT`, fallback dict shape, docstring |
+| `agents/scrape_opportunities.py` | `NATIONAL_SEEDS`/`SEATTLE_SEEDS` tuples -> strings; `build_row()` drops `seed_category`; lines 234, 250, 308, 349, 351, 396 |
+| `wingman/seeds_common.py` | `SEED_SELECT`, fallback dict shape, docstring |
 | `server.py` | `SEED_FIELDS` (:4683), `SEED_SELECT` (:4684), `create_seed()` validation (:4744) |
 | `admin_console.html` | remove category picker, pill column (:2778), payload (:2815), dropdown label (:2938) |
 | `../../scripts/one-off/migrate_seeds_to_supabase.py` | one-off, already run — update for consistency |
@@ -299,6 +299,6 @@ Steps 1-3 are buildable and verifiable without spending anything.
 
 - **Feeding the catalog into the prompt** to cut the ~40% duplicate rate — parked; needs its
   own paid A/B.
-- **Auto-rejecting anything on name similarity or shared domain** — `url_dedupe.py`'s
+- **Auto-rejecting anything on name similarity or shared domain** — `wingman/url_dedupe.py`'s
   measurements forbid it.
 - **Backfilling the 110 untriaged 08-20 rows** — left alone by decision.

@@ -10,22 +10,24 @@ import sys
 
 import pytest
 
-# Five unit tests import a script by bare name (`import matching_eval`) that no
-# longer lives at the repo root -- the 2026-09-04 tidy-up moved the leaf scripts
-# nothing imports into eval/ and scripts/. pytest puts the ROOT on sys.path (the
-# tests/ tree is a package, so it walks up to the first directory without an
-# __init__.py), which is what makes `import gemini_common` work; these
-# directories are not packages and are not on that path, so they are added here.
-# The scripts themselves carry their own ROOT shim for when they are RUN; this
-# is the mirror of it for when they are IMPORTED.
+# Auth token tests need a stable secret; set it before app.auth.tokens reads it.
+os.environ.setdefault("JWT_SECRET", "test-secret-do-not-use-in-prod-0123456789")
+
+# `from wingman import ...` and `from agents import ...` resolve without help: pytest puts
+# the repo ROOT on sys.path (the tests/ tree is a package, so it walks up to the first
+# directory without an __init__.py), and both are real packages under it.
+#
+# eval/ and scripts/ are NOT packages -- they hold standalone scripts, run as
+# `python eval/matching_eval.py`. Five unit tests import those modules by bare name, so
+# their directories go on the path explicitly. Do not 'simplify' these away by assuming
+# the package move covered them; it did not, and the failure is a collection error in
+# test_matching_eval / test_dedupe_eval / test_grade_scraper_batch /
+# test_backfill_match_vectors / test_backfill_attribution.
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for _sub in ("eval", "scripts/one-off", "scripts/dev", "scripts/backfill"):
     _p = os.path.join(_ROOT, _sub)
     if _p not in sys.path:
         sys.path.insert(0, _p)
-
-# Auth token tests need a stable secret; set it before app.auth.tokens reads it.
-os.environ.setdefault("JWT_SECRET", "test-secret-do-not-use-in-prod-0123456789")
 
 
 @pytest.fixture(autouse=True)

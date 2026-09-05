@@ -1,4 +1,4 @@
-"""Unit tests for url_validate.py — grounding resolution + liveness checks. FREE/HTTP only.
+"""Unit tests for wingman/url_validate.py — grounding resolution + liveness checks. FREE/HTTP only.
 
 Network is mocked at the urlopen seam. Nothing here touches a real socket.
 """
@@ -8,7 +8,7 @@ import urllib.error
 
 import pytest
 
-import url_validate as uv
+from wingman import url_validate as uv
 
 
 # ------------------------------------------------------------------- _is_dns_failure

@@ -10,8 +10,8 @@ import random
 import re
 import time
 
-import url_dedupe
-from claude_common import call_claude
+from wingman import url_dedupe
+from wingman.claude_common import call_claude
 from app.config import (
     SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY, CLAUDE_MODEL,
 )

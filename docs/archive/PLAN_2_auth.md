@@ -74,7 +74,7 @@ to also hang token verification, since every money-spending route already calls 
 `/api/subscription/validate-promo` return the same JSON shapes; the no-cache headers are
 present; source/secrets are deny-listed (`/server.py`, `/.env`, `/app/config.py` → 404); with
 ops off `/admin` + `/api/agents/*` + `/api/seeds` → 404, with ops on they → 200; and
-`check_links.py --preview` still runs (both directly and launched via the console).
+`agents/check_links.py --preview` still runs (both directly and launched via the console).
 
 ---
 

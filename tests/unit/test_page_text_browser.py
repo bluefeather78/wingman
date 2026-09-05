@@ -7,7 +7,7 @@ these need a real browser — the two halves (_fetch_urllib, _fetch_with_browser
 """
 import pytest
 
-import page_text as pt
+from wingman import page_text as pt
 
 
 @pytest.fixture
@@ -105,7 +105,7 @@ def test_refresh_default_fetch_enables_the_browser(monkeypatch):
     """refresh_opportunities is the one caller that opts in. If a refactor drops
     allow_browser=True the ~22% of bot-walled/SPA rows silently go back to being skipped,
     so pin it here."""
-    import refresh_opportunities as ro
+    from agents import refresh_opportunities as ro
     seen = {}
     monkeypatch.setattr(ro.page_text, "fetch_page_text",
                         lambda url, allow_browser=False: seen.update(url=url, allow_browser=allow_browser) or (None, "http-403"))

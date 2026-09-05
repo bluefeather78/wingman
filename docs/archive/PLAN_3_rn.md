@@ -356,7 +356,7 @@ misclassified).
 
 **Backend fix found by the parity run (commit 2a0bbf3):** the on-demand deadline endpoint's
 502 was the Phase-1 extraction selecting/patching a nonexistent `last_checked_at` column
-(the real column is `dates_last_checked_at` — check_deadlines.py and script.js both use it).
+(the real column is `dates_last_checked_at` — agents/check_deadlines.py and script.js both use it).
 Fixed in `app/services/deadlines.py` + `app/routes/opportunities.py`; verified 200.
 
 **Round 2 (same day, commit 150d11d)** — moved from screenshot eyeballing to a Playwright

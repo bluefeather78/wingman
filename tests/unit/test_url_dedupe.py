@@ -1,4 +1,4 @@
-"""Unit tests for url_dedupe.py — URL/name matching for user-submitted opportunities.
+"""Unit tests for wingman/url_dedupe.py — URL/name matching for user-submitted opportunities.
 
 All pure functions, no network. Behaviour is pinned against the real source; where the
 source does something surprising it is called out in a comment rather than "fixed" in the
@@ -6,7 +6,7 @@ assertion.
 """
 import pytest
 
-import url_dedupe as ud
+from wingman import url_dedupe as ud
 
 
 # --------------------------------------------------------------------------- split_url

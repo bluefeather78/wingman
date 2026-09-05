@@ -12,7 +12,7 @@ from app.core import (
 from app.deps import json_body, json_response, json_error
 from app.services.email import send_lifecycle_email_async
 from app.auth import get_current_user, get_optional_user, AuthedUser
-from subscription_common import (
+from wingman.subscription_common import (
     get_or_create_customer, create_checkout_session, cancel_subscription,
     validate_promo_code, promo_kind, extend_from, GRANTABLE_STATUSES,
 )

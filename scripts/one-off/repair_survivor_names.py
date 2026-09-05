@@ -25,9 +25,9 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
-import scrape_opportunities as so   # merge_row (best-copy-wins)
-import url_repair
-from supabase_common import load_dotenv, supabase_get, supabase_patch
+from agents import scrape_opportunities as so
+from wingman import url_repair
+from wingman.supabase_common import load_dotenv, supabase_get, supabase_patch
 
 # Anchored at the REPO ROOT, not at this file's directory: the 2026-09-04 tidy-up
 # moved this script down a level and `dirname(__file__)` no longer means the root.

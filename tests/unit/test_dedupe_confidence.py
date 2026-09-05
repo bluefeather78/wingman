@@ -1,5 +1,5 @@
 """Dedupe confidence: identity-token + hard-field discriminators, proofs, tier combiner. Pure."""
-import dedupe_confidence as dc
+from wingman import dedupe_confidence as dc
 
 
 # ---------- identity tokens ----------

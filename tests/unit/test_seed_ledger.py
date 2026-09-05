@@ -2,7 +2,7 @@
 
 Pure module, no I/O, so everything here is hermetic by construction.
 """
-import seed_ledger
+from wingman import seed_ledger
 
 
 # ---- reason_code / _negative_code -----------------------------------------------------

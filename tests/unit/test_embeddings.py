@@ -2,7 +2,7 @@
 Gemini call is stubbed via embed_fn injection; the activation-gated recompute decision and
 the persist-shape logic are what's exercised. No network.
 """
-import gemini_common
+from wingman import gemini_common
 from app.services import embeddings as e
 from app.services.matching import match_vector_content_hash
 

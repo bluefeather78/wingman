@@ -4,7 +4,7 @@ import urllib.error
 
 import pytest
 
-import aggregators_common as ag
+from wingman import aggregators_common as ag
 from app.services import action_items
 
 

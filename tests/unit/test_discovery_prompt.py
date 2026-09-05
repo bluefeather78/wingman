@@ -8,7 +8,7 @@
 If DISCOVERY_SYSTEM ever leaked into the resolvers, they would be told "never search by name"
 — the opposite of their job — so this routing is worth pinning.
 """
-import scrape_opportunities as so
+from agents import scrape_opportunities as so
 
 
 def _capture(monkeypatch):

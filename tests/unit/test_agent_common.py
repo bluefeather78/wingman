@@ -1,10 +1,10 @@
-"""Unit tests for agent_common.py — clean_email, snapshot_stamp (explicit `when`),
+"""Unit tests for wingman/agent_common.py — clean_email, snapshot_stamp (explicit `when`),
 and emit_preview's PREVIEW_JSON contract. Pure; no network, no wall-clock reliance.
 """
 import datetime
 import json
 
-import agent_common as ac
+from wingman import agent_common as ac
 
 
 # --------------------------------------------------------------------------- clean_email

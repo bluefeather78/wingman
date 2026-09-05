@@ -1,5 +1,5 @@
 """triage_queue: the pure bucketing + rejection-plan logic. Hermetic (no network)."""
-import triage_queue as tq
+from agents import triage_queue as tq
 
 
 def _row(rid, flag):

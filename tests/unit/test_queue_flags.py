@@ -1,7 +1,7 @@
 """queue_flags: the pure bridge that turns a discovery-gate verdict into a row edit the review
 console renders. Hermetic -- no network, no Supabase."""
-import classify_page
-import queue_flags as qf
+from wingman import classify_page
+from wingman import queue_flags as qf
 
 
 # --- upsert_flag: replace-or-append, never stack ------------------------------------------

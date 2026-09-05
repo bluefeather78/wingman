@@ -10,7 +10,7 @@ import time
 import urllib.parse
 import urllib.request
 
-import mailing_list_common
+from wingman import mailing_list_common
 from app.config import *  # noqa: F401,F403
 from app.core import (
     _supabase_request, _supabase_request_strict, _is_missing_column_error, get_user,
@@ -23,7 +23,7 @@ from app.core import (
 #
 # Two halves, deliberately far apart in trust:
 #
-#   DISCOVERY (find_mailing_lists.py) writes a RECIPE per opportunity into
+#   DISCOVERY (agents/find_mailing_lists.py) writes a RECIPE per opportunity into
 #   opportunity_signups, always at status 'pending_review'. It cannot verify its own work.
 #
 #   EXECUTION (here) replays a recipe for one real user, and refuses to touch anything a

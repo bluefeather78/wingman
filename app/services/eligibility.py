@@ -26,7 +26,7 @@ from __future__ import annotations
 # spaces folded, whitespace collapsed, casefolded) so a quote and a field are always compared
 # in the same alphabet. Not fuzzy matching — those characters carry no information. page_text
 # is the repo-root, stdlib-only module app/ already depends on elsewhere.
-from page_text import normalize_for_match
+from wingman.page_text import normalize_for_match
 
 # The candidate fields an exclusion quote may be verified against. `eligibility` is the
 # obvious home, but a restriction is sometimes stated only in `summary` ("designed

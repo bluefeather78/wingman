@@ -2,7 +2,7 @@
 
 The incremental-selection logic moved to dedupe_embed_store (hash-gated, DB-backed) — see
 test_dedupe_embed_store.py. build_catalog_embeddings now only keeps the representation alias."""
-import build_catalog_embeddings as bce
+from agents import build_catalog_embeddings as bce
 
 
 def _row(rid, name="A Program", summary="does things"):

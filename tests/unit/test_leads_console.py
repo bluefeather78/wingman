@@ -20,8 +20,15 @@ class _Leads:
 
 
 def _install(monkeypatch, rows):
+    """ops.core does `from wingman import discovered_leads` inside the function, so BOTH the
+    sys.modules entry and the attribute on the package have to be replaced: `from X import Y`
+    resolves Y off the already-imported package object first and only falls back to
+    sys.modules. Patching one of the two leaves the real module in play."""
     import sys
-    monkeypatch.setitem(sys.modules, "discovered_leads", _Leads(rows))
+    import wingman
+    fake = _Leads(rows)
+    monkeypatch.setitem(sys.modules, "wingman.discovered_leads", fake)
+    monkeypatch.setattr(wingman, "discovered_leads", fake, raising=False)
 
 
 def test_counts_split_the_queue_the_way_the_operator_asks_about_it(monkeypatch):

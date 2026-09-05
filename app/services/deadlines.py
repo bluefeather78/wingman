@@ -14,7 +14,7 @@ from app.services.ai import mock_deadline_iso
 
 DEADLINE_STALE_DAYS = 7
 # NOTE the column is dates_last_checked_at, NOT last_checked_at (that name only ever
-# existed in check_deadlines.py's DDL comment). Selecting the wrong name made PostgREST
+# existed in agents/check_deadlines.py's DDL comment). Selecting the wrong name made PostgREST
 # 400 the whole select, so every on-demand deadline check 502'd (found 2026-08-23).
 DEADLINE_FIELDS = "id,name,org,url,summary,status,important_dates,was_estimated,important_date_note,dates_last_checked_at"
 

@@ -3,7 +3,7 @@
 opportunities row that's missing it.
 
 Why this exists: `subject_tags` was only ever populated for opportunity-finder seed rows
-and freshly-scraped candidates (see migrate_to_supabase.py / scrape_opportunities.py) — the
+and freshly-scraped candidates (see migrate_to_supabase.py / agents/scrape_opportunities.py) — the
 original 1141 wingman-seed rows never got it, leaving ~86% of the live catalog without it
 as of 2026-08-20. script.js's preFilter() is being switched from the older single-value
 `subject` field to `subject_tags` for its relevance-boost matching, so this script closes
@@ -36,8 +36,8 @@ import os
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
-from gemini_common import call_gemini, extract_json, estimate_cost
-from supabase_common import load_dotenv, supabase_get, supabase_patch, supabase_insert_one
+from wingman.gemini_common import call_gemini, extract_json, estimate_cost
+from wingman.supabase_common import load_dotenv, supabase_get, supabase_patch, supabase_insert_one
 import os
 
 MODEL = "gemini-3.5-flash-lite"

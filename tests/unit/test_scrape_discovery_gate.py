@@ -1,7 +1,7 @@
 """Discovery-gate glue in scrape_opportunities: the pure helpers that shape a combined_reader
 ReadResult into the row / dup_candidates the snapshot stores. Hermetic (no network, no model)."""
-import scrape_opportunities as s
-import queue_flags
+from agents import scrape_opportunities as s
+from wingman import queue_flags
 
 
 # --- gate_metadata_overlay ----------------------------------------------------------------

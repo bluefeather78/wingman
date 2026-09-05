@@ -25,7 +25,7 @@ from app.deps import (json_response, json_error, subscription_block_reason, clie
                       raw_body as raw_body_dep)
 from app.auth import get_optional_user, AuthedUser
 from app.services.ai import generate_mock_text
-from gemini_common import call_gemini
+from wingman.gemini_common import call_gemini
 
 router = APIRouter()
 

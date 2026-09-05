@@ -129,7 +129,7 @@ Content-Type: application/json
 - **FREEMONTH** - Gives 1 free month (extends trial by 30 days)
 - **WELCOME10** - 10% off first month
 
-Add more in `subscription_common.py`:
+Add more in `wingman/subscription_common.py`:
 ```python
 PROMO_CODES = {
     "SUMMER50": {"discount_percent": 50, "description": "50% off summer"},
@@ -154,7 +154,7 @@ PROMO_CODES = {
 
 | File | Purpose |
 |------|---------|
-| `subscription_common.py` | Core subscription logic and Stripe API |
+| `wingman/subscription_common.py` | Core subscription logic and Stripe API |
 | `server.py` | Backend endpoints for subscription |
 | `index.html` | UI for subscription management |
 | `script.js` | Frontend logic and page rendering |
@@ -204,7 +204,7 @@ Try logging out and logging back in. Subscription status is fetched on login.
 
 ### Promo code not working
 - Check spelling (case-insensitive)
-- Verify it exists in `PROMO_CODES` dict in `subscription_common.py`
+- Verify it exists in `PROMO_CODES` dict in `wingman/subscription_common.py`
 - User can only use each code once
 
 ## Feature Limitations

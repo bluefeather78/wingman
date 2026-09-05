@@ -1,12 +1,12 @@
-"""Unit tests for check_deadlines.py pure helpers — extract_source_urls, base_domain,
+"""Unit tests for agents/check_deadlines.py pure helpers — extract_source_urls, base_domain,
 today_label. Nothing here calls Claude; only fixture dicts and static parsing.
 
 The escalation-loop tests at the bottom monkeypatch call_claude so no network/cost is
 incurred — they exercise research_deadlines' round sequencing, early-exit and site_reached
 aggregation, which is otherwise only-live logic.
 """
-import check_deadlines as cd
-import source_capture
+from agents import check_deadlines as cd
+from wingman import source_capture
 
 
 def _cap(urls, text=""):
@@ -517,8 +517,8 @@ def test_ladder_without_discover_is_unchanged(monkeypatch):
 
 # --------------------------------------------------------------- date-on-page (P6c / T7)
 
-import page_text as _pt
-import source_capture as _sc
+from wingman import page_text as _pt
+from wingman import source_capture as _sc
 
 
 def _src(url, text, tier=None):

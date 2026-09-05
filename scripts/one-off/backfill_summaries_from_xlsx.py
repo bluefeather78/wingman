@@ -34,7 +34,7 @@ import pandas as pd
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
-from supabase_common import load_dotenv, supabase_get, supabase_patch
+from wingman.supabase_common import load_dotenv, supabase_get, supabase_patch
 
 # Anchored at the REPO ROOT, not at this file's directory: the 2026-09-04 tidy-up
 # moved this script down a level and `dirname(__file__)` no longer means the root.
@@ -112,7 +112,7 @@ def main():
 
     print(f"\n[DONE] Updated {updated} row(s), {errors} error(s).")
     if updated:
-        print("[NOTE] Run `python export_json.py` to refresh the git-tracked opportunities.json snapshot.")
+        print("[NOTE] Run `python -m agents.export_json` to refresh the git-tracked opportunities.json snapshot.")
 
 
 if __name__ == "__main__":

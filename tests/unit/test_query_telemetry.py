@@ -3,7 +3,7 @@
 Every case here is a real query string from `agent_logs/scraper_20260823-*_seed*.json`, because
 the only thing this heuristic has to be right about is the traffic it actually sees.
 """
-import query_telemetry as qt
+from wingman import query_telemetry as qt
 
 
 def shape(q):

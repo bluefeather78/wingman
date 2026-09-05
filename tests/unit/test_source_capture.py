@@ -3,8 +3,8 @@ tier-tagged sources. Structure + graceful degradation are unit-tested here; real
 extraction was proven live in the P6a probe (THINK's guidelines PDF -> 32k chars)."""
 import base64
 
-import aggregators_common as ag
-import source_capture as sc
+from wingman import aggregators_common as ag
+from wingman import source_capture as sc
 
 
 def _html_block(url, text):

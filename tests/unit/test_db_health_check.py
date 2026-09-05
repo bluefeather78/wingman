@@ -4,7 +4,7 @@ here — only the pure functions that turn raw rows into the report's verdicts.
 """
 import datetime
 
-import db_health_check as d
+from wingman import db_health_check as d
 
 
 def _iso(**delta):

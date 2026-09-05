@@ -6,7 +6,7 @@ MARQUEE M9: this makes paid Gemini embedding calls. Approved for the matching pi
 It is idempotent and cheap to re-run: a row is embedded only when its match_vector_hash
 (the hash of name+org+summary+subject_tags+type) differs from the current field values, so
 a second run right after a first does nothing. That is also how it self-heals after
-refresh_opportunities.py edits a row's text — the next backfill re-embeds exactly those rows.
+agents/refresh_opportunities.py edits a row's text — the next backfill re-embeds exactly those rows.
 
 Reuses app.services.matching.embed_text / match_vector_content_hash so the backfill and the
 runtime activation hook compute the SAME text and the SAME hash — if they diverged, every row
@@ -32,10 +32,10 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
-from supabase_common import load_dotenv, supabase_get, supabase_patch
+from wingman.supabase_common import load_dotenv, supabase_get, supabase_patch
 from app.services.matching import embed_text, match_vector_content_hash
 from app.services.embeddings import should_recompute_embedding
-from gemini_common import call_gemini_embed, estimate_embed_cost, EMBED_MODEL
+from wingman.gemini_common import call_gemini_embed, estimate_embed_cost, EMBED_MODEL
 
 # Only the fields embed_text/hash read, plus the stored hash — deliberately NOT match_vector
 # itself (that would pull ~9MB of float text for nothing; the hash tells us what we need).

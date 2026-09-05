@@ -14,7 +14,7 @@ avoiding siblings**; duplicates are expected to grow faster than siblings.
 
 ## 1. The problem is surfacing, not detection
 
-The detection is good. `dedupe_confidence.py` already fuses every signal — URL proof, name
+The detection is good. `wingman/dedupe_confidence.py` already fuses every signal — URL proof, name
 relation, hard-field conflict, shared acronym, same-institution guard, embedding cosine — into
 **one tier per pair** (`proof / confident / adjudicate / sibling / hint / none`). The single
 label the operator is asking for is *already computed*.
@@ -26,8 +26,8 @@ shows the pile instead of the fused verdict:
 |---|---|---|---|
 | 1 | `url_dedupe.find_duplicates` (Track A) | insert | `dup_candidates` entries (rungs 1–5) |
 | 2 | `combined_reader.dedup_hint` (Track B) | insert (page fetched) | `dup_candidates` entries `via: content-embedding` |
-| 3 | `dedupe_queue.py --write` | offline rescan of **pending+flagged** | more `dup_candidates` back-links |
-| 4 | `find_catalog_dups.py` → console "Scan" | catalog-wide | `moderation_status = suspected_duplicate` |
+| 3 | `agents/dedupe_queue.py --write` | offline rescan of **pending+flagged** | more `dup_candidates` back-links |
+| 4 | `wingman/find_catalog_dups.py` → console "Scan" | catalog-wide | `moderation_status = suspected_duplicate` |
 
 Three storage fields carry dedupe state (`dup_candidates` list, `quality_flags`,
 `moderation_status`), two offline agents overlap, and the console renders **both** a
@@ -35,8 +35,8 @@ per-candidate back-link list (`dupeBackLinks()`) **and** a separate `suspected_d
 slice. A reviewer opens one row and reads N hints from up to 4 engines. That is the mess.
 
 There is also a real coverage hole the mess hides: **no offline pass runs embedding
-candidate-generation over the whole ACTIVE catalog.** `dedupe_queue.py` only re-embeds
-*pending/flagged* rows; `find_catalog_dups.py` scans all rows but with *heuristic* candidate
+candidate-generation over the whole ACTIVE catalog.** `agents/dedupe_queue.py` only re-embeds
+*pending/flagged* rows; `wingman/find_catalog_dups.py` scans all rows but with *heuristic* candidate
 generation only (exact-URL, same-domain name ratio, ≥2 shared tokens). A same-program pair
 whose names barely overlap — e.g. `SYCCL (Stony Brook)` vs `Summer Youth Camp for
 Computational Linguistics (SYCCL)`, name-similarity **0.143**, one shared token, Jaccard
@@ -104,13 +104,13 @@ different triggers over different populations. They must not cross.**
 | **Review queue** | pending, `is_active=false` | **insert-time**, per new row (Phase 4) | the new row is embedded **live** (paid) — it has no stored vector yet |
 | **Duplicate queue** | active, `is_active=true` | the **offline/ad-hoc** agent (batch) | **lookup** of stored `dedupe_vector`s — free |
 
-The offline agent (this section) merges `dedupe_queue.py` + `find_catalog_dups.py`, reads
+The offline agent (this section) merges `agents/dedupe_queue.py` + `wingman/find_catalog_dups.py`, reads
 **ACTIVE rows only**, resolves each against the active catalog, and publishes to the **Duplicate
 queue**. It must **never** write a verdict onto a pending review-queue row — that is deduped at
 insert (Phase 4), and an offline scanner reaching into the review queue is the cross-queue
 contamination this revamp removes. Read-only without `--write`. Free — string logic + one **bulk
 matmul** over stored vectors (measured 2026-09-02: 1,690 active rows in **33 s**, ~31 s of it the
-read). `--preview` prints the tier histogram and would-be writes. `dedupe_resolve.py` is the
+read). `--preview` prints the tier histogram and would-be writes. `wingman/dedupe_resolve.py` is the
 Phase-1 seed of this agent.
 
 ### 3.4 The one console surface
@@ -141,12 +141,12 @@ Per queue row, exactly one line:
 
 ## 4. What each current piece becomes
 
-- `dedupe_confidence.py` — **kept as-is.** It is the fused engine; the whole plan leans on it.
-- `url_dedupe.py` — **kept**, still the exact-URL hard-reject at insert and a Track-A candidate
+- `wingman/dedupe_confidence.py` — **kept as-is.** It is the fused engine; the whole plan leans on it.
+- `wingman/url_dedupe.py` — **kept**, still the exact-URL hard-reject at insert and a Track-A candidate
   source. Stops being a *queue writer*; its hints feed the resolver instead of `dup_candidates`.
 - `combined_reader.dedup_hint` — **kept** as a Track-B candidate source; stops writing
   `dup_candidates` directly.
-- `dedupe_queue.py`, `find_catalog_dups.py` — **merged into `dedupe.py`**, then deleted.
+- `agents/dedupe_queue.py`, `wingman/find_catalog_dups.py` — **merged into `dedupe.py`**, then deleted.
 - `queue_flags.dedupe_candidate` / `merge_candidates` — **retired** (no more multi-entry list).
 - `dup_candidates` field, `suspected_duplicate` status — **migrated out** (§5 phase 5).
 - The paid LLM adjudicator — **out of scope**, unchanged. `adjudicate` maps to "Possible" and
@@ -194,8 +194,8 @@ Roll back at any phase by re-showing the old surface — the old fields are unto
 
 ### Phase 1 — DONE (2026-09-02)
 
-Built: `dup_verdict.py` (pure resolver, 8 tests green), `../../db/dup_verdict_schema.sql` (run),
-`dedupe_resolve.py` (shadow runner, free, ~33s). Shadow result over 1,690 active rows: **58
+Built: `wingman/dup_verdict.py` (pure resolver, 8 tests green), `../../db/dup_verdict_schema.sql` (run),
+`wingman/dedupe_resolve.py` (shadow runner, free, ~33s). Shadow result over 1,690 active rows: **58
 rows carry one verdict** (0 certain / 2 likely / 56 possible, 30 sibling-surfaced); **SYCCL is
 now caught** (`ec17185 ↔ ec18702`), the pair `find_catalog_dups` was structurally blind to.
 Nothing wired to the app/console and no other column touched — verdicts written to `dup_verdict`
@@ -217,8 +217,8 @@ The **one agent**. `dedupe_resolve.run()` is the unified ad-hoc detector (active
 Duplicate queue), with **change-only writes** (a re-scan PATCHes only the rows whose verdict
 differs — 9, not 1,686). The console **"Scan for duplicates"** button now runs it in one step
 (`POST /api/agents/duplicate-scan` → `ops.core.scan_catalog_duplicates`, offloaded to a
-threadpool), replacing the old two-step report+flag modal. `find_catalog_dups.py` and
-`dedupe_queue.py` are marked **deprecated** (kept on disk for the Phase-5 cleanup; the SYCCL blind
+threadpool), replacing the old two-step report+flag modal. `wingman/find_catalog_dups.py` and
+`agents/dedupe_queue.py` are marked **deprecated** (kept on disk for the Phase-5 cleanup; the SYCCL blind
 spot they carried is closed by the resolver's embedding candidate-gen). Verified live: scan
 returns `scanned 1686 / with_verdict 50 / changed 9 / wrote 9`; flagged slice reconciled to 50,
 all verdict-backed; console functions load clean. Phases 4 (insert-time unification) and 5 (delete
@@ -239,7 +239,7 @@ submission/scrape.
 plan — feeders call `resolve_dup_verdict` at insert and stop writing `dup_candidates` — was NOT
 done, deliberately. It spans FOUR live, paid ingestion sites (scraper, hub miner, name harvest,
 user submission), and each loads candidate rows with a **slim `select: id,name,url`**
-(`scrape_opportunities.py:1096`) — no hard fields — so an insert-time verdict there would be
+(`agents/scrape_opportunities.py:1096`) — no hard fields — so an insert-time verdict there would be
 name+cosine only and **inconsistent** with the offline detector's full-field verdicts. Doing it
 right needs (a) widening each feeder's candidate load to the fields `field_relation` reads, and
 (b) a paid scrape/submission run to validate — editing four live paid paths blind is the over-reach
@@ -252,7 +252,7 @@ lands. Flagged for Shama.
 With the insert-time storage half deferred (above), most of Phase 5's deletions are **blocked**, and
 the earlier deprecation notes were premature — corrected 2026-09-02:
 
-- **Neither offline agent is deletable.** `dedupe_queue.py` is still the live "Dedupe the Review
+- **Neither offline agent is deletable.** `agents/dedupe_queue.py` is still the live "Dedupe the Review
   Queue" console tool (the review-queue/pending dedupe path that Phase 4 would have replaced), and
   `find_catalog_dups.find_duplicate_pairs` is still imported by it. Their docstrings now say
   "PARTLY SUPERSEDED" rather than deprecated.

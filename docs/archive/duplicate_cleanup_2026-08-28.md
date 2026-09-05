@@ -10,7 +10,7 @@
 > - **B** unchanged — genuine keep-all shared portals, nothing to do.
 
 
-Source: `find_catalog_dups.py` run (1871 rows, 1323 active). Resolve via the admin console's
+Source: `wingman/find_catalog_dups.py` run (1871 rows, 1323 active). Resolve via the admin console's
 **Duplicate** / **Reject** actions (never SQL DELETE — deletes need tombstones for
 `url_dedupe` to keep blocking re-submission). Rule used to pick the survivor: keep the
 incumbent **active, lower-id** row, EXCEPT where its name is a bare-institution junk name and

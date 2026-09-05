@@ -78,7 +78,7 @@ tests/
     test_estimate_agent_cost.py    # ops/core.estimate_agent_cost, _group_untracked_models
     test_user_costs_rollup.py      # ops/core.get_user_costs core aggregation (seams stubbed)
     # --- URL health ---
-    test_url_dedupe.py             # url_dedupe.py (find_duplicates + helpers)
+    test_url_dedupe.py             # wingman/url_dedupe.py (find_duplicates + helpers)
     test_url_validate.py           # url_validate: _is_dns_failure, domain_matches_org, is_bare_domain, support_urls_by_span
     test_url_repair.py             # url_repair: title_proves, keeps_identity, identity_words
     test_scraper_urls.py           # scrape_opportunities: reconcile_url, spans_for_name, build_row, next_id_generator
@@ -320,8 +320,8 @@ harness, assert the Python side of each and leave a comment pointing at the JS l
 4. `classify_feature` signatures (`app/core`) stay in sync with `generate_mock_text`'s dispatch
    order (`app/services/ai.py`) — a single test importing both and asserting the same system
    prompt routes to the matching feature/mock.
-5. `CLAUDE_MODEL` and its price constants agree across `app/config`, `check_deadlines.py`, and
-   `claude_common.py` (the documented Sonnet-drift-3×-overcharge bug).
+5. `CLAUDE_MODEL` and its price constants agree across `app/config`, `agents/check_deadlines.py`, and
+   `wingman/claude_common.py` (the documented Sonnet-drift-3×-overcharge bug).
 
 ## 5. A correctness bug the audit surfaced (fix alongside the tests)
 

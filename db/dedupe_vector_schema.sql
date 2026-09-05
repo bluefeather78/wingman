@@ -14,7 +14,7 @@
 -- was per-checkout local state: a fresh clone (or a removed worktree) had no index, so the
 -- scraper's dedupe HINT went dark and db_health_check read "0% covered" until someone re-ran the
 -- paid build. It now lives on the catalog row itself — computed once at ACTIVATION, backfillable
--- ad-hoc (build_catalog_embeddings.py), and read straight out of the catalog the scraper already
+-- ad-hoc (agents/build_catalog_embeddings.py), and read straight out of the catalog the scraper already
 -- loads. This is the exact move `match_vector` already made; see db/match_vector_schema.sql.
 --
 -- WHAT THE HASH IS FOR. `dedupe_vector` is computed from combined_reader.default_representation

@@ -4,8 +4,8 @@ Every fetch is injected, so nothing here touches the network or the catalog.
 """
 import pytest
 
-import discovered_leads as dl
-import walk_up_hubs as wu
+from wingman import discovered_leads as dl
+from wingman import walk_up_hubs as wu
 
 
 # ---------- where the parent is, and where there isn't one ----------
@@ -220,7 +220,8 @@ def test_walking_up_can_never_make_a_paid_call(monkeypatch):
     its import graph -- walk_up_hubs -> discovered_leads -> mine_hub_pages -> gemini_common, among
     others -- so "it does not import a model client" is not the claim and could not be. The claim
     is that no model function is ever CALLED, and this fails loudly if that stops being true."""
-    import gemini_common, claude_common
+    from wingman import gemini_common
+    from wingman import claude_common
 
     def boom(*a, **k):
         raise AssertionError("walk_up_hubs made a paid model call")

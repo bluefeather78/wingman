@@ -356,7 +356,7 @@ def test_welcome_preview_shows_the_real_trial_length():
     preview announced a "2-day trial" for a product whose trial is TRIAL_DAYS long. Not a
     template bug — every date here is computed — but indistinguishable from one, and read
     as one."""
-    from subscription_common import TRIAL_DAYS
+    from wingman.subscription_common import TRIAL_DAYS
     d = es.preview("welcome")
     assert f"{TRIAL_DAYS}-day trial started" in d["html"]
     assert f"next {TRIAL_DAYS} days" in d["html"]

@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 
 from app.config import *  # noqa: F401,F403 -- shared constants by bare name (as in the monolith)
-from subscription_common import (
+from wingman.subscription_common import (
     is_trial_expired, days_until_trial_end, trial_ends_at_iso,
 )
 
@@ -210,9 +210,9 @@ def record_interactive_cost(surface, usage, model=None, userid=None, system=None
         # have different per-token and per-search rates, so using one pricer for both
         # would quietly misreport half the interactive spend.
         if surface == "interactive_claude":
-            import claude_common as pricing
+            from wingman import claude_common as pricing
         else:
-            import gemini_common as pricing
+            from wingman import gemini_common as pricing
         searches = int((usage.get("server_tool_use") or {}).get("web_search_requests", 0) or 0)
         cost = (
             (usage.get("input_tokens") or 0) * pricing.INPUT_PRICE_PER_TOKEN

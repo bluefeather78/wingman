@@ -21,7 +21,7 @@ from app.services.opportunities import fetch_opportunities
 from app.services.embeddings import embed_student_themes
 from app.services.recall_query import recall_pool, attach_display, student_embed_texts
 from app.services.pool_eligibility import gate_pool_eligibility, ELIGIBILITY_ONLY_SYSTEM
-from gemini_common import call_gemini, extract_json
+from wingman.gemini_common import call_gemini, extract_json
 
 router = APIRouter()
 

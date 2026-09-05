@@ -23,8 +23,8 @@ from app.services import deadlines
 # Imported, never re-declared: user_costs.model must name the model that was actually
 # billed. The Sonnet/Haiku drift this repo already paid for came from exactly that — a pin
 # copied into a second file and left behind when the first one moved.
-from generate_action_items import MODEL as ACTION_ITEM_MODEL
-from check_deadlines import (
+from agents.generate_action_items import MODEL as ACTION_ITEM_MODEL
+from agents.check_deadlines import (
     check_one as check_deadline_one,
     deadline_write_decision,
     missing_opens_date,
@@ -212,7 +212,7 @@ def handle_tracker_sync(ids: str = "", user: AuthedUser = Depends(require_subscr
 def handle_action_items(opp_id: str, user: AuthedUser = Depends(require_subscription)):
     """The application checklist for one opportunity, shared by every student tracking it.
 
-    Almost always free: generate_action_items.py has already written a verified list onto
+    Almost always free: agents/generate_action_items.py has already written a verified list onto
     the row, and this just serves it. It generates only for a row the batch has not reached
     — a scrape from last night, a user submission resolved minutes ago, a page that was
     refusing our client when the agent last ran — and caches the result so the next student

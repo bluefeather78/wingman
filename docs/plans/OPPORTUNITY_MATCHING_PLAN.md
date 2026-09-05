@@ -135,7 +135,7 @@ grade mention. Sample values are clean:
 
 So the eligibility priority is **consumption, not collection**: 885 rows carry citizenship/
 geo/demographic/prereq prose the matcher never reads. The 376 rows (30%) with no eligibility
-text at all are a `refresh_opportunities.py` coverage job, runnable in parallel.
+text at all are a `agents/refresh_opportunities.py` coverage job, runnable in parallel.
 
 *(Note: the git-tracked `opportunities.json` is an Aug-20 snapshot that predates the
 `eligibility` column entirely — do not measure data state from it. Query the live table.)*
@@ -236,7 +236,7 @@ Represent student and opportunity as structured vectors. **Not** "replace the LL
 product" — a hybrid:
 - **Opportunity vectors** precomputed once per row by a background enrichment agent (LLM
   reads the row → structured axis scores → jsonb column, e.g. `match_vector`). Same shape as
-  `generate_action_items.py`: page/row in, JSON out.
+  `agents/generate_action_items.py`: page/row in, JSON out.
 - **Student vector** from the profile axes, later **weighted by revealed preference** from
   the event log (recent saves up, dismisses down).
 - **Three uses:** (1) sharper pre-filter via cosine similarity instead of substring keyword
@@ -561,7 +561,7 @@ gate sample for Phase 1's "zero open programs wrongly marked exclusive" acceptan
 Parse eligibility prose into structured gate flags on each row: `citizenship`,
 `demographic_hard` (with the exclusion-vs-encouragement MODALITY, not just the group),
 `prereq`, plus the existing `grade_min/max`, `state`, `location`(format). New enrichment
-agent (shape of `generate_action_items.py`: row in, JSON out) + schema columns with the
+agent (shape of `agents/generate_action_items.py`: row in, JSON out) + schema columns with the
 degrade-until-migrated + CREATE/ALTER convention.
 - **Depends on:** Phase 0 (schema).
 - **Delivers:** every row carries machine-readable feasibility flags.
@@ -626,7 +626,7 @@ comes later once data accrues. Independent of the spine; can begin before Phase 
 
 ### Parallel track P-B — Eligibility text backfill — in parallel with everything
 
-The ~30% of rows with no eligibility text: a `refresh_opportunities.py` coverage run (paid,
+The ~30% of rows with no eligibility text: a `agents/refresh_opportunities.py` coverage run (paid,
 gated). Improves Phase-1 coverage but does not block it.
 
 ### Deferred — Fit+Growth+Novelty weighting, revealed-preference model

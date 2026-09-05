@@ -1,7 +1,7 @@
 """Offline tests for sitemap_hub — the pure pipeline (enumerate+scope+containment) with an
 injected fetch and a fake classifier. No network, no API key. The paid Gemini classifier is
 NOT exercised here (it is injected in production); these pin the free brain around it."""
-import sitemap_hub as sh
+from wingman import sitemap_hub as sh
 
 
 HUB = "https://x.edu/programs/"

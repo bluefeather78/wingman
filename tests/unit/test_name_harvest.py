@@ -5,9 +5,9 @@ against a stubbed fetcher so the evidence bar is tested without the network.
 """
 import pytest
 
-import harvest_names as nh
-import url_repair
-import url_validate
+from agents import harvest_names as nh
+from wingman import url_repair
+from wingman import url_validate
 
 
 # ---------- parse_names: a malformed answer must SHRINK the work list, never invent in it ----
@@ -281,7 +281,7 @@ def test_is_editorial_url_false(url):
 
 def test_refind_still_sees_the_same_editorial_test():
     """The promotion must be behaviour-neutral for the caller it came from."""
-    import refind_dead_links
+    from agents import refind_dead_links
     assert refind_dead_links._is_editorial_url is url_validate.is_editorial_url
     assert refind_dead_links._EDITORIAL_SEGMENTS == url_validate.EDITORIAL_SEGMENTS
 
@@ -493,7 +493,7 @@ def test_select_names_reports_variants_separately_from_the_cap():
 def test_a_listicle_operator_can_never_become_a_program_url():
     """ec18783 stored a veritasai.com round-up as NYU Tandon's own page. best_resolved_url
     rejects mills, so adding the host is what prevents it."""
-    import url_validate as uv
+    from wingman import url_validate as uv
     assert uv.is_content_mill(
         "https://www.veritasai.com/veritasaiblog/nyu-tandons-machine-learning-summer-program")
     assert nh.best_resolved_url(

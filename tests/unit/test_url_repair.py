@@ -1,10 +1,10 @@
-"""Unit tests for url_repair.py — the three acceptance tests that keep a repair honest.
+"""Unit tests for wingman/url_repair.py — the three acceptance tests that keep a repair honest.
 
 All the functions under test are pure string/URL logic; nothing here fetches.
 """
 import pytest
 
-import url_repair as ur
+from wingman import url_repair as ur
 
 
 # ------------------------------------------------------------------- _words

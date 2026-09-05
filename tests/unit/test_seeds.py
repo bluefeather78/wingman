@@ -1,7 +1,7 @@
-"""Unit tests for seeds_common.py — select_seeds (pure) and the load_seeds fallback path
+"""Unit tests for wingman/seeds_common.py — select_seeds (pure) and the load_seeds fallback path
 reached by forcing supabase_get to return empty / raise.
 """
-import seeds_common as sc
+from wingman import seeds_common as sc
 
 
 def _seeds():

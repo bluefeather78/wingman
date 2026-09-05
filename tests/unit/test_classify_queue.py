@@ -1,7 +1,7 @@
 """Classifier queue dry-run: the pure hub-lead mapping (classify -> hub-mining lead). Hermetic."""
-import classify_page
-import discovered_leads as dl
-import classify_queue as cq
+from wingman import classify_page
+from wingman import discovered_leads as dl
+from agents import classify_queue as cq
 
 
 def test_first_party_hub_becomes_same_domain_lead():

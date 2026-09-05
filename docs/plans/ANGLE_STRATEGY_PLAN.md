@@ -31,9 +31,9 @@ addendum is appended to the research prompt and is the console's National/Seattl
 prompt (`RESEARCH_SYSTEM`) and once into the user turn. Nothing in this repo writes a search query
 for the scraper. See section 3.
 
-Loading, selection and crediting live in [seeds_common.py](../../seeds_common.py):
+Loading, selection and crediting live in [seeds_common.py](../../wingman/seeds_common.py):
 `load_seeds()` (Supabase, falling back loudly to the `NATIONAL_SEEDS` / `SEATTLE_SEEDS` literals in
-[scrape_opportunities.py](../../scrape_opportunities.py)), `select_seeds()` (`--seed-ids` stable,
+[scrape_opportunities.py](../../agents/scrape_opportunities.py)), `select_seeds()` (`--seed-ids` stable,
 `--seed-indices` deprecated), `record_seed_result()` (read-modify-write of the lifetime counters,
 re-read immediately before crediting so a mid-run console edit is not clobbered).
 
@@ -43,14 +43,14 @@ re-read immediately before crediting so a mid-run console edit is not clobbered)
 
 | Prompt | File | Tools | What the angle does to it |
 |---|---|---|---|
-| `RESEARCH_SYSTEM` (phase 1) | `scrape_opportunities.py` | googleSearch ON | `Search thoroughly with web_search for: {angle}` — the whole steering mechanism |
-| user turn, phase 1 | `scrape_opportunities.py:research_seed` | — | `Search now and write up what you find for: {angle}` |
-| `SEATTLE_ADDENDUM` | `scrape_opportunities.py` | — | appended for `mode=seattle`; reframes the task as creative reasoning about non-obvious local orgs |
-| forced-search nudge | `gemini_common.py:call_gemini` | — | appended to EVERY search-enabled system prompt: "You MUST call the googleSearch tool at least once..." |
-| soft search budget | `gemini_common.py:call_gemini` | — | appended when `max_searches` is set: "use at most {n} web searches total" |
-| `EXTRACT_SYSTEM` (phase 2) | `scrape_opportunities.py` | none | the angle is NOT present — extraction never sees what was being looked for |
-| `_NAME_SYSTEM` | `harvest_names.py` | none | reads program NAMES off a fetched page; no angle involved |
-| refind query | `refind_dead_links.py` | search | `current official page for <name> by <org>` — the one place this repo composes a query string itself |
+| `RESEARCH_SYSTEM` (phase 1) | `agents/scrape_opportunities.py` | googleSearch ON | `Search thoroughly with web_search for: {angle}` — the whole steering mechanism |
+| user turn, phase 1 | `agents/scrape_opportunities.py:research_seed` | — | `Search now and write up what you find for: {angle}` |
+| `SEATTLE_ADDENDUM` | `agents/scrape_opportunities.py` | — | appended for `mode=seattle`; reframes the task as creative reasoning about non-obvious local orgs |
+| forced-search nudge | `wingman/gemini_common.py:call_gemini` | — | appended to EVERY search-enabled system prompt: "You MUST call the googleSearch tool at least once..." |
+| soft search budget | `wingman/gemini_common.py:call_gemini` | — | appended when `max_searches` is set: "use at most {n} web searches total" |
+| `EXTRACT_SYSTEM` (phase 2) | `agents/scrape_opportunities.py` | none | the angle is NOT present — extraction never sees what was being looked for |
+| `_NAME_SYSTEM` | `agents/harvest_names.py` | none | reads program NAMES off a fetched page; no angle involved |
+| refind query | `agents/refind_dead_links.py` | search | `current official page for <name> by <org>` — the one place this repo composes a query string itself |
 
 Three properties of the phase-1 prompt worth stating plainly, because they constrain any redesign:
 
@@ -73,7 +73,7 @@ Three properties of the phase-1 prompt worth stating plainly, because they const
 
 Consequences already established elsewhere and load-bearing here:
 
-- **The search decision cannot be forced.** `gemini_common.py`'s THIRD finding, still standing:
+- **The search decision cannot be forced.** `wingman/gemini_common.py`'s THIRD finding, still standing:
   there is no `toolConfig` equivalent of Anthropic's forced tool choice for `googleSearch`. The only
   mitigation is detect-and-re-roll (`research_seed` retries once on a zero-search response, which is
   cheap because a silent call pays no per-search fee).
@@ -113,7 +113,7 @@ email — because `RESEARCH_SYSTEM` asks it to cover all of those per opportunit
 (seed 27, psychology/neuroscience, 7 searches): 2 broad discovery queries, 5 named-entity
 confirmations of programs already found.
 
-That enrichment is exactly the primitive `harvest_names.py` (4N) and `refind_dead_links.py`
+That enrichment is exactly the primitive `agents/harvest_names.py` (4N) and `agents/refind_dead_links.py`
 formalise — one narrow search per name, grounding-resolved, **title-proven** — except here it
 happens inside the broad call, at the same per-search fee, with no title proof and no record of
 which query produced which row.
@@ -135,7 +135,7 @@ run twice.
 40 `NATIONAL_SEEDS` + 8 `SEATTLE_SEEDS` literals, migrated into the table
 (`../../scripts/one-off/migrate_seeds_to_supabase.py`). Every angle currently enabled traces to a person typing it.
 
-### 4b. `propose_angles.py` — coverage-gap analysis (FREE)
+### 4b. `agents/propose_angles.py` — coverage-gap analysis (FREE)
 
 Reads active catalog rows and proposes an angle string for every **thin cell**:
 
@@ -160,7 +160,7 @@ Templates are fixed strings:
 "one cheap siblings-of-winners model call"; it was never built. So today, **new angles are generated
 by templates over catalog gaps, and by nothing else.**
 
-### 4c. `seed_ledger.py` — retirement, the other half of the loop
+### 4c. `wingman/seed_ledger.py` — retirement, the other half of the loop
 
 The catalog IS the ledger: every scraped row carries `seed_id`, and the reviewer's verdict
 (`moderation_status` + `moderation_reason`) lands on that same row, so an angle's funnel is a live
@@ -175,8 +175,8 @@ Sample guard: `MIN_FOUND = 10`, `MIN_RUNS = 2`, `MIN_ADJUDICATED = 5`.
 
 ### 4d. What the other discovery channels do and do NOT feed
 
-`mine_hub_pages.py` (hub links), `harvest_names.py` (4N, names on a page), `discovered_leads.py`
-(4F, capture the pages a search already paid to consult), `refind_dead_links.py` (resurrect moved
+`agents/mine_hub_pages.py` (hub links), `agents/harvest_names.py` (4N, names on a page), `wingman/discovered_leads.py`
+(4F, capture the pages a search already paid to consult), `agents/refind_dead_links.py` (resurrect moved
 programs). **All four produce catalog rows or page leads. None of them proposes an angle.** The
 compounding loop closes through *rows*, never through *intent*.
 
@@ -251,7 +251,7 @@ rows, whether two angles collapsed to the same three searches.
 
 ### 5.7 New-angle generation is template-only
 
-`propose_angles.py` can only propose what its three format strings can say, over a fixed
+`agents/propose_angles.py` can only propose what its three format strings can say, over a fixed
 `CORE_SUBJECTS` list. It cannot propose an angle for a *shape* of opportunity nobody has named (the
 "structured skilled volunteering, not one-off volunteering" distinction, or the "international
 residential 10-21 day" angle) — every one of those was hand-written. The siblings-of-winners call
@@ -267,7 +267,7 @@ that would learn from what actually got approved is unbuilt (4b).
    mechanism phase 2's URL truth depends on.
 2. **Discovery and enrichment are billed at the same per-search rate and mixed in one call.** That is
    the largest identified cost lever in the angle layer. §8.1 sharpens it to a division-of-labour
-   fact: `refresh_opportunities.py` already owns every field phase 2 extracts EXCEPT `url`, and
+   fact: `agents/refresh_opportunities.py` already owns every field phase 2 extracts EXCEPT `url`, and
    `url` is the only one it will never write — so phase 1 is paying search fees for fifteen fields a
    free agent re-derives, and its real product is the program's home page.
 3. **The self-learning loop is built end-to-end but starved.** One run per angle, and reason codes on
@@ -290,7 +290,7 @@ that would learn from what actually got approved is unbuilt (4b).
 `GET /api/seeds/queries` (localhost-gated like every ops route). Free: it reads local files, makes no
 model call and writes nothing.
 
-- **[query_telemetry.py](../../query_telemetry.py)** — pure, stdlib-only, the judgement half.
+- **[query_telemetry.py](../../wingman/query_telemetry.py)** — pure, stdlib-only, the judgement half.
   `classify_query` / `summarize_queries` / `summarize_seed` / `summarize_run`. 17 unit tests, every
   case a real query string out of the logs.
 - **`ops/core.list_seed_query_runs()`** — the disk half: scans `agent_logs/scraper_<stamp>_seed<id>.json`,
@@ -336,7 +336,7 @@ an institution-only frame misses them.
 
 ### 8.1 Phase 1 is buying the one field nothing else can give it, and paying for fifteen it already has
 
-`refresh_opportunities.py` states its own scope: *name, org, summary, type, price, state, location,
+`agents/refresh_opportunities.py` states its own scope: *name, org, summary, type, price, state, location,
 intl, season, category, eligibility, grade_min, grade_max, cost, subject_tags, contact_email.* That is
 **every field the scraper's phase 2 extracts, except `url`** — and it refuses to write `url`
 deliberately, because a no-search model writes URLs from memory (the 26%-dead-link mechanism).
@@ -344,9 +344,9 @@ deliberately, because a no-search model writes URLs from memory (the 26%-dead-li
 So the division of labour is already decided by the code, and the prompt contradicts it:
 
     the ONLY field phase 1 is uniquely able to get right   ->  url   (it has grounding; nothing else does)
-    every other field                                      ->  owned by refresh_opportunities.py (no search, ~free),
-                                                               check_deadlines.py (dates), generate_action_items.py
-                                                               (requirements), sitemap_common.py (the site's own pages)
+    every other field                                      ->  owned by agents/refresh_opportunities.py (no search, ~free),
+                                                               agents/check_deadlines.py (dates), agents/generate_action_items.py
+                                                               (requirements), wingman/sitemap_common.py (the site's own pages)
 
 Meanwhile `RESEARCH_SYSTEM` orders a ten-field write-up per opportunity under "never guess", which is
 the mechanism behind the measured 73% named-query rate (§7): the model cannot clear that bar without
@@ -489,7 +489,7 @@ Draft query policy:
 > community centre schedules.
 
 **Implementation note, no DDL required.** `mode` is currently `national` | `seattle`. Rather than a new
-`place` column, keep mode as the locale key and add a small `LOCALES` dict in `scrape_opportunities.py`
+`place` column, keep mode as the locale key and add a small `LOCALES` dict in `agents/scrape_opportunities.py`
 holding each locale's display name and its `sub_places` vocabulary. Adding a second city then means
 adding a dict entry, not a migration.
 

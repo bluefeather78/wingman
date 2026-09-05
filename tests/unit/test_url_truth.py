@@ -4,10 +4,10 @@ monkeypatched; everything else runs for real.
 """
 import pytest
 
-import scrape_opportunities as so
-import url_dedupe
-import url_repair
-import url_validate as uv
+from agents import scrape_opportunities as so
+from wingman import url_dedupe
+from wingman import url_repair
+from wingman import url_validate as uv
 
 
 # ---- is_content_mill ------------------------------------------------------------------

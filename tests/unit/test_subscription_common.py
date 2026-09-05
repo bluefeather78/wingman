@@ -1,4 +1,4 @@
-"""Unit tests for subscription_common.py (repo root, stdlib-only).
+"""Unit tests for wingman/subscription_common.py (repo root, stdlib-only).
 
 Time is frozen by swapping the module's `datetime` reference for a namespace whose
 `datetime` class returns a fixed `now()`. Stripe network functions are NOT tested.
@@ -10,7 +10,7 @@ import types
 
 import pytest
 
-import subscription_common as sc
+from wingman import subscription_common as sc
 
 
 FROZEN = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.timezone.utc)

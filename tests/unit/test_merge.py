@@ -1,5 +1,5 @@
 """Phase-3 merge + in-run twin collapse. Both pure functions, hermetic."""
-import scrape_opportunities as so
+from agents import scrape_opportunities as so
 
 
 # ---- merge_row ------------------------------------------------------------------------

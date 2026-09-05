@@ -9,9 +9,10 @@ the angle where the model relabels the invented task "generic" to dodge the chec
 """
 import pytest
 
-import page_text
-import source_capture
-from generate_action_items import (
+from wingman import page_text
+from wingman import source_capture
+from agents import generate_action_items as _gai
+from agents.generate_action_items import (
     SOURCE_GENERIC,
     SOURCE_PAGE_EMPTY,
     SOURCE_UNPARSED,
@@ -99,7 +100,7 @@ def test_generic_task_needs_no_proof():
 
 def test_program_own_name_is_not_a_claim():
     """The row's own name and org are subtracted before the check — the same subtraction
-    url_repair.py makes. Otherwise every task would have to prove the page repeats its own
+    wingman/url_repair.py makes. Otherwise every task would have to prove the page repeats its own
     title."""
     kept, _ = verify_items([item("Submit the NYU User Experience Design application",
                                  basis="generic")], OPP, PAGE_SRC)
@@ -187,7 +188,7 @@ def test_safe_advice_is_not_flagged(task):
 def test_no_generic_checklist_line_is_an_eligibility_claim():
     """Belt-and-braces: a generic line must never read as an eligibility CONDITION, or it
     could be wrongly dropped if it ever landed on an off-domain source."""
-    for opp_type in list(__import__("generate_action_items").GENERIC_BY_TYPE) + [None]:
+    for opp_type in list(_gai.GENERIC_BY_TYPE) + [None]:
         for it in generic_items({"type": opp_type, "url": "https://x.example"}):
             assert not page_text.is_eligibility_claim(it["text"]), it["text"]
 

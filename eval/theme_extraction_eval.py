@@ -136,7 +136,7 @@ GRADE_CTX = {}  # set per case before grade() is called
 
 
 def run_case(system, case, runs, show):
-    import gemini_common
+    from wingman import gemini_common
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         raise SystemExit("GEMINI_API_KEY not set (put it in .env) — cannot run.")

@@ -1,8 +1,8 @@
-"""Unit tests for build_legal.py — the self-contained mini-markdown renderer.
+"""Unit tests for agents/build_legal.py — the self-contained mini-markdown renderer.
 
 Pure functions (render, inline); no file I/O touched.
 """
-import build_legal as bl
+from agents import build_legal as bl
 
 
 # --------------------------------------------------------------------------- inline

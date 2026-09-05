@@ -40,7 +40,7 @@ Awaiting Shama's review + the prod backfill decision. A deliberate, minimal extr
 - **D3** — **PR 2 (prod DDL + paid backfill) not auto-executed**: `../../db/match_vector_schema.sql` is
   manual DDL (no PostgREST DDL endpoint) and the backfill is real spend. Free `--dry-run` run
   to report the number; the paid `--yes-really` + DDL are left for Shama.
-- **D4** — `gemini_common.py` gained the embedding call path (`call_gemini_embed` etc.) as a
+- **D4** — `wingman/gemini_common.py` gained the embedding call path (`call_gemini_embed` etc.) as a
   **pure additive** port (91 lines, 0 deletions) — the M9 seam was already marquee-approved in
   its own comment; needed by `embeddings.py` + `../../scripts/backfill/backfill_match_vectors.py`.
 - **D5** — The client-strip of `match_vector` was hand-added to **main's** route
@@ -210,7 +210,7 @@ without a model call. Keeps the call small and dodges truncation on a 100-verdic
 ### D. Backend — the activation embedding hook (durability — DO NOT SKIP)
 7. Wire `embeddings.refresh_row_embedding` into the write path so a row is (re)embedded
    whenever a write leaves it `is_active=true` — the activation endpoint AND a
-   `refresh_opportunities.py` pass (per `../../db/match_vector_schema.sql`'s "when this gets written").
+   `agents/refresh_opportunities.py` pass (per `../../db/match_vector_schema.sql`'s "when this gets written").
    **Verify the call-site exists** (the branch documents the hook but the wiring lives in a
    modified file we are not merging wholesale) — if it is not wired, **new rows never become
    recallable** and recall silently decays as the catalog grows.

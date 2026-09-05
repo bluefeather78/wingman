@@ -1,5 +1,5 @@
 """On-demand action items for one opportunity — the interactive twin of the batch pass in
-generate_action_items.py, which owns the logic. This module is plumbing only: read the row,
+agents/generate_action_items.py, which owns the logic. This module is plumbing only: read the row,
 serve what is already stored, and generate-and-cache when nothing is.
 
 WHY IT SHARES generate_action_items RATHER THAN REIMPLEMENTING
@@ -21,7 +21,7 @@ import urllib.parse
 import urllib.request
 
 from app.config import SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY
-from generate_action_items import (
+from agents.generate_action_items import (
     SELECT as ACTION_ITEM_FIELDS,
     STAMPING_SOURCES,
     generic_items,

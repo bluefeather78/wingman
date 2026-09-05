@@ -5,9 +5,9 @@ passed in directly (the live fetch is the wrapper's job and is not exercised her
 """
 import json
 
-import classify_page as cp
-import combined_reader as cr
-import embed_common
+from wingman import classify_page as cp
+from wingman import combined_reader as cr
+from wingman import embed_common
 
 _USAGE = {"input_tokens": 100, "output_tokens": 40, "server_tool_use": {"web_search_requests": 0}}
 _PROGRAM_PAGE = ("Apply now for the MIT PRIMES research program. "

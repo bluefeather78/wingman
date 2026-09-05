@@ -27,7 +27,7 @@ reversal was both at once: a paid call turned off and its prompt rewritten to hi
 **Prompt-writing convention (operator directive, 2026-08-28): always use concrete examples in
 prompts.** Models follow do/don't *examples* far better than adjectives — "broad", "distinct",
 "high quality" alone don't steer behaviour; a good/bad example pair does. When writing or editing any
-prompt, define the key terms with examples (see `DISCOVERY_SYSTEM` in `scrape_opportunities.py`: it
+prompt, define the key terms with examples (see `DISCOVERY_SYSTEM` in `agents/scrape_opportunities.py`: it
 defines "opportunity" structurally with counter-examples and "broad vs named search" with good/bad
 query pairs). This is measured house style here (it fixed the 73% named-query rate), not a preference.
 
@@ -136,10 +136,19 @@ app/                      FastAPI service (the only Python thing deployed)
   auth/                   JWT tokens, argon2 passwords, deps, ratelimit
 ops/                      LOCAL-ONLY console (WINGMAN_ENABLE_OPS): core.py, admin.py,
                           admin_console.html — never mounted on Render
-*.py (repo root)          55 files: ~34 shared libs + the 21 scripts ops/core.py runs by
-                          filename. Stdlib-only. They stay at the root deliberately — they
-                          import each other by BARE NAME and anchor log/snapshot I/O to
-                          __file__. Only 14 are reachable from app/, i.e. deployed.
+wingman/                  THE SHARED LAYER — 33 modules app/, ops/, agents/, tests/ and the
+                          one-off scripts all import: gemini_common, claude_common,
+                          supabase_common, url_validate, url_dedupe, page_text,
+                          agent_common, embed_common, dedupe_*, queue_flags, seeds_common …
+                          First-party, NOT in requirements.txt: it resolves because the repo
+                          root is the cwd of every entry point, exactly as `app` does.
+                          Exports REPO_ROOT — the one definition of "the repo root".
+agents/                   the 21 offline catalog agents + maintenance tools. ops/core.py runs
+                          them as `python -m agents.<name>` with cwd=REPO_ROOT. The `-m` is
+                          load-bearing: `python agents/x.py` would put agents/ on sys.path[0]
+                          instead of the repo root and every `from wingman import …` fails.
+                          SIX OF THE SEVEN CATALOG AGENTS COST REAL MONEY PER RUN.
+server.py                 the only .py at the repo root — the `python server.py` dev shim.
 scripts/                  leaf scripts nothing imports: one-off/ (9 migrations+backfills
                           already run) · dev/ · backfill/. Each carries a ROOT sys.path
                           shim because `python scripts/x/y.py` puts x/ on the path, not
@@ -154,11 +163,19 @@ docs/                     plans/ (unbuilt or part-shipped) · archive/ (shipped,
                           SUBSCRIPTION_SETUP.md + MATCHING_UX_REQUIREMENTS.md (live refs)
 data/                     Opportunities.xlsx, the diffable opportunities.json snapshot,
                           the two hand-curated hub registries. Not read at runtime.
-legal/*.md                source of record -> build_legal.py -> terms.html/privacy.html
+legal/*.md                source of record -> agents/build_legal.py -> terms.html/privacy.html
 tests/                    pytest suite for the backend (945 tests, all green)
 walkthrough.html          the landing film (vendored ~1.5MB bundle) — see its section below
 styles.css, favicon.svg   kept ONLY for the legal/about pages the RN app links to
 ```
+
+**Adding a module: does it go in `wingman/` or `agents/`?** `agents/` is for something an
+operator RUNS (it has a `main()`/argparse and an `ops/core.py` entry); `wingman/` is for
+something other code IMPORTS. A file that is both — `check_deadlines` and
+`generate_action_items` are, since `app/` reuses their functions — lives in `agents/`, and
+`app/` imports it from there. Never compute the repo root with `dirname(__file__)`; import
+`REPO_ROOT` from `wingman`. That mistake broke 17 sites at once during this move and 16 of
+them failed silently.
 
 The root-level pages above (terms/privacy/about + walkthrough/logic_map/styles/favicon)
 are the ONLY thing `app/main.py`'s repo-root static route exists to serve. Its
@@ -203,8 +220,8 @@ proxies to it (PostgREST, anon key, RLS-restricted to `is_active=true` rows, pag
 PostgREST's 1000-row cap, cached in-process for `OPPORTUNITIES_CACHE_TTL` seconds) and
 the client fetches that endpoint once on load.
 [opportunities.json](data/opportunities.json) still exists git-tracked as a diffable backup
-snapshot only — regenerate it with `export_json.py` after editing the DB, it is **not**
-fetched at runtime anymore. It moved to `data/` on 2026-09-04; `export_json.py`'s `OUT_PATH`
+snapshot only — regenerate it with `agents/export_json.py` after editing the DB, it is **not**
+fetched at runtime anymore. It moved to `data/` on 2026-09-04; `agents/export_json.py`'s `OUT_PATH`
 writes there, and the static route now blocks the directory (it was downloadable from the
 production domain before, since `.json` is not in `_DENY_EXT`). `scripts/one-off/migrate_to_supabase.py` was the one-off script that populated the
 table (from this file plus a sibling `opportunity finder/` project's seed data); not part of
@@ -215,40 +232,40 @@ the regular dev loop.
 Seven offline Python scripts maintain the catalog. **Six of the seven cost real money per run**
 (Gemini or Anthropic, most with web search). **Never run one of those six without fresh
 explicit approval in chat** — this rule exists because of an unplanned ~$30 spend, and
-building UI for a run is not authorization to trigger it. `check_links.py` is the exception
+building UI for a run is not authorization to trigger it. `agents/check_links.py` is the exception
 and is genuinely free; see its own section below for the one thing it *does* need care about.
 
 | Console key | Script | `agent_runs.agent` | Job | Web search |
 |---|---|---|---|---|
-| `metadata` | `refresh_opportunities.py` | `metadata_refresher` | Core metadata: name, org, summary, eligibility, pricing | no |
-| `reviews` | `check_reviews.py` | `review_checker` | Org legitimacy / reputation from independent sources | Gemini |
-| `scraper` | `scrape_opportunities.py` | `scraper` | Find NEW opportunities (only agent that INSERTs) | Gemini |
-| `deadline` | `check_deadlines.py` | `deadline_checker` | Deadlines + running/not-running status | Claude |
-| `mailinglist` | `find_mailing_lists.py` | `mailing_list_finder` | Find each program's mailing-list signup form, store a replayable recipe | no |
-| `links` | `check_links.py` | `link_checker` | Verify every catalog URL; repair what moved, **queue the rest for human review** (never deactivates on its own, as of 2026-09-02) | no — **free, plain HTTP** |
-| `tasks` | `generate_action_items.py` | `action_item_generator` | The application checklist per program, verified against the program's own page | no — page fetched by us, no search |
+| `metadata` | `agents/refresh_opportunities.py` | `metadata_refresher` | Core metadata: name, org, summary, eligibility, pricing | no |
+| `reviews` | `agents/check_reviews.py` | `review_checker` | Org legitimacy / reputation from independent sources | Gemini |
+| `scraper` | `agents/scrape_opportunities.py` | `scraper` | Find NEW opportunities (only agent that INSERTs) | Gemini |
+| `deadline` | `agents/check_deadlines.py` | `deadline_checker` | Deadlines + running/not-running status | Claude |
+| `mailinglist` | `agents/find_mailing_lists.py` | `mailing_list_finder` | Find each program's mailing-list signup form, store a replayable recipe | no |
+| `links` | `agents/check_links.py` | `link_checker` | Verify every catalog URL; repair what moved, **queue the rest for human review** (never deactivates on its own, as of 2026-09-02) | no — **free, plain HTTP** |
+| `tasks` | `agents/generate_action_items.py` | `action_item_generator` | The application checklist per program, verified against the program's own page | no — page fetched by us, no search |
 
 Watch out for two things that have caused real bugs here:
 - The **scraper's `items_processed` counts SEEDS, not rows** — never sum it with the other
   three agents' row counts. `AGENT_CONFIGS_SCHEMA[key]["unit"]` encodes this.
-- `check_reviews.py` is the *review* checker, not the metadata refresher. An earlier console
-  card labelled "Refresh Agent" actually executed `check_reviews.py`; the keys in the table
+- `agents/check_reviews.py` is the *review* checker, not the metadata refresher. An earlier console
+  card labelled "Refresh Agent" actually executed `agents/check_reviews.py`; the keys in the table
   above are the corrected mapping. Don't rename the `db_agent` literals — the scripts write
   them and there is existing history under each.
 
 **A model-typed URL is not trustworthy anywhere in this repo.** This is the scraper rewrite's
 central finding generalised, and as of 2026-08-23 it is enforced in three more places:
 
-- `refresh_opportunities.py` **no longer writes `url` at all.** It calls Gemini with
+- `agents/refresh_opportunities.py` **no longer writes `url` at all.** It calls Gemini with
   `use_web_search=False` and used to write whatever `url` came back onto a live catalog row —
   the exact mechanism behind the scraper's 26% dead-link rate, except overwriting curated
   data rather than creating new. The scraper's fix (take the URL from `groundingChunks`) is
-  unavailable without search, so the field is simply not written; `check_links.py` owns link
+  unavailable without search, so the field is simply not written; `agents/check_links.py` owns link
   health and a replacement URL is a human edit in the console. Its prompt also used to open
   with *"YOU MUST use web_search and web_fetch"* while search was off, which left the model
   no way to comply except to answer from memory in the voice of a lookup. It now says it has
   no web access and that null is the expected answer.
-- `check_reviews.py` **takes `review_sources` from the search, not from memory**: phase 2 is
+- `agents/check_reviews.py` **takes `review_sources` from the search, not from memory**: phase 2 is
   handed the URLs resolved from phase 1's grounding chunks and told to copy them, and
   `clean_sources()` marks each kept source `retrieved: true/false` and drops any unretrieved
   one an HTTP check finds dead. Measured 2026-08-23: **199 of the 1469 source URLs already in
@@ -264,8 +281,8 @@ two-phase.** This is the scraper's design generalised, and it turned out to have
 bigger justification than the one it was built on. Measured 2026-08-23 in a controlled A/B
 (one row, identical research instructions, arms alternated, only the closing paragraph
 differing): **prose 4/4 calls searched, JSON 0/4**, 34 grounding chunks against 0. It matches
-the history — `check_reviews.py` had made **22 searches across 3089 row-checks** and
-`check_deadlines.py` **59 across 1218**, both on single JSON calls, against the scraper's
+the history — `agents/check_reviews.py` had made **22 searches across 3089 row-checks** and
+`agents/check_deadlines.py` **59 across 1218**, both on single JSON calls, against the scraper's
 prose phase 1 at 5.3 searches/seed.
 
     Phase 1 (research)  prose out, tools on   -> keeps grounding / retrieved source URLs
@@ -273,7 +290,7 @@ prose phase 1 at 5.3 searches/seed.
 
 State the claim carefully — a previous session over-claimed it and had to retract. It is a
 large shift in **probability**, not a gate: run id=33 (JSON) fired 6 searches and run id=48
-(prose) fired none. `gemini_common.py`'s SEVENTH finding carries both counterexamples. The
+(prose) fired none. `wingman/gemini_common.py`'s SEVENTH finding carries both counterexamples. The
 THIRD finding still stands: there is no way to *force* a search, only to stop discouraging
 one. Do not collapse any of the three back into a single call.
 
@@ -284,7 +301,7 @@ one. Do not collapse any of the three back into a single call.
   `web_fetch_tool_result` blocks carry the URLs actually retrieved — already resolved, with
   no redirect hop. Phase 2 gets them for the same reason the scraper's does: so the model
   copies a URL that was really fetched instead of recalling one that merely looks right.
-- **`web_fetch` is deliberately NOT capped alongside `web_search`** in `check_deadlines.py`.
+- **`web_fetch` is deliberately NOT capped alongside `web_search`** in `agents/check_deadlines.py`.
   It carries no per-call fee and it is the tool that actually reaches the FAQ/key-dates
   subpages the dates live on; the prompt's whole estimation logic depends on it.
 
@@ -292,12 +309,12 @@ one. Do not collapse any of the three back into a single call.
 call whether to search. The mitigation is to re-send the *identical* prompt once — a silent
 call pays no per-search fee — and it is in all three agents.
 
-- In `check_reviews.py` a **still-silent call writes nothing and does not stamp
+- In `agents/check_reviews.py` a **still-silent call writes nothing and does not stamp
   `last_reviewed_at`**. That column is the staleness filter, so the old behaviour did double
   damage: a memory-derived `insufficient_data` (textually identical to a real search finding
   nothing — the file's own comment said so) *and* a 30-day suppression of any re-check that
   would have corrected it. Skipping leaves the row due, and the next pass re-rolls.
-- In `check_deadlines.py` the retry is on **by default including the interactive path**
+- In `agents/check_deadlines.py` the retry is on **by default including the interactive path**
   (`retry_on_silent=True`). That costs a user one extra round-trip, and it is worth it
   because `server.py` caches a deadline answer for 7 days: one silent, invented set of dates
   is served to every student who opens that opportunity for a week. `check_one()` returns a
@@ -332,10 +349,10 @@ call pays no per-search fee — and it is in all three agents.
   row with **no existing dates** is written and stamped, because there is nothing to lose and
   not stamping would re-bill that row on every view forever.
 - **Nulling `dates_last_checked_at` is the only way to force a re-check inside the TTL**, and
-  until 2026-08-24 there was no working way to do it: `clear_deadline_cache.py` PATCHed
-  `last_checked_at`, a name that only ever existed in `check_deadlines.py`'s DDL comment, so
+  until 2026-08-24 there was no working way to do it: `wingman/clear_deadline_cache.py` PATCHed
+  `last_checked_at`, a name that only ever existed in `agents/check_deadlines.py`'s DDL comment, so
   PostgREST rejected every write. That script now takes ids or `--all` (with `--dry-run` and a
-  `--yes-really` guard), `check_opp_data.py` inspects the same columns, and the console's
+  `--yes-really` guard), `agents/check_opp_data.py` inspects the same columns, and the console's
   deadline card carries a **Force re-check** button over
   `POST /api/agents/deadline/clear-cache`. All three quote the **queued** spend (~$0.07/row,
   paid when a student next opens the row) rather than a $0.00 that would read as free, and the
@@ -347,7 +364,7 @@ call pays no per-search fee — and it is in all three agents.
   moment its FIRST date has passed — so a row whose only date is a deadline reads "Coming Up"
   right until it flips to "Past" and can never say Happening Now, which is backwards for a
   student who could be applying today. Measured 2026-08-24: **13 of the 34 active rows that
-  carry any dates (38%) had no `opens` entry**. All four prompts (both `check_deadlines.py`
+  carry any dates (38%) had no `opens` entry**. All four prompts (both `agents/check_deadlines.py`
   phases, `extractTrackerInfo`, `intakeExtractAndClassify`) now require an opens entry
   whenever there is an application step, require projecting the prior cycle's when the current
   one is unposted, and require an explicit reason in the note when there genuinely is none.
@@ -380,7 +397,7 @@ call pays no per-search fee — and it is in all three agents.
     `getDisplayMilestones` ORs it with `projected`, since a client-projected date is an
     estimate by construction. Absent on rows written before 2026-08-24 — treated as unknown,
     never as confirmed, and the renderer suppresses a duplicate when the label already says it.
-  - `check_deadlines.py` gained **`--ids ID...`** and **`--missing-opens`** so a known gap can
+  - `agents/check_deadlines.py` gained **`--ids ID...`** and **`--missing-opens`** so a known gap can
     be re-checked for cents instead of paying ~$84 for a full pass to fix a handful of rows.
     Both ignore the 7-day cache (that staleness filter belongs to the interactive endpoint,
     not to a deliberate operator re-check), and both work with `--preview`, which is free.
@@ -458,8 +475,8 @@ call pays no per-search fee — and it is in all three agents.
 
 | | before (single JSON call) | after (two-phase, MAX_SEARCHES=1) |
 |---|---|---|
-| `check_reviews.py` | $0.0014/row, **~0 searches** | **$0.0166/row** → ~$20 per 1226-row pass, ~$4 per staleness tranche |
-| `check_deadlines.py` | $0.0010/row when silent | **$0.0676/row** → ~$84 for a full `--all` pass |
+| `agents/check_reviews.py` | $0.0014/row, **~0 searches** | **$0.0166/row** → ~$20 per 1226-row pass, ~$4 per staleness tranche |
+| `agents/check_deadlines.py` | $0.0010/row when silent | **$0.0676/row** → ~$84 for a full `--all` pass |
 
 Read the deadline row carefully before reacting to $84: the interactive checks that *really
 searched* have always cost a **median $0.0790** (36 of them in `deadline_check_log`), so the
@@ -468,7 +485,7 @@ already paying — `MAX_SEARCHES` capped `web_search` at 1 where it allowed 3. T
 sub-cent `agent_runs` figures (id=14, id=16) are the price of *not looking*, not a cheaper
 way of looking, and comparing against them is how this decision gets made wrongly.
 
-`find_mailing_lists.py` is the odd one out on cost, and deliberately so: it fetches each
+`agents/find_mailing_lists.py` is the odd one out on cost, and deliberately so: it fetches each
 row's page with `urllib` and finds provider embeds by **regex**, and only calls the model
 when a form was actually found — to answer the one question a regex cannot, *is this form
 THIS program's list or the host institution's?* Rows with no form resolve for **free**, no
@@ -476,7 +493,7 @@ API call at all. Do not "improve" it by handing the whole page to a model: a hal
 Mailchimp endpoint is a recipe that fails silently for every student who ever taps the
 button, where a regex cannot invent one.
 
-`check_reviews.py` selects rows on **staleness only** (`STALE_AFTER_DAYS = 30`, i.e. never
+`agents/check_reviews.py` selects rows on **staleness only** (`STALE_AFTER_DAYS = 30`, i.e. never
 reviewed or last reviewed >30 days ago), and `--force` ignores that entirely and re-checks
 every active row. The threshold was 182 (~6 months) until 2026-08-22; at that value an
 ad-hoc run did nothing at all for half a year, so the only way to make the agent act
@@ -498,7 +515,7 @@ through 2026-09-21, rather than all at once; a full 1327-row pass is roughly $1.
 ## Cost accounting — what the numbers do and don't include
 
 Every cost figure in this repo is **estimated locally from token counts** against the price
-constants in `gemini_common.py` / `claude_common.py`. Nothing reads provider billing, so
+constants in `wingman/gemini_common.py` / `wingman/claude_common.py`. Nothing reads provider billing, so
 treat totals as a floor. Known blind spots, all of them deliberate and surfaced in the
 console's "Estimated vs billed" card rather than hidden:
 
@@ -521,7 +538,7 @@ console's "Estimated vs billed" card rather than hidden:
   `interactive_claude` rollup as every other app call.
 - **Every Anthropic call in this repo runs on Haiku 4.5** (`claude-haiku-4-5-20251001`),
   pinned in three places that must agree: `server.py`'s `CLAUDE_MODEL`,
-  `check_deadlines.py`'s local `CLAUDE_MODEL`, and `claude_common.py`'s `MODEL`. The last
+  `agents/check_deadlines.py`'s local `CLAUDE_MODEL`, and `wingman/claude_common.py`'s `MODEL`. The last
   of those was left on `claude-sonnet-4-6` when the other two moved, which meant the
   model depended on which entry point you came through — the resume/LinkedIn import went
   through `claude_common` and so actually ran on Sonnet while recording its cost under
@@ -530,7 +547,7 @@ console's "Estimated vs billed" card rather than hidden:
   cost every `interactive_claude` call, and those run on Haiku — so while that file said
   Sonnet, the constants were Sonnet's $3/$15 against Haiku's actual $1/$5 and interactive
   Claude spend was estimated at **3x** what it cost.
-- **`check_deadlines.py` costed its Claude calls with `gemini_common.estimate_cost`** —
+- **`agents/check_deadlines.py` costed its Claude calls with `gemini_common.estimate_cost`** —
   Gemini's $0.75/$3.75 per MTok plus $0.014/search — against Anthropic calls made by its
   own local `call_claude()`. It now imports `estimate_cost` from `claude_common`.
 - Both corrections landed 2026-08-22 and are **not applied retroactively**: `agent_runs`,
@@ -680,12 +697,12 @@ rollup. Two obvious substitutes are both wrong, and both were checked:
   the explicit writes exist, but they are not what makes it move, so **every** agent write
   moves it and no reader can attribute a change to a particular agent. The scripts that set
   it by hand are harmless but redundant.
-  - This became a real bug the moment `check_links.py` landed: a link-health pass writes
-    `link_status`/`link_checked_at` to every active row, so `check_refresh_progress.py` —
+  - This became a real bug the moment `agents/check_links.py` landed: a link-health pass writes
+    `link_status`/`link_checked_at` to every active row, so `agents/check_refresh_progress.py` —
     which counts `updated_at > cutoff` — reported **"1236/1236 opportunities updated"** with
     the metadata refresher having touched none of them. It now excludes rows whose
     `link_checked_at` also falls in the window and reports its count as a floor.
-  - `check_links.py`'s `build_update()` still withholds `updated_at` for a telemetry-only
+  - `agents/check_links.py`'s `build_update()` still withholds `updated_at` for a telemetry-only
     write. That is currently a no-op against the trigger, and it is kept deliberately: it
     states the intent, and it is what makes the behaviour correct if the trigger is ever
     dropped. Do not "simplify" it away on the grounds that it changes nothing today.
@@ -795,7 +812,7 @@ a dashboard link instead of a live figure. See `fetch_anthropic_billed_cost()`.
 **Three run tiers**, and only one of them is free:
 - `--preview` — resolves which rows/seeds would be processed, prints a `PREVIEW_JSON:` line,
   exits before the first API call. **Zero cost, zero writes.** Shared plumbing lives in
-  `agent_common.py`; `server.py`'s `preview_agent()` parses that line and pairs the count with
+  `wingman/agent_common.py`; `server.py`'s `preview_agent()` parses that line and pairs the count with
   a per-item cost averaged from that agent's real `agent_runs` history.
   - That average takes **successful runs only, and never `mode = "snapshot-commit"`**.
     Both exclusions matter and both were missing until 2026-08-22: a *failed* run counted
@@ -806,7 +823,7 @@ a dashboard link instead of a live figure. See `fetch_anthropic_billed_cost()`.
     failures and a 7th a commit, the estimate came out at $0.000528/row against the
     ~$0.00091 its clean runs measure — i.e. the one feature whose whole job is to price a
     run before you authorise it was under-quoting by about half. The old $0.70 full-pass
-    figure quoted above for `check_reviews.py` was this same skewed number; it is $1.42 now.
+    figure quoted above for `agents/check_reviews.py` was this same skewed number; it is $1.42 now.
   - `est_cost_low_usd`/`est_cost_high_usd` carry the **spread** across the sample, and
     `provisional` is set below three clean runs. A lone mean reads as a precision the
     number does not have — the scraper's own history spans three orders of magnitude per
@@ -820,12 +837,12 @@ a dashboard link instead of a live figure. See `fetch_anthropic_billed_cost()`.
 layers: module default → env var → flag). The 5-second inter-call delay is what fixed this
 pipeline's repeated HTTP 429s — treat it as a floor. It also dominates wall time: ~1330 rows at
 5s is ~110 minutes regardless of API speed. `gemini_common` and `claude_common` each expose
-`set_min_delay()`/`set_default_timeout()`. Note `check_deadlines.py` has its **own** local
+`set_min_delay()`/`set_default_timeout()`. Note `agents/check_deadlines.py` has its **own** local
 `call_claude()` (not `claude_common`'s) and its own delay knob defaulting to 0, because
 `check_one()` is shared with server.py's interactive on-demand deadline endpoint, where a
 process-wide delay would make one user's request block on another's; batch mode raises it to 5.
 
-**Committing a dry-run snapshot** ([dryrun_common.py](dryrun_common.py)) replays a snapshot's
+**Committing a dry-run snapshot** ([dryrun_common.py](wingman/dryrun_common.py)) replays a snapshot's
 withheld writes into Supabase. It makes **no API calls and costs nothing** — the money was
 already spent by the run that produced the file. `GET /api/agents/snapshots` lists what is on
 disk; `POST /api/agents/snapshots/commit` with `preview: true` resolves the real post-dedupe
@@ -864,7 +881,7 @@ counts without writing, and without it applies them.
   - A snapshot still does not correspond to a particular `agent_runs` row — nothing links
     them — but two same-day runs no longer collapse into one file.
 
-## Link health — `check_links.py`
+## Link health — `agents/check_links.py`
 
 Fixing the scraper's fabricated URLs fixed only NEW rows. The catalog they join had never
 been checked. Measured over all 1374 active rows on 2026-08-23: **1029 live, 137 dead
@@ -897,7 +914,7 @@ is what separates a genuine NXDOMAIN (8 rows, all retired university subdomains)
 - **Two passes, always.** Anything that looks dead is re-checked before a write. Free, and
   it is the only thing between a CDN hiccup and a queued dead-link finding. Measured: 135 of
   137 were unchanged on the second pass and 2 rows moved *into* dead, so it corrects both ways.
-- **Repair before queuing** — [url_repair.py](url_repair.py), free, on by default
+- **Repair before queuing** — [url_repair.py](wingman/url_repair.py), free, on by default
   (`--no-repair` opts out). Programs get reorganised far more often than they are cancelled:
   of the 30 dead rows in the 08-23 audit, 9 were re-found on the same site and 9 of 9 came
   back live. See the next section — the accuracy bar there is the whole feature.
@@ -929,14 +946,14 @@ fixes the old "known gap" where a flag on a still-active row had nowhere to show
 
 **`--repair-flagged` scope (broadened 2026-09-02) and its NO-auto-activation rule.** It walks
 inactive rows carrying any repairable link flag — `dead link (`, `link unverifiable (`,
-`link unreachable (`, or the soft-404 flag (`_REPAIRABLE_PREFIXES` in `check_links.py`), not
+`link unreachable (`, or the soft-404 flag (`_REPAIRABLE_PREFIXES` in `agents/check_links.py`), not
 dead-link-only — and attempts a repair on any that re-check as dead **or** unverifiable (a
 403/timeout row is often genuinely gone; a repair attempt is free). A proven repair no longer
 sets `is_active=true`: it writes the new URL and parks the row at `link_review_status='repaired'`
 for a person to verify and Activate on the Links tab. See M2 — as of 2026-09-02 **no** code path
 in this repo auto-activates a catalog row.
 
-## URL repair — `url_repair.py` (proves a moved link; never activates, as of 2026-09-02)
+## URL repair — `wingman/url_repair.py` (proves a moved link; never activates, as of 2026-09-02)
 
 **Proposing a replacement URL is cheap and worthless on its own; accepting one is the
 feature.** Measured over the 148 rows the first pass deactivated, taking the best-scoring
@@ -995,7 +1012,7 @@ for manual activation rather than restoring them itself.)
   are *correct* (`jshs.org`, `precollege.wisc.edu` — dedicated program sites whose homepage
   IS the program page), and `domain_matches_org()` on 9%, roughly one in seven of them real
   (the rest are university domain abbreviations no rule derives — `umd.edu`, `tamu.edu`,
-  `gatech.edu`). Both earn their place in `scrape_opportunities.py`, where a fresh candidate
+  `gatech.edu`). Both earn their place in `agents/scrape_opportunities.py`, where a fresh candidate
   has the opposite base rate. What replaced them is `FLAG_SOFT_404` — a deep link that
   redirects to a bare homepage, i.e. the program page deleted behind a 200. It fires on 10
   rows (1.0%) at about one-in-two precision. Ten rows at one-in-two beats eighty-eight at
@@ -1031,11 +1048,11 @@ The old design generated tasks in the BROWSER, per student, per add, from a sing
 call. Three properties made a fabrication inevitable:
 
 - **It could not read the page.** `/api/messages` attaches exactly one tool, `googleSearch`
-  — no `web_fetch` (that lives only on `check_deadlines.py`'s Anthropic path) and no
+  — no `web_fetch` (that lives only on `agents/check_deadlines.py`'s Anthropic path) and no
   `urlContext`. The prompt meanwhile said *"YOU MUST use web_search"* and *"Fetch this
   URL"*. Neither tool existed in the call, so the model could not comply except by
   answering from memory in the voice of a lookup — the identical failure
-  `refresh_opportunities.py` already carries a note about.
+  `agents/refresh_opportunities.py` already carries a note about.
 - **The prompt licensed invention outright**: *"Infer these from the requirements you find
   AND FROM WHAT'S TYPICAL FOR THIS TYPE OF OPPORTUNITY."* "Algebra 2" is precisely what a
   STEM summer program typically requires. The dates in the same response had a never-invent
@@ -1049,7 +1066,7 @@ It was also **permanent**: `refreshTrackerDeadlines` and `applyDeadlineCheckToIn
 touched `actionItems`, so no code path could ever replace a wrong one. And it rendered as
 flat authoritative text, with no equivalent of the dates' `(est.)` marker.
 
-**Tasks are now catalog data**, generated by `generate_action_items.py` and stored on the
+**Tasks are now catalog data**, generated by `agents/generate_action_items.py` and stored on the
 opportunity row ([action_items_schema.sql](db/action_items_schema.sql) — another one-time
 manual DDL step; until it runs the agent aborts naming it and the app keeps its old
 per-student behaviour). They were never personalised — the prompt has always forbidden
@@ -1057,13 +1074,13 @@ anything about the student's own project — so every student was paying for an 
 answer and getting a slightly different one. Moving them makes an add instant, makes the
 list consistent, and, the actual reason, **makes it reviewable**.
 
-**The guarantee is in code, not in the prompt** — [page_text.py](page_text.py), free,
+**The guarantee is in code, not in the prompt** — [page_text.py](wingman/page_text.py), free,
 stdlib-only, shared by the batch agent and the on-demand endpoint. Two tests, and there are
 two for a reason:
 
 - **`claim_is_supported()`** — every DISTINCTIVE word of the task must appear on the page we
   fetched. Strip the generic application vocabulary and the program's own name (the same
-  subtraction `url_repair.py` makes, for the same reason) and "algebra" is what is left; it
+  subtraction `wingman/url_repair.py` makes, for the same reason) and "algebra" is what is left; it
   is not on nyu.edu, so the task cannot be kept. **This runs on EVERY task regardless of
   what the model labelled it.** Checking only the tasks the model *called* page-backed
   leaves the loophole wide open — relabelling an invented prerequisite "generic" would walk
@@ -1077,7 +1094,7 @@ words all check out asserts nothing unsupported — it merely did not prove a sp
 sentence — and the card labels it accordingly. Demote where demoting is honest; drop only
 what is unsupportable.
 
-- **No fuzzy matching, ever.** `url_repair.py` measured what a similarity ratio does to
+- **No fuzzy matching, ever.** `wingman/url_repair.py` measured what a similarity ratio does to
   exactly this judgement (at >= 0.72 it accepted "Summer Research Immersion" as proof of
   "First-year Research Immersion"): the shared words are the category and the differing word
   is the identity, which is backwards for a ratio. Normalizing curly quotes and dashes is
@@ -1096,7 +1113,7 @@ there would be nothing to verify the answer against. Those rows get a per-type g
 checklist built locally. This is not a degradation to apologise for: **the NYU row that
 started all this is one of them** (nyu.edu answers our client with a 202 and an empty body),
 so the outcome for that exact opportunity is now a free, honest, generic checklist and no
-possible Algebra 2. Roughly one page in ten refuses us — `check_links.py` measured ~9% 403s
+possible Algebra 2. Roughly one page in ten refuses us — `agents/check_links.py` measured ~9% 403s
 plus 41 TLS failures on pages a student's browser loads fine — so a fetch failure is a fact
 about our HTTP client, **never** about the program.
 
@@ -1117,7 +1134,7 @@ exactly the role `deadline_write_decision()` plays for dates. Four outcomes, and
 - `unparsed` — page read, model output unreadable. Keeps whatever the row has, does not stamp.
 
 **Single call, not two phases, and this is a deliberate divergence from the other agents.**
-`check_reviews.py` and `check_deadlines.py` are two-phase because demanding JSON collapses
+`agents/check_reviews.py` and `agents/check_deadlines.py` are two-phase because demanding JSON collapses
 the SEARCH rate (prose 4/4, JSON 0/4). That reasoning does not transfer: this agent never
 searches, it is handed the page. With no search to suppress, a second phase buys nothing and
 doubles the per-row cost. Watch the **demotion rate** in the run summary — that is the signal
@@ -1200,7 +1217,7 @@ would otherwise hand slot 2's completion to slot 3's task. Same positional-id tr
 Google Calendar sync hit with `importantDates`.
 
 **`eligibility` is now in `OPPORTUNITIES_FIELDS`.** It is maintained by
-`refresh_opportunities.py` and was the only curated record of a program's entry requirements
+`agents/refresh_opportunities.py` and was the only curated record of a program's entry requirements
 anywhere in the repo, yet it never left the database — so the prompt that was inventing
 prerequisites could not see the column that knows them. It reaches the prompt as **context,
 never as proof**: both prompts state explicitly that it is our own note rather than the
@@ -1278,8 +1295,8 @@ before anyone activates it, backing the queue's per-row **Edit** modal.
 - `EDITABLE_OPPORTUNITY_FIELDS` is a **whitelist**, and an unknown key is refused *by name*
   rather than dropped (PostgREST would 400 the whole PATCH on it anyway). Not editable:
   `is_active`/`moderation_status` (those are the buttons), `id`/`source`/`created_at`
-  (provenance), `review_*` (`check_reviews.py` owns them), and
-  `status`/`important_dates`/`was_estimated`/`dates_last_checked_at` (`check_deadlines.py`
+  (provenance), `review_*` (`agents/check_reviews.py` owns them), and
+  `status`/`important_dates`/`was_estimated`/`dates_last_checked_at` (`agents/check_deadlines.py`
   owns them — a hand-typed date would be overwritten by the next check).
 - `type` is validated against `OPPORTUNITY_TYPES`; a typo there makes the row invisible to
   the finder's `KIND_CONFIG` lookup rather than merely ugly. `category` is deliberately *not*
@@ -1310,8 +1327,8 @@ same shared, cached deadline check a Fresh Finds add does, on add and on every l
 - Failure is still never the student's problem: an unresolvable submission returns 200 with
   `id: null`, the item stays in the Quest Log under a slug, and the refresh says plainly that
   it cannot be auto-checked instead of claiming it checked it.
-Matching lives in **[url_dedupe.py](url_dedupe.py)**, kept separate from the `normalize_url()`
-that `scrape_opportunities.py` / `dryrun_common.py` / `scripts/one-off/migrate_to_supabase.py` each carry —
+Matching lives in **[url_dedupe.py](wingman/url_dedupe.py)**, kept separate from the `normalize_url()`
+that `agents/scrape_opportunities.py` / `wingman/dryrun_common.py` / `scripts/one-off/migrate_to_supabase.py` each carry —
 those three are deliberately identical to each other and are **not** to be changed to match
 this one.
 
@@ -1330,7 +1347,7 @@ The governing rule, and the catalog measurements that force it:
   Measured against the current catalog that threshold matches **264 pairs, 257 of which have
   different URLs** and are genuinely distinct opportunities — `'Summer Internship'` collides
   with everything, and `'1-Week Medical Academy'` vs `'3-Week Medical Academy'` scores 0.95.
-  It was suppressing real opportunities silently and unlogged. `scrape_opportunities.py` now
+  It was suppressing real opportunities silently and unlogged. `agents/scrape_opportunities.py` now
   calls `find_duplicates()` here like everything else; do not reintroduce a private rule.
 - **The stored `url` is never normalized.** 100 catalog rows have case-sensitive paths
   (`…/CNIX.html`) that 404 once folded. Normalization happens only in a throwaway
@@ -1358,7 +1375,7 @@ columns only and logs one warning naming the file; submissions still land inacti
 `moderation_status` is **separate from `is_active`** on purpose: the boolean alone cannot say
 "a human looked at this and said no", so a rejected row would sit at `is_active = false`
 forever and be re-triaged every time the queue is opened. Do **not** name it `state` (that is
-the 2-letter US state code) or `review_status` (that is `check_reviews.py`'s org-legitimacy
+the 2-letter US state code) or `review_status` (that is `agents/check_reviews.py`'s org-legitimacy
 verdict, already shown to students). The normalized-URL index there is deliberately **not
 unique**, for the shared-portal reason above.
 
@@ -1366,7 +1383,7 @@ unique**, for the shared-portal reason above.
 split into two halves that are deliberately far apart in trust, and the split *is* the
 accuracy design:
 
-- **Discovery** (`find_mailing_lists.py`) writes one **recipe** per opportunity into
+- **Discovery** (`agents/find_mailing_lists.py`) writes one **recipe** per opportunity into
   `opportunity_signups` — how to POST a signup for that program — always at
   `status = 'pending_review'`. It cannot verify its own work.
 - **Execution** (`subscribe_user_to_list()` in server.py, `POST
@@ -1376,7 +1393,7 @@ accuracy design:
   same reason — except here a wrong answer lands in a student's inbox.
 
 - **The success state is `submitted`, never `subscribed`** — in
-  [mailing_list_common.py](mailing_list_common.py), in the `state` column, and in the
+  [mailing_list_common.py](wingman/mailing_list_common.py), in the `state` column, and in the
   button label. Every supported provider double opt-ins, and we sign the student up with
   **their own address** (there is no wingman-owned relay to read), so nothing in this repo
   can observe the confirmation link being clicked. Claiming otherwise is the exact silent
@@ -1398,7 +1415,7 @@ accuracy design:
   a per-list tap, an explicitly confirmed email address, and a ticked box. There is no
   bulk "subscribe me to all results" path and there must not be one — most users here are
   minors, and bulk sending is also how the outbound address gets blacklisted.
-  `legal/terms.md` §14A and `legal/privacy.md` §6A cover it (re-run `build_legal.py`);
+  `legal/terms.md` §14A and `legal/privacy.md` §6A cover it (re-run `agents/build_legal.py`);
   `TERMS_VERSION` moved to `2026-08-22` for it.
 - The email is **prefilled from the account but editable**. A Google signup often carries a
   school address that blocks outside mail, and making the address an explicit choice is
@@ -1422,7 +1439,7 @@ accuracy design:
   must add it to the ALTER block too.** Until the file is (re-)run, discovery aborts
   naming it, the console tab shows the setup step, and every opportunity degrades to the
   handoff — which is the correct behaviour with no verified recipe.
-- **[grade_mailing_lists.py](grade_mailing_lists.py)** is the measuring instrument, and is
+- **[grade_mailing_lists.py](agents/grade_mailing_lists.py)** is the measuring instrument, and is
   free. `--sample` picks a deterministic, deliberately adversarial 10-row stratified
   sample (it includes shared-portal rows on purpose); `--worksheet` turns the finder's
   output into a form a human fills in by opening each page; `--score` computes
@@ -1449,8 +1466,8 @@ of this chart:
   deadline checks. Spend the users caused, which nobody starts from this console. The
   per-user decomposition of exactly this money is the Cost per user tab.
 - **`other` — "Other"**: standalone scripts with no card — `scripts/one-off/backfill_subject_tags.py` (a
-  completed one-off) and `find_contact_emails.py` (a full-catalog pass; an ordinary
-  `refresh_opportunities.py` run already resolves `contact_email` per row, so this is only
+  completed one-off) and `agents/find_contact_emails.py` (a full-catalog pass; an ordinary
+  `agents/refresh_opportunities.py` run already resolves `contact_email` per row, so this is only
   for an initial backfill or a `--force` re-check).
 
 Each band carries a `note` the console prints under the legend, and each per-day entry
@@ -1486,7 +1503,7 @@ grounding-resolved URLs returned 200, including the catalog's own dead
 `training.nih.gov/research-training/sip/` against the real `…/research-training/pb/sip/`.
 Phase 2 needs no search, so a strict output format is free there.
 
-- **`url_validate.py`** does both halves and is entirely free — no API calls, no keys.
+- **`wingman/url_validate.py`** does both halves and is entirely free — no API calls, no keys.
   `resolve_grounding_chunks()` follows the one redirect hop from
   `vertexaisearch.cloud.google.com/grounding-api-redirect/…` to the real page (`web.title` is
   only a bare domain and `web.domain` does not exist on `v1beta/generateContent`, so the hop
@@ -1510,7 +1527,7 @@ Phase 2 needs no search, so a strict output format is free there.
 whether to search, non-deterministically: seed 51 was run twice with an *identical* command
 and returned 0 searches once and 6 the next time. Phase 1 therefore retries once on a
 zero-search response (cheap — a silent call pays no $0.014/search fee) and flags whatever is
-still silent. See `gemini_common.py`'s FIFTH and SIXTH findings. Do not try to force it; the
+still silent. See `wingman/gemini_common.py`'s FIFTH and SIXTH findings. Do not try to force it; the
 THIRD finding's conclusion that no reliable forcing mechanism exists is **correct**.
 
 **Discard almost nothing, explain everything.** Every row lands `is_active=false` with
@@ -1519,8 +1536,8 @@ Only two things never reach the table: an **exact duplicate** (same normalized U
 matching name, via `url_dedupe.find_duplicates()`), and a candidate with **no URL** — the URL
 is the row's identity. Both are written to the review snapshot with their raw JSON, so
 nothing vanishes silently. The snapshot is now `{"inserted": [...], "rejected": [...]}` rather
-than a bare list; `dryrun_common.py` reads these files, so **check it if you change that
-shape**. Flags are the `FLAG_*` constants in `scrape_opportunities.py` and must stay short —
+than a bare list; `wingman/dryrun_common.py` reads these files, so **check it if you change that
+shape**. Flags are the `FLAG_*` constants in `agents/scrape_opportunities.py` and must stay short —
 the console renders each as a pill truncated at 90 characters (with the full text in a
 `title=` tooltip).
 
@@ -1568,8 +1585,8 @@ repo cannot run: `create_seed()` writes `SEED_CATEGORY_PLACEHOLDER` to satisfy t
 **Scraper search angles** ("seeds") live in a Supabase `scraper_seeds` table
 ([scraper_seeds_schema.sql](db/scraper_seeds_schema.sql)), editable from the admin console, with
 lifetime per-angle yield totals (`total_added`, `total_cost`, …) so unproductive angles can be
-found and retired. `seeds_common.py` loads them and falls back to the hardcoded
-`NATIONAL_SEEDS`/`SEATTLE_SEEDS` literals in `scrape_opportunities.py` if the table is empty or
+found and retired. `wingman/seeds_common.py` loads them and falls back to the hardcoded
+`NATIONAL_SEEDS`/`SEATTLE_SEEDS` literals in `agents/scrape_opportunities.py` if the table is empty or
 unreachable — it logs loudly which source it used.
 Yield totals are credited by `record_seed_result()`, which **re-reads the seed immediately
 before adding** rather than adding to the copy loaded when the run began: PostgREST cannot
@@ -1606,7 +1623,7 @@ plus five POST endpoints:
   (`generate_mock_text`). Client sends a plain `{system, userContent, useWebSearch}` body
   (not Anthropic's content-block/messages envelope); server.py reuses `gemini_common.
   call_gemini()` — the same request-building, forced-search nudge, and thinking-budget
-  handling used by the offline batch scripts (`check_deadlines.py`/`check_reviews.py`) —
+  handling used by the offline batch scripts (`agents/check_deadlines.py`/`agents/check_reviews.py`) —
   and re-wraps the result into a `{content:[{type:"text",text:...}]}` envelope so both live
   and mock responses parse the same way client-side. When adding a new AI-backed feature,
   add a matching mock branch here so the app stays usable without a live key.
@@ -1650,7 +1667,7 @@ plus five POST endpoints:
   unchanged, this was a storage-backend swap only.
 
 **Subscription, trial, and signup consent.** Every account starts a **7-day free trial**
-that converts to a **$9.99/month** Stripe plan. `subscription_common.py` talks to Stripe
+that converts to a **$9.99/month** Stripe plan. `wingman/subscription_common.py` talks to Stripe
 over raw HTTP (no SDK, matching the stdlib-only philosophy) and holds the `PROMO_CODES`
 dict; four POST endpoints (`/api/subscription/status|checkout|cancel|validate-promo`) sit
 in `server.py`.
@@ -1743,7 +1760,7 @@ in `server.py`.
   materially** or old and new acceptances become indistinguishable.
 - **The legal documents are generated.** `legal/terms.md` and `legal/privacy.md` are the
   source of record; `terms.html` / `privacy.html` are built from them by
-  **`build_legal.py`** and must not be hand-edited — re-run it after any edit under
+  **`agents/build_legal.py`** and must not be hand-edited — re-run it after any edit under
   `legal/`. Note Terms §3 still states the beta is free of charge, which the $9.99 plan
   contradicts.
 - Stripe is **not configured**: `STRIPE_API_KEY`/`STRIPE_PRICE_ID` are absent from `.env`,
@@ -2106,7 +2123,7 @@ segments, no campaign composer, and deliberately no code path anywhere in this r
 mails everybody at once. A marketing platform (Mailchimp, Loops, Customer.io) was rejected
 for one reason: it requires continuously syncing the roster — names, emails, plan status —
 to a third party, for a user base that is largely minors. That contradicts
-`legal/privacy.md`, and switching it on would need a privacy edit, a `build_legal.py`
+`legal/privacy.md`, and switching it on would need a privacy edit, a `agents/build_legal.py`
 re-run and a `TERMS_VERSION` bump first. What IS outsourced is the pipe: Resend gets one
 address at a time, at the moment of sending. What a provider buys and a repo cannot rebuild
 is SPF/DKIM/DMARC on the sending domain, a warmed IP, bounce/complaint handling and a
@@ -2187,7 +2204,7 @@ the app to trigger it for us. So:
   unsubscribe that quietly keeps sending is the exact silent failure the mailing-list feature
   is measured against, and there is no volume here that makes the distinction worth the trust
   cost.
-- `send_lifecycle_emails.py` at the repo root is the **local** runner (`--preview`,
+- `wingman/send_lifecycle_emails.py` at the repo root is the **local** runner (`--preview`,
   `--dry-run`, `--days`, `--json`) for a manual catch-up. Unlike the six catalog agents **all
   three tiers are free** — there is no model in this path. What `--preview` protects is not
   money, it is a student's inbox.

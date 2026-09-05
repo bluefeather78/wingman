@@ -6,8 +6,8 @@ the other). Every case runs against BOTH so the two ports cannot drift apart.
 """
 import pytest
 
-import claude_common
-import gemini_common
+from wingman import claude_common
+from wingman import gemini_common
 
 # The two implementations under test. Every test parametrizes over both.
 EXTRACTORS = [gemini_common.extract_json, claude_common.extract_json]

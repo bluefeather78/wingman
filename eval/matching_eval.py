@@ -186,7 +186,7 @@ def run_eligibility_eval(cases, verdict_fn):
 def _live_verdict_fn(gemini_key):
     """Real verdict: run the curation call over the single candidate + student, apply the
     guard, and report whether the candidate came back eligible. Needs a model key."""
-    from gemini_common import call_gemini, extract_json
+    from wingman.gemini_common import call_gemini, extract_json
     from app.config import MESSAGES_MODEL
     from app.services.curation import (
         CURATION_SYSTEM, build_candidate_view, build_curation_user_content, finalize_curation,
@@ -236,7 +236,7 @@ def main():
         print(f"\n{len(SEED_ELIGIBILITY_CASES)} cases.")
         return
     if args.run:
-        from supabase_common import load_dotenv  # only for .env loading of the key
+        from wingman.supabase_common import load_dotenv  # only for .env loading of the key
         load_dotenv()
         key = os.environ.get("GEMINI_API_KEY", "")
         if not key:

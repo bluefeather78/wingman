@@ -6,7 +6,7 @@
 # to turn the enhancement on.
 #
 #   playwright — headless-browser fallback for page_text.fetch_page_text(allow_browser=True),
-#     used by refresh_opportunities.py (MARQUEE M1). When the free plain-HTTP GET fails
+#     used by agents/refresh_opportunities.py (MARQUEE M1). When the free plain-HTTP GET fails
 #     (bot walls: 403/202/429; JS-rendered SPAs; some TLS errors), the agent retries through a
 #     headless Chromium that runs the page's JS and presents a real browser fingerprint — still
 #     reading the LIVE page, never model memory. Measured 2026-08-28: recovers 156 of the 329

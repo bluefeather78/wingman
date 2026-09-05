@@ -1,4 +1,4 @@
--- scraper_seeds — the scrape_opportunities.py search angles, moved out of source so the
+-- scraper_seeds — the agents/scrape_opportunities.py search angles, moved out of source so the
 -- admin console can add/edit/enable/disable/delete them and track which ones earn their keep.
 --
 -- Run this once in the Supabase SQL editor, then populate it with:
@@ -43,7 +43,7 @@ alter table scraper_seeds enable row level security;
 --
 -- disabled_reason / disabled_at describe WHY and WHEN an angle was switched off. When the
 -- run-end sweep retires an angle it diagnoses mined-out or thin, it stamps
--- disabled_reason = 'auto: <diagnosis> — N found, N approved, ...' (see seed_ledger.py) so
+-- disabled_reason = 'auto: <diagnosis> — N found, N approved, ...' (see wingman/seed_ledger.py) so
 -- the console can show an "auto-disabled" badge with the reason and a one-click re-enable.
 -- A hand-disabled angle leaves disabled_reason NULL, which is how the two are told apart.
 -- Re-enabling (auto or manual) clears both. Until this runs the scraper still auto-decides,

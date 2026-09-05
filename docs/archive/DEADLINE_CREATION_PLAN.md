@@ -78,7 +78,7 @@ on-demand and cache."
 4. **Gemini stays for `meta`/`fit` only** — `extractTrackerInfo` is slimmed so its date and
    task outputs are dropped/ignored. The client takes dates from the deadline endpoint and
    tasks from the action-items endpoint.
-5. **`apply_url` = static `opp.url`** (link-checked by `check_links.py`) + a static label. No
+5. **`apply_url` = static `opp.url`** (link-checked by `agents/check_links.py`) + a static label. No
    model-typed apply URL; per-step action-item URLs cover the deep-link need.
 6. **The two Claude calls stay separate** — the deadline check needs `web_search` (current +
    prior cycle), the task check must NOT search (page fetched by us, quotes verified against
@@ -103,7 +103,7 @@ writes dates.)
   7-day re-bill. Accepted deliberately for product quality on the two core features.
 
 **⚠ Reconcile with `ACTION_ITEMS_TRUST_PLAN.md` — two conflicts this decision creates:**
-- **Model.** That plan is written on Gemini (`generate_action_items.py`, `call_gemini`) and
+- **Model.** That plan is written on Gemini (`agents/generate_action_items.py`, `call_gemini`) and
   quotes Gemini task costs throughout. Moving tasks to Claude Haiku supersedes its model
   choice. The two compose cleanly — the trust-tier / aggregator work is model-agnostic and
   the code-side quote verification is unchanged — but that doc's cost figures, `call_gemini`
@@ -133,7 +133,7 @@ result and stamped**, caching the hole for 7 days.
 
 ## Gap catalog
 
-- **G1 — Estimation physically cannot run.** `MAX_SEARCHES = 1` (`check_deadlines.py:140`)
+- **G1 — Estimation physically cannot run.** `MAX_SEARCHES = 1` (`agents/check_deadlines.py:140`)
   caps `web_search` at one query, enforced server-side by Anthropic (`max_uses: 1`). But the
   phase-1 prompt *mandates* a multi-query discipline (current cycle, then "ALWAYS ALSO" the
   prior cycle, then FAQ/key-dates). The single search lands on the evergreen page that omits
@@ -255,7 +255,7 @@ decisions.
 Introduce an explicit rolling/always-open status rather than inventing a fake deadline.
 
 **Server / catalog:**
-- Add `"rolling"` to `VALID_STATUS` (`check_deadlines.py:114`). Semantics: the program is
+- Add `"rolling"` to `VALID_STATUS` (`agents/check_deadlines.py:114`). Semantics: the program is
   genuinely always-open with no cycle boundaries (distinct from `running`, which has a cycle
   and a deadline).
 - Teach all three prompts (check_deadlines phase-2 extract, `extractTrackerInfo`,
@@ -492,7 +492,7 @@ with them in mind rather than retrofitted.
 ## Tentative touch list (subject to plan approval)
 
 Deadlines / status (G1–G3, G-cross):
-- `check_deadlines.py` — escalation loop in `research_deadlines`/`check_one`; `MAX_SEARCHES`
+- `agents/check_deadlines.py` — escalation loop in `research_deadlines`/`check_one`; `MAX_SEARCHES`
   → per-round budget + ladder; phase-1 signal tail; `VALID_STATUS` (+`rolling`);
   `deadline_write_decision` + `SOURCE_UNREACHED`; phase-2 prompt (rolling).
 - `app/routes/opportunities.py` — inherits `check_one`; confirm the `source`/stamp handling
@@ -501,7 +501,7 @@ Deadlines / status (G1–G3, G-cross):
   readers.
 
 Tasks → Claude (architecture decision):
-- `generate_action_items.py` — swap `call_gemini`→`call_claude` (Haiku 4.5 pin); cost via
+- `agents/generate_action_items.py` — swap `call_gemini`→`call_claude` (Haiku 4.5 pin); cost via
   `claude_common.estimate_cost`; keep `page_text` fetch + `claim_is_supported`/
   `quote_is_on_page` verification unchanged.
 - `app/services/action_items.py` — gate on `ANTHROPIC_API_KEY`; add the 7-day (or agreed)
@@ -520,7 +520,7 @@ Client — collapse the redundant Gemini producer:
   (Claude path), status logic, mocks.
 
 **Cross-doc:** several of these files also appear in `ACTION_ITEMS_TRUST_PLAN.md`
-(`generate_action_items.py`, `app/services/action_items.py`, `tracker.ts`). Sequence the two
+(`agents/generate_action_items.py`, `app/services/action_items.py`, `tracker.ts`). Sequence the two
 so the Gemini→Claude move lands before/with the aggregator work, not against it.
 
 ## Phased implementation plan
@@ -531,7 +531,7 @@ the refresh; 7 is a future per-user layer. The shared fetch-layer track (A/B/C) 
 
 **Phase 0 — Tasks move to Claude (foundation).** _(build-order step 0, shared with
 `ACTION_ITEMS_TRUST_PLAN.md`)_
-- `generate_action_items.py`: `call_gemini` → `call_claude` (Haiku 4.5 pin); cost via
+- `agents/generate_action_items.py`: `call_gemini` → `call_claude` (Haiku 4.5 pin); cost via
   `claude_common.estimate_cost`. Keep `page_text` fetch + `claim_is_supported`/
   `quote_is_on_page` verification untouched.
 - `app/services/action_items.py`: gate on `ANTHROPIC_API_KEY`; keep the free `generic-fallback`.
@@ -547,7 +547,7 @@ the refresh; 7 is a future per-user layer. The shared fetch-layer track (A/B/C) 
   Phase 6.
 
 **Phase 2 — Deadline estimation: G1 escalation loop.**
-- `check_deadlines.py`: escalation loop in `research_deadlines`/`check_one`; per-round
+- `agents/check_deadlines.py`: escalation loop in `research_deadlines`/`check_one`; per-round
   `max_uses:1` + strategy ladder; `FOUND_*` signal tail; accumulate `sources` across rounds;
   prompt caching (decision 6). Batch + interactive inherit via `check_one`.
 - **Rung 4 (trusted third-party) depends on the shared `trusted_aggregators` allowlist** (see
@@ -582,7 +582,7 @@ the refresh; 7 is a future per-user layer. The shared fetch-layer track (A/B/C) 
   per-user tombstones; removal state/undo; add/delete UI. No catalog schema change.
 
 **Parallel track — shared infrastructure (with `ACTION_ITEMS_TRUST_PLAN.md`).**
-- **Trusted-domain allowlist** — `trusted_aggregators` table + `aggregators_common.py` +
+- **Trusted-domain allowlist** — `trusted_aggregators` table + `wingman/aggregators_common.py` +
   admin-console Sources tab (approve/block/park). Defined in `ACTION_ITEMS_TRUST_PLAN.md`;
   now **also gates the deadline loop's rung 4** (decision 1). Build once, shared. Deadline
   rung 4 needs only the read side (which domains are trusted); the task side needs the full

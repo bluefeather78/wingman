@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """One-off backfill: `description` (the longer 2-4 sentence field populated by
-scrape_opportunities.py/migrate_to_supabase.py) is never rendered anywhere in the
+agents/scrape_opportunities.py/migrate_to_supabase.py) is never rendered anywhere in the
 frontend — only the shorter `summary` field reaches the UI (see script.js's Finder
 result cards). This script folds `description` into `summary` (concatenated, so no
 detail is lost) for every row that has a non-empty `description`, so all of that
@@ -26,7 +26,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 
-from supabase_common import load_dotenv, supabase_get, supabase_patch
+from wingman.supabase_common import load_dotenv, supabase_get, supabase_patch
 
 
 def merge(summary, description):
@@ -93,7 +93,7 @@ def main():
 
     print(f"\n[DONE] Updated {updated} row(s), {errors} error(s).")
     if updated:
-        print("[NOTE] Run `python export_json.py` to refresh the git-tracked opportunities.json snapshot.")
+        print("[NOTE] Run `python -m agents.export_json` to refresh the git-tracked opportunities.json snapshot.")
 
 
 if __name__ == "__main__":

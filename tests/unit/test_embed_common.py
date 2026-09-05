@@ -4,7 +4,7 @@ All pure. The vector CALL is network and is never exercised here — only its re
 """
 import math
 
-import embed_common as ec
+from wingman import embed_common as ec
 
 
 # ---------- cosine ----------

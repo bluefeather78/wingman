@@ -1,7 +1,7 @@
 """Unit tests for dedupe_queue.select_rows — the --source queue/flagged row selection. Pure,
 no network.
 """
-import dedupe_queue as dq
+from agents import dedupe_queue as dq
 
 
 def _row(id_, active, status, flags=None):

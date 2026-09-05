@@ -24,15 +24,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-import agent_common
-import aggregators_common
-import db_health_check
-import dryrun_common
-import mailing_list_common
-import query_telemetry
-import seed_ledger
-from supabase_common import supabase_get
-from agent_common import PREVIEW_PREFIX as AGENT_PREVIEW_PREFIX
+from wingman import agent_common
+from wingman import aggregators_common
+from wingman import db_health_check
+from wingman import dryrun_common
+from wingman import mailing_list_common
+from wingman import query_telemetry
+from wingman import seed_ledger
+from wingman.supabase_common import supabase_get
+from wingman.agent_common import PREVIEW_PREFIX as AGENT_PREVIEW_PREFIX
 from app.config import *  # noqa: F401,F403
 from app import config
 from app.core import (
@@ -43,7 +43,7 @@ from app.core import (
     classify_feature, subscription_state,
 )
 from app.services.opportunities import _opportunities_cache, _opportunities_cache_lock
-from subscription_common import is_trial_expired, promo_kind, PROMO_CODES
+from wingman.subscription_common import is_trial_expired, promo_kind, PROMO_CODES
 from app.services.mailing_list import (
     SIGNUPS_TABLE, SUBSCRIPTIONS_TABLE, SIGNUP_REVIEW_STATUSES, MAILING_LIST_SETUP_HINT,
 )
@@ -52,7 +52,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 # ---------- Agent execution tracking ----------
-# check_reviews.py/scrape_opportunities.py/check_deadlines.py each write a row to a
+# agents/check_reviews.py/scrape_opportunities.py/check_deadlines.py each write a row to a
 # Supabase `agent_runs` table (insert at start, patch with items/cost/errors at finish
 # — see each script's own docstring for the exact CREATE TABLE). That table is the
 # authoritative source for run history and cost/items data: it's accurate even for
@@ -90,7 +90,7 @@ AGENT_CONFIGS_SCHEMA = {
     "scraper": {
         "name": "New Opportunity Scout",
         "description": "Search for new opportunities missing from the catalog",
-        "script": "scrape_opportunities.py",
+        "script": "agents/scrape_opportunities.py",
         "db_agent": "scraper",
         "unit": "seeds",
         "writes": "inserts",
@@ -101,7 +101,7 @@ AGENT_CONFIGS_SCHEMA = {
     "metadata": {
         "name": "Update Opportunity",
         "description": "Refresh name, org, eligibility, pricing and other core fields",
-        "script": "refresh_opportunities.py",
+        "script": "agents/refresh_opportunities.py",
         "db_agent": "metadata_refresher",
         "unit": "rows",
         "writes": "updates",
@@ -112,7 +112,7 @@ AGENT_CONFIGS_SCHEMA = {
     "deadline": {
         "name": "Deadline Checker",
         "description": "Check and update application deadlines and program status",
-        "script": "check_deadlines.py",
+        "script": "agents/check_deadlines.py",
         "db_agent": "deadline_checker",
         "unit": "rows",
         "writes": "updates",
@@ -126,7 +126,7 @@ AGENT_CONFIGS_SCHEMA = {
         "name": "Reviews Generator",
         "description": "Generate the reviews shown on each opportunity — org legitimacy and "
                        "reputation, verified from independent sources",
-        "script": "check_reviews.py",
+        "script": "agents/check_reviews.py",
         "db_agent": "review_checker",
         "unit": "rows",
         "writes": "updates",
@@ -137,7 +137,7 @@ AGENT_CONFIGS_SCHEMA = {
     "tasks": {
         "name": "Task Generator",
         "description": "Work out each program's application steps, verified against its own page",
-        "script": "generate_action_items.py",
+        "script": "agents/generate_action_items.py",
         "db_agent": "action_item_generator",
         "unit": "rows",
         "writes": "updates",
@@ -152,7 +152,7 @@ AGENT_CONFIGS_SCHEMA = {
     "mailinglist": {
         "name": "Mailing List Finder",
         "description": "Find each program's mailing-list signup form and store a recipe for it",
-        "script": "find_mailing_lists.py",
+        "script": "agents/find_mailing_lists.py",
         "db_agent": "mailing_list_finder",
         "unit": "rows",
         "writes": "updates",
@@ -168,7 +168,7 @@ AGENT_CONFIGS_SCHEMA = {
     "links": {
         "name": "Link Checker",
         "description": "Verify catalog URLs and queue the broken ones for review on the Links tab; also mark programs whose summary says they're discontinued",
-        "script": "check_links.py",
+        "script": "agents/check_links.py",
         "db_agent": "link_checker",
         "unit": "rows",
         # Since 2026-09-02 this agent DEACTIVATES NOTHING. It never activates, rejects, or
@@ -421,7 +421,7 @@ def get_agent_history(agent=None, limit=50, days=None):
     return shaped[:limit]
 
 
-import dryrun_common
+from wingman import dryrun_common
 
 USER_COSTS_SETUP_SQL = "db/user_costs_schema.sql"
 PLAN_PRICE_USD = 9.99  # mirrors subscription_common.PLAN_PRICE_CENTS
@@ -1511,7 +1511,7 @@ def clear_dup_verdict(ids):
 
 
 # The columns the Links-tab queue reads. link_review_status is the queue membership flag
-# (see db/link_health_schema.sql / check_links.py); the rest let the row explain itself without a
+# (see db/link_health_schema.sql / agents/check_links.py); the rest let the row explain itself without a
 # second lookup — the code and dead-since date say HOW dead and for HOW LONG, quality_flags
 # carries the reviewer hint (and any repair suggestion), and is_active/moderation_status let
 # the console show a row a person already deactivated differently from a still-live one.
@@ -1912,8 +1912,8 @@ OPPORTUNITY_TYPES = ("Program", "Internship", "Competition", "Research", "Volunt
 #   is_active / moderation_status  — those are the Activate and Reject buttons, which carry
 #                                    their own confirmations and cache invalidation.
 #   id, source, created_at         — provenance. Editing it would erase where a row came from.
-#   review_status/review_summary/review_sources/last_reviewed_at — check_reviews.py owns these.
-#   status/important_dates/was_estimated/dates_last_checked_at   — check_deadlines.py owns
+#   review_status/review_summary/review_sources/last_reviewed_at — agents/check_reviews.py owns these.
+#   status/important_dates/was_estimated/dates_last_checked_at   — agents/check_deadlines.py owns
 #                                    these, and a hand-typed date would be silently
 #                                    overwritten by the next deadline check anyway.
 EDITABLE_OPPORTUNITY_FIELDS = {
@@ -2116,7 +2116,7 @@ def _ROUNDUP_REJECT_REASON():
     """The reject reason that routes a page back into discovery, read from the one place that
     defines it. Imported lazily so the console still loads if the offline layer is unavailable."""
     try:
-        import discovered_leads
+        from wingman import discovered_leads
         return discovered_leads.ROUNDUP_REJECT_REASON
     except Exception:
         return "third-party-roundup"
@@ -2126,7 +2126,7 @@ def _queue_roundup_leads_async(ids):
     """Classify the just-rejected round-ups and queue them, on a background thread."""
     def work():
         try:
-            import discovered_leads
+            from wingman import discovered_leads
             rows = supabase_get(SUPABASE_URL, "opportunities",
                                 {"select": "id,name,url,seed_id",
                                  "id": f"in.({','.join(ids)})"}, SUPABASE_SERVICE_KEY) or []
@@ -2255,7 +2255,7 @@ def _pick_survivor(a, b):
     (deeper-path) URL. Only a suggestion — the operator can swap keep/flag in the console
     before anything is written. Returns (keep, flag).
     """
-    import url_dedupe
+    from wingman import url_dedupe
 
     def score(r):
         s = 0
@@ -2287,7 +2287,7 @@ def scan_catalog_duplicates(write=True):
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
     try:
-        import dedupe_resolve
+        from wingman import dedupe_resolve
         summary = dedupe_resolve.run(SUPABASE_URL, SUPABASE_SERVICE_KEY, write=bool(write))
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"Duplicate scan failed: {e}"}
@@ -2305,13 +2305,13 @@ def duplicate_report_pairs(limit=2000):
     action instead, not here. Writes nothing; this only proposes.
 
     As of 2026-08-30 this runs on the SAME embedding + dedupe_confidence tier engine
-    dedupe_queue.py uses for the review queue (find_catalog_dups.find_duplicate_pairs), not a
+    agents/dedupe_queue.py uses for the review queue (find_catalog_dups.find_duplicate_pairs), not a
     separate free heuristic scan — that scan (URL/name-similarity/acronym cuts) is retired. See
-    find_catalog_dups.py's module docstring for why: it was three hand-tuned approximations of
+    wingman/find_catalog_dups.py's module docstring for why: it was three hand-tuned approximations of
     what one semantic-similarity pass now does directly, on rows already embedded for free.
     """
-    import find_catalog_dups as fcd
-    import dedupe_confidence as dc
+    from wingman import find_catalog_dups as fcd
+    from wingman import dedupe_confidence as dc
 
     if not SUPABASE_URL:
         return {"ok": False, "error": "SUPABASE_URL not configured."}
@@ -2390,14 +2390,14 @@ def flag_suspected_duplicate_pairs(pairs, reviewed_by="admin-console"):
 
 
 # The queue marker added by db/activation_refresh_schema.sql. Set when a row is activated,
-# cleared by refresh_opportunities.py once it reads the page. A one-shot queue flag, NOT a
+# cleared by agents/refresh_opportunities.py once it reads the page. A one-shot queue flag, NOT a
 # staleness clock — see that file's header.
 ACTIVATION_REFRESH_COLUMN = "activation_refresh_queued_at"
 ACTIVATION_REFRESH_SQL = "db/activation_refresh_schema.sql"
 
 
 def metadata_refresh_queue(limit=200):
-    """Rows ACTIVATED but not yet run through refresh_opportunities.py.
+    """Rows ACTIVATED but not yet run through agents/refresh_opportunities.py.
 
     Read-only. Backs the console's Core Details card. A row is in the queue while its
     `activation_refresh_queued_at` is non-null; the refresh agent nulls it on a successful
@@ -2432,7 +2432,7 @@ def get_db_health():
     """One-shot, read-only health snapshot of the catalog for the console's Health tab.
 
     Thin wrapper over db_health_check.collect_health() — the same function the CLI runs — so the
-    tab and `python db_health_check.py` can never report different numbers. FREE: read-only
+    tab and `python -m wingman.db_health_check` can never report different numbers. FREE: read-only
     Supabase GETs plus two local-file reads (the leads queue and the dedupe embedding index),
     no model call, no writes. collect_health never raises; a subsystem it cannot read is marked
     unavailable inside the payload. Wrapped in a belt-and-braces try anyway so a health card can
@@ -2462,7 +2462,7 @@ def _index_activated_rows(ids):
     (opportunities.dedupe_vector) so a later scrape's embedding dedupe can match new candidates
     against rows a human just made live. Never raises and never blocks activation — on any failure
     (no GEMINI_API_KEY, network, migration not run, etc.) the rows are simply left for the next
-    build_catalog_embeddings.py run to pick up. Active-only, matching the vector's design: a row is
+    agents/build_catalog_embeddings.py run to pick up. Active-only, matching the vector's design: a row is
     embedded when a human makes it LIVE, not while it sits pending.
 
     Deliberately PARALLEL to _embed_match_vectors: that writes the RECALL match_vector the
@@ -2478,7 +2478,7 @@ def _index_activated_rows(ids):
         key = os.environ.get("GEMINI_API_KEY")
         if not key:
             return 0  # mock / no-key env: skip silently, exactly like the AI proxies do
-        from dedupe_embed_store import refresh_row_dedupe_embedding, DEDUPE_SELECT_FIELDS
+        from wingman.dedupe_embed_store import refresh_row_dedupe_embedding, DEDUPE_SELECT_FIELDS
         rows = _supabase_request("opportunities", params={
             "select": DEDUPE_SELECT_FIELDS, "id": f"in.({','.join(ids)})"}) or []
         count = 0
@@ -2542,8 +2542,8 @@ def _embed_match_vectors(ids):
 
 
 # Sources whose rows arrive prefilled with refresh_opportunities' own extraction and therefore
-# never need to be queued for it: the scraper (M9 discovery gate, scrape_opportunities.py) and
-# the hub miner (combined_reader.extract_metadata, mine_hub_pages.py) both now run that same
+# never need to be queued for it: the scraper (M9 discovery gate, agents/scrape_opportunities.py) and
+# the hub miner (combined_reader.extract_metadata, agents/mine_hub_pages.py) both now run that same
 # extraction on the page they already fetched, before insert (2026-08-30). Everything else --
 # user-submitted, scraper_seeds-derived, tombstone backfills, name-harvest finds -- still might
 # be thin, so it still queues. Matched by prefix against the `source` column's own literal
@@ -2654,7 +2654,7 @@ def activate_opportunities(ids, active=True):
 
 
 # ---------------- Deadline cache ----------------
-# The console half of clear_deadline_cache.py. Nulling dates_last_checked_at is the ONLY
+# The console half of wingman/clear_deadline_cache.py. Nulling dates_last_checked_at is the ONLY
 # way to force a re-check inside the 7-day TTL, and until 2026-08-24 there was no working
 # way to do it at all (the script wrote a column name that does not exist, so PostgREST
 # rejected every PATCH). That mattered because the TTL is also what hides a bad answer:
@@ -3503,6 +3503,16 @@ def _int_or_none(value):
         return None
 
 
+def _script_module(script):
+    """"agents/scrape_opportunities.py" -> "agents.scrape_opportunities".
+
+    The agents are launched with `-m`, not by path, and that is load-bearing since the
+    2026-09-04 package move: `python agents/x.py` puts agents/ on sys.path[0] and NOT the
+    repo root, so the script's own `from wingman import ...` would fail immediately. `-m`
+    with cwd=REPO_ROOT puts the repo root on the path instead, which is the same way
+    uvicorn resolves `app.main` in production."""
+    return script[:-3].replace("/", ".") if script.endswith(".py") else script
+
 def build_agent_args(agent_name, config, preview=False):
     """Translate a console config dict into real argv for the agent's script.
 
@@ -3511,12 +3521,12 @@ def build_agent_args(agent_name, config, preview=False):
     not add one without checking `python <script>.py --help` first.
     """
     cfg = AGENT_CONFIGS_SCHEMA[agent_name]
-    args = [sys.executable, "-u", cfg["script"]]  # -u: unbuffered, so live output streams
+    args = [sys.executable, "-u", "-m", _script_module(cfg["script"])]  # -u: unbuffered, so live output streams
     config = config or {}
     defaults = agent_defaults(agent_name)  # built-ins with saved overrides applied
 
     if agent_name == "metadata":
-        # refresh_opportunities.py: [--sample N | --all | --awaiting-refresh] [--dry-run]
+        # agents/refresh_opportunities.py: [--sample N | --all | --awaiting-refresh] [--dry-run]
         # [--exclude-source S]
         scope = config.get("scope")
         if scope == "sample":
@@ -3532,7 +3542,7 @@ def build_agent_args(agent_name, config, preview=False):
             args += ["--exclude-source", str(config["excludeSource"])]
 
     elif agent_name == "reviews":
-        # check_reviews.py: [--sample N | --all] [--force] [--dry-run]
+        # agents/check_reviews.py: [--sample N | --all] [--force] [--dry-run]
         scope = config.get("scope")
         if scope == "sample":
             args += ["--sample", str(_int_or_none(config.get("sampleSize")) or 50)]
@@ -3543,7 +3553,7 @@ def build_agent_args(agent_name, config, preview=False):
             args.append("--force")
 
     elif agent_name == "scraper":
-        # scrape_opportunities.py: --mode {national,seattle} (required) [--dry-run]
+        # agents/scrape_opportunities.py: --mode {national,seattle} (required) [--dry-run]
         # [--seed-ids S] [--seed-indices S] [--max-searches N] [--gate-observe]
         args += ["--mode", config.get("mode") or "national"]
         if config.get("seedIds"):
@@ -3559,7 +3569,7 @@ def build_agent_args(agent_name, config, preview=False):
             args.append("--gate-observe")
 
     elif agent_name == "deadline":
-        # check_deadlines.py: [--sample N | --all] [--dry-run]
+        # agents/check_deadlines.py: [--sample N | --all] [--dry-run]
         scope = config.get("scope")
         if scope == "sample":
             args += ["--sample", str(_int_or_none(config.get("sampleSize")) or 50)]
@@ -3567,7 +3577,7 @@ def build_agent_args(agent_name, config, preview=False):
             args.append("--all")
 
     elif agent_name == "mailinglist":
-        # find_mailing_lists.py: [--all | --ids A,B] [--limit N] [--force] [--dry-run]
+        # agents/find_mailing_lists.py: [--all | --ids A,B] [--limit N] [--force] [--dry-run]
         if config.get("ids"):
             args += ["--ids", str(config["ids"])]
         else:
@@ -3579,7 +3589,7 @@ def build_agent_args(agent_name, config, preview=False):
             args.append("--force")
 
     elif agent_name == "links":
-        # check_links.py: [--all | --sample N | --ids A,B | --repair-flagged] [--force]
+        # agents/check_links.py: [--all | --sample N | --ids A,B | --repair-flagged] [--force]
         # [--flag-only] [--no-repair] [--dry-run] [--workers N]
         scope = config.get("scope")
         if config.get("ids"):
@@ -3924,7 +3934,7 @@ MAINTENANCE_TOOLS = {
         "name": "Inspect an Opportunity",
         "description": "Dump everything stored for one program id — deadline data first. "
                        "The place to start when a student reports something wrong.",
-        "script": "check_opp_data.py",
+        "script": "agents/check_opp_data.py",
         "free": True, "writes": False,
         "params": [{"key": "ids", "label": "Opportunity id(s)", "required": True,
                     "placeholder": "ec18694 ec17433"}],
@@ -3933,13 +3943,13 @@ MAINTENANCE_TOOLS = {
         "name": "Refresh Progress Report",
         "description": "How many rows the Update Opportunity agent has recently touched. "
                        "Read-only.",
-        "script": "check_refresh_progress.py",
+        "script": "agents/check_refresh_progress.py",
         "free": True, "writes": False, "params": [],
     },
     # NOTE: the old "dupfinder" tool card was retired 2026-08-28. The same catalog scan now
     # backs the Run → Duplicates tab (duplicate_report_pairs / flag_suspected_duplicate_pairs),
     # which not only lists suspected pairs but lets a human flag them in place — a superset of
-    # the report-only card. find_catalog_dups.py is still imported by duplicate_report_pairs.
+    # the report-only card. wingman/find_catalog_dups.py is still imported by duplicate_report_pairs.
     "minehub": {
         # Hub-first discovery: one page that LISTS many programs yields many real rows without
         # a per-search fee. Preview (discover + dedup) is free; extraction is one no-search
@@ -3948,7 +3958,7 @@ MAINTENANCE_TOOLS = {
         "description": "Discover programs by mining a hub page that lists many — a university "
                        "pre-college index, a city teen page, a listicle. Preview is free; a real "
                        "run extracts (~$0.003/page) and inserts inactive rows for review.",
-        "script": "mine_hub_pages.py",
+        "script": "agents/mine_hub_pages.py",
         "free": False, "writes": True,
         "params": [
             {"key": "fromLeads", "label": "…or take N from the discovery queue",
@@ -3978,7 +3988,7 @@ MAINTENANCE_TOOLS = {
         "description": "For a page that LISTS programs by name but does not link them. Reads "
                        "the names free, then searches for each one's own page. Preview is free; "
                        "a real run is PAID (~$0.02/name) and inserts inactive rows for review.",
-        "script": "harvest_names.py",
+        "script": "agents/harvest_names.py",
         "free": False, "writes": True,
         "params": [
             {"key": "url", "label": "Page URL", "required": True,
@@ -3997,7 +4007,7 @@ MAINTENANCE_TOOLS = {
         "description": "Analyse where the catalog is thin and propose new scraper angles. "
                        "Preview prints them; Commit writes them as DISABLED seeds for you to "
                        "review and enable. Both are free.",
-        "script": "propose_angles.py",
+        "script": "agents/propose_angles.py",
         "free": True, "writes": True,
         "params": [
             {"key": "mode", "type": "select", "label": "Scope", "options": [
@@ -4015,7 +4025,7 @@ MAINTENANCE_TOOLS = {
         "description": "Resurrect real programs whose stored link died — one narrow web search "
                        "per row, inserting a fresh inactive row for review. Preview is free; a "
                        "real run is PAID (~$0.02–0.05/row) and needs approval.",
-        "script": "refind_dead_links.py",
+        "script": "agents/refind_dead_links.py",
         "free": False, "writes": True,
         "params": [
             {"key": "mode", "type": "select", "label": "Mode", "options": [
@@ -4028,21 +4038,21 @@ MAINTENANCE_TOOLS = {
         "name": "Mailing-List Accuracy Grader",
         "description": "Pick the deterministic pilot sample and print the finder --ids string "
                        "to run next. Calls no API.",
-        "script": "grade_mailing_lists.py", "fixed_args": ["--sample"],
+        "script": "agents/grade_mailing_lists.py", "fixed_args": ["--sample"],
         "free": True, "writes": False, "params": [],
     },
     "export": {
         "name": "Export Catalog Backup",
         "description": "Write the whole catalog to a diffable opportunities.json snapshot. "
                        "Local file only.",
-        "script": "export_json.py",
+        "script": "agents/export_json.py",
         "free": True, "writes": True, "params": [],
     },
     "legal": {
         "name": "Rebuild Legal Pages",
         "description": "Regenerate terms.html / privacy.html from the legal markdown source. "
                        "Run after editing anything under legal/.",
-        "script": "build_legal.py",
+        "script": "agents/build_legal.py",
         "free": True, "writes": True, "params": [],
     },
     "contactemail": {
@@ -4050,7 +4060,7 @@ MAINTENANCE_TOOLS = {
         "description": "Backfill only. New opportunities already get a contact email when "
                        "they’re added, and an Update Opportunity refresh keeps it current "
                        "— run this just to fill gaps in older rows or force a re-check.",
-        "script": "find_contact_emails.py",
+        "script": "agents/find_contact_emails.py",
         "free": False, "writes": True,
         "params": [
             {"key": "scope", "type": "select", "label": "Scope", "options": [
@@ -4071,7 +4081,7 @@ MAINTENANCE_TOOLS = {
                        "queue shows a class pill and classified hubs feed the mining queue. "
                        "Preview is free; a real run is PAID (~$0.004/row, an unreadable page is "
                        "free) and stamps every row.",
-        "script": "classify_queue.py",
+        "script": "agents/classify_queue.py",
         "free": False, "writes": True,
         "params": [
             {"key": "mode", "type": "select", "label": "Mode", "options": [
@@ -4093,7 +4103,7 @@ MAINTENANCE_TOOLS = {
                        "(adds real tier/cosine evidence to what the scan proposed — never changes "
                        "moderation_status or is_active). Preview is free; a real run is PAID (~a "
                        "cent total; the catalog index is prebuilt).",
-        "script": "dedupe_queue.py",
+        "script": "agents/dedupe_queue.py",
         "free": False, "writes": True,
         "params": [
             {"key": "source", "type": "select", "label": "Source", "options": [
@@ -4112,7 +4122,7 @@ MAINTENANCE_TOOLS = {
                        "hubs (their programs are mined), non-opportunity pages, and stale "
                        "programs. Never touches a fresh program or an unreadable row. FREE, "
                        "reversible, and reuses the console's own moderation.",
-        "script": "triage_queue.py",
+        "script": "agents/triage_queue.py",
         "free": True, "writes": True,
         "params": [
             {"key": "mode", "type": "select", "label": "Mode", "options": [
@@ -4128,7 +4138,7 @@ MAINTENANCE_TOOLS = {
                        "automatically; this is the ad-hoc catch-up. Re-embeds only rows whose "
                        "fields changed (content-hash gated). Preview is free; a commit is PAID "
                        "(~cents). Needs db/dedupe_vector_schema.sql to have been run.",
-        "script": "build_catalog_embeddings.py",
+        "script": "agents/build_catalog_embeddings.py",
         "free": False, "writes": True,
         "params": [
             {"key": "mode", "type": "select", "label": "Mode", "options": [
@@ -4151,11 +4161,11 @@ def build_tool_args(tool_key, params):
     """argv for one maintenance tool. Mirrors build_agent_args but far smaller — these scripts
     take a handful of flags at most, and most take none."""
     cfg = MAINTENANCE_TOOLS[tool_key]
-    args = [sys.executable, "-u", cfg["script"]]
+    args = [sys.executable, "-u", "-m", _script_module(cfg["script"])]
     args += list(cfg.get("fixed_args") or [])
     params = params or {}
     if tool_key == "inspect":
-        # check_opp_data.py takes positional ids; accept commas or spaces from the one field.
+        # agents/check_opp_data.py takes positional ids; accept commas or spaces from the one field.
         args += str(params.get("ids") or "").replace(",", " ").split()
     elif tool_key == "refind":
         # Default to the free preview; a paid run must be chosen explicitly.
@@ -4207,7 +4217,7 @@ def build_tool_args(tool_key, params):
         if params.get("dryRun"):
             args.append("--dry-run")
     elif tool_key == "classifyqueue":
-        # classify_queue.py: [--preview | --limit N] [--write]
+        # agents/classify_queue.py: [--preview | --limit N] [--write]
         if str(params.get("mode") or "preview") == "write":
             args.append("--write")
             n = _int_or_none(params.get("limit"))
@@ -4216,7 +4226,7 @@ def build_tool_args(tool_key, params):
         else:
             args.append("--preview")
     elif tool_key == "dedupequeue":
-        # dedupe_queue.py: [--source queue|flagged] [--preview] [--write] [--classified-only]
+        # agents/dedupe_queue.py: [--source queue|flagged] [--preview] [--write] [--classified-only]
         source = str(params.get("source") or "queue")
         if source == "flagged":
             args += ["--source", "flagged"]
@@ -4227,12 +4237,12 @@ def build_tool_args(tool_key, params):
         else:
             args.append("--preview")
     elif tool_key == "triagequeue":
-        # triage_queue.py: [--all-junk] [--dry-run]. Preview = the plan; reject = act.
+        # agents/triage_queue.py: [--all-junk] [--dry-run]. Preview = the plan; reject = act.
         args.append("--all-junk")
         if str(params.get("mode") or "preview") != "reject":
             args.append("--dry-run")
     elif tool_key == "embedindex":
-        # build_catalog_embeddings.py requires one of --dry-run (free preview) or --yes-really
+        # agents/build_catalog_embeddings.py requires one of --dry-run (free preview) or --yes-really
         # (PAID embed + write). Re-embedding is content-hash gated, so there is no --rebuild.
         args.append("--yes-really" if str(params.get("mode") or "preview") == "commit"
                     else "--dry-run")
@@ -4378,7 +4388,7 @@ def list_discovered_leads(limit=60):
     console disagree with the tool.
     """
     try:
-        import discovered_leads
+        from wingman import discovered_leads
     except Exception as e:                              # pragma: no cover - import guard
         return {"ok": False, "error": str(e)[:200], "leads": []}
     try:

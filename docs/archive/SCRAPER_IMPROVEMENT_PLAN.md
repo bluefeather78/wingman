@@ -25,7 +25,7 @@ search angle -> search -> URLs
        '- NAMES them  -> name harvest  (PAID, ~$0.019/name)   [operator-pointed only]
 
 a row we already activated -> its PARENT url -> does the parent link it back?
-       '- yes -> a same-domain hub lead   (walk_up_hubs.py, FREE, no classifier)
+       '- yes -> a same-domain hub lead   (wingman/walk_up_hubs.py, FREE, no classifier)
 ```
 Second feed: **rejecting a row as a round-up in the console queues it automatically.**
 Third feed: **the catalog itself** — see the walk-up below, which is where hubs now come from.
@@ -54,7 +54,7 @@ links, it is **(A) pages linking programs on OTHER domains** (third-party round-
   Ringling, LIM keep programs at a different path than the index). Cause is structural:
   same-domain links on any page are dominated by the shared nav.
 
-**BUILT 2026-08-28 — `walk_up_hubs.py` derives kind B instead of detecting it.** When a search
+**BUILT 2026-08-28 — `wingman/walk_up_hubs.py` derives kind B instead of detecting it.** When a search
 returns `ced.berkeley.edu/academics/summer-programs/**summer-institute**` and it becomes a row,
 its **parent** is very likely the index of its siblings. So walk UP from a program we already
 trust and make the parent **prove** it:
@@ -86,10 +86,10 @@ off-domain, since every lead already on file came from the router.
 
 ### What shipped this session
 
-- **Phase 4N `harvest_names.py`** — names off a page, resolved via the refind primitive. Three
+- **Phase 4N `agents/harvest_names.py`** — names off a page, resolved via the refind primitive. Three
   free gates; ranking before the cap (**A/B'd live: 1 row -> 3 rows at identical cost**, self-
   promotion 1-of-1 -> 0-of-3); a **score floor** replaced the count cap.
-- **Phase 4F `discovered_leads.py`** — the router. Structural, no host list, no budget.
+- **Phase 4F `wingman/discovered_leads.py`** — the router. Structural, no host list, no budget.
 - **Live runs (PAID $0.55 total):** hub mining 19 rows, name harvest 12 rows across 3 runs.
   **31 rows await review.**
 - **Console:** *Harvest Names From a Page* joins *Mine Hub Pages*. Free preview by default.
@@ -156,10 +156,10 @@ off-domain, since every lead already on file came from the router.
    when the pipeline changes; do not publish a second copy.
 
 ### Session 2026-08-28 — kind B closed, two live bugs fixed
-- **`walk_up_hubs.py` built + swept** (above). 1516 tests green (1533 collected locally, 17 of
+- **`wingman/walk_up_hubs.py` built + swept** (above). 1516 tests green (1533 collected locally, 17 of
   them a concurrent session's untracked `test_query_telemetry.py`); `grade_scraper_batch` url-dup
   **0 regressions, SAFE**. 244 leads written.
-- **`discovered_leads.py --list` crashed on the live file.** A remembered NO carries `kind=None`
+- **`wingman/discovered_leads.py --list` crashed on the live file.** A remembered NO carries `kind=None`
   and the listing formatted it with a width spec (`f"{None:5}"` raises); 10 such rows are on
   disk, so the command this handoff tells the next session to run did not work at all. The
   default listing is now the actionable work-list; `--all` shows the whole file.
@@ -275,14 +275,14 @@ Only `program`-class pages are enriched — hubs become leads, `none` is flagged
 does what the new-opportunity scraper AND `refresh_opportunities` both do — read the page, pull the
 fields — so a NEW row lands fully formed for a 5-second review.** Nothing is retired:
 
-- **`refresh_opportunities.py` stays STANDALONE**, the lightweight existing-row updater. The reader
+- **`agents/refresh_opportunities.py` stays STANDALONE**, the lightweight existing-row updater. The reader
   only CALLS its public `build_system`/`clean_update_dict` (read-only, no M1 edit); M1 holds because
   metadata is extracted only when the fetch succeeded — a failed fetch routes to `unreadable` and
   never reaches the model, so we never answer from memory.
 - **Action items and deadlines stay STANDALONE too** (operator, 2026-08-30) — out of scope here,
   followed up later. Keeping tasks out also keeps this build clear of the action-item verification
   machinery. Reviews stay separate as always.
-- Built as `combined_reader.py` (fetch-once orchestrator, every call injected, hermetically tested).
+- Built as `wingman/combined_reader.py` (fetch-once orchestrator, every call injected, hermetically tested).
 
 ### Axis 1 — the page classifier (M8 prompt, M9 paid; search scraper ONLY for v1)
 
@@ -357,17 +357,17 @@ which page CONTENT might do and URL/name cannot.
 - **Storage needs no DDL.** ~1300 rows × a ~768-float vector ≈ 4 MB — load and cosine-compare
   in-process with numpy, no pgvector, no SQL RPC (which this repo cannot run). MVP = a repo-root
   sidecar `catalog_embeddings.jsonl` (`id → vector + embedded_at + source`), the same
-  "file now, table later" pattern `discovered_leads.py` uses. Dead-page rows fall back to
+  "file now, table later" pattern `wingman/discovered_leads.py` uses. Dead-page rows fall back to
   field-embedding. Provider: Gemini `gemini-embedding-001`.
 
 ### Build order (both axes)
 
 | # | step | cost | gate |
 |---|---|---|---|
-| 1 | `classify_page.py` (CTA + staleness) + `embed_common.py` + `../../eval/dedupe_eval.py` + `combined_reader.py` (classify + refresh-metadata + dedupe, fetch-once) + unit tests | **FREE ✅ BUILT** | pytest green (59 new tests); `../../eval/grade_scraper_batch.py` 0 regressions |
+| 1 | `wingman/classify_page.py` (CTA + staleness) + `wingman/embed_common.py` + `../../eval/dedupe_eval.py` + `wingman/combined_reader.py` (classify + refresh-metadata + dedupe, fetch-once) + unit tests | **FREE ✅ BUILT** | pytest green (59 new tests); `../../eval/grade_scraper_batch.py` 0 regressions |
 | 2 | run `../../eval/dedupe_eval.py` — pick representation + threshold | ~$0.04 spent ✅ RAN 2026-08-30 | **verdict below** |
-| 3 | `build_catalog_embeddings.py` — backfill the sidecar index (fields rep, incremental, `--commit`) | **built ✅; free preview: 1509 rows, ~$0.027 to embed** | run gated |
-| 4 | wire `combined_reader` into `scrape_opportunities.py`'s candidate loop | paid per run, gated | grade harness 0 regressions |
+| 3 | `agents/build_catalog_embeddings.py` — backfill the sidecar index (fields rep, incremental, `--commit`) | **built ✅; free preview: 1509 rows, ~$0.027 to embed** | run gated |
+| 4 | wire `combined_reader` into `agents/scrape_opportunities.py`'s candidate loop | paid per run, gated | grade harness 0 regressions |
 | 5 | console: show class/confidence + the embedding dup-hint in the review queue | FREE | — |
 
 ### Dedupe eval RESULT (RAN 2026-08-30, $0.038 total, active catalog, 90 same-site name-similar pairs)
@@ -394,7 +394,7 @@ which page CONTENT might do and URL/name cannot.
   ≡ Fellows Scholarship, NYU GSTEM ×2, Automation-Robotics ×2, Coding for Game Design ×2, Applied
   Research (Sci&Eng) ×2, Badger Music Clinic ≡ Summer Music Clinic. Actionable console cleanup,
   independent of the scraper — the method demonstrably finds duplicates.
-- **Consequence for build order:** step 3 (`build_catalog_embeddings.py`) embeds ROW FIELDS, not
+- **Consequence for build order:** step 3 (`agents/build_catalog_embeddings.py`) embeds ROW FIELDS, not
   pages — no catalog-wide fetch, ~$0.20, robust. The dedupe axis proceeds as a hint.
 
 ### Dedupe CONFIDENCE — the multi-tiered design (raise auto-action, shrink the human tail)
@@ -450,8 +450,8 @@ turning on any auto-tier**. Same discipline as the rest of the pipeline. Honest 
 tail never reaches zero human touch without accepting SOME bounded, reversible, measured auto-merge
 error.
 
-**Build status (2026-08-30):** `dedupe_confidence.py` (identity-token + hard-field discriminators,
-proof helpers, `classify_pair` tier logic — all pure) BUILT + tested. `build_catalog_embeddings.py`
+**Build status (2026-08-30):** `wingman/dedupe_confidence.py` (identity-token + hard-field discriminators,
+proof helpers, `classify_pair` tier logic — all pure) BUILT + tested. `agents/build_catalog_embeddings.py`
 RAN (`--commit`, $0.0269, 1509 active rows → `catalog_embeddings.jsonl`). `../../eval/dedupe_eval.py --signals`
 (discriminators, free) and `--tiers` (full pipeline: index cosine + discriminators, free) are the
 measurements.
@@ -467,13 +467,13 @@ accumulate** before widening. AUTO-MERGE is still wired OFF in v1 (tiers LABEL t
 ambiguous band); flipping the CONFIDENT/PROOF tiers to auto is the next decision, backed by this 0-FP
 measurement + the reversible/audited merge.
 
-**Validated on the REAL review queue + two guards it exposed (`dedupe_queue.py`, read-only, ~$0.004).**
+**Validated on the REAL review queue + two guards it exposed (`agents/dedupe_queue.py`, read-only, ~$0.004).**
 Ran the logic over the 279 pending rows against the active index and each other: **4 CONFIDENT (all
 verified true duplicates — Fred Hutch SHIP, NYU SPARC, FBINAA Youth Leadership, Stanford CNI-X; two
 arrive on a WORSE url — a Facebook page, an Empowerly listing — and would fold into the real
 institutional row), 4 adjudicate (incl. an intra-queue pair, both pending), 3-4 sibling, ~10 hint,
 258 genuinely new.** The live queue surfaced two weaknesses the curated eval could not, both now
-fixed FREE in `dedupe_confidence.py`:
+fixed FREE in `wingman/dedupe_confidence.py`:
 - **Abbreviations** — "Google Computer Science Summer Institute (CSSI)" vs "Google CS Summer Institute
   (CSSI)" read as a name CONFLICT and was wrongly kept distinct. `shared_acronym` (a shared
   PARENTHETICAL acronym) now softens CONFLICT→SUBSET, recovering it (SIBLING→HINT here; the CS/CS
@@ -496,7 +496,7 @@ fixed FREE in `dedupe_confidence.py`:
 - **Undated pages are KEPT** by the staleness rule.
 - **The staleness drop IS wanted** (a deterministic date rule, ≤ year−3), logged not silent.
 - **Metadata IS folded in** (the reader does refresh's page-extraction for a new row) — but
-  **`refresh_opportunities.py` is KEPT standalone** as the existing-row updater; nothing retired,
+  **`agents/refresh_opportunities.py` is KEPT standalone** as the existing-row updater; nothing retired,
   no M1 code edited (reader calls its public helpers read-only).
 - **Action items + deadlines are DEFERRED to their standalone agents** — out of scope for the
   combined reader; follow-up later. Reviews stay separate.
@@ -515,7 +515,7 @@ fixed FREE in `dedupe_confidence.py`:
 - `38ae6b7` P4 live-preview fixes (fetch_page_text unpack; refind ec-id minting)
 
 **Nothing merged to main.** The working tree is SHARED with an active deadline-email
-session (app/services/email*.py, send_lifecycle_emails.py, app/config.py) — when
+session (app/services/email*.py, wingman/send_lifecycle_emails.py, app/config.py) — when
 committing, stage ONLY scraper files. The email commit `6f9ab2f` sits in scraper-v2's
 history; reorganize branches later if you want them fully separate.
 
@@ -531,9 +531,9 @@ history; reorganize branches later if you want them fully separate.
 - **Console verified live** at /admin → Scraper angles: funnel columns (Appr/Rej/Dup/Waste %/
   $/appr/Diagnosis) render; every angle shows `small sample` (each has 1 run; needs ≥2 + ≥10
   found to diagnose or auto-disable). "Recent merges" card wired ("No merges yet").
-- **18 gap angles written as DISABLED seeds** (`propose_angles.py --commit`). Review + enable
+- **18 gap angles written as DISABLED seeds** (`agents/propose_angles.py --commit`). Review + enable
   the worthwhile ones in the console.
-- **Refind pilot RAN (PAID, $0.4091)**: `refind_dead_links.py --limit 20`. 20 searched, **4
+- **Refind pilot RAN (PAID, $0.4091)**: `agents/refind_dead_links.py --limit 20`. 20 searched, **4
   re-found** → review queue (is_active=false): Kenyon Review ✅, Red Cross Youth Council ✅,
   Immerse "Academic Insights" ⚠ (mill product), UVA Creative Writing ❌ (matched
   northern.virginia.edu — a WRONG-institution false positive). 16 found nothing (wrote
@@ -581,7 +581,7 @@ the worktree is immune). `.env` copied in (gitignored) so tests/scripts run ther
 1. **Apply the 4 refind verdicts** in the console (recommendations above; Immerse still pending).
 2. **Refind is now tightened — resume draining the 167-row backlog** in small PAID batches
    (~$4-8 total), reviewing as you go. Precision should be higher than the Aug-27 ~50-75%.
-3. **Hub extraction is PAID and still gated.** `python mine_hub_pages.py --hubs-file
+3. **Hub extraction is PAID and still gated.** `python -m agents.mine_hub_pages --hubs-file
    hub_pilot_national.json` (no --preview) extracts the 29 candidates (~$0.09); rows land
    is_active=false for review. Consider trimming to fewer hubs to hit the ≤10-call pilot bar.
    NOTE: mine_hub_pages `main()` proves+prices extraction but does NOT insert — wiring the
@@ -596,15 +596,15 @@ the worktree is immune). `.env` copied in (gitignored) so tests/scripts run ther
 - `python ../../eval/grade_scraper_batch.py` — FREE gate. `0 regressions` required to ship any change.
 - `python ../../eval/build_fixture.py --batch B --snapshot F1 F2 --out tests/fixtures/X.json` — FREE.
 - `python ../../scripts/one-off/backfill_seed_attribution.py [--commit]` — FREE (done; idempotent).
-- `python propose_angles.py [--commit]` — FREE (18 written).
-- `python walk_up_hubs.py [--limit N] [--commit]` — **FREE at every tier** (plain HTTP +
+- `python -m agents.propose_angles [--commit]` — FREE (18 written).
+- `python -m wingman.walk_up_hubs [--limit N] [--commit]` — **FREE at every tier** (plain HTTP +
   a Supabase read, no model call anywhere). Derives an institution's own program index by
   walking UP from an active row and requiring the parent to LINK that row. Queues
   `scope=same-domain` hub leads; mining them is the paid step.
-- `python mine_hub_pages.py --hubs URL --preview` FREE / live = PAID.
-- `python refind_dead_links.py --preview` FREE / `--limit N` = PAID search.
-- `python harvest_names.py --hubs URL --preview` FREE (prices the run over fetchable pages) / without `--preview` = PAID (1 naming call + up to `--max-names` searches).
-- `python scrape_opportunities.py --mode national --seed-ids IDS` — PAID (preview via console).
+- `python -m agents.mine_hub_pages --hubs URL --preview` FREE / live = PAID.
+- `python -m agents.refind_dead_links --preview` FREE / `--limit N` = PAID search.
+- `python -m agents.harvest_names --hubs URL --preview` FREE (prices the run over fetchable pages) / without `--preview` = PAID (1 naming call + up to `--max-names` searches).
+- `python -m agents.scrape_opportunities --mode national --seed-ids IDS` — PAID (preview via console).
 - **Every paid run needs fresh explicit chat approval (the ~$30-overspend rule).**
 
 ## North star
@@ -753,7 +753,7 @@ the frozen fixtures are stable ground truth.
 
 - `../../eval/grade_scraper_batch.py` — replay/scoring harness. Hard gate for every phase:
   **zero human-approved rows suppressed**.
-- `find_catalog_dups.py` — read-only self-dup sweep (48 identical-URL groups found;
+- `wingman/find_catalog_dups.py` — read-only self-dup sweep (48 identical-URL groups found;
   the 30 pair-shaped ones are resolved; multi-row portal groups deliberately left).
 - Reject-reason capture live end-to-end (console modal → `moderation_reason` column).
 - Tombstones retired; 56 backfill rows in table (note: `opportunities.type` is NOT
@@ -768,7 +768,7 @@ the frozen fixtures are stable ground truth.
 - Related but separate systems already live: silent-search retry, seeds in
   `scraper_seeds` (yield counters found/added/dupes/cost via `record_seed_result`),
   review snapshots `{"inserted": [...], "rejected": [...]}` (shape read by
-  `dryrun_common.py` — additions OK, shape changes not), per-seed debug logs in
+  `wingman/dryrun_common.py` — additions OK, shape changes not), per-seed debug logs in
   `agent_logs/scraper_<stamp>_seed<id>.json`.
 
 ---
@@ -791,7 +791,7 @@ Build:
   `scraper_seeds.disabled_reason text`, `scraper_seeds.disabled_at timestamptz`.
   Degrade gracefully until run (retry writes without the column, report a ready flag —
   the `moderation_reason` pattern in `ops/core.py` is the template).
-- `scrape_opportunities.py`: stamp `seed_id` on every inserted row (`build_row` or the
+- `agents/scrape_opportunities.py`: stamp `seed_id` on every inserted row (`build_row` or the
   insert loop); carry it in the snapshot.
 - `ops/core.get_seed_yield()`: per-seed funnel = live GROUP BY over `opportunities`
   (seed_id × moderation_status × reason-code prefix, where the code is
@@ -895,7 +895,7 @@ Success criteria:
 ### Phase 4 — Discovery channels (PAID — each run needs fresh operator approval)
 
 Build:
-- `mine_hub_pages.py`: harvest (regex, free) → two-stage filter proven by the pilot:
+- `agents/mine_hub_pages.py`: harvest (regex, free) → two-stage filter proven by the pilot:
   (a) anchor-level audience filter (drop elementary/middle/graduate/MBA/PhD/faculty/
   admitted-student links — cuts Wisconsin's 40 links to ~4), (b) fetch each surviving
   target and require high-school-audience words (free). One-level sub-hub recursion
@@ -904,7 +904,7 @@ Build:
   listicle hubs — following the wrong kind is how you crawl the internet). Dedupe +
   reason-checked against the catalog BEFORE any model call. Extraction = one no-search
   model call per surviving page (~$0.003; the URL is real by construction, no
-  grounding needed — the `generate_action_items.py` shape: page in, JSON out). Rows
+  grounding needed — the `agents/generate_action_items.py` shape: page in, JSON out). Rows
   land `is_active=false`, `source='hub-<domain>-<date>'`, `found_via=<hub url>`.
 - `--refind` on the scraper: selects REJECTED rows whose reason/flags say dead-link;
   one narrow search per row ("current official page for <name> by <org>"),
@@ -935,13 +935,13 @@ Success criteria (pilot-sized, then scale):
 
 **Current state: dormant, and REDESIGNED 2026-08-27 after a measured Seattle preview
 overturned the original premise.** `--mode seattle` exists (hyperlocal `SEATTLE_SEEDS` +
-`SEATTLE_ADDENDUM` in scrape_opportunities.py, console National/Seattle switch, `mode`
+`SEATTLE_ADDENDUM` in agents/scrape_opportunities.py, console National/Seattle switch, `mode`
 column on `scraper_seeds`), ran once 2026-08-18, ~nothing survived review. Search-first is
 dead for local (small orgs, no SEO, link rot). The obvious replacement — "hub-first, every
 local institution publishes a program index" — was **tested and found only half true.**
 
 **MEASURED (2026-08-27, `hubs_seattle.json`, 8 fetchable Seattle hubs, free preview):**
-`mine_hub_pages.py` harvested/filtered to **54 candidates → 42 after new local chaff
+`agents/mine_hub_pages.py` harvested/filtered to **54 candidates → 42 after new local chaff
 filters → still ~75% chaff.** The chaff was structural, not incidental: **civic/nonprofit
 sites are built differently from university program indexes.** A university links to a
 dedicated page *per program* (`STEM.php`, `badger-summer-scholars`); a library/museum/city
@@ -993,7 +993,7 @@ appears in the seed grid so local yield is diagnosable like any angle. The old "
 alone" target is retired — hubs alone cannot hit it on civic sites, and name-harvest is paid
 per name.
 
-### Phase 4N — Name-harvest → search (**BUILT + RUN PAID 2026-08-27 as `harvest_names.py`**; operator-pointed)
+### Phase 4N — Name-harvest → search (**BUILT + RUN PAID 2026-08-27 as `agents/harvest_names.py`**; operator-pointed)
 
 *The spec below is the design record. Two things about what shipped are NOT in it. (a) It has run
 paid — 12 rows across 3 runs — and the ranking A/B, the score floor and `FLAG_SELF_PROMOTED` all
@@ -1025,7 +1025,7 @@ names are in the TEXT; the URLs are not.
 **Why higher precision than a broad search angle:** the page already vouched the program exists
 and is HS-relevant, so this only resolves name→URL, it doesn't discover from scratch.
 
-Build as a new mode on `mine_hub_pages.py` (`--resolve-names`) or a small `harvest_and_resolve.py`;
+Build as a new mode on `agents/mine_hub_pages.py` (`--resolve-names`) or a small `harvest_and_resolve.py`;
 free to build + unit-test, paid only when run. Confirmed feasible on the real College Transitions
 page (names ARE in the server text). Residual limit: a FULLY client-rendered page whose text is
 also empty still needs a headless browser — rarer than expected; flag, don't solve now.
@@ -1035,7 +1035,7 @@ fixture (fake page text in, resolved rows out); (2) a gated run over College Tra
 Dataverse lands ≥15 real competitions at title-proven pages, operator approval ≥70%; (3)
 per-name cost logged, capped, and attributed to the source page.
 
-### Phase 4F — Feed-forward (**BUILT 2026-08-27 as `discovered_leads.py`**; router is structural)
+### Phase 4F — Feed-forward (**BUILT 2026-08-27 as `wingman/discovered_leads.py`**; router is structural)
 
 *Spec below is the design record. **This status line has been wrong once already — read it against
 the START HERE block, which is authoritative.** An earlier version said the hub half did not work
@@ -1045,7 +1045,7 @@ round.*
 - **The hub half is the working one.** A lead qualifies on **>= 6 distinct OFF-domain domains**
   (round-ups 9-20, ordinary pages 1-3), and `--from-leads` mines it **off-domain to match** — the
   fix in `52c6a56`, without which all 25 queued leads would have been mined for their own nav.
-- **The names half is recorded, not consumed.** `harvest_names.py` is operator-pointed (4N above).
+- **The names half is recorded, not consumed.** `agents/harvest_names.py` is operator-pointed (4N above).
 - **Rule 0 sits in front of both** (`01cd374`): a page with **zero anchors was never received**, and
   gets no verdict rather than a guess. That alone was 10 of the 11 queued name leads.
 - What free link-counting genuinely cannot do is spot **an institution's own index** — the kind-B
@@ -1073,7 +1073,7 @@ extraction, per the repo's cost discipline):
 
 **Storage — two tiers:**
 - **MVP (no migration):** scraper appends to `discovered_leads.jsonl` + a `leads` list in the
-  run snapshot; `mine_hub_pages.py` gains `--from-leads`. Hub leads processable NOW (insert is
+  run snapshot; `agents/mine_hub_pages.py` gains `--from-leads`. Hub leads processable NOW (insert is
   wired); name-harvest leads wait on Phase 4N.
 - **Mature:** a `discovered_leads` table (url, kind, source_seed_id, signal, status) reviewable
   in the console, same shape as `scraper_seeds` — with the degrade-and-retry pattern.
@@ -1163,7 +1163,7 @@ Success criteria:
   by a same-day run). Authoritative content of old rows lives in `dup_candidates`
   copies inside reviewed rows, or `opportunities.json` (a git-tracked backup, not
   runtime data).
-- **Review snapshots are read by `dryrun_common.py`** — add keys, never change shape.
+- **Review snapshots are read by `wingman/dryrun_common.py`** — add keys, never change shape.
   `_patch_updates()` there must mirror any change to an agent's live PATCH columns.
 - **The queue filter must spell out NULL** (`moderation_status.is.null` in the `or=`) —
   `NULL NOT IN (...)` is NULL in SQL.

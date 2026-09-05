@@ -2,7 +2,7 @@
 -- Phase 1 of docs/plans/DEDUPE_SIMPLIFICATION_PLAN.md. One manual step in the Supabase SQL editor
 -- (PostgREST has no DDL endpoint, so nothing in this repo can run it).
 --
--- Shape (written by dedupe_resolve.py / dup_verdict.Verdict.as_dict):
+-- Shape (written by wingman/dedupe_resolve.py / dup_verdict.Verdict.as_dict):
 --   {
 --     "confidence":   "certain" | "likely" | "possible",
 --     "duplicate_of": "<survivor row id>",

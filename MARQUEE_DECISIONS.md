@@ -4,7 +4,7 @@ These are load-bearing design decisions that must **never** be changed, reverted
 softened without an explicit, extensive discussion with the operator (Shama) in chat and a clear
 "yes, change it."
 
-This file exists because one of them was violated silently. `refresh_opportunities.py` was built to
+This file exists because one of them was violated silently. `agents/refresh_opportunities.py` was built to
 fill each opportunity's fields from a **live web fetch** (`use_web_search=True`, prompt: *"YOU MUST
 use web_search and web_fetch to verify CURRENT information"*). In an **unrelated commit** titled
 *"Implement resume/LinkedIn profile import feature"* (`9efd4c3`) it was flipped to
@@ -34,7 +34,7 @@ enrich — the opposite of the instruction — and nobody re-checked it against 
 
 ## Ratified
 
-### M1 — `refresh_opportunities.py` fills metadata by READING THE LIVE PAGE, never from memory
+### M1 — `agents/refresh_opportunities.py` fills metadata by READING THE LIVE PAGE, never from memory
 *Ratified 2026-08-28 by Shama.*
 
 The metadata agent must gather each opportunity's fields (summary, eligibility, cost, price, grade
@@ -45,7 +45,7 @@ run) — it does **not** mean fall back to memory.
 
 - **Why:** memory-based fill returns blank for new/small/local programs — the exact rows the catalog
   most needs — and silently overwrites curated values with plausible inventions on the rest.
-- **Protected sites:** `refresh_opportunities.py` `check_one()` / `build_system()` — the fetch and the
+- **Protected sites:** `agents/refresh_opportunities.py` `check_one()` / `build_system()` — the fetch and the
   prompt. Any change back toward `use_web_search=False` / "no web access" / memory-only requires
   re-approval.
 - **Amendment 2026-08-28 (approved by Shama, offline-agents only):** the fetch gained a
@@ -66,7 +66,7 @@ run) — it does **not** mean fall back to memory.
 removed — there is now NO auto-activation path at all.*
 
 A person activates every catalog row from the console; **no** code path sets `is_active = true`
-automatically. There is no exception. `check_links.py --repair-flagged` used to be the one narrow
+automatically. There is no exception. `agents/check_links.py --repair-flagged` used to be the one narrow
 exception (it restored a row when it proved a moved link), but as of 2026-09-02 it no longer
 activates: a proven repair now writes the new URL onto the still-inactive row and parks it at
 `link_review_status = 'repaired'` on the console's Links tab, where a person verifies the link and
@@ -84,7 +84,7 @@ about *running*; M9 governs *changing the code that spends*.)
 
 A stored opportunity URL must be grounding-resolved and title-proven (`url_validate` / `url_repair`),
 never a URL the model typed or recalled. This is the fix for the scraper's measured 26% dead-link
-rate, and it is why `refresh_opportunities.py` does not write `url` even under M1.
+rate, and it is why `agents/refresh_opportunities.py` does not write `url` even under M1.
 
 ### M5 — The scraper's phase 1 uses PROSE output with real search; it is never collapsed to one JSON call
 *Ratified 2026-08-28 by Shama.*
@@ -116,11 +116,11 @@ adding one, or removing one requires Shama's explicit approval first and its own
   quiet reword can flip what an agent does (search vs. recall, extract vs. invent, broad vs. narrow)
   with no code diff that looks dangerous.
 - **Scope:** any string that is sent to a model as instruction or context. The main homes today (not
-  exhaustive — the rule is about the *kind* of string, not the file list): `scrape_opportunities.py`
-  (`RESEARCH_SYSTEM`, `EXTRACT_SYSTEM`, `SEATTLE_ADDENDUM`, the user turns), `refresh_opportunities.py`
-  (`build_system`), `check_deadlines.py`, `check_reviews.py`, `generate_action_items.py`,
-  `find_mailing_lists.py`, `harvest_names.py` (`_NAME_SYSTEM`), `mine_hub_pages.py`, `source_capture.py`,
-  `gemini_common.py` / `claude_common.py` (the appended forced-search and budget instructions),
+  exhaustive — the rule is about the *kind* of string, not the file list): `agents/scrape_opportunities.py`
+  (`RESEARCH_SYSTEM`, `EXTRACT_SYSTEM`, `SEATTLE_ADDENDUM`, the user turns), `agents/refresh_opportunities.py`
+  (`build_system`), `agents/check_deadlines.py`, `agents/check_reviews.py`, `agents/generate_action_items.py`,
+  `agents/find_mailing_lists.py`, `agents/harvest_names.py` (`_NAME_SYSTEM`), `agents/mine_hub_pages.py`, `wingman/source_capture.py`,
+  `wingman/gemini_common.py` / `wingman/claude_common.py` (the appended forced-search and budget instructions),
   `app/services/ai.py` and the interactive proxies in `server.py`, and every prompt in
   `frontend/src/lib/*` (profile chat, ranking, tracker extraction, tags).
 - **Not gated:** fixing a typo that cannot change meaning, or changing text that never reaches a model

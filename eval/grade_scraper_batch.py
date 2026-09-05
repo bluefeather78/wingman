@@ -36,7 +36,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-import scrape_opportunities  # classify_same_url — the SAME rule the live scraper runs (Phase 5)
+from agents import scrape_opportunities
 
 # Anchored at the REPO ROOT, not at this file's directory: the 2026-09-04 tidy-up
 # moved this script down a level and `dirname(__file__)` no longer means the root.
@@ -62,7 +62,7 @@ def load_fixture(path):
 def load_snapshot_rows(fixture, snapshot_dir):
     """Every inserted row from the fixture's snapshots, review metadata attached.
 
-    Rows carry the shape scrape_opportunities.py wrote: the catalog fields plus a
+    Rows carry the shape agents/scrape_opportunities.py wrote: the catalog fields plus a
     'review' dict holding quality_flags and dup_candidates. Old bare-list snapshots
     (pre-2026-08-23) are tolerated for forward reuse with other fixtures.
     """

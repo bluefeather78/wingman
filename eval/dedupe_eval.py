@@ -41,7 +41,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-import url_dedupe
+from wingman import url_dedupe
 
 # The 5 pairs the operator confirmed as true aliases in the deferred 96-pair analysis (`/alp/`
 # 301s to `/accelerated-learning-program/`, etc.). Each id anchors one alias pair; a qualifying
@@ -207,7 +207,7 @@ def format_report(rep_name, sep):
 def _fetch_rows():
     """The catalog rows, from Supabase (free). Returns just the rows — the Gemini key for the
     embedding/model calls is read separately (`_gemini_key`); they are different credentials."""
-    from supabase_common import supabase_get, load_dotenv
+    from wingman.supabase_common import supabase_get, load_dotenv
     load_dotenv()
     su = os.environ.get("SUPABASE_URL", "").rstrip("/")
     key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
@@ -219,7 +219,7 @@ def _fetch_rows():
 
 def _gemini_key():
     """The Gemini API key for the PAID embedding/descriptor calls — NOT the Supabase key."""
-    from supabase_common import load_dotenv
+    from wingman.supabase_common import load_dotenv
     load_dotenv()
     k = os.environ.get("GEMINI_API_KEY")
     if not k:
@@ -229,7 +229,7 @@ def _gemini_key():
 
 def _embed_all(texts, api_key, timeout=120):
     """Embed a list of texts in chunks of embed_common.DEFAULT_BATCH. Returns (vectors, cost)."""
-    import embed_common
+    from wingman import embed_common
     vectors, cost = [], 0.0
     for i in range(0, len(texts), embed_common.DEFAULT_BATCH):
         chunk = texts[i:i + embed_common.DEFAULT_BATCH]
@@ -242,7 +242,7 @@ def _embed_all(texts, api_key, timeout=120):
 def _signals(pairs, labels):
     """FREE: run the name + field discriminators over the pairs, no embedding. Shows how many
     high-similarity pairs the free signals would pull OUT as siblings vs confirm as duplicates."""
-    import dedupe_confidence as dc
+    from wingman import dedupe_confidence as dc
     buckets = {}
     print(f"\n[SIGNALS] name/field discriminators over {len(pairs)} pairs (FREE, no embedding):\n")
     for a, b in pairs:
@@ -264,12 +264,12 @@ def _tiers(pairs, labels):
     """FREE: the FULL tier pipeline (cosine from the built index + discriminators) over the pairs.
     Measures how many pairs land in each tier — the CONFIDENT/PROOF count is the auto-merge set, and
     printing them lets the operator eyeball the false-positive rate before auto-merge is turned on."""
-    import embed_common
-    import dedupe_confidence as dc
-    import dedupe_embed_store
+    from wingman import embed_common
+    from wingman import dedupe_confidence as dc
+    from wingman import dedupe_embed_store
     index = {e["id"]: e["vector"] for e in dedupe_embed_store.fetch_dedupe_index_from_env()}
     if not index:
-        print("[ERROR] No catalog dedupe index — run build_catalog_embeddings.py --yes-really first.")
+        print("[ERROR] No catalog dedupe index — run agents/build_catalog_embeddings.py --yes-really first.")
         return
     by_tier = {}
     detail = {dc.TIER_CONFIDENT: [], dc.TIER_SIBLING: [], dc.TIER_ADJUDICATE: []}
@@ -292,8 +292,8 @@ def _tiers(pairs, labels):
 
 
 def _run(args):
-    import page_text
-    import embed_common
+    from wingman import page_text
+    from wingman import embed_common
 
     rows = _fetch_rows()
     if not args.include_inactive:
@@ -339,7 +339,7 @@ def _run(args):
             page_cache[rid] = txt or ""
             texts[REP_PAGE][rid] = page_cache[rid]
     if REP_DESCRIPTOR in reps:
-        import gemini_common
+        from wingman import gemini_common
         for rid in involved:
             page = page_cache.get(rid, "")
             if not page:

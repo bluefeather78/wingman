@@ -244,7 +244,7 @@ def test_sweep_reports_setup_rather_than_zero_due(monkeypatch):
     result = es.run_trial_sweep()
     # A zero here would read as "nobody is due" when the truth is "this never runs".
     assert result["ok"] is False and result["table_ready"] is False
-    assert "email_schema.sql" in result["setup_sql_file"]
+    assert "db/email_schema.sql" in result["setup_sql_file"]
 
 
 def _reader(rows):

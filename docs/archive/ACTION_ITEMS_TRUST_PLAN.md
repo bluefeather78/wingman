@@ -10,7 +10,7 @@
 are open (see "Open issues & decisions"); build starts only after they are answered.
 **Owner:** _tbd_  **Started:** 2026-08-25
 **Related code:** `generate_action_items.py`, `page_text.py`, `app/services/action_items.py`,
-`app/routes/opportunities.py`, `action_items_schema.sql`, `frontend/src/lib/tracker.ts`,
+`app/routes/opportunities.py`, `../../db/action_items_schema.sql`, `frontend/src/lib/tracker.ts`,
 `frontend/src/api/trackerStore.ts`, `frontend/app/(app)/index.tsx`,
 `frontend/app/(app)/tracker.tsx`, `ops/admin.py`, `ops/core.py`, `ops/admin_console.html`.
 **Related docs/memory:** `DEADLINE_CREATION_PLAN.md` (shares the THINK Scholars root cause —
@@ -217,7 +217,7 @@ aggregators partly *route around* the SPA/PDF gap even before the A/B/C fetch fi
 
 ## Data model
 
-### New table — `trusted_aggregators` (new `trusted_aggregators_schema.sql`)
+### New table — `trusted_aggregators` (new `../../db/trusted_aggregators_schema.sql`)
 
 ```
 create table if not exists trusted_aggregators (
@@ -229,7 +229,7 @@ create table if not exists trusted_aggregators (
   created_at  timestamptz default now(),
   updated_at  timestamptz default now()
 );
--- ALTER-then-CREATE convention (see mailing_list_schema.sql): every future column is an
+-- ALTER-then-CREATE convention (see ../../db/mailing_list_schema.sql): every future column is an
 -- `add column if not exists`, because PostgREST 400s an entire write on one unknown key.
 ```
 
@@ -388,7 +388,7 @@ New `.vtab` **Sources** (`view-sources`), between Mailing lists and Cost per use
 
 ## Migration / back-compat summary
 
-- Additive only. `trusted_aggregators_schema.sql` is a new one-time DDL step; the item-level
+- Additive only. `../../db/trusted_aggregators_schema.sql` is a new one-time DDL step; the item-level
   fields are JSONB and need no migration.
 - Every legacy row renders and behaves identically until an aggregator run touches it:
   legacy `page`→official, legacy generic→generic, no pending anywhere.
@@ -517,7 +517,7 @@ Suggested sequence, each step shippable and inert-by-default:
    plan builds on the result; do not fold it into the aggregator change.
 1. **Fetch fixes A (PDF) + B (link discovery)** — shared with deadline work, low risk, widen
    the official tier immediately. (C/Playwright gated on decision 6.)
-2. **Schema** — `trusted_aggregators_schema.sql` + the additive `action_items` item fields
+2. **Schema** — `../../db/trusted_aggregators_schema.sql` + the additive `action_items` item fields
    (JSONB, no DDL). Console/agent degrade-not-break until run.
 3. **`aggregators_common.py`** — shared classify/normalize lib.
 4. **Serve-path pending filter** — `app/services/action_items.py` withholds `pending`/

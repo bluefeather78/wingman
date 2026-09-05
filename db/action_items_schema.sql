@@ -45,7 +45,7 @@ alter table opportunities add column if not exists action_items_checked_at times
 create index if not exists opportunities_action_items_checked_at_idx
   on opportunities (action_items_checked_at);
 
--- ALTER-then-CREATE, deliberately, and the same trap mailing_list_schema.sql documents:
+-- ALTER-then-CREATE, deliberately, and the same trap db/mailing_list_schema.sql documents:
 -- `create table if not exists` is a no-op against a table that already exists in an older
 -- shape, and PostgREST 400s an ENTIRE write on one unknown key. A single missing column
 -- here means every action-item write fails and the console reads as "the agent found

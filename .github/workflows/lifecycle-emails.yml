@@ -36,7 +36,7 @@ name: Lifecycle emails
 # app/routes/, not from here.
 #
 # ARM IT WHEN SHIPPING BETA (deadline alerts are built & tested but held until there are
-# real users). To arm: (1) run email_schema.sql in the Supabase SQL editor if not already;
+# real users). To arm: (1) run db/email_schema.sql in the Supabase SQL editor if not already;
 # (2) set the WINGMAN_API_BASE and EMAIL_CRON_SECRET repository secrets AND EMAIL_CRON_SECRET
 # in the Render dashboard (the endpoint 503s without the latter, so an armed schedule with no
 # secret would just fail red every day); (3) uncomment the two `schedule:` lines below.
@@ -97,6 +97,6 @@ jobs:
           # A 200 whose body says ok:false is the un-run-migration case. Surface it as a
           # failure so it shows up as a red run rather than as a green one that sent nothing.
           if grep -q '"ok": *false' response.json; then
-            echo "::error::Sweep returned ok:false — see the body above (usually: run email_schema.sql)."
+            echo "::error::Sweep returned ok:false — see the body above (usually: run db/email_schema.sql)."
             exit 1
           fi

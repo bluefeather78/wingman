@@ -13,7 +13,7 @@
 -- a no-op against a table that already has the column in an older shape, and PostgREST 400s
 -- an entire PATCH on one unknown key — so a single missing column means check_links.py
 -- records NOTHING, and the console reads as "every link is fine" rather than "every write
--- failed". Same trap as mailing_list_schema.sql and user_activity_schema.sql.
+-- failed". Same trap as db/mailing_list_schema.sql and db/user_activity_schema.sql.
 
 alter table opportunities
   -- 'live' | 'dead' | 'unverified', mirroring url_validate.LIVE/DEAD/UNVERIFIED.

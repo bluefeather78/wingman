@@ -177,7 +177,7 @@ Roll back at any phase by re-showing the old surface — the old fields are unto
 ## 6. Decisions (locked 2026-09-02)
 
 1. **Storage:** ✅ **new `dup_verdict jsonb` column** (one manual SQL DDL step, matching the
-   repo's other schema files). `dup_verdict_schema.sql`.
+   repo's other schema files). `../../db/dup_verdict_schema.sql`.
 2. **Siblings:** ✅ **config cosine floor** — hide `sibling` below `SIBLING_SHOW_FLOOR`, surface
    it above as a **Possible** line tagged "looks similar, fields differ." Default floor `0.93`.
 3. **Auto-merge:** ✅ **off — manual.** `proof`/`confident` still just *label* (Certain/Likely);
@@ -194,7 +194,7 @@ Roll back at any phase by re-showing the old surface — the old fields are unto
 
 ### Phase 1 — DONE (2026-09-02)
 
-Built: `dup_verdict.py` (pure resolver, 8 tests green), `dup_verdict_schema.sql` (run),
+Built: `dup_verdict.py` (pure resolver, 8 tests green), `../../db/dup_verdict_schema.sql` (run),
 `dedupe_resolve.py` (shadow runner, free, ~33s). Shadow result over 1,690 active rows: **58
 rows carry one verdict** (0 certain / 2 likely / 56 possible, 30 sibling-surfaced); **SYCCL is
 now caught** (`ec17185 ↔ ec18702`), the pair `find_catalog_dups` was structurally blind to.

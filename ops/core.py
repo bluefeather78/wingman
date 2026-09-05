@@ -423,14 +423,14 @@ def get_agent_history(agent=None, limit=50, days=None):
 
 import dryrun_common
 
-USER_COSTS_SETUP_SQL = "user_costs_schema.sql"
+USER_COSTS_SETUP_SQL = "db/user_costs_schema.sql"
 PLAN_PRICE_USD = 9.99  # mirrors subscription_common.PLAN_PRICE_CENTS
 
 
 # One label, one bucket, for every row whose `model` is the empty string. Those rows are
 # not a model named "" — they were written in the ~5-hour window on 2026-08-21 between
 # per-user attribution going live (18:59:39, the first user_costs row ever) and
-# user_costs_schema.sql being re-run to add the `model` column (before 2026-08-22 00:16:41,
+# db/user_costs_schema.sql being re-run to add the `model` column (before 2026-08-22 00:16:41,
 # the first row that carries one). 13 rows, $0.19, one window, never to grow again.
 #
 # Only the model id is unknown in them: cost, calls, tokens, user, surface and feature are
@@ -826,7 +826,7 @@ def get_user_costs(days=30, limit=200):
         "table_ready": True,
         # False means the table exists but predates the provider/model breakout. Every
         # figure is still correct; the model just reads as "(before model tracking)"
-        # until user_costs_schema.sql is re-run.
+        # until db/user_costs_schema.sql is re-run.
         "model_ready": model_ready,
         "setup_sql_file": USER_COSTS_SETUP_SQL,
         "providers": provider_list,
@@ -1511,7 +1511,7 @@ def clear_dup_verdict(ids):
 
 
 # The columns the Links-tab queue reads. link_review_status is the queue membership flag
-# (see link_health_schema.sql / check_links.py); the rest let the row explain itself without a
+# (see db/link_health_schema.sql / check_links.py); the rest let the row explain itself without a
 # second lookup — the code and dead-since date say HOW dead and for HOW LONG, quality_flags
 # carries the reviewer hint (and any repair suggestion), and is_active/moderation_status let
 # the console show a row a person already deactivated differently from a still-live one.
@@ -1531,7 +1531,7 @@ def list_link_queue(limit=1000):
                       person to verify the new link and Activate. (Since 2026-09-02 nothing
                       auto-activates — see MARQUEE M2.)
 
-    If link_health_schema.sql has not been run the column does not exist and the filtered read
+    If db/link_health_schema.sql has not been run the column does not exist and the filtered read
     400s; that is reported as ok:True with schema_ready:False and empty lists, so the tab
     renders a one-time setup step rather than an error — the same shape list_pending uses for
     its own missing migration.
@@ -1550,7 +1550,7 @@ def list_link_queue(limit=1000):
         probe = _supabase_request("opportunities", params={"select": "id", "limit": "1"})
         if probe is not None:
             return {"ok": True, "schema_ready": False, "total": 0, "opportunities": [],
-                    "repaired": [], "setup_sql": "link_health_schema.sql"}
+                    "repaired": [], "setup_sql": "db/link_health_schema.sql"}
         return {"ok": False, "error": "Could not read opportunities from Supabase."}
 
     pending = [r for r in rows if (r.get("link_review_status") or "") == "pending"]
@@ -1747,7 +1747,7 @@ def commit_dryrun_snapshot(file_name, dry=False):
     return result
 
 
-# The columns user_submissions_schema.sql adds. Selected separately from the base row so a
+# The columns db/user_submissions_schema.sql adds. Selected separately from the base row so a
 # database that has not run that migration still gets a working queue (see the ladder in
 # list_pending_opportunities) rather than a blank one — PostgREST 400s the WHOLE select on
 # one unknown column, so a single wide select would take the queue down entirely.
@@ -1760,13 +1760,13 @@ _MODERATION_SELECT = ("moderation_status,submitted_by,submitted_at,reviewed_by,r
                       "duplicate_of,dup_candidates,quality_flags")
 
 # WHY a row was rejected — labeled training data for the scraper (see
-# user_submissions_schema.sql, which must be re-run to add the column). Stored as
+# db/user_submissions_schema.sql, which must be re-run to add the column). Stored as
 # "code" or "code: note"; the console owns the code list, the server only bounds length.
 _MODERATION_REASON_COLUMN = "moderation_reason"
 MODERATION_REASON_MAX_LEN = 500
 
 # A human's verdict on a queued row. Mirrors the CHECK constraint in
-# user_submissions_schema.sql — keep the two in step or a write here 400s.
+# db/user_submissions_schema.sql — keep the two in step or a write here 400s.
 MODERATION_STATUSES = ("pending_review", "approved", "rejected", "duplicate",
                        "suspected_duplicate")
 
@@ -1887,13 +1887,13 @@ def list_pending_opportunities(limit=500, source=None, status="queue"):
         # {id: {name,url,is_active}} for the rows marked `duplicate` point at, so the queue
         # can name the survivor rather than showing a bare id.
         "duplicate_targets": _duplicate_targets(rows) if moderation_ready else {},
-        # False means user_submissions_schema.sql has not been run: the console shows the
+        # False means db/user_submissions_schema.sql has not been run: the console shows the
         # setup step and hides the reject controls instead of offering a button that 400s.
         "moderation_ready": moderation_ready,
         # False (with moderation_ready true) means the file predates moderation_reason and
         # must be RE-RUN: rejects still work, but the why is dropped with a notice.
         "reason_ready": reason_ready,
-        "moderation_sql": "user_submissions_schema.sql",
+        "moderation_sql": "db/user_submissions_schema.sql",
         "statuses": statuses,
         "sources": sorted(({"source": k, "count": v} for k, v in sources.items()),
                           key=lambda x: x["count"], reverse=True),
@@ -2222,7 +2222,7 @@ def moderate_opportunities(ids, status, reviewed_by="admin-console", duplicate_o
             if _is_missing_column_error(e):
                 return {"ok": False, "moderation_ready": False,
                         "error": "The moderation columns do not exist yet. Run "
-                                 "user_submissions_schema.sql in the Supabase SQL editor "
+                                 "db/user_submissions_schema.sql in the Supabase SQL editor "
                                  "(it is idempotent), then restart the server."}
             errors += 1
             if len(details) < 5:
@@ -2244,7 +2244,7 @@ def moderate_opportunities(ids, status, reviewed_by="admin-console", duplicate_o
         result["reason_dropped"] = True
         result["note"] = ("The verdict was recorded, but the reason was dropped: the "
                           "moderation_reason column does not exist yet. Re-run "
-                          "user_submissions_schema.sql (idempotent) to keep reasons.")
+                          "db/user_submissions_schema.sql (idempotent) to keep reasons.")
     return result
 
 
@@ -2389,11 +2389,11 @@ def flag_suspected_duplicate_pairs(pairs, reviewed_by="admin-console"):
     return {"ok": errors == 0, "flagged": flagged, "errors": errors, "error_details": details}
 
 
-# The queue marker added by activation_refresh_schema.sql. Set when a row is activated,
+# The queue marker added by db/activation_refresh_schema.sql. Set when a row is activated,
 # cleared by refresh_opportunities.py once it reads the page. A one-shot queue flag, NOT a
 # staleness clock — see that file's header.
 ACTIVATION_REFRESH_COLUMN = "activation_refresh_queued_at"
-ACTIVATION_REFRESH_SQL = "activation_refresh_schema.sql"
+ACTIVATION_REFRESH_SQL = "db/activation_refresh_schema.sql"
 
 
 def metadata_refresh_queue(limit=200):
@@ -2403,7 +2403,7 @@ def metadata_refresh_queue(limit=200):
     `activation_refresh_queued_at` is non-null; the refresh agent nulls it on a successful
     page read. Oldest-queued first, so the top of the list is what has waited longest.
 
-    Degrades if activation_refresh_schema.sql has not been run: the column does not exist,
+    Degrades if db/activation_refresh_schema.sql has not been run: the column does not exist,
     the select 400s, and we return queue_ready=False + the file name rather than an error —
     the card then shows the setup line, exactly like the moderation queue does.
     """
@@ -2589,7 +2589,7 @@ def activate_opportunities(ids, active=True):
     # refresh_opportunities" here; the agent clears the mark when it reads the page. A prefilled
     # row skips the marker entirely — nothing to await. Deactivating CLEARS the mark
     # unconditionally, regardless of source (a hidden row is not awaiting anything). See
-    # activation_refresh_schema.sql. This is a SEPARATE column from the moderation one, so it
+    # db/activation_refresh_schema.sql. This is a SEPARATE column from the moderation one, so it
     # degrades on its OWN ladder rung — a missing queue column must never cost the moderation
     # stamp (which would send the row back round the queue). Rungs, most→least complete:
     # full → moderation-only → plain.
@@ -2648,7 +2648,7 @@ def activate_opportunities(ids, active=True):
             # on any embed failure), and the tiny embedding cost that implied.
             "embedded": embedded, "embed_cost_usd": round(embed_cost, 6),
             "errors": errors, "error_details": details,
-            # False means activation_refresh_schema.sql has not been run: the row was still
+            # False means db/activation_refresh_schema.sql has not been run: the row was still
             # (de)activated, it just was not enqueued for a refresh.
             "queue_ready": rung == 0}
 
@@ -2884,7 +2884,7 @@ def moderate_signup_recipes(ids, status, reviewed_by="admin-console"):
 AGGREGATORS_TABLE = "trusted_aggregators"
 AGGREGATOR_STATUSES = ("trusted", "blocked")
 AGGREGATORS_SETUP_HINT = (
-    "The trusted_aggregators table is missing. Run trusted_aggregators_schema.sql in the "
+    "The trusted_aggregators table is missing. Run db/trusted_aggregators_schema.sql in the "
     "Supabase SQL editor (it is idempotent), then restart with restart_server.ps1. Until "
     "then no off-domain source is trusted anywhere: the deadline loop keeps nothing off the "
     "program's own site, and aggregator tasks (P6) all stay parked.")
@@ -4127,7 +4127,7 @@ MAINTENANCE_TOOLS = {
                        "everything live. Usually unnecessary — activating a row now embeds it "
                        "automatically; this is the ad-hoc catch-up. Re-embeds only rows whose "
                        "fields changed (content-hash gated). Preview is free; a commit is PAID "
-                       "(~cents). Needs dedupe_vector_schema.sql to have been run.",
+                       "(~cents). Needs db/dedupe_vector_schema.sql to have been run.",
         "script": "build_catalog_embeddings.py",
         "free": False, "writes": True,
         "params": [
@@ -4301,7 +4301,7 @@ SEED_FIELDS = ("mode", "angle", "is_enabled", "sort_order")
 SEED_CATEGORY_PLACEHOLDER = "unused"
 SEED_SELECT = ("id,mode,angle,is_enabled,sort_order,total_runs,total_found,"
                "total_added,total_dupes,total_cost,last_run_at,created_at")
-# disabled_reason/disabled_at arrived after the table (scraper_seeds_schema.sql ALTER block).
+# disabled_reason/disabled_at arrived after the table (db/scraper_seeds_schema.sql ALTER block).
 # Selected on top of SEED_SELECT, with a degrade rung so a DB migrated before them keeps a
 # working grid — the moderation_reason pattern for opportunities, one table over.
 SEED_DISABLE_COLS = "disabled_reason,disabled_at"
@@ -4339,7 +4339,7 @@ def get_seed_yield(seed_rows):
     it and the verdict a reviewer later records, so an angle's funnel is computed on read,
     not stored — a changed verdict corrects it on the next refresh with nothing to recompute.
     `seed_rows` is the already-loaded list_seeds() result (avoids a second read of the small
-    seeds table). seed_id arrived with scraper_attribution_schema.sql; a DB migrated before
+    seeds table). seed_id arrived with db/scraper_attribution_schema.sql; a DB migrated before
     that reads seed_ready=false and the grid hides the funnel columns rather than erroring.
 
     Uses the paginating supabase_get, not _supabase_request: this is a GROUP BY and must see
@@ -4357,7 +4357,7 @@ def get_seed_yield(seed_rows):
         # not tell them to run a migration that is already in place.
         if _is_missing_column_error(e):
             print("[WARN] seed_id column missing — funnel disabled until "
-                  "scraper_attribution_schema.sql is run.")
+                  "db/scraper_attribution_schema.sql is run.")
         else:
             print(f"[WARN] Could not read seed attribution ({e}); funnel temporarily "
                   f"unavailable.")
@@ -4733,7 +4733,7 @@ def update_seed(seed_id, payload):
 
     updated = _patch(patch)
     if updated is None and ("disabled_reason" in patch or "disabled_at" in patch):
-        # Those columns may not exist yet (scraper_seeds_schema.sql pending) — retry the
+        # Those columns may not exist yet (db/scraper_seeds_schema.sql pending) — retry the
         # toggle without them so enabling/disabling still works.
         updated = _patch({k: v for k, v in patch.items()
                           if k not in ("disabled_reason", "disabled_at")})

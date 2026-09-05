@@ -105,7 +105,7 @@ def test_real_cost_values_survive():
 
 
 def test_activation_queue_fetch_degrades_when_migration_not_run(monkeypatch):
-    # If activation_refresh_schema.sql has not been run, the queue column is absent and a
+    # If db/activation_refresh_schema.sql has not been run, the queue column is absent and a
     # select naming it 400s. The agent must keep running (drop the column, latch the drain
     # off) rather than dying — the metadata refresh itself does not depend on the column.
     calls = []

@@ -19,7 +19,7 @@ Awaiting Shama's review + the prod backfill decision. A deliberate, minimal extr
 
 **Findings that changed the rollout:**
 - **PR2 is mostly already done in prod.** The dry-run ran clean (no 400), so
-  `match_vector_schema.sql` is ALREADY migrated and ~1,456 of 1,678 rows are already embedded
+  `../../db/match_vector_schema.sql` is ALREADY migrated and ~1,456 of 1,678 rows are already embedded
   (the earlier branch's live backfill). Only **222 rows need embedding, est. ~$0.0036** — not the
   full-catalog spend the plan budgeted. Left unrun per D3 (paid write to prod); trivially cheap.
 - **No activation hook exists anywhere** — not even on `opportunity-matching`. `refresh_row_embedding`
@@ -37,7 +37,7 @@ Awaiting Shama's review + the prod backfill decision. A deliberate, minimal extr
   mapping to a planned PR, since one session can't open/merge 4 separate PRs. Splittable later.
 - **D2** — M8 eligibility-only prompt built **without pre-signoff** per explicit waiver; kept
   as its **own dedicated commit** for tomorrow's review.
-- **D3** — **PR 2 (prod DDL + paid backfill) not auto-executed**: `match_vector_schema.sql` is
+- **D3** — **PR 2 (prod DDL + paid backfill) not auto-executed**: `../../db/match_vector_schema.sql` is
   manual DDL (no PostgREST DDL endpoint) and the backfill is real spend. Free `--dry-run` run
   to report the number; the paid `--yes-really` + DDL are left for Shama.
 - **D4** — `gemini_common.py` gained the embedding call path (`call_gemini_embed` etc.) as a
@@ -114,7 +114,7 @@ per commit. But the recall/eligibility logic was written as **standalone new mod
 | Piece | How it comes over |
 |---|---|
 | `matching.py`, `eligibility.py`, `curation.py`*, `embeddings.py` | **Copy as-is** — new files on main, zero conflict |
-| `match_vector_schema.sql`, `backfill_match_vectors.py` | **Copy as-is** — new files |
+| `../../db/match_vector_schema.sql`, `backfill_match_vectors.py` | **Copy as-is** — new files |
 | their unit tests | **Copy as-is** — new files |
 | `app/routes/opportunities.py` (the `/api/match` route) | **Do NOT merge** — write a NEW trimmed handler |
 | `app/services/opportunities.py` (match_vector in the cache select + degrade) | **Port the small select change only** |
@@ -184,7 +184,7 @@ without a model call. Keeps the call small and dodges truncation on a 100-verdic
 
 ### A. Backend — copy the standalone modules (no conflict)
 1. Copy `matching.py`, `eligibility.py`, `embeddings.py`, `curation.py` + their tests.
-2. Copy `match_vector_schema.sql`, `backfill_match_vectors.py` + test.
+2. Copy `../../db/match_vector_schema.sql`, `backfill_match_vectors.py` + test.
 3. Do **not** copy `funnel.py`, `match_pipeline.py`.
 
 ### B. Backend — the new trimmed `/api/match` route (net-new, on main's opportunities.py)
@@ -210,7 +210,7 @@ without a model call. Keeps the call small and dodges truncation on a 100-verdic
 ### D. Backend — the activation embedding hook (durability — DO NOT SKIP)
 7. Wire `embeddings.refresh_row_embedding` into the write path so a row is (re)embedded
    whenever a write leaves it `is_active=true` — the activation endpoint AND a
-   `refresh_opportunities.py` pass (per `match_vector_schema.sql`'s "when this gets written").
+   `refresh_opportunities.py` pass (per `../../db/match_vector_schema.sql`'s "when this gets written").
    **Verify the call-site exists** (the branch documents the hook but the wiring lives in a
    modified file we are not merging wholesale) — if it is not wired, **new rows never become
    recallable** and recall silently decays as the catalog grows.
@@ -250,7 +250,7 @@ without a model call. Keeps the call small and dodges truncation on a 100-verdic
 
 Order matters; nothing recalls until 1–2 are done.
 
-1. **Run `match_vector_schema.sql`** in the Supabase SQL editor (adds `match_vector`,
+1. **Run `../../db/match_vector_schema.sql`** in the Supabase SQL editor (adds `match_vector`,
    `match_vector_hash`, `match_vector_computed_at`). Until then the route degrades to "not
    migrated" and recall is off (grid still works on the fallback path).
 2. **`python backfill_match_vectors.py --dry-run`** → confirms count + estimated cost.
@@ -322,10 +322,10 @@ cents, on live traffic, which `main` does not pay today. Acceptable and monitore
 Ordered so the paid/prod steps come only after the free code is in and validated.
 
 - **PR 1 — recall engine (backend, no user-visible change).** Copy `matching.py`,
-  `eligibility.py`, `embeddings.py`, `curation.py` + tests; `match_vector_schema.sql`;
+  `eligibility.py`, `embeddings.py`, `curation.py` + tests; `../../db/match_vector_schema.sql`;
   `backfill_match_vectors.py` + test; the cache-select change (B5) with the not-migrated
   degrade. Nothing calls it yet. Merges green, ships nothing to users.
-- **PR 2 — prod data (ops, gated on PR 1).** Run `match_vector_schema.sql`; `backfill
+- **PR 2 — prod data (ops, gated on PR 1).** Run `../../db/match_vector_schema.sql`; `backfill
   --dry-run` → approve → `--yes-really`; wire + verify the activation hook (D7). Still no
   user-visible change; recall data now exists and self-maintains.
 - **PR 3 — the endpoint + eligibility pass (backend, M8).** `app/routes/matching.py` with

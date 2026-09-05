@@ -91,7 +91,7 @@ This check is free (a regex over text we already fetched) and deliberately conse
 
 SETUP:
     .env needs SUPABASE_URL and SUPABASE_SERVICE_KEY. No model key.
-    link_health_schema.sql is a one-time manual step in the Supabase SQL editor. Without
+    db/link_health_schema.sql is a one-time manual step in the Supabase SQL editor. Without
     it this still runs and still queues findings by writing link_review_status - EXCEPT when
     that column is the one missing: then it drops the link_* columns from its writes (losing
     the staleness filter, so every run re-checks everything, and losing the queue routing
@@ -123,7 +123,7 @@ import url_validate as uv
 DB_AGENT = "link_checker"
 
 # PostgREST reports an unknown column as 42703 on a read and PGRST204 on a write. Both mean
-# "link_health_schema.sql has not been run", and both must be told apart from a real failure.
+# "db/link_health_schema.sql has not been run", and both must be told apart from a real failure.
 _SCHEMA_ERROR_CODES = ("42703", "PGRST204", "PGRST205", "42P01")
 
 # How long a link-health result stays good enough to skip. Deliberately much shorter than
@@ -344,7 +344,7 @@ def select_rows(supabase_url, service_key, args):
         if not _is_missing_column(_http_detail(e)):
             raise
         schema_ready = False
-        print("[WARN] link_* columns are missing - run link_health_schema.sql in the "
+        print("[WARN] link_* columns are missing - run db/link_health_schema.sql in the "
               "Supabase SQL editor. Continuing without them: results are still acted on, "
               "but nothing is recorded and every run re-checks the whole catalog.")
         rows = supabase_get(supabase_url, "opportunities", {
@@ -539,7 +539,7 @@ def apply_update(supabase_url, service_key, row_id, update, schema_ready):
         if not _is_missing_column(_http_detail(e)):
             raise
         stripped = {k: v for k, v in update.items() if k not in LINK_COLUMNS}
-        print("[WARN] link_* columns rejected on write - run link_health_schema.sql. "
+        print("[WARN] link_* columns rejected on write - run db/link_health_schema.sql. "
               "Retrying without them; the row cannot be queued for review until the migration "
               "runs, but any repair/discontinuation change still lands.")
         if stripped:

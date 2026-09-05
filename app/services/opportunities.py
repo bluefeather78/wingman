@@ -16,7 +16,7 @@ _opportunities_cache = {"data": None, "fetched_at": 0.0}
 _opportunities_cache_lock = threading.Lock()
 
 # Latched OFF the first time a fetch 400s because opportunities.match_vector is not migrated
-# yet (match_vector_schema.sql not run). Once off, the catalog is fetched WITHOUT the vector —
+# yet (db/match_vector_schema.sql not run). Once off, the catalog is fetched WITHOUT the vector —
 # the client never sees it anyway (handle_opportunities strips it), and matching recall simply
 # has no vectors until the column exists (it degrades to the thin-profile path). This is the
 # same "degrade until migrated" convention every other schema-gated column here follows: a
@@ -114,7 +114,7 @@ def fetch_opportunities():
 
     Degrades gracefully if match_vector is not migrated: on the first 400 naming it, drops the
     column and refetches, so the catalog endpoint keeps working (matching recall just has no
-    vectors until match_vector_schema.sql is run)."""
+    vectors until db/match_vector_schema.sql is run)."""
     global _match_vector_available
     with _opportunities_cache_lock:
         age = time.time() - _opportunities_cache["fetched_at"]
@@ -128,7 +128,7 @@ def fetch_opportunities():
             if _match_vector_available and _is_missing_match_vector_error(e):
                 # Column not migrated yet — degrade once and retry without it.
                 _match_vector_available = False
-                print("[WARN] opportunities.match_vector not found — run match_vector_schema.sql. "
+                print("[WARN] opportunities.match_vector not found — run db/match_vector_schema.sql. "
                       "Serving the catalog without embeddings; matching recall is degraded until then.")
                 try:
                     data = _paginated_catalog_fetch(_select_without_match_vector())

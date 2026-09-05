@@ -91,7 +91,7 @@ async def no_cache(request: Request, call_next):
 @app.middleware("http")
 async def capture_api_errors(request: Request, call_next):
     """Record server-side failures to api_errors so the admin console's API Errors tab can show
-    what the live service is breaking on — see app.core.record_api_error / api_errors_schema.sql.
+    what the live service is breaking on — see app.core.record_api_error / db/api_errors_schema.sql.
 
     Two things are captured, and nothing else (a 4xx is a client mistake, not a service fault):
       * an UNHANDLED exception — recorded with its type and full traceback, which is what makes

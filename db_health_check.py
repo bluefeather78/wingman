@@ -21,7 +21,7 @@ queried the database would silently report "0 leads" because it was looking in t
 This reads both sources — Supabase and the leads file — and reconciles them. (The dedupe
 embeddings USED to be a repo-root JSONL too, which is exactly why a fresh checkout read "0%
 covered"; they now live in opportunities.dedupe_vector, read from the catalog like every other
-coverage column — see dedupe_vector_schema.sql.)
+coverage column — see db/dedupe_vector_schema.sql.)
 
 FREE and SAFE: it issues read-only PostgREST GETs and reads two local files. It makes no model
 call, writes nothing, and is safe to run as often as you like. Unlike the six paid agents there
@@ -80,7 +80,7 @@ CHECK_AGENTS = [
 
 # The active-row columns this report reads to compute coverage. Fetched in ONE paginated GET
 # rather than a count query per metric. Several arrived in later migrations (link_* in
-# link_health_schema.sql, action_items_checked_at in action_items_schema.sql), so a database
+# db/link_health_schema.sql, action_items_checked_at in db/action_items_schema.sql), so a database
 # migrated before them 400s the whole select — _fetch_active_rows() degrades to the base set and
 # marks the missing coverage "unavailable" rather than failing the whole report.
 _ACTIVE_FULL_SELECT = ("id,type,review_status,last_reviewed_at,link_status,link_checked_at,"
@@ -334,7 +334,7 @@ def collect_health(supabase_url=None, key=None):
     # Metadata-refresh backlog: rows ACTIVATED but not yet enriched. A row is queued while its
     # activation_refresh_queued_at is non-null; the refresher nulls it on a successful page read
     # (same column ops.core.metadata_refresh_queue reads). Absent on a DB migrated before
-    # activation_refresh_schema.sql — _count returns None then, which reads as "—" not a false 0.
+    # db/activation_refresh_schema.sql — _count returns None then, which reads as "—" not a false 0.
     if out["supabase_configured"]:
         refresh_q = _count(supabase_url, key, "opportunities",
                            {"is_active": "eq.true", "activation_refresh_queued_at": "not.is.null"})
@@ -346,8 +346,8 @@ def collect_health(supabase_url=None, key=None):
     out["queues"] = queues
 
     # --- Embedding coverage: two separate vectors on `opportunities`, same coverage shape --------
-    # * dedupe_vector  — the scraper's duplicate-detection embedding (dedupe_vector_schema.sql)
-    # * match_vector   — the student-facing semantic RECALL embedding (match_vector_schema.sql)
+    # * dedupe_vector  — the scraper's duplicate-detection embedding (db/dedupe_vector_schema.sql)
+    # * match_vector   — the student-facing semantic RECALL embedding (db/match_vector_schema.sql)
     # Coverage = active rows carrying the corresponding _hash (written together with the vector),
     # read from the same active-rows fetch above so no extra query and no megabytes of float arrays
     # are pulled. `columns_available` False means the migration has not run (or the FULL select
@@ -487,9 +487,9 @@ def _print_report(h):
                   f"{section.get('coverage_pct') if section.get('coverage_pct') is not None else '—'}%")
 
     _print_embedding(h.get("embeddings", {}), "DEDUPE EMBEDDINGS",
-                     "dedupe_vector", "dedupe_vector_schema.sql")
+                     "dedupe_vector", "db/dedupe_vector_schema.sql")
     _print_embedding(h.get("semantic_embeddings", {}), "SEMANTIC EMBEDDINGS (recall match_vector)",
-                     "match_vector", "match_vector_schema.sql")
+                     "match_vector", "db/match_vector_schema.sql")
 
     print("\nLAST RUN OF EACH MAINTENANCE PASS")
     for chk in h.get("checks", []):
@@ -516,7 +516,7 @@ def _print_report(h):
             print(f"  dead links still active: {cov['dead_links_active']}")
     else:
         print("\nCOVERAGE GAPS\n  unavailable — the link/review/task timestamp columns are not "
-              "migrated in yet (link_health_schema.sql / action_items_schema.sql).")
+              "migrated in yet (db/link_health_schema.sql / db/action_items_schema.sql).")
 
     if h.get("errors"):
         print("\nREAD ERRORS (sections above degrade rather than fail)")

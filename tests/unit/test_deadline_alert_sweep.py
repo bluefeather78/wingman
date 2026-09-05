@@ -224,7 +224,7 @@ def test_missing_table_reports_setup_not_a_wall_of_skips(live):
     fake, sent = live([_account(deadlines=[("a", "Alpha", 1)])], missing_table=True)
     result = es.run_deadline_alert_sweep()
     assert result.get("table_ready") is False
-    assert "email_schema.sql" in result.get("setup_sql_file", "")
+    assert "db/email_schema.sql" in result.get("setup_sql_file", "")
     assert sent == []
 
 

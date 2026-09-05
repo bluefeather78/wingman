@@ -1,4 +1,4 @@
--- dedupe_vector_schema.sql — one-time manual DDL (run in the Supabase SQL editor).
+-- db/dedupe_vector_schema.sql — one-time manual DDL (run in the Supabase SQL editor).
 --
 -- Adds the catalog-side DEDUPE embedding columns to `opportunities`. This is the duplicate-
 -- detection vector (the similarity half of the scraper gate), NOT the recall match_vector — a
@@ -15,7 +15,7 @@
 -- scraper's dedupe HINT went dark and db_health_check read "0% covered" until someone re-ran the
 -- paid build. It now lives on the catalog row itself — computed once at ACTIVATION, backfillable
 -- ad-hoc (build_catalog_embeddings.py), and read straight out of the catalog the scraper already
--- loads. This is the exact move `match_vector` already made; see match_vector_schema.sql.
+-- loads. This is the exact move `match_vector` already made; see db/match_vector_schema.sql.
 --
 -- WHAT THE HASH IS FOR. `dedupe_vector` is computed from combined_reader.default_representation
 -- (name + org + type + summary + eligibility) and is only ever recomputed when that text actually

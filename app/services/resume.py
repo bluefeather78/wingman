@@ -231,7 +231,7 @@ def insert_user_opportunity(name, url, opp_type, section, meta, fit, note,
         "important_dates": important_dates if important_dates else None,
         "category": category or None,
     }
-    # Columns from user_submissions_schema.sql. Split out so the insert can be retried
+    # Columns from db/user_submissions_schema.sql. Split out so the insert can be retried
     # without them if that migration hasn't been run yet — see insert_opportunity_row.
     # submission_payload keeps the extracted detail the catalog has nowhere to put
     # (apply_url, requirements, meta, note) so a reviewer can still see it, without
@@ -288,7 +288,7 @@ def insert_opportunity_row(row, review_fields, generated_id, name):
     """POST the row, retrying without the review columns if the migration is pending.
 
     Same degrade-gracefully shape as the user_costs table: until
-    user_submissions_schema.sql is run in the Supabase SQL editor, PostgREST rejects
+    db/user_submissions_schema.sql is run in the Supabase SQL editor, PostgREST rejects
     the whole insert with PGRST204 ("column not found") rather than ignoring the
     unknown keys. Losing the submission entirely over a missing review column would be
     worse than losing the review metadata, so we retry with the base row and say so.
@@ -313,11 +313,11 @@ def insert_opportunity_row(row, review_fields, generated_id, name):
                       f"(pending_review)")
             elif attempt == 1:
                 print(f"[User Opportunity] Inserted WITHOUT submission_payload: "
-                      f"{generated_id} - {name}. Re-run user_submissions_schema.sql to "
+                      f"{generated_id} - {name}. Re-run db/user_submissions_schema.sql to "
                       f"add that column.")
             else:
                 print(f"[User Opportunity] Inserted WITHOUT review metadata: "
-                      f"{generated_id} - {name}. Run user_submissions_schema.sql in "
+                      f"{generated_id} - {name}. Run db/user_submissions_schema.sql in "
                       f"the Supabase SQL editor to enable the moderation queue.")
             return True
         except Exception as e:

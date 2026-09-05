@@ -159,7 +159,7 @@ its raw JSON and is counted.
 ### Flag taxonomy
 
 `quality_flags` is an existing `jsonb` column of human-readable strings
-(`user_submissions_schema.sql`), already rendered by the console as warn pills. **Pills
+(`../../db/user_submissions_schema.sql`), already rendered by the console as warn pills. **Pills
 truncate at 90 characters** (`admin_console.html:1308`) — keep every reason under that, and
 add a `title=` attribute carrying the untruncated text.
 

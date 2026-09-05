@@ -1,9 +1,9 @@
--- subscription_schema.sql — one-time manual DDL for the Supabase `users` table.
+-- db/subscription_schema.sql — one-time manual DDL for the Supabase `users` table.
 --
 -- Paste this whole file into the Supabase SQL editor and run it. PostgREST (which is
 -- all server.py can reach) exposes REST reads/writes only, no DDL, so there is no way
 -- to run this from the app. This is the same one-time-manual-step pattern as
--- user_costs_schema.sql and scraper_seeds_schema.sql.
+-- db/user_costs_schema.sql and db/scraper_seeds_schema.sql.
 --
 -- Until this runs, /api/register returns a 503 naming this file: create_user() writes
 -- every column below on signup, and Postgres rejects the whole insert with 42703

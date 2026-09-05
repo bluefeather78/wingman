@@ -41,7 +41,7 @@ from generate_action_items import (
 TASK_TTL_DAYS = 7
 
 # PostgREST 400s an entire select on one unknown column, so a catalog that has not had
-# action_items_schema.sql run against it would break the read outright. Latched after the
+# db/action_items_schema.sql run against it would break the read outright. Latched after the
 # first failure — the same degrade-rather-than-break shape get_user_account() uses, and for
 # the same reason: this sits on a path a student is waiting on.
 _columns_missing = False
@@ -72,7 +72,7 @@ def get_opportunity_for_action_items(opp_id):
                 raise
             _columns_missing = True
             print("[WARN] opportunities.action_items columns are missing — run "
-                  "action_items_schema.sql. Serving unverified per-student tasks until then.")
+                  "db/action_items_schema.sql. Serving unverified per-student tasks until then.")
     return None
 
 

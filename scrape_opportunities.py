@@ -48,7 +48,7 @@ SETUP:
         SUPABASE_URL=https://<project-ref>.supabase.co
         SUPABASE_SERVICE_KEY=<service_role key>
         GEMINI_API_KEY=<key>
-    Run the agent_runs SQL and user_submissions_schema.sql before the first non-dry-run use.
+    Run the agent_runs SQL and db/user_submissions_schema.sql before the first non-dry-run use.
 
 USAGE:
     python scrape_opportunities.py --mode seattle --preview    # free, resolves scope only
@@ -878,8 +878,8 @@ def insert_rows(supabase_url, service_key, rows, review_by_id):
     PostgREST rejects an entire insert on one unknown key, so a single missing column would
     mean the whole scrape wrote NOTHING — reading as "the agent found nothing" rather than
     "every insert 400'd". Two INDEPENDENT migrations can be missing here: the review columns
-    (moderation_status/dup_candidates/quality_flags — user_submissions_schema.sql) and the
-    attribution columns (seed_id/found_via — scraper_attribution_schema.sql). Either can be
+    (moderation_status/dup_candidates/quality_flags — db/user_submissions_schema.sql) and the
+    attribution columns (seed_id/found_via — db/scraper_attribution_schema.sql). Either can be
     present without the other, so the ladder tries all four combinations widest-first and
     keeps the maximal set the DB actually supports — a live DB with both applied always takes
     the full path. Returns the tier that succeeded. `rows` carry seed_id/found_via on the base
@@ -900,7 +900,7 @@ def insert_rows(supabase_url, service_key, rows, review_by_id):
             if i == len(attempts) - 1:
                 raise  # the minimal write is base columns only — a failure here is real
             print(f"[WARN] Insert tier '{tier}' failed ({e}); trying a narrower column set. "
-                  f"Run user_submissions_schema.sql and scraper_attribution_schema.sql to "
+                  f"Run db/user_submissions_schema.sql and db/scraper_attribution_schema.sql to "
                   f"keep review flags and seed attribution.")
 
 
@@ -931,7 +931,7 @@ def auto_disable_mined_seeds(supabase_url, service_key, ran_seeds):
             "seed_id": f"in.({id_list})"}, service_key) or []
     except Exception as e:
         print(f"[WARN] Skipping auto-disable — could not read the ledger ({e}). "
-              f"Have you run scraper_attribution_schema.sql?")
+              f"Have you run db/scraper_attribution_schema.sql?")
         return []
 
     funnels = seed_ledger.build_seed_funnels(opp_rows, seed_rows)
@@ -950,7 +950,7 @@ def auto_disable_mined_seeds(supabase_url, service_key, ran_seeds):
             # disabled_reason/disabled_at migration may be pending — still retire the angle,
             # just without recording why (the console degrades to a bare disable).
             print(f"  [WARN] Could not record the auto-disable reason for seed {sid} ({e}); "
-                  f"disabling anyway. Run scraper_seeds_schema.sql to keep reasons.")
+                  f"disabling anyway. Run db/scraper_seeds_schema.sql to keep reasons.")
             try:
                 supabase_patch(supabase_url, "scraper_seeds", {"id": f"eq.{sid}"},
                                {"is_enabled": False}, service_key)

@@ -18,7 +18,7 @@ SETUP:
     it, every row that resolves for free (0 or 1 candidate email) still gets checked; only
     the rare multi-candidate row is left unresolved instead of erroring. (The disambiguation
     call runs on Gemini as of the 2026-08-29 M9 provider swap — see contact_email_common.py.)
-    Run opportunities_contact_email_schema.sql once in the Supabase SQL editor first.
+    Run db/opportunities_contact_email_schema.sql once in the Supabase SQL editor first.
 
 USAGE:
     python find_contact_emails.py --preview --limit 10   # free: what would it touch

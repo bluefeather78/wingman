@@ -412,7 +412,7 @@ Each item below was verified in code; listed so the reader knows it was covered.
 
 **17. PII logging.** See M9. The `/api/agents/metrics` roster (`ops/core.py:1199-1203, 1292`) returns names and e-mails of every account; it is ops-only and gated as M8 describes — its sensitivity is why M8 matters.
 
-**18. Concurrency.** Register: DB unique index on `lower(email)` (`users_email_unique_schema.sql:38`) and the `userid` PK close the check-then-insert race, and `create_user` maps `23505` to `DuplicateEmail` (`core.py:796-797`). Promo: M6. Refresh reuse: M2. `email_sends` claim-before-send with a three-column unique constraint is correctly designed. `record_interactive_cost` / `record_user_cost` read-modify-write under a process lock — a multi-worker deploy would under-count, not over-charge.
+**18. Concurrency.** Register: DB unique index on `lower(email)` (`../../db/users_email_unique_schema.sql:38`) and the `userid` PK close the check-then-insert race, and `create_user` maps `23505` to `DuplicateEmail` (`core.py:796-797`). Promo: M6. Refresh reuse: M2. `email_sends` claim-before-send with a three-column unique constraint is correctly designed. `record_interactive_cost` / `record_user_cost` read-modify-write under a process lock — a multi-worker deploy would under-count, not over-charge.
 
 **13. CORS / cookies.** No session cookies exist; the only cookies are the two OAuth `state` values (M11 for `Secure`). CORS `*` with `allow_credentials=False` is not exploitable on its own.
 

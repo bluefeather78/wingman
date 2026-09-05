@@ -73,7 +73,7 @@ argon2 on that successful login** — no lockout, no pre-migration, no client ch
 end-to-end. New deps: `PyJWT`, `argon2-cffi` (in `requirements.txt`; Linux wheels, Render
 installs them).
 
-**One manual Supabase step (revocation only):** run **`auth_schema.sql`** in the Supabase SQL
+**One manual Supabase step (revocation only):** run **`../../db/auth_schema.sql`** in the Supabase SQL
 editor — it adds `users.token_version integer not null default 0`. Auth works fully without
 it (code reads a missing value as 0, so login/refresh/IDOR-fix all work); only session
 revocation is inert until it runs. `create_user` deliberately does NOT write the column
@@ -84,7 +84,7 @@ confirm with the user before relying on logout-all.
 (10/IP/hr) — `app/auth/ratelimit.py`. Per-worker (documented); a shared store is future work.
 
 **New/changed files:** `app/auth/` (tokens, passwords, dependencies, ratelimit, `__init__`),
-`app/routes/auth.py` (refresh + logout-all), `auth_schema.sql`; edits to `app/config.py`,
+`app/routes/auth.py` (refresh + logout-all), `../../db/auth_schema.sql`; edits to `app/config.py`,
 `app/core.py` (`bump_token_version`, `update_password_hash`), `app/deps.py` (`login_response`),
 `app/main.py` (auth router + HTTPException→`{"error"}` handler), every gated router, and
 `script.js` (token storage in **localStorage**, `authFetch`, all gated fetch sites). Built and

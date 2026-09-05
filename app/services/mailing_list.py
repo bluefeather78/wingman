@@ -70,7 +70,7 @@ def _subscribe_rate_limited(userid):
 # existing in an older shape with columns missing. The fix is identical either way, and
 # the second case is the easier one to misread as a bug.
 MAILING_LIST_SETUP_HINT = ("The mailing-list tables are missing or out of date. Run "
-                           "mailing_list_schema.sql in the Supabase SQL editor (it is "
+                           "db/mailing_list_schema.sql in the Supabase SQL editor (it is "
                            "idempotent, and its ALTER block adds anything missing from an "
                            "existing table), then restart the server.")
 

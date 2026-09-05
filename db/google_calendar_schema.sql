@@ -1,7 +1,7 @@
--- google_calendar_schema.sql — one-time manual DDL for the Supabase `users` table.
+-- db/google_calendar_schema.sql — one-time manual DDL for the Supabase `users` table.
 --
 -- Paste this whole file into the Supabase SQL editor and run it. Same one-time-manual-step
--- pattern as google_auth_schema.sql and subscription_schema.sql — PostgREST exposes no DDL,
+-- pattern as db/google_auth_schema.sql and db/subscription_schema.sql — PostgREST exposes no DDL,
 -- so server.py cannot run this itself.
 --
 -- Until this runs, connecting Google Calendar returns a 503 naming this file: the OAuth

@@ -511,7 +511,7 @@ console's "Estimated vs billed" card rather than hidden:
   `user_costs` and `deadline_check_log` rows written before then carry the old rates.
 
 **Per-user cost attribution** lives in a Supabase `user_costs` table
-([user_costs_schema.sql](user_costs_schema.sql) — a one-time manual DDL step in the Supabase
+([user_costs_schema.sql](db/user_costs_schema.sql) — a one-time manual DDL step in the Supabase
 SQL editor; until it is run, `server.py` logs one warning, attribution is off, and the console
 shows the setup step instead of an error). Read it as a **breakdown of interactive spend, never
 as extra spend**: every dollar in `user_costs` is already counted in the `interactive_*`
@@ -544,7 +544,7 @@ once and writes both, so the two can't drift.
   and the profile chat is already a deliberate Anthropic holdout inside an otherwise
   Gemini app — one feature moving provider would silently make a surface-based split wrong.
   Surface is still reported separately; it answers *where in the app*, not *who is billing*.
-- The `model` column arrived after the table did, so **`user_costs_schema.sql` must be
+- The `model` column arrived after the table did, so **`db/user_costs_schema.sql` must be
   re-run** (it is idempotent — `add column if not exists` plus a constraint swap). Until
   then the console degrades rather than breaking: reads retry with a narrower select,
   writes retry without the column, `model_ready: false` comes back, and every model reads
@@ -593,7 +593,7 @@ once and writes both, so the two can't drift.
   by-model list and inside every feature's model list alike (`_group_untracked_models()` /
   `_group_untracked_feature_models()`, keyed `UNTRACKED_MODEL_KEY`). They are all from one
   ~5-hour window on 2026-08-21, between attribution going live (18:59:39, the first
-  `user_costs` row) and `user_costs_schema.sql` being re-run to add the column (before
+  `user_costs` row) and `db/user_costs_schema.sql` being re-run to add the column (before
   00:16:41 on 08-22, the first row carrying one): 13 rows, $0.19, a set that can never
   grow. Only the **model id** is unknown in them — cost, calls, tokens, user, surface and
   feature are exact and fully counted, and the provider still resolves through
@@ -714,7 +714,7 @@ exists.
 **Two migrations gate the time-series half**, and both degrade to a setup notice rather
 than an error:
 
-- **[user_activity_schema.sql](user_activity_schema.sql)** → `activity_ready`. Unlocks
+- **[user_activity_schema.sql](db/user_activity_schema.sql)** → `activity_ready`. Unlocks
   DAU/WAU/MAU, the retention cohorts, and the "came back" side metric.
   `touch_user_activity(userid, surface)` is called from the nine handlers that carry a
   userid (login, data save/load, both AI surfaces, deadline check, subscription status,
@@ -728,7 +728,7 @@ than an error:
   buffer and a quiet day looks like a stalled pipeline. A missing table latches the whole
   path off after one warning; a transient failure deliberately does **not** — the same
   distinction `record_user_cost` carries, for the same reason.
-- **[user_metrics_daily_schema.sql](user_metrics_daily_schema.sql)** → `snapshots_ready`.
+- **[user_metrics_daily_schema.sql](db/user_metrics_daily_schema.sql)** → `snapshots_ready`.
   Every state metric is computed from the *current* `users` table, and the `data` jsonb
   holds one profile rather than a history of one — so "how many users had a meaningful
   profile on 2026-08-01" is not merely unqueried, it is **unrecoverable**. The snapshot is
@@ -739,7 +739,7 @@ than an error:
   recomputed. **Run it on day one even though nothing reads it for weeks** — every day it
   is not running is a day permanently missing from every trend line this will ever draw.
 
-Both files end with an **ALTER block** for the same reason `mailing_list_schema.sql` does:
+Both files end with an **ALTER block** for the same reason `db/mailing_list_schema.sql` does:
 `create table if not exists` is a no-op against a table that already exists in an older
 shape, and PostgREST 400s an entire insert on one unknown key — so a single missing column
 means *nothing* is ever recorded and the view reads as "nobody used the app" rather than
@@ -848,7 +848,7 @@ they were real programs with rotted links (`smysp.stanford.edu`,
 
 **As of 2026-09-02 the agent QUEUES findings for a person; it deactivates NOTHING on its
 own.** Every finding sets `link_review_status = 'pending'` (a new column in
-`link_health_schema.sql`) and shows up on the console's **Links** tab, where a person
+`db/link_health_schema.sql`) and shows up on the console's **Links** tab, where a person
 multi-selects rows and either **Clears** them (dismiss the finding, row stays live) or
 **Deactivates** them (`is_active=false` + `moderation_status='pending_review'`). The
 classification below still names the *severity* of each finding — it now decides how the
@@ -895,7 +895,7 @@ manual activation). `POST /api/agents/link-queue/resolve` (`core.resolve_link_qu
 applies `clear` / `deactivate` / `activate` to a multi-selected set — `activate` (the repaired
 list's action) routes through `activate_opportunities` (moderation stamp + embeddings + cache
 bust, MARQUEE M9) and then clears the `repaired` flag. Both localhost-gated like the rest of
-`/api/agents/*`. The tab degrades to a setup notice if `link_health_schema.sql`'s
+`/api/agents/*`. The tab degrades to a setup notice if `db/link_health_schema.sql`'s
 `link_review_status` column is absent (deactivate still works via a stripped write; clear
 needs the column). This replaced the old behaviour where a dead link surfaced only in the
 New-Opportunities review queue after the agent had already deactivated the row — and it
@@ -974,10 +974,10 @@ for manual activation rather than restoring them itself.)
   redirects to a bare homepage, i.e. the program page deleted behind a 200. It fires on 10
   rows (1.0%) at about one-in-two precision. Ten rows at one-in-two beats eighty-eight at
   one-in-seven.
-- **[link_health_schema.sql](link_health_schema.sql)** — **RUN 2026-08-23; re-run 2026-09-02**
+- **[link_health_schema.sql](db/link_health_schema.sql)** — **RUN 2026-08-23; re-run 2026-09-02**
   to add `link_review_status`. Five columns now (`link_status`, `link_status_code`,
   `link_checked_at`, `link_dead_since`, `link_review_status`), all live. It keeps the same
-  ALTER block for the same reason as `mailing_list_schema.sql` — **add a column to a CREATE
+  ALTER block for the same reason as `db/mailing_list_schema.sql` — **add a column to a CREATE
   there and you must add it to the ALTER too**. Without the migration the agent still runs and
   still records what it can: it drops those columns from its writes, losing the 7-day
   staleness filter (every run re-checks everything — free, so *slower* not *broken*) and, when
@@ -1024,7 +1024,7 @@ touched `actionItems`, so no code path could ever replace a wrong one. And it re
 flat authoritative text, with no equivalent of the dates' `(est.)` marker.
 
 **Tasks are now catalog data**, generated by `generate_action_items.py` and stored on the
-opportunity row ([action_items_schema.sql](action_items_schema.sql) — another one-time
+opportunity row ([action_items_schema.sql](db/action_items_schema.sql) — another one-time
 manual DDL step; until it runs the agent aborts naming it and the app keeps its old
 per-student behaviour). They were never personalised — the prompt has always forbidden
 anything about the student's own project — so every student was paying for an identical
@@ -1208,7 +1208,7 @@ every time the queue was opened — the queue only ever grew.
   scraper row has a NULL `moderation_status`, and `NULL NOT IN (…)` is NULL in SQL, so a
   plain `not.in` would empty the queue outright.
 - The moderation endpoints degrade if
-  [user_submissions_schema.sql](user_submissions_schema.sql) has not been run — the list
+  [user_submissions_schema.sql](db/user_submissions_schema.sql) has not been run — the list
   falls back to the base select (`moderation_ready: false`, the console hides Reject and
   shows the setup line), and activate drops the approve stamp rather than the whole write.
 
@@ -1326,7 +1326,7 @@ The governing rule, and the catalog measurements that force it:
   `submission_payload`.
 
 Review-queue columns (`moderation_status`, `submitted_by`, `dup_candidates`, `quality_flags`,
-…) come from **[user_submissions_schema.sql](user_submissions_schema.sql)** — another one-time
+…) come from **[user_submissions_schema.sql](db/user_submissions_schema.sql)** — another one-time
 manual DDL step in the Supabase SQL editor. Until it runs the insert is retried with the base
 columns only and logs one warning naming the file; submissions still land inactive.
 `moderation_status` is **separate from `is_active`** on purpose: the boolean alone cannot say
@@ -1387,7 +1387,7 @@ accuracy design:
 - If the attempt cannot be recorded the response carries **`recorded: false`**: the signup
   went out, but the button will reset and the Quest Log cannot list it. Surfaced rather
   than hidden, because it reads as a mystery otherwise.
-- **[mailing_list_schema.sql](mailing_list_schema.sql)** is another one-time manual DDL
+- **[mailing_list_schema.sql](db/mailing_list_schema.sql)** is another one-time manual DDL
   step. Unlike the other schema files it ends with an **ALTER block**, because
   `create table if not exists` is a no-op against a table that already exists in an older
   shape — and PostgREST 400s an entire insert on one unknown key, so a single missing
@@ -1540,7 +1540,7 @@ repo cannot run: `create_seed()` writes `SEED_CATEGORY_PLACEHOLDER` to satisfy t
 `SEED_SELECT` does not read it, and the console no longer offers it.
 
 **Scraper search angles** ("seeds") live in a Supabase `scraper_seeds` table
-([scraper_seeds_schema.sql](scraper_seeds_schema.sql)), editable from the admin console, with
+([scraper_seeds_schema.sql](db/scraper_seeds_schema.sql)), editable from the admin console, with
 lifetime per-angle yield totals (`total_added`, `total_cost`, …) so unproductive angles can be
 found and retired. `seeds_common.py` loads them and falls back to the hardcoded
 `NATIONAL_SEEDS`/`SEATTLE_SEEDS` literals in `scrape_opportunities.py` if the table is empty or
@@ -1629,8 +1629,8 @@ over raw HTTP (no SDK, matching the stdlib-only philosophy) and holds the `PROMO
 dict; four POST endpoints (`/api/subscription/status|checkout|cancel|validate-promo`) sit
 in `server.py`.
 
-- The `users` table needs the columns in **[subscription_schema.sql](subscription_schema.sql)**
-  — a one-time manual DDL step in the Supabase SQL editor, same as `user_costs_schema.sql`.
+- The `users` table needs the columns in **[subscription_schema.sql](db/subscription_schema.sql)**
+  — a one-time manual DDL step in the Supabase SQL editor, same as `db/user_costs_schema.sql`.
   PostgREST has no DDL endpoint, so nothing in this repo can run it. **Until it runs,
   registration is down**: `create_user()` writes all of those columns and Postgres rejects
   the insert entirely if one is missing. `/api/register` detects that case (PostgREST
@@ -1706,7 +1706,7 @@ in `server.py`.
   case-insensitive lookup. Don't switch these to `ilike` — `_` is a legitimate email
   character and an ILIKE wildcard, so it would over-match and refuse valid signups.
   The check and the INSERT are two round-trips, so simultaneous signups can still race
-  past it; the unique index in **[users_email_unique_schema.sql](users_email_unique_schema.sql)**
+  past it; the unique index in **[users_email_unique_schema.sql](db/users_email_unique_schema.sql)**
   is what actually closes that, and `EMAIL_UNIQUE_INDEX` in `server.py` must keep matching
   the index name there or an email collision gets reported as a userid collision.
 - **Signup consent**: three checkboxes (18-or-older; if not, parent/guardian permission
@@ -1781,7 +1781,7 @@ first paint in production. None of it was computation — it was the shape of th
   `get_user_data()` is only `data`. `get_user()` (`select=*`) remains for the paths that
   genuinely want both. PostgREST has no "everything but X", so the account list is explicit
   and **falls back to `*` once and latches** if a column has not been migrated in — the
-  same 400-on-unknown-column trap `mailing_list_schema.sql` carries, except here it would
+  same 400-on-unknown-column trap `db/mailing_list_schema.sql` carries, except here it would
   break sign-in.
 
 Measured end to end on `:8000` (warm, exported bundle): first paint of Home Base went from
@@ -2089,7 +2089,7 @@ Workspace accounts goes to spam, and school MXes are the least forgiving recipie
 are.
 
 **`email_sends` is a CLAIM table, not a log**
-([email_schema.sql](email_schema.sql) — another one-time manual DDL step, and it also adds
+([email_schema.sql](db/email_schema.sql) — another one-time manual DDL step, and it also adds
 `users.lifecycle_email_optout`). The row is written **before** Resend is called, and its
 `unique (userid, kind, dedupe_key)` is what makes a repeated sweep safe: the second attempt
 loses the insert, sees 23505, and skips. A log written *after* the send cannot do this — the
@@ -2100,7 +2100,7 @@ direction — a stuck row is visible in the console and clearable by hand, a dup
 be un-sent.
 
 - **Failing to claim means not sending, including when the table is absent.** Until
-  `email_schema.sql` runs, every claim fails and nothing is ever sent; the console shows the
+  `db/email_schema.sql` runs, every claim fails and nothing is ever sent; the console shows the
   setup step. That reads as the feature being switched off, which is correct — the
   alternative is sending with no record of having sent, i.e. a daily sweep that mails the
   same student every morning.
@@ -2199,7 +2199,7 @@ email carries **no win-back offer, deliberately** — the same email with a coup
 commercial, and the exemption is not worth trading for one.
 
 **Setup, in order** (nothing sends until all of it is done):
-1. Run [email_schema.sql](email_schema.sql) in the Supabase SQL editor.
+1. Run [email_schema.sql](db/email_schema.sql) in the Supabase SQL editor.
 2. Create a Resend account, verify `highschoolwingman.com` as a sending domain (SPF/DKIM),
    and put `RESEND_API_KEY` in `.env` and in the Render dashboard. A 403 whose message
    mentions the domain is an unverified sender, not a bad key — `_resend_post` says so.

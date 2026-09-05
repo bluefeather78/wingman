@@ -1,4 +1,4 @@
--- users_email_unique_schema.sql — one-time manual DDL for the Supabase `users` table.
+-- db/users_email_unique_schema.sql — one-time manual DDL for the Supabase `users` table.
 --
 -- Makes email uniqueness a database guarantee. server.py already refuses a duplicate
 -- email at registration (handle_register), but that check and the INSERT are two separate

@@ -43,7 +43,7 @@ alter table user_metrics_daily enable row level security;
 
 
 -- ---------------------------------------------------------------------------
--- ALTER block — see the note in user_activity_schema.sql. `create table if not exists`
+-- ALTER block — see the note in db/user_activity_schema.sql. `create table if not exists`
 -- does nothing to an existing table, and one unknown key 400s the whole write.
 alter table user_metrics_daily add column if not exists accounts    integer not null default 0;
 alter table user_metrics_daily add column if not exists funnel      jsonb   not null default '{}'::jsonb;

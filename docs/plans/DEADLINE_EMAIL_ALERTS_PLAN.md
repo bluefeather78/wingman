@@ -112,7 +112,7 @@ clicked, and this system's opt-out (correctly) kills *all* lifecycle email at on
 - `welcome`/`goodbye` use `''` for the key and this uses a rich key — both live happily
   under the same three-column unique constraint. **No schema change is needed**:
   `email_sends.kind` is free text *specifically* so a fourth kind needs no migration
-  (email_schema.sql says so), and the claim/opt-out/mock-mode machinery is kind-agnostic.
+  (../../db/email_schema.sql says so), and the claim/opt-out/mock-mode machinery is kind-agnostic.
 
 **Volume guard inside the digest:** sort by `days_left` ascending, render at most ~10
 items, close with "and N more in your Quest Log." An email that scrolls forever is read as
@@ -387,7 +387,7 @@ Everything is in place and tested; this is now a pure config flip, deliberately 
 yet — the operator turns it on when shipping Beta. **Arming checklist (all in
 `.github/workflows/lifecycle-emails.yml`, whose header now carries this too):**
 
-1. Run `email_schema.sql` in the Supabase SQL editor if not already (until then every claim
+1. Run `../../db/email_schema.sql` in the Supabase SQL editor if not already (until then every claim
    fails and nothing sends — by design).
 2. Set repository secrets `WINGMAN_API_BASE` and `EMAIL_CRON_SECRET` (Actions), **and**
    `EMAIL_CRON_SECRET` in the Render dashboard (the endpoint 503s without it).

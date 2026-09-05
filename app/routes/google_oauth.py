@@ -266,7 +266,7 @@ def handle_google_finish(request: Request, body: dict = Depends(json_body)):
     except MissingUserColumns:
         return json_error(503, "Accounts are temporarily unavailable: the "
                                "database is missing required columns. Run "
-                               "subscription_schema.sql and google_auth_schema.sql "
+                               "db/subscription_schema.sql and db/google_auth_schema.sql "
                                "in the Supabase SQL editor, then try again.")
     except DuplicateEmail:
         return json_error(409, "An account already exists with that email "
@@ -392,7 +392,7 @@ def handle_google_calendar_callback(request: Request):
     except urllib.error.HTTPError as e:
         if _is_missing_column_error(e):
             return json_error(503, "Google Calendar sync is temporarily "
-                                   "unavailable: run google_calendar_schema.sql "
+                                   "unavailable: run db/google_calendar_schema.sql "
                                    "in the Supabase SQL editor, then try again.")
         return json_error(502, f"Could not reach Supabase: {e}")
     except Exception as e:
@@ -588,7 +588,7 @@ def handle_calendar_sync(body: dict = Depends(json_body),
     except urllib.error.HTTPError as e:
         if _is_missing_column_error(e):
             return json_error(503, "Google Calendar sync is temporarily "
-                                   "unavailable: run google_calendar_schema.sql "
+                                   "unavailable: run db/google_calendar_schema.sql "
                                    "in the Supabase SQL editor, then try again.")
         return json_error(502, f"Could not prepare your {WINGMAN_CALENDAR_NAME} calendar: {e}")
     except Exception as e:

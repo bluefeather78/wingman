@@ -35,7 +35,7 @@ STRIPE_WEBHOOK_SECRET=whsec_YOUR_WEBHOOK_SECRET_HERE
 In Supabase SQL editor, run:
 ```sql
 -- Don't paste this list by hand — it is incomplete (the consent columns are
--- missing from it). Run subscription_schema.sql instead; see ../SUBSCRIPTION_SETUP.md §1.
+-- missing from it). Run ../../db/subscription_schema.sql instead; see ../SUBSCRIPTION_SETUP.md §1.
 ```
 
 ### Step 4: Test It!

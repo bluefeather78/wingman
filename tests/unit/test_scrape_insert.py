@@ -45,7 +45,7 @@ def test_insert_full_when_both_migrations_present(monkeypatch):
 
 
 def test_insert_keeps_review_when_only_attribution_pending(monkeypatch):
-    # The expected Phase-1 deploy window: user_submissions_schema.sql applied, attribution not.
+    # The expected Phase-1 deploy window: db/user_submissions_schema.sql applied, attribution not.
     # The review columns MUST survive — dropping them would strip the queue of its flags.
     post, calls = _fake_post(forbidden={"seed_id", "found_via"})
     monkeypatch.setattr(so, "supabase_post", post)

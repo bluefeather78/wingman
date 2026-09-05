@@ -1,4 +1,4 @@
--- activation_refresh_schema.sql — one-time manual DDL (run in the Supabase SQL editor).
+-- db/activation_refresh_schema.sql — one-time manual DDL (run in the Supabase SQL editor).
 --
 -- Adds a single queue marker to `opportunities`:
 --

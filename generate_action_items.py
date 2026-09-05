@@ -550,7 +550,7 @@ def main():
         body = e.read().decode("utf-8", errors="replace")
         if "action_items" in body:
             print("[ERROR] The action_items columns are missing. Run "
-                  "action_items_schema.sql in the Supabase SQL editor first.")
+                  "db/action_items_schema.sql in the Supabase SQL editor first.")
             sys.exit(1)
         raise
     print(f"[OK] {len(candidates)} row(s) selected.")

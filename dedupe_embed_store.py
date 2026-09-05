@@ -6,7 +6,7 @@ used to live in a repo-root JSONL sidecar (catalog_embeddings.jsonl). That was p
 state: a fresh clone had no index, so the scraper's dedupe hint went dark and db_health_check read
 "0% covered", until someone re-ran the paid build. It now lives in three columns on `opportunities`,
 exactly like the recall match_vector — computed once at ACTIVATION, backfillable ad-hoc, and read
-straight out of the catalog the scraper already loads. See dedupe_vector_schema.sql.
+straight out of the catalog the scraper already loads. See db/dedupe_vector_schema.sql.
 
 This module is the seam, mirroring app/services/embeddings.py for the recall vector:
   * dedupe_representation / dedupe_content_hash  -- the text embedded + its freshness hash (pure)

@@ -522,7 +522,7 @@ history; reorganize branches later if you want them fully separate.
 **State: all phases built, 1263 tests green, grading harness SAFE. `0 regressions` on
 `python grade_scraper_batch.py` is the merge bar for any future change.**
 
-### DDL run by the operator (live): `scraper_attribution_schema.sql`, `scraper_seeds` ALTER (disabled_reason/at). `moderation_reason` was already live.
+### DDL run by the operator (live): `../../db/scraper_attribution_schema.sql`, `scraper_seeds` ALTER (disabled_reason/at). `moderation_reason` was already live.
 
 ### What actually RAN this session (live, on real data)
 - **seed_id backfill DONE**: `backfill_seed_attribution.py` stamped **143/159** Aug-23 rows

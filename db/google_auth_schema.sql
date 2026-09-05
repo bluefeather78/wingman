@@ -1,8 +1,8 @@
--- google_auth_schema.sql — one-time manual DDL for the Supabase `users` table.
+-- db/google_auth_schema.sql — one-time manual DDL for the Supabase `users` table.
 --
 -- Paste this whole file into the Supabase SQL editor and run it. PostgREST (which is
 -- all server.py can reach) exposes REST reads/writes only, no DDL, so there is no way
--- to run this from the app. Same one-time-manual-step pattern as subscription_schema.sql.
+-- to run this from the app. Same one-time-manual-step pattern as db/subscription_schema.sql.
 --
 -- Until this runs, Google sign-in returns a 503 naming this file: create_user() writes
 -- google_id on a Google signup and Postgres rejects the insert (42703 / PGRST204) if the

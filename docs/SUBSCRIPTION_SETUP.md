@@ -8,7 +8,7 @@ This guide explains how to set up the subscription/payment system for Wingman.
 > live. This section is kept for rebuilding the table, or for standing up a second
 > environment.
 
-The migration lives in **[subscription_schema.sql](../subscription_schema.sql)**. Open the
+The migration lives in **[subscription_schema.sql](../db/subscription_schema.sql)**. Open the
 Supabase SQL editor, paste the whole file in, run it. That is the only step here.
 
 There is no way to do this from the app: PostgREST — all `server.py` can reach — exposes
@@ -278,7 +278,7 @@ Cancels an active subscription:
 - `index.html` - Subscription management page UI
 - `script.js` - Frontend subscription logic and page rendering
 - `.env` - Stripe API keys (gitignored)
-- `subscription_schema.sql` - the one-time DDL from §1
+- `../db/subscription_schema.sql` - the one-time DDL from §1
 - `legal/terms.md`, `legal/privacy.md` - source of record for the two legal documents
 - `terms.html`, `privacy.html` - generated from those by `build_legal.py`; do not hand-edit
 - `build_legal.py` - re-run after any edit under `legal/`
@@ -327,7 +327,7 @@ Make sure `STRIPE_API_KEY` is set in `.env`
 - Check that the code exists in `subscription_common.py`
 
 ### "Accounts are temporarily unavailable" on registration (503)
-The migration in §1 has not been run. Run `subscription_schema.sql` in the Supabase SQL
+The migration in §1 has not been run. Run `../db/subscription_schema.sql` in the Supabase SQL
 editor and restart the server.
 
 ### Trial expiry: how the gate works

@@ -36,7 +36,7 @@ import numpy as np
 # --------------------------------------------------------------------------- content hash
 #
 # The five fields the row embedding is computed from. A row's embedding is recomputed only
-# when the hash of these exact fields changes (see match_vector_schema.sql / the
+# when the hash of these exact fields changes (see db/match_vector_schema.sql / the
 # activation-gated refresh hook), so the vector can never be stale relative to the text it
 # describes — the same exact-identity freshness idea `profileDerivedIsFresh` uses on the
 # profile side. Eligibility / price / season / location / state are deliberately EXCLUDED:

@@ -1,7 +1,7 @@
 -- Moderation state for user-submitted opportunities.
 --
 -- ONE-TIME MANUAL STEP: paste this into the Supabase SQL editor and run it, exactly like
--- subscription_schema.sql and user_costs_schema.sql. PostgREST has no DDL endpoint, so
+-- db/subscription_schema.sql and db/user_costs_schema.sql. PostgREST has no DDL endpoint, so
 -- nothing in this repo can apply it.
 --
 -- Until it runs, server.py degrades: the insert is retried with the base columns only, one

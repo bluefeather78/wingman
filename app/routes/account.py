@@ -69,7 +69,7 @@ def handle_register(request: Request, body: dict = Depends(json_body)):
     except MissingUserColumns:
         return json_error(503, "Accounts are temporarily unavailable: the "
                                "database is missing the subscription and "
-                               "consent columns. Run subscription_schema.sql "
+                               "consent columns. Run db/subscription_schema.sql "
                                "in the Supabase SQL editor, then try again.")
     except DuplicateEmail:
         return json_error(409, "An account already exists with that email "

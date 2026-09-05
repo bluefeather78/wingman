@@ -692,7 +692,7 @@ state preserved.
 
 ## 7. Data model / schema
 
-- **`trusted_aggregators`** (new `trusted_aggregators_schema.sql`): `domain` (pk), `status`
+- **`trusted_aggregators`** (new `../../db/trusted_aggregators_schema.sql`): `domain` (pk), `status`
   (`trusted`|`blocked`; absent ⇒ pending), `label`, `notes`, `added_by`, timestamps.
   ALTER-then-CREATE convention (PostgREST 400s a whole write on one unknown key).
 - **`action_items` item fields** (JSONB, no DDL): add `source_tier`
@@ -774,7 +774,7 @@ state preserved.
   chip links the **evidence** `source_url` (where the claim came from); the existing trailing ↗
   stays the **step action** `url` — two different links. (No longer open.)
 - **Seed allowlist — DECIDED (2026-08-25): seed `lumiere-education.com` as trusted on day one.**
-  The `trusted_aggregators_schema.sql` seeds this one domain as `status='trusted'`, so its
+  The `../../db/trusted_aggregators_schema.sql` seeds this one domain as `status='trusted'`, so its
   tasks (and THINK's) show from the first pass. All other discovered domains still start pending
   and go through the park-and-approve queue. (No longer open.)
 
@@ -1150,7 +1150,7 @@ is new, additive, and stdlib-only, exactly like `page_text.py`.
 - `app/routes/opportunities.py` — **DONE:** deadline endpoint calls
   `check_one(want_requirements=True)` (read-once).
 - `app/routes/opportunities.py` — inherits `check_one`; new-outcome stamp handling.
-- `aggregators_common.py` (new), `trusted_aggregators_schema.sql` (new).
+- `aggregators_common.py` (new), `../../db/trusted_aggregators_schema.sql` (new).
 - `ops/core.py` + `ops/admin.py` + `ops/admin_console.html` — Sources tab (approve/block/park).
 - `frontend/src/lib/status.ts` — `rolling` in `computeProgressStatus` + list readers.
 - `frontend/src/lib/tracker.ts` — **DONE (P7/P8):** tier/verified fields in the raw types +
@@ -1578,7 +1578,7 @@ deadline."
   yet;** P5 code unchanged and still valid (the substrate builds ON P2's finder + P5's tiers).
 - **2026-08-25** — **P5 IMPLEMENTED** (code-complete; branch `P5-P7-deadline-and-task-tracker`,
   dev server on :8001). Shared trust infrastructure, all five deliverables:
-  - **`trusted_aggregators_schema.sql`** (new) — domain-pk allowlist, `status`
+  - **`../../db/trusted_aggregators_schema.sql`** (new) — domain-pk allowlist, `status`
     trusted/blocked (absent row ⇒ pending), ALTER-then-CREATE, seeds `lumiere-education.com`
     as trusted. **Manual DDL step — not yet run in Supabase.**
   - **`aggregators_common.py`** (new, stdlib-only, repo root) — the ONE read side both

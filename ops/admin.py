@@ -503,9 +503,9 @@ def handle_seeds_list(request: Request):
     rows = core.list_seeds(mode=request.query_params.get("mode"))
     if rows is None:
         return json_error(502, "Could not read scraper_seeds. Has the table been created? "
-                               "See scraper_seeds_schema.sql.")
+                               "See db/scraper_seeds_schema.sql.")
     # Attach each angle's live verdict funnel (a GROUP BY over opportunities.seed_id). Absent
-    # until scraper_attribution_schema.sql is run, in which case seed_ready is false and the
+    # until db/scraper_attribution_schema.sql is run, in which case seed_ready is false and the
     # grid simply hides the funnel columns.
     yld = core.get_seed_yield(rows)
     if yld["seed_ready"]:

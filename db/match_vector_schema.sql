@@ -1,4 +1,4 @@
--- match_vector_schema.sql — one-time manual DDL (run in the Supabase SQL editor).
+-- db/match_vector_schema.sql — one-time manual DDL (run in the Supabase SQL editor).
 --
 -- Adds the catalog-side embedding columns to `opportunities`, for Phase 5 of
 -- docs/plans/OPPORTUNITY_MATCHING_PLAN.md (semantic recall). PostgREST has no DDL endpoint, so nothing

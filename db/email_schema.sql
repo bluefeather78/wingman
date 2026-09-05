@@ -1,9 +1,9 @@
--- email_schema.sql — one-time manual DDL for the lifecycle-email feature.
+-- db/email_schema.sql — one-time manual DDL for the lifecycle-email feature.
 --
 -- Paste this whole file into the Supabase SQL editor and run it. PostgREST (which is all
 -- app/ can reach) exposes REST reads/writes only, no DDL, so nothing in this repo can run
--- it for you. Same one-time-manual-step pattern as subscription_schema.sql,
--- mailing_list_schema.sql and user_costs_schema.sql.
+-- it for you. Same one-time-manual-step pattern as db/subscription_schema.sql,
+-- db/mailing_list_schema.sql and db/user_costs_schema.sql.
 --
 -- Until this runs, NO lifecycle email is ever sent. app/services/email.py claims a send
 -- row BEFORE it calls Resend (see below), so a missing table means the claim fails, and a

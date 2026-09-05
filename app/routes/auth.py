@@ -57,7 +57,7 @@ def handle_refresh(body: dict = Depends(json_body)):
 def handle_logout_all(user: AuthedUser = Depends(get_current_user)):
     new_version = bump_token_version(user.id)
     if new_version is None:
-        # Column not present (auth_schema.sql not run) or the account vanished — nothing to
+        # Column not present (db/auth_schema.sql not run) or the account vanished — nothing to
         # revoke. Report it honestly rather than claiming sessions were ended.
         return json_response(200, {"ok": True, "revoked": False})
     return json_response(200, {"ok": True, "revoked": True})

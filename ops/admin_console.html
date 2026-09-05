@@ -596,7 +596,7 @@ tr.disabled-seed { opacity: .48; }
         <div class="card-body tight">
           <div class="hint hidden" id="dupeModerationSetup" style="padding:10px 14px">
             The moderation columns do not exist yet. Run
-            <span class="mono">user_submissions_schema.sql</span> in the Supabase SQL editor
+            <span class="mono">db/user_submissions_schema.sql</span> in the Supabase SQL editor
             (it is idempotent), then restart with <span class="mono">restart_server.ps1</span>.
           </div>
           <div id="dupeBody" style="padding:4px 8px 10px">
@@ -623,7 +623,7 @@ tr.disabled-seed { opacity: .48; }
 
       <!-- Rows the console activated but that have not yet been read from their live page by
            refresh_opportunities.py. Activation enqueues them; the agent (run manually) drains
-           them. Read-only. Off until activation_refresh_schema.sql is run. -->
+           them. Read-only. Off until db/activation_refresh_schema.sql is run. -->
       <div class="card">
         <div class="card-head">
           <h2>Awaiting refresh</h2>
@@ -729,7 +729,7 @@ tr.disabled-seed { opacity: .48; }
       <div class="card-body tight">
         <div class="hint hidden" id="linkQueueSetup" style="padding:10px 14px">
           The review queue is unavailable: the link-health columns do not exist yet. Run
-          <span class="mono">link_health_schema.sql</span> in the Supabase SQL editor (it is
+          <span class="mono">db/link_health_schema.sql</span> in the Supabase SQL editor (it is
           idempotent), then restart with <span class="mono">restart_server.ps1</span>. The
           checker still runs; it just cannot queue findings until the migration is applied.
         </div>
@@ -1151,7 +1151,7 @@ tr.disabled-seed { opacity: .48; }
       <div class="card-body tight">
         <div class="hint hidden" id="moderationSetup" style="padding:10px 14px">
           Reject is unavailable: the moderation columns do not exist yet. Run
-          <span class="mono">user_submissions_schema.sql</span> in the Supabase SQL editor
+          <span class="mono">db/user_submissions_schema.sql</span> in the Supabase SQL editor
           (it is idempotent), then restart with <span class="mono">restart_server.ps1</span>.
           Activation is unaffected.
         </div>
@@ -1202,7 +1202,7 @@ tr.disabled-seed { opacity: .48; }
       <div class="card-body tight">
         <div class="hint hidden" id="signupSetup" style="padding:10px 14px">
           The mailing-list tables are missing or out of date. Run
-          <span class="mono">mailing_list_schema.sql</span> in the Supabase SQL editor
+          <span class="mono">db/mailing_list_schema.sql</span> in the Supabase SQL editor
           (it is idempotent), then restart with <span class="mono">restart_server.ps1</span>.
         </div>
         <div class="tbl-wrap">
@@ -1308,7 +1308,7 @@ tr.disabled-seed { opacity: .48; }
 
     <div class="hint hidden" id="emailSetup" style="padding:10px 14px;margin-bottom:16px">
       The <span class="mono">email_sends</span> table is missing. Run
-      <span class="mono">email_schema.sql</span> in the Supabase SQL editor (it is idempotent),
+      <span class="mono">db/email_schema.sql</span> in the Supabase SQL editor (it is idempotent),
       then restart with <span class="mono">restart_server.ps1</span>. Until then
       <strong>nothing is sent at all</strong> &mdash; a send claims its row before calling the
       provider, so no table means no claim, and no claim means no send. That is deliberate:
@@ -1557,7 +1557,7 @@ tr.disabled-seed { opacity: .48; }
 <!-- Why a row is being rejected. The codes are labeled training data for the scraper:
      each one names a scraper failure mode, and grade_scraper_batch.py fixtures read the
      stored reason instead of re-inferring it from row content. Codes here must stay in
-     step with the taxonomy documented in user_submissions_schema.sql. -->
+     step with the taxonomy documented in db/user_submissions_schema.sql. -->
 <div class="overlay" id="rejectModal">
   <div class="modal" style="max-width:560px">
     <div class="modal-head">
@@ -1574,7 +1574,7 @@ tr.disabled-seed { opacity: .48; }
                placeholder="e.g. kept ec17096 instead">
       </div>
       <div class="hint" id="rejectReasonSetup" style="margin-top:8px">
-        Reasons aren’t stored yet — re-run <span class="mono">user_submissions_schema.sql</span>
+        Reasons aren’t stored yet — re-run <span class="mono">db/user_submissions_schema.sql</span>
         (idempotent) to add the <span class="mono">moderation_reason</span> column. The
         rejection itself still works.
       </div>
@@ -2361,7 +2361,7 @@ function renderSignups() {
   const body = $('signupBody');
   if (!rows.length) {
     const empty = S.mailingListReady === false
-      ? 'Run mailing_list_schema.sql, then run the Mailing List Finder.'
+      ? 'Run db/mailing_list_schema.sql, then run the Mailing List Finder.'
       : S.signupStatus === 'pending_review'
         ? 'No recipes waiting for review.'
         : 'Nothing here.';
@@ -2482,7 +2482,7 @@ function renderAggregators() {
   if (!S.aggregatorsReady) {
     setup.classList.remove('hidden');
     setup.innerHTML = esc(S.aggregatorSetupHint ||
-      'Run trusted_aggregators_schema.sql in the Supabase SQL editor, then restart.');
+      'Run db/trusted_aggregators_schema.sql in the Supabase SQL editor, then restart.');
   } else {
     setup.classList.add('hidden');
   }
@@ -2668,7 +2668,7 @@ function renderLinkQueue() {
   const body = $('linkQueueBody');
   if (body) {
     if (!S.linkSchemaReady) {
-      body.innerHTML = '<tr><td colspan="6" class="empty">Waiting on link_health_schema.sql.</td></tr>';
+      body.innerHTML = '<tr><td colspan="6" class="empty">Waiting on db/link_health_schema.sql.</td></tr>';
     } else if (!rows.length) {
       body.innerHTML = '<tr><td colspan="6" class="empty">Nothing queued — every checked link is fine.</td></tr>';
     } else {
@@ -2709,7 +2709,7 @@ function updateLinkButtons() {
     clr.disabled = !n || !S.linkSchemaReady;
     clr.textContent = n ? `Clear ${n} selected` : 'Clear selected';
     clr.title = S.linkSchemaReady ? 'Dismiss the finding; the program stays live in the catalog.'
-                                  : 'Run link_health_schema.sql first.';
+                                  : 'Run db/link_health_schema.sql first.';
   }
   if (dea) {
     dea.disabled = !n;
@@ -2739,7 +2739,7 @@ async function resolveLink(ids, action) {
     toast(`${verb} ${r.updated} program${r.updated === 1 ? '' : 's'}.`);
     if (r.errors) notice(`${r.errors} failed: ${(r.details || []).join(' | ')}`);
     if (r.schema_ready === false) {
-      notice('Deactivated, but the review flag could not be written — run link_health_schema.sql.');
+      notice('Deactivated, but the review flag could not be written — run db/link_health_schema.sql.');
     }
     ids.forEach(id => S.selectedLinks.delete(id));
     await loadLinkQueue();
@@ -2777,7 +2777,7 @@ async function resolveRepaired(ids, action) {
       if (r.embed_cost_usd) bits.push(`embed cost ${money(r.embed_cost_usd)}`);
       if (!r.embedded && !r.indexed) bits.push('(no embeddings — mock/no-key env or already indexed)');
       bits.push(r.queue_ready === false
-        ? 'not queued for a metadata refresh (activation_refresh_schema.sql not run)'
+        ? 'not queued for a metadata refresh (db/activation_refresh_schema.sql not run)'
         : 'queued for a metadata refresh — run the Core Details refresher to enrich them');
       notice(`Activated ${r.updated}: ${bits.join('; ')}.`);
     }
@@ -2804,7 +2804,7 @@ function updateReviewButtons() {
   rej.classList.toggle('hidden', rejected);
   res.classList.toggle('hidden', !rejected);
   rej.disabled = !n || !S.moderationReady;
-  rej.title = S.moderationReady ? '' : 'Run user_submissions_schema.sql first.';
+  rej.title = S.moderationReady ? '' : 'Run db/user_submissions_schema.sql first.';
   rej.textContent = n ? `Reject ${n} selected` : 'Reject selected';
   res.disabled = !n;
   res.textContent = n ? `Restore ${n} to queue` : 'Restore to queue';
@@ -2818,7 +2818,7 @@ async function postModerate(ids, status, reason) {
   toast(`${status === 'rejected' ? 'Rejected' : 'Restored'} ${r.moderated} `
       + `opportunit${r.moderated === 1 ? 'y' : 'ies'}.`);
   if (r.errors) notice(`${r.errors} failed: ${(r.error_details || []).join(' | ')}`);
-  if (r.reason_dropped) notice(r.note || 'Reason dropped — re-run user_submissions_schema.sql.');
+  if (r.reason_dropped) notice(r.note || 'Reason dropped — re-run db/user_submissions_schema.sql.');
   S.selectedPending.clear();
   refreshDashboard();
   return r;
@@ -3492,7 +3492,7 @@ function renderUserCosts() {
     // One un-run migration should read as a setup step, not as a broken page.
     summaryEl.innerHTML = `<div class="notice" style="line-height:1.6">
       <strong>Per-user attribution is not switched on yet.</strong>
-      Run <span class="mono">${esc(d.setup_sql_file || 'user_costs_schema.sql')}</span> once in the
+      Run <span class="mono">${esc(d.setup_sql_file || 'db/user_costs_schema.sql')}</span> once in the
       Supabase SQL editor, then restart the server. Until then every interactive call is still
       costed in the totals above — it just isn't attributed to anyone.
     </div>`;
@@ -4082,7 +4082,7 @@ function providerBlock(d) {
     <div class="notice" style="margin:0 0 12px;line-height:1.6">
       The <span class="mono">user_costs</span> table has no <span class="mono">model</span>
       column yet, so spend is split by provider only. Re-run
-      <span class="mono">${esc(d.setup_sql_file || 'user_costs_schema.sql')}</span> in the
+      <span class="mono">${esc(d.setup_sql_file || 'db/user_costs_schema.sql')}</span> in the
       Supabase SQL editor to break it out by model — the totals are already correct either way.
     </div>` : '';
 
@@ -4515,7 +4515,7 @@ async function loadSeeds() {
   } catch (e) {
     $('seedBody').innerHTML = `<tr><td colspan="13" class="empty">
       Could not load angles: ${esc(e.message)}<br>
-      <span style="font-size:12px">Run <span class="mono">scraper_seeds_schema.sql</span> in the Supabase SQL editor,
+      <span style="font-size:12px">Run <span class="mono">db/scraper_seeds_schema.sql</span> in the Supabase SQL editor,
       then <span class="mono">python migrate_seeds_to_supabase.py</span>.</span></td></tr>`;
   }
   loadMerges();
@@ -4572,7 +4572,7 @@ async function loadMetadataRefreshQueue() {
     const d = await api('/api/agents/metadata-refresh-queue?limit=200');
     if (!d.ok) { el.textContent = 'Could not read the queue: ' + (d.error || 'unknown'); return; }
     if (!d.queue_ready) {
-      el.innerHTML = `<div>Not tracking yet &mdash; run <span class="mono">${esc(d.queue_sql || 'activation_refresh_schema.sql')}</span>
+      el.innerHTML = `<div>Not tracking yet &mdash; run <span class="mono">${esc(d.queue_sql || 'db/activation_refresh_schema.sql')}</span>
         in the Supabase SQL editor (idempotent), then restart with <span class="mono">restart_server.ps1</span>.
         Until then, activation still works; it just is not recorded here.</div>`;
       return;
@@ -4793,7 +4793,7 @@ function renderSeeds() {
   const note = $('seedYieldNote');
   if (note) {
     if (!S.seedReady) {
-      note.textContent = 'Per-angle approval funnels appear once scraper_attribution_schema.sql '
+      note.textContent = 'Per-angle approval funnels appear once db/scraper_attribution_schema.sql '
         + 'is run (Appr/Rej/Dup, waste, $/approved and the diagnosis are blank until then).';
       note.classList.remove('hidden');
     } else if (y && !y.ever_credited && y.reason) {
@@ -5642,11 +5642,11 @@ function renderHealth(h) {
     <div class="card-body">`;
   html += `<div style="margin-bottom:14px">${healthPill(e.severity, e.severity === 'ok' ? 'ok' : 'gap')}
     <span style="margin-left:8px"><strong>Dedupe embeddings</strong> — ${e.columns_available === false
-      ? `dedupe_vector column not present — run dedupe_vector_schema.sql (coverage unknown, not zero)`
+      ? `dedupe_vector column not present — run db/dedupe_vector_schema.sql (coverage unknown, not zero)`
       : `${num(e.indexed)} indexed, ${num(e.missing)} of ${num(e.active_rows)} active rows missing (${esc(covPct)} covered)`}.</span></div>`;
   html += `<div style="margin-bottom:14px">${healthPill(s.severity, s.severity === 'ok' ? 'ok' : 'gap')}
     <span style="margin-left:8px"><strong>Semantic embeddings</strong> <span style="color:var(--text-2);font-size:12px">(recall match_vector)</span> — ${s.columns_available === false
-      ? `match_vector column not present — run match_vector_schema.sql (coverage unknown, not zero)`
+      ? `match_vector column not present — run db/match_vector_schema.sql (coverage unknown, not zero)`
       : `${num(s.indexed)} indexed, ${num(s.missing)} of ${num(s.active_rows)} active rows missing (${esc(semPct)} covered)`}.</span></div>`;
   if (cov.columns_available) {
     const rows = [['reviews', 'Reviews'], ['links', 'Link health'],
@@ -5673,8 +5673,8 @@ function renderHealth(h) {
   } else {
     html += `<div class="notice info">Coverage gaps are unavailable — the review / link / task
       timestamp columns are not migrated in yet
-      (<span class="mono">link_health_schema.sql</span>,
-      <span class="mono">action_items_schema.sql</span>).</div>`;
+      (<span class="mono">db/link_health_schema.sql</span>,
+      <span class="mono">db/action_items_schema.sql</span>).</div>`;
   }
   html += `</div></div>`;
 

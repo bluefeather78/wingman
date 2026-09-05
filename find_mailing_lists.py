@@ -32,7 +32,7 @@ catalog resolves for free.
 
 SETUP:
     .env needs SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY.
-    Run mailing_list_schema.sql once in the Supabase SQL editor first.
+    Run db/mailing_list_schema.sql once in the Supabase SQL editor first.
 
 USAGE:
     python find_mailing_lists.py --preview --limit 10   # free: what would it touch
@@ -240,7 +240,7 @@ def select_rows(supabase_url, service_key, args):
             seen = {r["opportunity_id"] for r in done}
         except Exception as e:
             print(f"[ERROR] Could not read opportunity_signups: {e}")
-            print("[ERROR] Has mailing_list_schema.sql been run in the Supabase SQL editor?")
+            print("[ERROR] Has db/mailing_list_schema.sql been run in the Supabase SQL editor?")
             sys.exit(1)
         active = [o for o in active if o["id"] not in seen]
 
@@ -339,7 +339,7 @@ def main():
             if _is_missing_column(detail):
                 print(f"\n[ERROR] {detail.get('message')}")
                 print("[ERROR] The opportunity_signups table is out of date. Re-run "
-                      "mailing_list_schema.sql in the Supabase SQL editor — it is "
+                      "db/mailing_list_schema.sql in the Supabase SQL editor — it is "
                       "idempotent and its ALTER block adds whatever is missing.")
                 print(f"[ERROR] Stopped after {i} row(s); API spend so far ${total_cost:.4f}.")
                 sys.exit(1)

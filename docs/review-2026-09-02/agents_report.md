@@ -661,7 +661,7 @@ G1  parse args (--sample|--all|--ids|--missing, --force, --dry-run, --preview, -
     own limiter — see §4.16).
 G2  GET is_active=true rows; --ids → in.(); --missing → action_items is.null; else
     staleness (checked_at null or < now-90d) unless --force.  400 mentioning action_items
-    → "run action_items_schema.sql" exit.
+    → "run ../../db/action_items_schema.sql" exit.
 G3  --preview → emit_preview → EXIT.  INSERT agent_runs {agent:"action_item_generator"}.
 G4  FOR EACH row: process_one(opp, key, timeout)                               [455]
 G5    policy = aggregators_common.get_policy(...)

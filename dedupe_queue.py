@@ -32,7 +32,7 @@ deactivate anything. A flagged row stays exactly as flagged; a pending row stays
 
 The only cost is embedding the selected rows (a fraction of a cent for either source, since
 `--source flagged` selections are typically small); the active catalog's dedupe vectors are read
-from the `opportunities.dedupe_vector` column (see dedupe_vector_schema.sql). Nothing is written to
+from the `opportunities.dedupe_vector` column (see db/dedupe_vector_schema.sql). Nothing is written to
 Supabase without --write — this only tells you what the logic WOULD judge.
 
     python dedupe_queue.py                     # embeds the review queue, prints tier verdicts

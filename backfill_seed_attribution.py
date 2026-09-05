@@ -19,7 +19,7 @@ FREE (no API calls). Writes to the live catalog only with --commit; --preview (d
     python backfill_seed_attribution.py --commit         # apply
     python backfill_seed_attribution.py --source-like scraper-national-20260823 --commit
 
-Requires scraper_attribution_schema.sql to have been run (seed_id must exist); it says so
+Requires db/scraper_attribution_schema.sql to have been run (seed_id must exist); it says so
 if the PATCH is rejected for a missing column.
 """
 import argparse
@@ -148,7 +148,7 @@ def main():
         rows = supabase_get(supabase_url, "opportunities", params, service_key)
     except Exception as e:
         print(f"[ERROR] Could not read opportunities ({e}). "
-              f"If this names seed_id, run scraper_attribution_schema.sql first.")
+              f"If this names seed_id, run db/scraper_attribution_schema.sql first.")
         raise SystemExit(1)
 
     todo, buckets = [], {"candidate": 0, "resolved": 0, "unmatched": 0,

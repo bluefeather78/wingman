@@ -145,7 +145,7 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 # Client ID/Secret from a Google Cloud OAuth client (Web application type), configured with
 # redirect URIs for both localhost and the production domain. Server-side redirect flow, not
 # Google Identity Services JS — the callback exchanges a code for tokens itself, so no
-# client-side Google library is needed. See google_auth_schema.sql for the users table columns
+# client-side Google library is needed. See db/google_auth_schema.sql for the users table columns
 # this depends on (google_id, and password_hash made nullable for Google-only accounts).
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
@@ -160,7 +160,7 @@ GOOGLE_TOKEN_TTL_SECONDS = 5 * 60
 # "openid email profile", so an existing signed-in session (password or Google) has no
 # token that can touch Calendar. Connecting Calendar is its own start/callback pair that
 # requests the calendar.events scope against the already-known userid, and persists the
-# resulting tokens (see google_calendar_schema.sql) rather than discarding them like the
+# resulting tokens (see db/google_calendar_schema.sql) rather than discarding them like the
 # short-lived _google_session_tokens above — a sync can then run again later without
 # re-prompting, as long as the refresh token stays valid.
 GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.app.created"
@@ -217,24 +217,24 @@ REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60  # 30 days
 # ledger, the other a product funnel, and a page that computes both computes neither well.
 #
 # Two migrations gate the time-series half (see the .sql files for why each exists):
-#   user_activity_schema.sql       -> DAU/WAU/MAU, retention, "came back after signup day"
-#   user_metrics_daily_schema.sql  -> trend lines for state metrics, which are otherwise
+#   db/user_activity_schema.sql       -> DAU/WAU/MAU, retention, "came back after signup day"
+#   db/user_metrics_daily_schema.sql  -> trend lines for state metrics, which are otherwise
 #                                     unrecoverable (the `data` jsonb holds one profile,
 #                                     not a history of one)
 # Neither is required for the funnel, plan mix, conversion or the roster. Those come from
 # the `users` table as it stands today, which is why they shipped first.
-USER_ACTIVITY_SETUP_SQL = "user_activity_schema.sql"
-USER_METRICS_SETUP_SQL = "user_metrics_daily_schema.sql"
+USER_ACTIVITY_SETUP_SQL = "db/user_activity_schema.sql"
+USER_METRICS_SETUP_SQL = "db/user_metrics_daily_schema.sql"
 # The append-only behavioral event log the matcher's revealed-preference loop reads. Capture
 # ships early (unlogged clicks are unrecoverable); the consumer comes later. Until this runs,
 # record_user_events() latches off after one warning and the UI is unaffected (fail-open).
-USER_EVENTS_SETUP_SQL = "user_events_schema.sql"
+USER_EVENTS_SETUP_SQL = "db/user_events_schema.sql"
 # The append-only log of 5xx responses / unhandled exceptions the FastAPI service produces,
 # read by the admin console's API Errors tab. Capture ships with the recorder (an unlogged
 # failure is unrecoverable); until this runs, record_api_error() latches off after one warning
 # and no request is affected (fail-open). Lives in Supabase, not memory, because the console
-# runs on a different machine from the shipped API — see api_errors_schema.sql.
-API_ERRORS_SETUP_SQL = "api_errors_schema.sql"
+# runs on a different machine from the shipped API — see db/api_errors_schema.sql.
+API_ERRORS_SETUP_SQL = "db/api_errors_schema.sql"
 
 
 # ---------- Lifecycle email (Resend) ----------
@@ -336,4 +336,4 @@ DEADLINE_ALERT_MAX_ITEMS = 10
 # unauthenticated — the same choice JWT_SECRET makes.
 EMAIL_CRON_SECRET = os.environ.get("EMAIL_CRON_SECRET", "")
 
-EMAIL_SETUP_SQL = "email_schema.sql"
+EMAIL_SETUP_SQL = "db/email_schema.sql"

@@ -18,7 +18,7 @@
 -- with present=False — every domain classifies as pending (nothing off-domain ships), the
 -- deadline rung-4 filter keeps nothing, and the console Sources tab shows the setup step.
 --
--- ALTER-THEN-CREATE, like mailing_list_schema.sql / email_schema.sql: `create table if not
+-- ALTER-THEN-CREATE, like db/mailing_list_schema.sql / db/email_schema.sql: `create table if not
 -- exists` is a no-op against a table that already exists in an older shape, and PostgREST
 -- 400s an entire write on one unknown key — so a single missing column means EVERY write
 -- fails and the feature reads as "found nothing" rather than "every write failed". If you

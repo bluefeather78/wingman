@@ -76,7 +76,7 @@ def main():
     except Exception as e:
         # A 400 here is almost always the migration not being run yet — name the file.
         print(f"[ERROR] Could not read the catalog: {e}")
-        print("        If this is a missing-column error, run dedupe_vector_schema.sql first.")
+        print("        If this is a missing-column error, run db/dedupe_vector_schema.sql first.")
         sys.exit(1)
 
     needing = rows_needing_dedupe_embedding(rows)

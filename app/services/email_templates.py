@@ -52,7 +52,7 @@ OTHER RULES THAT STILL APPLY:
     legal/privacy.md does not describe open-tracking. Adding it is a privacy-policy change
     and a TERMS_VERSION bump, not a template edit.
   * The unsubscribe link is in the footer of ALL THREE, including the two that are
-    defensibly transactional. See email_schema.sql.
+    defensibly transactional. See db/email_schema.sql.
 """
 import html
 

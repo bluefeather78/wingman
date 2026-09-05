@@ -169,7 +169,7 @@ This is genuinely most of the dashboard, and it is available today. Do this firs
 ### Phase 1 — `user_activity`, the one new write path
 
 ```sql
--- user_activity_schema.sql  (one-time manual DDL, same pattern as user_costs_schema.sql)
+-- ../../db/user_activity_schema.sql  (one-time manual DDL, same pattern as ../../db/user_costs_schema.sql)
 create table if not exists user_activity (
     userid      text not null,
     day         date not null,
@@ -415,9 +415,9 @@ a `?stage=` filter and paginate.
   strip and the default view, with KPI tiles, the signups/DAU chart, and the four paged
   panels (Funnel, Retention, Subscriptions, Users). Funnel bars expand to name the
   accounts each step lost.
-- [user_activity_schema.sql](../../user_activity_schema.sql) + `touch_user_activity()`, wired
+- [user_activity_schema.sql](../../db/user_activity_schema.sql) + `touch_user_activity()`, wired
   into the nine handlers that carry a userid, buffered in memory and flushed every 30s.
-- [user_metrics_daily_schema.sql](../../user_metrics_daily_schema.sql) + `record_metrics_snapshot()`,
+- [user_metrics_daily_schema.sql](../../db/user_metrics_daily_schema.sql) + `record_metrics_snapshot()`,
   written from the read path and throttled to one write per 5 minutes.
 
 **Both .sql files still need running once in the Supabase SQL editor** — PostgREST exposes

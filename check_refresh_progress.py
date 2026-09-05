@@ -44,7 +44,7 @@ updated = supabase_get(supabase_url, "opportunities", {
 
 # Drop rows whose only recent write was a link-health pass — see the module docstring.
 # Done client-side rather than as a PostgREST filter so a database without the link_*
-# columns (link_health_schema.sql not run) still works: the key is simply absent and
+# columns (db/link_health_schema.sql not run) still works: the key is simply absent and
 # nothing is excluded, which is exactly the old behaviour.
 link_touched = [o for o in updated
                 if o.get("link_checked_at") and o["link_checked_at"] > cutoff]

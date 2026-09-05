@@ -1,9 +1,9 @@
--- mailing_list_schema.sql — one-time manual DDL for the mailing-list signup feature.
+-- db/mailing_list_schema.sql — one-time manual DDL for the mailing-list signup feature.
 --
 -- Paste this whole file into the Supabase SQL editor and run it. PostgREST (which is all
 -- server.py can reach) exposes REST reads/writes only, no DDL, so nothing in this repo
--- can run it for you. Same one-time-manual-step pattern as subscription_schema.sql,
--- user_costs_schema.sql and user_submissions_schema.sql.
+-- can run it for you. Same one-time-manual-step pattern as db/subscription_schema.sql,
+-- db/user_costs_schema.sql and db/user_submissions_schema.sql.
 --
 -- Until this runs: find_mailing_lists.py exits with an error naming this file, the admin
 -- console's Mailing lists tab shows the setup step instead of a queue, and

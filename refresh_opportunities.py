@@ -113,7 +113,7 @@ VALID_LOCATION = {'In-Person', 'Remote', 'In-Person and Remote'}
 VALID_INTL = {'International Students', 'Domestic Students'}
 VALID_SEASON = {'Summer', 'Year-Long', 'Spring', 'Fall', 'Winter'}
 
-# Queue marker from activation_refresh_schema.sql: a row the console activated and enqueued
+# Queue marker from db/activation_refresh_schema.sql: a row the console activated and enqueued
 # for a metadata refresh. This agent is the DRAIN — it clears the marker once it successfully
 # reads the row's page (reason == 'ok'), whether or not any field changed, so the console's
 # "awaiting refresh" list empties as rows are processed. A one-shot queue flag, not a
@@ -124,7 +124,7 @@ _queue_col_enabled = True
 
 
 def _get_opportunities(supabase_url, params, service_key):
-    """supabase_get for the opportunities table, tolerant of activation_refresh_schema.sql
+    """supabase_get for the opportunities table, tolerant of db/activation_refresh_schema.sql
     not being run. If the queue column is in the select and PostgREST 400s, drop it and
     latch it off for the rest of the run — the drain then simply does nothing, and the
     metadata refresh itself is unaffected."""
@@ -148,7 +148,7 @@ def _get_opportunities(supabase_url, params, service_key):
 # name+org+summary+subject_tags+type; dedupe_vector uses name+org+type+summary+eligibility. When a
 # live PATCH actually CHANGES one of them, the row is re-embedded on both vectors (a paid Gemini
 # embedding call, ~cents/row, only for rows that changed). Toggling/removing this paid call is a
-# marquee change. See MARQUEE_DECISIONS.md M9, match_vector_schema.sql, dedupe_vector_schema.sql.
+# marquee change. See MARQUEE_DECISIONS.md M9, db/match_vector_schema.sql, db/dedupe_vector_schema.sql.
 EMBED_TRIGGER_FIELDS = ("name", "org", "summary", "subject_tags", "type", "eligibility")
 
 
@@ -369,7 +369,7 @@ def main():
                             "(activation_refresh_queued_at is set) — rows activated in the admin "
                             "console and not yet read from their live page. This DRAINS the "
                             "console's Awaiting-refresh queue: each row processed here has its "
-                            "marker cleared. Needs activation_refresh_schema.sql.")
+                            "marker cleared. Needs db/activation_refresh_schema.sql.")
     parser.add_argument("--dry-run", action="store_true", help="No writes — just prints and dumps results to JSON.")
     parser.add_argument("--exclude-source", type=str, default=None, help="Exclude opportunities with this source value.")
     parser.add_argument("--skip-contact-email", action="store_true",
@@ -437,7 +437,7 @@ def main():
         except urllib.error.HTTPError as e:
             if e.code == 400:
                 print(f"[ERROR] The activation-refresh queue column is missing — run "
-                      f"activation_refresh_schema.sql in the Supabase SQL editor first.")
+                      f"db/activation_refresh_schema.sql in the Supabase SQL editor first.")
                 sys.exit(1)
             raise
         mode = "awaiting"

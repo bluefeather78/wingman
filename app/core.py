@@ -47,7 +47,7 @@ def subscription_state(record):
     status = record.get("subscription_status") or "trial"
     trial_ends = record.get("trial_ends_at")
     # A trial row with no end date has not started its clock yet — that's every account
-    # created before subscription_schema.sql ran, since ALTER TABLE backfills NULL. Read
+    # created before db/subscription_schema.sql ran, since ALTER TABLE backfills NULL. Read
     # it as "not expired": is_trial_expired(None) says True, and taking that literally
     # would paywall every pre-existing user the moment the migration lands.
     # ensure_trial_started() below stamps a real date on them at next sign-in.
@@ -422,7 +422,7 @@ def classify_feature(system):
 _user_costs_available = True
 # Separately flipped when the table exists but predates the provider/model breakout, so a
 # half-migrated database keeps attributing spend (without the model split) instead of
-# losing attribution entirely. Re-run user_costs_schema.sql to switch it back on.
+# losing attribution entirely. Re-run db/user_costs_schema.sql to switch it back on.
 _user_costs_has_model = True
 _user_costs_lock = threading.Lock()
 _user_costs_rows = {}  # {(userid, day, surface, feature, model): user_costs row id}
@@ -486,14 +486,14 @@ def record_user_cost(userid, surface, feature, cost, input_tokens=0, output_toke
                         if existing is not None:
                             _user_costs_has_model = False
                             print("[WARN] user_costs has no `model` column - provider/model "
-                                  "breakout is off. Re-run user_costs_schema.sql in the "
+                                  "breakout is off. Re-run db/user_costs_schema.sql in the "
                                   "Supabase SQL editor.")
                     else:
                         existing = None
                     if existing is None:
                         _user_costs_available = False
                         print("[WARN] user_costs table unavailable - per-user cost "
-                              "attribution is off. Run user_costs_schema.sql in the "
+                              "attribution is off. Run db/user_costs_schema.sql in the "
                               "Supabase SQL editor.")
                         return
                 if existing:
@@ -656,7 +656,7 @@ def get_user(userid):
 
 # Every column on `users` EXCEPT `data`. There is no "select everything but X" in
 # PostgREST, so the list is explicit — and because a missing column 400s the whole read
-# (the trap mailing_list_schema.sql and user_costs_schema.sql both carry), a failure here
+# (the trap db/mailing_list_schema.sql and db/user_costs_schema.sql both carry), a failure here
 # falls back to `*` once and latches, so a pre-migration database degrades to the old
 # behaviour rather than breaking sign-in.
 _ACCOUNT_COLUMNS = (
@@ -745,7 +745,7 @@ class MissingUserColumns(Exception):
 
     Raised instead of letting PostgREST's bare 400 surface as "Could not reach
     Supabase", which is what the missing migration looked like before and cost a
-    session of debugging. See subscription_schema.sql.
+    session of debugging. See db/subscription_schema.sql.
     """
 
 
@@ -755,8 +755,8 @@ def create_user(userid, first_name, last_name, email, password_hash, location=""
 
     is_adult / parental_consent come from the registration checkboxes; the caller
     (handle_register / handle_google_finish) is what enforces them, this just records
-    what was agreed to. Every column past `data` requires subscription_schema.sql to
-    have been run; google_id additionally requires google_auth_schema.sql (password_hash
+    what was agreed to. Every column past `data` requires db/subscription_schema.sql to
+    have been run; google_id additionally requires db/google_auth_schema.sql (password_hash
     is None for a Google-only account — that schema also drops the NOT NULL on it).
     """
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -781,7 +781,7 @@ def create_user(userid, first_name, last_name, email, password_hash, location=""
         "terms_version": TERMS_VERSION,
     }
     # Only set on a Google signup — omitted (not merely None) for a plain password
-    # registration, so that path keeps working even before google_auth_schema.sql has
+    # registration, so that path keeps working even before db/google_auth_schema.sql has
     # been run: PostgREST 400s the whole insert on an unrecognized column, and google_id
     # would be exactly that until the migration lands.
     if google_id is not None:
@@ -803,7 +803,7 @@ def create_user(userid, first_name, last_name, email, password_hash, location=""
 # PostgREST's schema cache, as PGRST204. Both mean "run the migration".
 _MISSING_COLUMN_CODES = {"42703", "PGRST204"}
 
-# Name of the unique index on lower(email) — see users_email_unique_schema.sql. Matched
+# Name of the unique index on lower(email) — see db/users_email_unique_schema.sql. Matched
 # against the constraint Postgres names in a 23505, to tell an email collision apart from
 # a userid collision, which are both 409s and need different messages.
 EMAIL_UNIQUE_INDEX = "users_email_lower_key"
@@ -872,7 +872,7 @@ def bump_token_version(userid):
     then die within one access-token lifetime. This is the revocation primitive behind
     "log out everywhere" and account-kill. Returns the new version, or None on failure.
 
-    Degrades if auth_schema.sql has not run yet: the column simply isn't there, so revocation
+    Degrades if db/auth_schema.sql has not run yet: the column simply isn't there, so revocation
     is a no-op (nothing to bump), consistent with how the rest of auth treats a version of 0.
     """
     record = get_user(userid)
@@ -886,7 +886,7 @@ def bump_token_version(userid):
     except urllib.error.HTTPError as e:
         if _is_missing_column_error(e):
             print("[WARN] users.token_version missing - session revocation is off. "
-                  "Run auth_schema.sql in the Supabase SQL editor.")
+                  "Run db/auth_schema.sql in the Supabase SQL editor.")
             return None
         raise
     return new_version
@@ -1068,7 +1068,7 @@ EVENTS_FLUSH_SECONDS = 20.0
 EVENTS_MAX_BUFFER = 5000       # backstop: a wedged flush can't grow memory without bound
 # Free text in the column (a new action is a code change, not a DDL migration), but the write
 # path whitelists so a malformed/hostile body can't seed arbitrary rows. Keep in step with the
-# action list documented in user_events_schema.sql.
+# action list documented in db/user_events_schema.sql.
 _VALID_EVENT_ACTIONS = {
     "impression", "open", "save", "track", "apply_click",
     "dismiss", "untrack", "search", "tag_filter",
@@ -1174,7 +1174,7 @@ def flush_user_events():
 # migration is a quiet no-op; and fail-open — recording an error must NEVER itself raise or
 # block the response that is already on its way back to the client. Lives in Supabase, not
 # memory, because the console runs on a different machine from the shipped API (see
-# api_errors_schema.sql).
+# db/api_errors_schema.sql).
 _api_errors_lock = threading.Lock()
 _api_errors_buffer = []          # list of ready-to-insert row dicts
 _api_errors_available = True     # latched off if the table/columns aren't there
@@ -1275,7 +1275,7 @@ def _is_missing_column_error(exc):
 
 
 def _missing_table_error(exc):
-    """True when PostgREST rejected the call because mailing_list_schema.sql has not run.
+    """True when PostgREST rejected the call because db/mailing_list_schema.sql has not run.
 
     An unknown TABLE reports PGRST205 (and 42P01 from Postgres itself), where an unknown
     COLUMN reports the codes _is_missing_column_error already knows about. Both mean "run

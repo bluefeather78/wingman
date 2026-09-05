@@ -165,7 +165,7 @@ def test_get_api_errors_reports_missing_table_as_a_setup_step(monkeypatch):
                             _http_error(404, {"code": "PGRST205", "message": "no table"})))
     r = opscore.get_api_errors(days=7, limit=10)
     assert r["ok"] is True and r["available"] is False
-    assert "api_errors_schema.sql" in r["error"]
+    assert "db/api_errors_schema.sql" in r["error"]
 
 
 def test_get_api_errors_reports_outage_as_not_ok(monkeypatch):

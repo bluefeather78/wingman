@@ -23,7 +23,7 @@ stuck at 'sending' that is never retried automatically. That is the intended dir
 stuck row is visible in the console and clearable by hand, a duplicate cannot be un-sent.
 
 FAILING TO CLAIM MEANS NOT SENDING, INCLUDING WHEN THE TABLE IS ABSENT. Until
-email_schema.sql is run every claim fails and nothing is ever sent. That reads as the
+db/email_schema.sql is run every claim fails and nothing is ever sent. That reads as the
 feature being switched off, which is correct — the alternative is sending with no record of
 having sent, and a daily sweep that cannot remember mails the same student every morning.
 
@@ -59,7 +59,7 @@ SENDS_TABLE = "email_sends"
 # race, not an error: it means somebody else already owns this send.
 _UNIQUE_VIOLATION = "23505"
 
-# The codes that mean "email_schema.sql has not been run" — an unknown TABLE (PGRST205 /
+# The codes that mean "db/email_schema.sql has not been run" — an unknown TABLE (PGRST205 /
 # 42P01) or an unknown COLUMN (PGRST204 / 42703, i.e. a table created in an older shape,
 # which is what the ALTER block in that file repairs). Mirrors _missing_table_error in
 # app.core; kept as a set here because the claim path must classify from an already-read
@@ -198,7 +198,7 @@ def _claim(userid, kind, dedupe_key, email, subject):
 
     row is the inserted email_sends row on success. reason is why not on failure:
       'already_sent'  — the unique constraint refused it; somebody already owns this send
-      'setup'         — email_schema.sql has not been run
+      'setup'         — db/email_schema.sql has not been run
       'error: ...'    — anything else, and it means DO NOT SEND
     """
     payload = {
@@ -367,7 +367,7 @@ def send_lifecycle_email(userid, kind, record=None, dedupe_key=None, to_email=No
         return {"state": "skipped", "reason": "no email address on the account"}
 
     # Opt-out is honoured for ALL THREE kinds, including the two that are defensibly
-    # transactional. See email_schema.sql.
+    # transactional. See db/email_schema.sql.
     if record.get("lifecycle_email_optout"):
         return {"state": "skipped", "reason": "opted out of lifecycle email"}
 

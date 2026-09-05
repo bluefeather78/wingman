@@ -266,9 +266,9 @@ Kept in one place so none of it scrolls out of sight. None of it blocks starting
    defensible guess; the tier is what tells you whether that number is right. Letting more
    requests through than the org's tier allows just relocates the queue to the provider's door
    and turns a wait into a 429.
-2. **Decision 4 below (retire `opportunity-matching` as a branch) is still unanswered** — and
-   it is a Phase 3 input, not a Phase 2 leftover. Note that the branch now exists **only on
-   `origin`**; there is no local copy left to archive from.
+2. ~~Decision 4 below (retire `opportunity-matching` as a branch) is still unanswered.~~
+   **ANSWERED yes and DONE in Phase 3** — archived as the tag `archive/opportunity-matching`,
+   then deleted from `origin`.
 3. **The `cleanup_subject_tags.py` rescue in the Headline is dead, found 2026-09-05.** The
    fb6134 worktree is gone (`git worktree list` shows one worktree), commit `fb6134` is no
    longer a valid object in this repo, and no commit reachable from any local or remote ref
@@ -388,7 +388,7 @@ running the real thing did.
    401s; set `EMAIL_POSTAL_ADDRESS`; leave `CSP_ENFORCE` unset until the report-only violations
    have been read.
 
-### Deliberate departures from the phase row, both recorded where they bite
+### Deliberate departures from the phase row — three, each recorded where it bites
 
 - **The run lock lives in a new `agent_locks` table, not in `agent_runs`** as the phase row
   says. `agent_runs` is an append-only history: one row per run, no uniqueness on `agent`, and
@@ -436,12 +436,96 @@ running the real thing did.
 
 ---
 
-### Picking Phase 3 up cold
+### What changed that Phase 4 has to know about
+
+Phase 3 left seven seams Phase 4 will land directly on top of. Each already exists — the risk
+is rebuilding one, or adding a second thing that does the same job badly.
+
+1. **There is already a cross-process mutex, and it is not the file lock.**
+   `wingman/run_lock.py` + `db/agent_locks_schema.sql` give a real one: `name` is the primary
+   key, so acquisition is an INSERT and the loser is rejected by Postgres with no read-then-write
+   window. It leases (900s), heartbeats, guards release on a per-acquisition token, and takes
+   over a lock whose holder pid is provably dead on the same host. **Phase 4's "lock file
+   batch-only" item is about a DIFFERENT lock** — `gemini_common`'s `.gemini_web_search.lock`,
+   which is still a local file guarding the shared googleSearch quota. The obvious move is to
+   put that one on `RunLock` too (a second lock name, not a second mechanism); the thing not to
+   do is invent a third locking scheme. **The scheduled worker Phase 4 wants MUST take
+   `CATALOG_INSERT` before it inserts**, or it reintroduces exactly the collision 4.2 closed.
+
+2. **The RPC helpers Phase 4 needs already exist.** `supabase_common.supabase_rpc(url, fn,
+   payload, key)` was added for `next_opportunity_id` and is generic — it is what the
+   "idempotent rollups via RPC" and "`jsonb_set` RPC for saves" items should call.
+   `supabase_delete(url, table, params, key)` also exists and REFUSES an unfiltered call
+   (PostgREST would happily empty a table for an empty filter set).
+
+3. **`supabase_get` now applies `order` itself, defaulting to `id`.** Any table Phase 4 adds
+   that is NOT keyed on `id` must pass `order_by=`, or every read of it 400s. This is not
+   hypothetical: `agent_locks` shipped without it, every read of the lock 400'd, and nothing
+   caught it because all the unit tests mock `supabase_get` away — it only surfaced when the
+   table existed to reject the query. **Add the new table to `_NON_ID_KEYED` in
+   `tests/unit/test_ordered_pagination.py` in the SAME commit that creates it.**
+
+4. **Money that has been spent survives an exception now, and new paid paths must opt in.**
+   `agent_common.bank_onto_exception(exc, cost)` stamps the amount onto the exception;
+   `agent_common.banked_cost(exc)` recovers it in the handler. Any paid call Phase 4 adds — the
+   scheduled worker especially, since nobody is watching it — needs both halves, or its failures
+   are free as far as every total is concerned.
+
+5. **`wingman/scrape_common.py` is where row-building lives.** `build_row`, `next_id_generator`,
+   `insert_rows`, `VALID_*` and the `FLAG_*` constants moved there out of the runnable agent. A
+   new inserting agent imports from `wingman/`, never from `agents/scrape_opportunities.py`.
+   The agent re-exports them, so old import sites still work — but a monkeypatch has to target
+   the module the function actually resolves its globals from.
+
+6. **Snapshots: ten families are registered and staleness is now enforced.** Phase 4's "leads +
+   snapshots in tables" item must carry three things across, not just the storage: the dedupe
+   key is `url_dedupe.match_key` on BOTH sides of the comparison; a patch commit stamps the
+   RUN's time (from the filename) rather than `now`, because those columns are staleness clocks;
+   and a patch snapshot older than `STALE_DAYS` is refused unless `allow_stale`. `link_check`
+   and `mailing_list` are registered as not-committable with their reasons in the spec — moving
+   snapshots into a table must not quietly make them committable.
+
+7. **CI now fails a commit that edits marquee-protected code without naming the entry.**
+   `scripts/ci/check_marquee_commits.py`, wired into `.github/workflows/ci.yml` (which needs
+   `fetch-depth: 0` to resolve a range). It does NOT replace approval — rule 1 is still a human
+   gate in chat. Phase 4's scheduled paid runs are M3 territory (approval moves from per-run to
+   per-schedule) and the toggle + dollar ceiling the phase row asks for is what makes that safe.
+
+### Picking Phase 4 up cold
+
+Phase 4 is **shared state** — making the pipeline correct when more than one process, or more
+than one machine, is running it. Its row in the phase plan carries the item list and its exit
+test (*two instances pass the 50 rps test; a second machine sees the same lead queue*).
+
+Three orientation notes.
+
+**First, the 50 rps half of that exit test cannot be met on the current hosting and that is
+deliberate.** Render stays `plan: free` until the app opens to students (decision 3), and the
+throughput bar was already deferred once for Phase 2 on exactly that basis (decision 8). Do not
+bump `render.yaml`; do not treat the deferral as an oversight to fix. The *second machine sees
+the same lead queue* half is testable today and is the real work.
+
+**Second, read [docs/CLAUDE-ops.md](CLAUDE-ops.md) before editing anything under `agents/`,
+`wingman/` or `ops/`** — most of it is a record of something that already went wrong once, and
+six of the seven catalog agents cost real money per run.
+
+**Third, and learned the hard way today: run the thing before believing the tests.** Phase 3's
+unit suite was green and all three exit-test conditions passed before the service was ever
+started. Booting it and driving the real console route then failed on the first attempt, twice
+— once because a status probe swallowed a missing-table error and reported a held lock as free
+(so the console launched a second paid agent), and once because a read inherited an `order=id`
+default against a table keyed on `name`. Both were invisible to the unit tests, because those
+mock the database seam away entirely. Phase 4 is *entirely* about shared state, which is the
+category unit tests are worst at. Budget for a live two-process test, not just green pytest.
+
+---
+
+### Picking Phase 3 up cold (HISTORICAL — Phase 3 is done; kept for the record)
 
 Phase 3 is **pipeline + repo** — the agents, `agent_runs`, the review queue, the URL rules and
 the branch cleanup. Its row in the phase plan below carries the full item list, its approvals
 (**M8 if any prompt text moves** — approval first, then its own dedicated commit; plus
-**decision 4**, still unanswered, which gates the branch work) and its exit test (*two agents at
+**decision 4**, answered yes on 2026-09-05, which gated the branch work) and its exit test (*two agents at
 once refuse to overlap; a simulated insert timeout fails loudly; a snapshot commit inserts 0
 dupes*).
 
@@ -473,6 +557,10 @@ a day.
 
 ## Decisions needed from Shama
 
+*All nine below are ANSWERED as of 2026-09-05. Kept in full because several say "do not change
+this" and the reasoning is the point — a future session that re-opens one without reading it is
+the failure this list exists to prevent. Nothing here is waiting on Shama.*
+
 1. ~~Move AI prompts server-side (M8)?~~ **ANSWERED yes; shipped 2026-09-04** as S1-1, its own
    dedicated M8 commit. The prompt text was moved verbatim and that was verified character by
    character against the originals.
@@ -486,7 +574,10 @@ a day.
    to students.** This is a deliberate, informed choice, not an oversight — see "Phase 2 approvals
    and scope" above for what it means for Phase 2's exit test. Do not open a PR bumping the plan;
    `render.yaml` saying `plan: free` is the intended state today.
-4. Retire `opportunity-matching` as a branch (archive tag, extract per decision)? Recommended yes.
+4. ~~Retire `opportunity-matching` as a branch (archive tag, extract per decision)?~~
+   **ANSWERED yes (Shama, 2026-09-05); done in Phase 3.** Tagged `archive/opportunity-matching`
+   at its tip `f3c5cd73` and pushed, then the branch was deleted from `origin`. The tag is how
+   it stays recoverable; it is still never to be merged.
 5. ~~Keep logging chat turns + IP to `conversations`?~~ **ANSWERED (Shama, 2026-09-04): keep
    the turns, drop the IP.** Shipped as S1-9 — `client_ip` is no longer written and the column
    is dropped, RLS is on and confirmed live, and userids/emails no longer go to stdout.
@@ -545,6 +636,17 @@ a day.
    it; do not re-raise it as a new finding.
 
    **Phase 3's `merges → review queue` item is therefore struck from the phase row below.**
+
+10. ~~Port `local_org_discovery.py` (the `local-discovery-engine` prototype) onto main?~~
+    **ANSWERED (Shama, 2026-09-05): leave it as is, decide later.** It is an M8 + M9 item by its
+    own header — three prompts and a paid Gemini path — so it cannot be ported without a fresh
+    yes. Parked, not pending: nothing is blocked on it and it should not be re-raised as an open
+    question. The branch stays on `origin` so the prototype remains recoverable.
+
+11. ~~Clean up the remaining unmerged branches?~~ **ANSWERED (Shama, 2026-09-05): no — leave them
+    alone.** `wingman/search-feature`, `local-discovery-engine`, `rearchitecture` and
+    `docs/ollama-local-analysis-plan` all stay on `origin` untouched. Only fully-merged branches
+    were deleted. Do not revisit this.
 
 ## Live finding (2026-09-02): catalog fetch statement-timeout + cache decoupling
 
@@ -636,7 +738,12 @@ body → `413`.
 | **0 DONE** Stop the bleeding — numpy + exact pins; proxy requires subscribed caller on live path; Anthropic timeout + `max_uses`; per-user daily budget + forced-recheck cooldown + circuit breaker; static allow-list; `FORWARDED_ALLOW_IPS` + login key (ip,user); `email_verified` + exact redirect host; paid tier; delete tracked logs/dumps/stray Render CLI README+CHANGELOG; rotate the PAT in the git remote | Days 1–3 | 2 d | M9 (proxy) | signed-out proxy POST → 401; clean Render build passes; `/ops/admin_console.html` → 404 |
 | **1 DONE** Security — prompts server-side by feature id; refresh-token rotation; calendar handoff nonce; `url_is_public()` + auth on submissions; body limits + security headers (CSP report-only) + Secure cookies; conditional promo PATCH; single login-failure message; ops token; `conversations` RLS or stop; promo table; argon2-wrap legacy rows | Wk 1–2 | 5 d | M8 | no High/Medium open; replayed refresh token revokes lineage |
 | **2 DONE** Capacity — no Gemini sleep on web path; async AI lane (semaphore 12, timeouts, 503+Retry-After); 60 s identity cache; pooled HTTP (Supabase only); pre-serialized gzip+ETag catalog + split vector cache on a 24 h backstop; batched cost accounting; OWASP argon2; semaphore 4 on fresh deadline/checklist; ~~`/healthz` + structured logs + alerts~~ **DROPPED 2026-09-05 (Datadog free tier later, decision 7)**; ~~k6 load test on staging~~ ~~laptop probe~~ **DEFERRED 2026-09-05 (decision 8)**; confirm provider tiers — **still open** | Wk 2–4 | 7 d | **M9 granted 2026-09-05**; three dedicated commits | **CLOSED on unit tests + per-change measurements** (2349 → 2447, exit 0). Both throughput bars — laptop before/after (decision 8) and *50 rps on staging* (decision 3) — are **deferred to launch**, so the phase shipped with **no system-level number** |
-| **3 DONE** Pipeline + repo — insert ladder degrades only on missing column; one URL key, no re-stamp on commit, all snapshot families committable; DB-sequence ids + run lock in `agent_runs`; bank cost before parse; ~~merges → review queue~~ **STRUCK — decision 9 (Shama, 2026-09-05): do not touch the merge logic at all**; discontinued needs page evidence; reject unsourced URLs; ordered pagination; service key required; branch cleanup + merge `local-discovery-engine`; CI marquee-tag check; ~~move one-offs/eval out of root~~ **already done — `scripts/one-off/` and `eval/` exist and `server.py` is the only `.py` left at the root (verified 2026-09-05)**; `scrape_common.py` (does not exist yet); tests for untested paid paths | Wk 3–5 | 6 d | **M8 if prompt text moves** (approval first, dedicated commit); **decision 4 is still unanswered** and gates the branch cleanup | two agents at once refuse to overlap; simulated insert timeout fails loudly; snapshot commit inserts 0 dupes |
+| **3 DONE** Pipeline + repo — insert ladder degrades only on missing column; one URL key, no re-stamp on commit, ~~all snapshot families committable~~ **8 of 10; `link_check` and `mailing_list` are registered
+but refuse, each with its reason**; DB-sequence ids + run lock ~~in `agent_runs`~~ **in a new `agent_locks` table — see the Phase 3
+departures section for why `agent_runs` cannot hold a lock**; bank cost before parse; ~~merges → review queue~~ **STRUCK — decision 9 (Shama, 2026-09-05): do not touch the merge logic at all**; discontinued needs page evidence; reject unsourced URLs; ordered pagination; service key required; branch cleanup **(done: 13 merged branches deleted, `opportunity-matching` archived)** +
+~~merge `local-discovery-engine`~~ **NOT merged — it is behind main on every shared file and a
+merge would revert the `wingman/` reorg; its plan doc was ported and the prototype is parked as
+an M8+M9 item**; CI marquee-tag check; ~~move one-offs/eval out of root~~ **already done — `scripts/one-off/` and `eval/` exist and `server.py` is the only `.py` left at the root (verified 2026-09-05)**; `scrape_common.py` **(now `wingman/scrape_common.py`)**; tests for untested paid paths | Wk 3–5 | 6 d | **none taken — no prompt text moved and no paid call changed**; decision 4 answered yes | **ALL THREE MET**, each pinned by a named test, and the lock verified live against the real `agent_locks` table |
 | **4 NEXT** Shared state — shared cache or signed handoff tokens; lock file batch-only; idempotent rollups via RPC; `jsonb_set` RPC for saves; leads + snapshots in tables; scheduled worker (free agents first, paid behind toggle + dollar ceiling); optional direct Postgres for hot queries | Wk 5–7 | 6 d | M3 per scheduled paid run | two instances pass the 50 rps test; second machine sees same lead queue |
 | 5 Product accuracy — grade parser context; date validation; sort-on-refresh + calendar ids by label; synthesis failure keeps transcript; unreachable ≠ revoked; reset singletons on logout; one retry per action; client timeouts; drop icon fonts + dead prompts/code; Vitest ~40 cases; a11y labels; split big screens | Wk 6–8 | 5 d | none | frontend tests in CI; golden-set score holds; bundle −300 KB |
 | 6 Operate — dashboards, dependency bumps, key rotation, runbook, Stripe webhook route, re-arm trial cron | Wk 8+ | ongoing | none | "is it up / fast / what did it cost" on one screen |

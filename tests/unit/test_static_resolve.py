@@ -2,7 +2,7 @@
 
 Return contract (pinned from source): returns an absolute filesystem path string
 when the resolved target is an existing, allowed file; returns None otherwise
-(empty/root path, dotfile/dotdir, agent_logs, traversal escape, denied ext/name,
+(empty/root path, dotfile/dotdir, a blocked directory, traversal escape, denied ext/name,
 or missing file). Paths are anchored under main.REPO_ROOT. Since the Phase 3
 cutover (tag `workingwithauth`) the old SPA is gone: the route only serves the
 static pages the app still links to (terms/privacy/about + styles.css/favicon.svg),
@@ -125,6 +125,37 @@ def test_agent_logs_rejected():
 
 def test_agent_logs_nested_rejected():
     assert main._resolve_static("agent_logs") is None
+
+
+# --------------------------------------------------------------------------- #
+# Blocked directories
+#
+# _DENY_EXT is by FILE TYPE and has no .json/.xlsx/.docx, so before the
+# 2026-09-04 tidy-up `GET /Opportunities.xlsx`, `/opportunities.json` and
+# `/test_resume.docx` were all served from the repo root in production. Moving
+# them into data/ does not fix that by itself — this resolver joins any relative
+# path under REPO_ROOT — so the directories are blocked by name. These paths are
+# real files in the tree, which is the point: the assertion has to be that a file
+# that EXISTS is refused, not that a missing one 404s.
+# --------------------------------------------------------------------------- #
+def test_blocked_dirs_rejected():
+    for rel in (
+        "data/opportunities.json",
+        "data/Opportunities.xlsx",
+        "data/hubs_seattle.json",
+        "tests/fixtures/test_resume.docx",
+        "db/email_schema.sql",
+        "docs/review-2026-09-02/load_results.json",
+        "frontend/package.json",
+    ):
+        assert os.path.isfile(_norm(rel)), f"fixture moved: {rel}"
+        assert main._resolve_static(rel) is None, rel
+
+
+def test_root_pages_still_served():
+    """The five pages this route exists for must survive the directory block."""
+    for name in ("terms.html", "privacy.html", "about.html", "styles.css", "favicon.svg"):
+        assert main._resolve_static(name) == _norm(name)
 
 
 # --------------------------------------------------------------------------- #

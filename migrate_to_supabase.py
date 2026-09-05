@@ -24,7 +24,7 @@ import sys
 import urllib.error
 import urllib.request
 
-WINGMAN_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opportunities.json")
+WINGMAN_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "opportunities.json")
 FINDER_JSON = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "opportunity finder", "opportunities.json"
 )

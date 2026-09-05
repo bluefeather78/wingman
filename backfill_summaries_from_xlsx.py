@@ -29,7 +29,7 @@ import pandas as pd
 
 from supabase_common import load_dotenv, supabase_get, supabase_patch
 
-XLSX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Opportunities.xlsx")
+XLSX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "Opportunities.xlsx")
 
 
 def load_xlsx_summaries():

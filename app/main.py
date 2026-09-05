@@ -168,6 +168,17 @@ if os.environ.get("WINGMAN_ENABLE_OPS"):
 _DENY_EXT = {".py", ".pyc", ".pyo", ".log", ".sql", ".ps1", ".md", ".txt", ".sh"}
 _DENY_NAMES = {".env", "agent_settings.json"}
 
+# Directories under the repo root that this route must never reach into. The extension
+# deny-list above is by FILE TYPE and misses whole categories: .json, .xlsx and .docx are
+# not on it, so before the 2026-09-04 tidy-up `GET /Opportunities.xlsx`,
+# `/opportunities.json` and `/test_resume.docx` were all publicly downloadable from
+# production. Relocating them into data/ does NOT fix that on its own — _resolve_static
+# joins any relative path under REPO_ROOT and only dotdirs were blocked — so the
+# directories are named here as well. This is a targeted patch, not the fix: the route is
+# still deny-list-shaped, and PRODUCTION_READINESS_PLAN.md High #5 ("catch-all static
+# route serves the repo") wants an ALLOW-list of the handful of pages this exists for.
+_DENY_DIRS = {"agent_logs", "data", "db", "docs", "tests", "eval", "legal", "frontend"}
+
 # Where the web app lives when this service does NOT serve it itself. When set (e.g. a
 # separate Static Site origin), a browser hitting the root is redirected there; otherwise
 # a plain JSON status answers. Ignored when SERVE_WEB_DIST is on.
@@ -218,7 +229,7 @@ def _resolve_static(rel: str):
         return None  # the root is handled by serve_static, not by a file
     # Reject dotfiles/dotdirs (.env, .git, ...), agent logs, and traversal.
     parts = rel.split("/")
-    if any(p.startswith(".") for p in parts) or "agent_logs" in parts:
+    if any(p.startswith(".") for p in parts) or _DENY_DIRS.intersection(parts):
         return None
     candidate = os.path.normpath(os.path.join(REPO_ROOT, rel))
     if candidate != REPO_ROOT and not candidate.startswith(REPO_ROOT + os.sep):

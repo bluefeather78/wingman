@@ -41,7 +41,7 @@ the program; nothing reaches students without a human yes. Like every paid agent
 needs fresh explicit approval.
 
     python harvest_names.py --hubs https://www.collegetransitions.com/dataverse/... --preview
-    python harvest_names.py --hubs-file hub_pilot_national.json --preview   # FREE
+    python harvest_names.py --hubs-file data/hub_pilot_national.json --preview   # FREE
     python harvest_names.py --hubs URL --max-names 10                       # PAID (gated)
 """
 import argparse

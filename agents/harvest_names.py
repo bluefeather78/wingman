@@ -547,7 +547,7 @@ def main():
     from wingman.supabase_common import supabase_insert_one, supabase_patch
     from agents import scrape_opportunities as so
     today = datetime.date.today().strftime("%Y%m%d")
-    mint = next_id_generator({r["id"] for r in (existing or [])})
+    mint = next_id_generator({r["id"] for r in (existing or [])}, supabase_url, service_key)
     run_row = supabase_insert_one(supabase_url, "agent_runs", {
         "agent": "name_harvester",
         "mode": "names" + ("-dryrun" if args.dry_run else ""),
@@ -676,4 +676,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # The catalog-insert lock (audit 4.2). This agent mints `ec<max+1>` ids from a
+    # snapshot taken at run start, so a second inserting agent running alongside it
+    # mints the SAME ids. Held here rather than inside main() so the one guard covers
+    # both a hand-run and the console subprocess. See wingman/run_lock.py.
+    from wingman.run_lock import guard_catalog_writes
+    guard_catalog_writes("name_harvester", main)

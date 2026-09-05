@@ -3420,6 +3420,25 @@ def is_agent_running(agent_name):
         return _agent_runs.get(agent_name, {}).get("status") == "running"
 
 
+# The scripts that INSERT into `opportunities` and therefore contend for the catalog-insert
+# run lock (audit 4.2). Only `scraper` is a console card; the other three are hand-run, which
+# is exactly why the lock lives in the agents rather than only here — the console can refuse
+# what it launches itself, it cannot refuse what somebody types in another terminal.
+CATALOG_INSERT_SCRIPTS = ("agents/scrape_opportunities.py", "agents/mine_hub_pages.py",
+                          "agents/harvest_names.py", "agents/refind_dead_links.py")
+
+
+def catalog_lock_holder():
+    """Who currently holds the catalog-insert lock, or None.
+
+    Read-only and never raises — a status probe must not be the thing that stops a run. The
+    agent re-checks and takes the lock itself, so a race between this and the subprocess ends
+    in a clean [REFUSED] from the agent rather than a collision.
+    """
+    from wingman import run_lock
+    return run_lock.current_holder(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+
 def running_gemini_search_agent(exclude=None):
     """Name of a currently-running agent that holds the shared Gemini web-search lock.
 

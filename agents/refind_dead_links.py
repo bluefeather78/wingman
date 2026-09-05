@@ -148,7 +148,7 @@ def main():
     today = datetime.date.today().strftime("%Y%m%d")
     all_ids = {r["id"] for r in (supabase_get(supabase_url, "opportunities",
                                               {"select": "id"}, service_key) or [])}
-    mint_id = so.next_id_generator(all_ids)
+    mint_id = so.next_id_generator(all_ids, supabase_url, service_key)
 
     class _A:  # minimal args shim for research_seed
         timeout = args.timeout
@@ -186,4 +186,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # The catalog-insert lock (audit 4.2). This agent mints `ec<max+1>` ids from a
+    # snapshot taken at run start, so a second inserting agent running alongside it
+    # mints the SAME ids. Held here rather than inside main() so the one guard covers
+    # both a hand-run and the console subprocess. See wingman/run_lock.py.
+    from wingman.run_lock import guard_catalog_writes
+    guard_catalog_writes("dead_link_refinder", main)

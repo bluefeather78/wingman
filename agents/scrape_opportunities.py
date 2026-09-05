@@ -494,12 +494,48 @@ concretely explain *why and how* a high schooler could actually use this one, sp
 not generic filler. If you can't come up with a genuinely concrete, specific reason, leave it out."""
 
 
-def next_id_generator(existing_ids):
+def next_id_generator(existing_ids, supabase_url=None, service_key=None, block=25):
+    """Fresh `ec<n>` ids, from the DB sequence when there is one and max+1 otherwise.
+
+    The max+1 half is correct ONLY while a single agent is writing — it reads the maximum once,
+    at run start, so two overlapping runs hand out the same ids and the second insert dies on
+    the primary key (audit 4.2). wingman/run_lock.py is what guarantees the single writer.
+
+    `next_opportunity_id` (db/agent_locks_schema.sql) is the belt to that braces: nextval is
+    atomic and never rolls back, so ids stay unique even if a lock is bypassed. Drawn `block`
+    at a time to keep this to one round trip per 25 rows rather than one per row. Unused ids in
+    a block are simply skipped — a sequence has no obligation to be gapless, and a gap costs
+    nothing here.
+
+    Falls back silently when the function is absent (a checkout where the .sql has not been
+    run): the ids are still correct, they just depend on the lock rather than on Postgres.
+    """
     nums = [int(i[2:]) for i in existing_ids if i.startswith("ec") and i[2:].isdigit()]
     n = (max(nums) if nums else 18220) + 1
+
+    def local():
+        nonlocal n
+        while True:
+            yield f"ec{n}"
+            n += 1
+
+    fallback = local()
+    if not (supabase_url and service_key):
+        yield from fallback
+        return
+
+    from wingman import run_lock
+    sequence_ok = True
     while True:
-        yield f"ec{n}"
-        n += 1
+        if sequence_ok:
+            ids = run_lock.mint_ids(supabase_url, service_key, block, fallback)
+            # mint_ids falls back to the local generator on any failure; detect that by the
+            # ids not being ahead of the snapshot maximum, and stop paying for the round trip.
+            sequence_ok = bool(ids) and all(i.startswith("ec") for i in ids)
+            for i in ids:
+                yield i
+        else:
+            yield from fallback
 
 
 def clean_value(value, valid_set):
@@ -1129,7 +1165,8 @@ def main():
     # deletions from 2026-08 were backfilled as source='tombstone-backfill' rejected
     # rows, so the table is the ONLY dedupe memory. Never SQL-DELETE a row; reject it.)
     existing = supabase_get(supabase_url, "opportunities", {"select": "id,name,url"}, service_key)
-    mint_id = next_id_generator({r["id"] for r in existing})
+    # Sequence-backed when db/agent_locks_schema.sql has run; max+1 under the run lock otherwise.
+    mint_id = next_id_generator({r["id"] for r in existing}, supabase_url, service_key)
     print(f"[OK] {len(existing)} existing rows loaded.")
 
     # MARQUEE M9: the always-on discovery gate. Every candidate's page is read ONCE more to
@@ -1588,4 +1625,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # The catalog-insert lock (audit 4.2). This agent mints `ec<max+1>` ids from a
+    # snapshot taken at run start, so a second inserting agent running alongside it
+    # mints the SAME ids. Held here rather than inside main() so the one guard covers
+    # both a hand-run and the console subprocess. See wingman/run_lock.py.
+    from wingman.run_lock import guard_catalog_writes
+    guard_catalog_writes("scraper", main)

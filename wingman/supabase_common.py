@@ -148,3 +148,42 @@ def supabase_patch(supabase_url, table, params, body, key):
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         resp.read()
+
+
+def supabase_delete(supabase_url, table, params, key):
+    """DELETE rows matching `params` (dict of PostgREST filters). Raises on failure.
+
+    Deliberately requires filters: PostgREST would happily delete the whole table for an
+    empty filter set, and no caller here ever wants that.
+    """
+    if not params:
+        raise ValueError("supabase_delete needs a filter; refusing to delete a whole table")
+    query = urllib.parse.urlencode(params)
+    req = urllib.request.Request(
+        f"{supabase_url}/rest/v1/{table}?{query}",
+        method="DELETE",
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Prefer": "return=minimal",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        resp.read()
+
+
+def supabase_rpc(supabase_url, fn, payload, key, timeout=30):
+    """POST /rest/v1/rpc/<fn>. Returns the decoded body (often a list). Raises on failure."""
+    req = urllib.request.Request(
+        f"{supabase_url}/rest/v1/rpc/{fn}",
+        data=json.dumps(payload or {}).encode("utf-8"),
+        method="POST",
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read()
+    return json.loads(body) if body else None

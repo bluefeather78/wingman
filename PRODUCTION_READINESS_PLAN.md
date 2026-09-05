@@ -128,44 +128,55 @@ scope this document originally proposed.
 
 ### Phase 2 progress (branch `phase2-capacity`, as of 2026-09-05)
 
-Five of the nine items are built, committed and green. Each marquee item is its own dedicated
-commit naming M9, per MARQUEE_DECISIONS.md.
+**All nine buildable items are done, committed and green.** Item 9 was dropped (decision 7).
+Each marquee item is its own dedicated commit naming M9, per MARQUEE_DECISIONS.md.
 
-| Item | State | Commit |
-|---|---|---|
-| 2 async AI lane | **DONE** | `MARQUEE M9 (Phase 2 item 2)` |
-| 8 paid deadline/checklist lane | **DONE** | `MARQUEE M9 (Phase 2 item 8)` |
-| 1 no Gemini sleep on the web path | **DONE** | `MARQUEE M9 (Phase 2 item 1)` |
-| 3 60s identity cache | **DONE** | `Phase 2 item 3` |
-| 7 OWASP argon2 | **DONE** | `Phase 2 item 7` |
-| 4 pooled HTTP | not started | — |
-| 5 gzip+ETag catalog, split vector cache, 24 h backstop | not started — **its "paused" reason has expired**, see below | — |
-| 6 batched cost accounting | not started | — |
-| 9 observability | **DROPPED** (decision 7) | — |
-| 10 laptop probe + provider tiers | probe not run; tier still unconfirmed | — |
+| Item | State |
+|---|---|
+| 1 no Gemini sleep on the web path | **DONE** — `MARQUEE M9 (Phase 2 item 1)` |
+| 2 async AI lane | **DONE** — `MARQUEE M9 (Phase 2 item 2)` |
+| 3 60s identity cache | **DONE** |
+| 4 pooled HTTP (Supabase only) | **DONE** |
+| 5 split catalog/vector caches, 24h backstop, gzip+ETag | **DONE** |
+| 6 batched cost accounting | **DONE** |
+| 7 OWASP argon2 | **DONE** |
+| 8 paid deadline/checklist lane | **DONE** — `MARQUEE M9 (Phase 2 item 8)` |
+| 9 observability | **DROPPED** (decision 7 — Datadog free tier later) |
+| 10 laptop probe | **NOT RUN.** Provider tiers still unconfirmed |
 
-Tests went 2349 -> 2401, exit 0 throughout; every item added its own tests.
+Tests went **2349 -> 2447**, exit 0 at every step; every item added its own tests.
 
-**Item 5's pause is over.** The reason recorded under "Live finding" below — "it touches
-`ops/core.py` + the tested cache contract that a concurrent workstream is editing" — was
-checked on 2026-09-05 and is no longer true: no unmerged branch touches
-`app/services/opportunities.py` or `ops/core.py`, there are no extra worktrees, and the last
-commits to both are Phase 1 work already on `main`. The workstream finished and merged; the
-plan text simply had not caught up. Item 5 is unblocked.
+**The one thing left in Phase 2 is item 10's laptop probe.** The code is in and unit-tested;
+what has not happened is the end-to-end before/after measurement the revised exit test asks
+for. Until it runs, the numbers quoted below are per-change measurements, not a system result.
 
-**Three things measured while doing this, worth keeping:**
+**Five things measured or found while building this, worth keeping:**
 
 1. **/api/match was sleeping ~10s per request, not ~5.** The Gemini throttle is taken once to
    embed the student's themes and once for the eligibility gate. The plan described M5 as one
-   5s sleep; it was two, on the route matching is built around.
+   5s sleep; it was two, on the route matching is built around. Measured after: 5.0s -> 0.000s
+   per pair of calls in the web process, with batch agents still at 5.0s.
 2. **OWASP's argon2 numbers are LIGHTER than argon2-cffi's defaults**, not heavier
    (19 MiB/t=2/p=1 against 64 MiB/t=3/p=4). Item 7 therefore made sign-in ~2x faster and cut
-   its memory ~70%. At the old default, eight concurrent sign-ins is all 512 MB of a free
-   instance — an OOM reachable from an unauthenticated endpoint.
+   its memory ~70%. At the old default, **eight concurrent sign-ins is all 512 MB of a free
+   instance — an OOM reachable from an unauthenticated endpoint.** That was live.
 3. **AI_MAX_CONCURRENCY shipped at 12, not the plan's 30.** 30 of the shared 40-slot anyio
-   threadpool would leave 10 for every other route, which is not meaningfully better than the
-   starvation it is meant to prevent. Raise it via the env var once the provider tier is known
-   and the host is paid.
+   threadpool leaves 10 for every other route, which is not meaningfully better than the
+   starvation it is meant to prevent.
+4. **httpx was imported but never declared.** It was reachable only as a transitive dependency
+   of the test client — the identical shape to this plan's Critical #2 (numpy missing from
+   `requirements.txt` while the code imported it). Now pinned.
+5. **Cost accounting was serialising every paid call.** Attribution spawned a thread per call
+   and held one global lock across three or four Supabase round trips inside it, so concurrent
+   AI calls queued behind each other's bookkeeping. Item 6 removed both.
+
+**Item 4 was scoped to Supabase only** (Shama, 2026-09-05): the Anthropic call is a 10-30
+second request, so a reused handshake saves under 1% of it and would have cost an M9 approval
+to buy that. A test pins that it stays on `urlopen`.
+
+**Pre-warming the catalog at startup was deliberately not done.** Render Free sleeps when
+idle, so it would add ~10s to every cold start — paid often to help rarely. It belongs with
+the paid-tier move.
 
 ---
 

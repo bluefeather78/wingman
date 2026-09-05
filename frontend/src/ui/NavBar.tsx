@@ -103,7 +103,14 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
             })}
           </View>
 
-          <Pressable style={styles.avatar} onPress={() => setDrawerOpen(true)}>
+          <Pressable
+            style={styles.avatar}
+            onPress={() => setDrawerOpen(true)}
+            accessibilityRole="button"
+            // An emoji is announced by its own name ("bust in silhouette"), which says nothing
+            // about what the button does (Phase 5, finding 20).
+            accessibilityLabel="Open your account menu"
+          >
             <Text style={styles.avatarEmoji}>👤</Text>
           </Pressable>
         </View>

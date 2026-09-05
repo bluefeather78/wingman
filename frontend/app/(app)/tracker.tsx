@@ -506,7 +506,11 @@ export default function Tracker() {
       <View style={styles.topRow}>
         <View style={styles.topLeft}>
           <Text style={styles.lastChecked}>{lastCheckedLabel}</Text>
-          <IconBtn onPress={checkForUpdates}>
+          <IconBtn
+            onPress={checkForUpdates}
+            disabled={refreshing}
+            label={refreshing ? 'Checking for updates' : 'Check all tracked opportunities for updates'}
+          >
             <RefreshIcon size={14} color={refreshing ? colors.slate400 : colors.indigo600} />
           </IconBtn>
         </View>
@@ -524,11 +528,15 @@ export default function Tracker() {
             </Animated.Text>
           )}
           <View style={syncing ? styles.syncBtnBusy : null}>
-            <IconBtn onPress={syncing ? undefined : syncToCalendar}>
+            <IconBtn
+              onPress={syncing ? undefined : syncToCalendar}
+              disabled={syncing}
+              label={syncing ? 'Syncing deadlines to Google Calendar' : 'Sync deadlines to Google Calendar'}
+            >
               {syncing ? <SpinningRefresh size={16} /> : <CalendarSyncIcon size={16} color={colors.navy} />}
             </IconBtn>
           </View>
-          <IconBtn onPress={openSearch}>
+          <IconBtn onPress={openSearch} label="Search the catalog to add an opportunity">
             <SearchIcon size={16} color={colors.navy} />
           </IconBtn>
         </View>
@@ -632,7 +640,12 @@ export default function Tracker() {
               <Text style={styles.drawerTitle}>Add opportunities</Text>
               <Text style={styles.drawerSub}>Search the catalog by name or organization, pick any you want, and add them all at once.</Text>
             </View>
-            <Pressable onPress={closeSearch} hitSlop={10}>
+            <Pressable
+              onPress={closeSearch}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close add opportunities"
+            >
               <Text style={styles.drawerClose}>✕</Text>
             </Pressable>
           </View>
@@ -674,6 +687,12 @@ export default function Tracker() {
                   key={opp.id}
                   style={[styles.searchRow, tracked && styles.searchRowDisabled]}
                   onPress={tracked || adding ? undefined : () => toggleSelect(opp.id)}
+                  // A text glyph is not a checkbox to anything but a sighted reader: the ✓
+                  // below carries no role and no state, so the row announced as plain text
+                  // and gave no way to tell selected from not (finding 20).
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: checked || tracked, disabled: tracked || adding }}
+                  accessibilityLabel={tracked ? `${opp.name} — already in your Quest Log` : opp.name}
                 >
                   <View style={[styles.checkbox, checked && styles.checkboxOn, tracked && styles.checkboxTracked]}>
                     {(checked || tracked) && <Text style={styles.checkboxMark}>✓</Text>}
@@ -978,10 +997,16 @@ function ListCard({
           />
         </View>
         <View style={styles.iconRow}>
-          <IconBtn onPress={() => onToggleSaved(item.id)}>
+          {/* The label carries the item NAME and the CURRENT state: on a list of a dozen
+              cards, "Save for later" a dozen times says nothing about which one, and a
+              star that is already filled needs to announce that it will un-save. */}
+          <IconBtn
+            onPress={() => onToggleSaved(item.id)}
+            label={isSaved ? `Remove ${item.name} from saved for later` : `Save ${item.name} for later`}
+          >
             <StarIcon size={15} color={isSaved ? colors.orange : colors.navy} filled={isSaved} />
           </IconBtn>
-          <IconBtn onPress={() => onRemove(item.id)}>
+          <IconBtn onPress={() => onRemove(item.id)} label={`Remove ${item.name} from your Quest Log`}>
             <XIcon size={14} color={colors.slate400} />
           </IconBtn>
         </View>

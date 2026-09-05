@@ -492,9 +492,37 @@ export function LegendItem({ color, label }: { color: string; label: string }) {
 }
 
 // ---------- Circular icon button (.icon-btn: 30px, white, 2px navy border) ----------
-export function IconBtn({ children, onPress, size = 30 }: { children: ReactNode; onPress?: () => void; size?: number }) {
+//
+// `label` is REQUIRED (Phase 5, frontend_report finding 20). This button's entire content is
+// an icon, so a screen reader announcing it has nothing to read — every one of them was
+// "button", five times over on the Quest Log's own header. Making the prop required rather
+// than optional is the point: an optional one gets left off, and there is no way to notice
+// from looking at the screen.
+export function IconBtn({
+  children,
+  onPress,
+  size = 30,
+  label,
+  disabled,
+}: {
+  children: ReactNode;
+  onPress?: () => void;
+  size?: number;
+  /** What the button DOES, in the words a student would use. Not the icon's name. */
+  label: string;
+  disabled?: boolean;
+}) {
   return (
-    <Pressable onPress={onPress} style={[styles.iconBtn, { width: size, height: size, borderRadius: size / 2 }]}>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      // Announced as dimmed rather than silently doing nothing — these are disabled by
+      // passing `undefined` for onPress while a pass is in flight, which is invisible to a
+      // screen reader.
+      accessibilityState={{ disabled: disabled ?? !onPress }}
+      style={[styles.iconBtn, { width: size, height: size, borderRadius: size / 2 }]}
+    >
       {children}
     </Pressable>
   );

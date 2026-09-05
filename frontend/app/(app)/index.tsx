@@ -91,6 +91,11 @@ function TaskRow({ ai, onPress, onDelete }: {
           hitSlop={8}
           onHoverIn={() => setDelHovered(true)}
           onHoverOut={() => setDelHovered(false)}
+          accessibilityRole="button"
+          // The task text, not "delete": a list of tasks each announced as "delete" gives a
+          // screen reader user no way to tell which one they are about to remove
+          // (Phase 5, frontend_report finding 20).
+          accessibilityLabel={`Delete task: ${ai.text}`}
         >
           <Text style={[styles.taskDelete, delHovered && styles.taskDeleteHover]}>✕</Text>
         </Pressable>
@@ -365,7 +370,12 @@ export default function Home() {
                   <Txt variant="h2" style={styles.cardTitle}>All Your Tasks</Txt>
                   <Text style={styles.modalSub}>Everything you're tracking - manage it all in one place</Text>
                 </View>
-                <Pressable onPress={() => setTasksOpen(false)} hitSlop={10}>
+                <Pressable
+                  onPress={() => setTasksOpen(false)}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close all tasks"
+                >
                   <Text style={styles.modalClose}>✕</Text>
                 </Pressable>
               </View>

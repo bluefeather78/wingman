@@ -706,11 +706,26 @@ export default function Profile() {
             </View>
             <View style={styles.drawerHeadBtns}>
               {ttsAvailable && (
-                <Pressable {...voiceBtnPop.handlers} style={[styles.voiceBtn, voiceBtnPop.shadowStyle, voiceOn && styles.voiceBtnOn]} onPress={toggleVoiceOutput}>
+                <Pressable
+                  {...voiceBtnPop.handlers}
+                  style={[styles.voiceBtn, voiceBtnPop.shadowStyle, voiceOn && styles.voiceBtnOn]}
+                  onPress={toggleVoiceOutput}
+                  accessibilityRole="switch"
+                  // A toggle needs its STATE announced, not just its name: 🔊 and 🔇 are the
+                  // only thing that distinguished on from off (finding 20).
+                  accessibilityState={{ checked: voiceOn }}
+                  accessibilityLabel={voiceOn ? 'Read answers aloud, on' : 'Read answers aloud, off'}
+                >
                   <Text style={styles.voiceBtnText}>{voiceOn ? '🔊' : '🔇'}</Text>
                 </Pressable>
               )}
-              <Pressable onPress={closeDrawer} hitSlop={10}>
+              <Pressable
+                onPress={closeDrawer}
+                hitSlop={10}
+                accessibilityRole="button"
+                // Closing IS the save here, which a bare "close" would hide.
+                accessibilityLabel="Close and save this conversation to your profile"
+              >
                 <Text style={styles.drawerClose}>✕</Text>
               </Pressable>
             </View>
@@ -756,7 +771,14 @@ export default function Profile() {
               onSubmitEditing={send}
             />
             {!!SpeechRecognitionCtor && (
-              <Pressable {...micBtnPop.handlers} style={[styles.micBtn, micBtnPop.shadowStyle, listening && styles.micListening]} onPress={toggleVoiceInput}>
+              <Pressable
+                {...micBtnPop.handlers}
+                style={[styles.micBtn, micBtnPop.shadowStyle, listening && styles.micListening]}
+                onPress={toggleVoiceInput}
+                accessibilityRole="switch"
+                accessibilityState={{ checked: listening }}
+                accessibilityLabel={listening ? 'Stop dictating' : 'Dictate your answer'}
+              >
                 <Text style={styles.voiceBtnText}>{listening ? '⏺' : '🎤'}</Text>
               </Pressable>
             )}
@@ -773,7 +795,12 @@ export default function Profile() {
           <Pressable style={styles.importCard} onPress={(e) => e.stopPropagation()}>
             <View style={styles.importHead}>
               <Text style={styles.importTitle}>Quick add</Text>
-              <Pressable onPress={() => setImportOpen(false)} hitSlop={10}>
+              <Pressable
+                onPress={() => setImportOpen(false)}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Close quick add"
+              >
                 <Text style={styles.drawerClose}>✕</Text>
               </Pressable>
             </View>

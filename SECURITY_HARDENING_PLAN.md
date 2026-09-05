@@ -179,15 +179,29 @@ for byte, as do both conditional branches and every user-content template.
 
 ### What still needs a human
 
-- **Run [db/RUN_ME_S1.sql](db/RUN_ME_S1.sql)** in the Supabase SQL editor — one paste
+- ~~**Run [db/RUN_ME_S1.sql](db/RUN_ME_S1.sql)**~~ — **RUN 2026-09-04**, reported successful.
+  The columns and tables exist ahead of the deploy, which is the right order: the code that
+  uses them is still on `codecleanup` and unpushed, so until it ships the new columns simply
+  sit unused. **Still outstanding: read the verification query's output** — it returns five
+  rows and every one must say `rls = true`. For `conversations`, `agent_runs` and
+  `deadline_check_log` that confirmation IS the fix, not the file. Original instructions kept
+  below for the record.
+- ~~Run it~~ in the Supabase SQL editor — one paste
   covering all five files, idempotent, with a verification query at the end that should
   return `rls = true` for all five tables. (The individual files stay the source of record
   and the place to read why each statement exists; that one is a convenience copy.)
   Everything degrades rather than breaking until it runs — rotation is simply off, promo
   codes fall back to the built-in table — but nothing is actually fixed until it does.
-- **Confirm RLS in the Supabase dashboard** for `conversations`, `agent_runs` and
-  `deadline_check_log`. A schema file cannot retroactively secure a table somebody created
-  by hand from a code comment; that confirmation IS the fix for S1-9.
+- **Confirm RLS** for `conversations`, `agent_runs` and `deadline_check_log` — either from
+  the verification query at the end of `db/RUN_ME_S1.sql` or in the dashboard (Table Editor
+  > table > RLS). A schema file cannot retroactively secure a table somebody created by hand
+  from a code comment; that confirmation IS the fix for S1-9.
+
+- **Watch the first sign-ins after the deploy.** S1-2's rotation goes live the moment the
+  code ships against the migrated database. Every refresh token minted before it carries no
+  `jti`, and the route adopts those once and rotates them in rather than treating them as
+  reuse — that path is tested, but it is the one change here that could sign the whole user
+  base out if it is wrong, and the symptom would be a spike of 401s on `/api/auth/refresh`.
 - **Run `cd frontend && npx tsc --noEmit`.** There was no node toolchain in the environment
   this work was done in, so the frontend changes in S1-1, S1-2 and S1-3 are unverified by
   the compiler. They are mechanical (signature changes and call-site updates), but that is

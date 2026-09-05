@@ -7,6 +7,11 @@ import { beginGoogleSignIn } from '@/auth/googleSignIn';
 import { Field, Logo, PopButton, Txt } from '@/ui/components';
 import { colors, fonts, radius, softShadow, space } from '@/ui/theme';
 
+// The shortest password a new account may have. S1-11: the server only ever sees
+// sha256(password), so it cannot tell a passphrase from a single letter — the length rule
+// has to live here, and the field's placeholder was already promising it.
+const MIN_PASSWORD_LENGTH = 8;
+
 // Login / Register — ported from the live app's #page-login: centered card-soft (max-w-sm),
 // favicon + Wingman + BETA, tagline, beta notice, back-to-home, Google row (with the
 // live app's COMING SOON treatment) above the form, then the form and the register link.
@@ -31,6 +36,13 @@ export default function Login() {
 
   async function submit() {
     setError(null);
+    // S1-11: there was no minimum anywhere — not here, not on the server, which only ever
+    // sees sha256(password) and so cannot tell a 20-character passphrase from one letter.
+    // The placeholder said "At least 8 characters" and nothing enforced it.
+    if (isRegister && password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+      return;
+    }
     if (isRegister && password !== passwordConfirm) {
       setError('Passwords do not match.');
       return;

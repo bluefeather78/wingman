@@ -15,6 +15,7 @@ from app.core import (
 from app.deps import (json_body, json_response, json_error, client_ip, login_response,
                       opaque_error, DB_UNAVAILABLE)
 from app.auth import hash_password, verify_password, AuthConfigError
+from app.auth.passwords import is_valid_client_hash
 from app.auth.ratelimit import (login_limiter, login_ip_limiter, register_limiter,
                                 register_email_limiter)
 from app.services.email import send_lifecycle_email_async
@@ -58,6 +59,14 @@ def handle_register(request: Request, body: dict = Depends(json_body)):
 
     if not EMAIL_RE.match(email):
         return json_error(400, "Please enter a valid email address.")
+
+    # S1-11, finding L1: the client contract is sha256(password) as 64 lowercase hex chars,
+    # and nothing checked it. A caller sending a one-character "hash" got an account whose
+    # password-equivalent secret was one character — the browser's own hashing was the only
+    # thing preventing it, and a server must not depend on its client for that.
+    if not is_valid_client_hash(password_hash):
+        return json_error(400, "Your browser could not prepare that password. Reload the "
+                               "page and try again.")
 
     # S1-7, finding M7: the "already exists with that email" 409 below is an enumeration
     # oracle, and this population is largely minors — a list of "these addresses have
@@ -136,6 +145,12 @@ def handle_login(request: Request, body: dict = Depends(json_body)):
     if not login_limiter.allow(f"{ip}|{key}") or not login_ip_limiter.allow(ip):
         return json_error(429, "Too many sign-in attempts. Please wait a few minutes "
                                "and try again.")
+    # A malformed passwordHash cannot match any stored value, so answer the ordinary
+    # failure without a Supabase read (S1-11). LOGIN_FAILED, not a distinct 400: telling a
+    # caller their input was the wrong SHAPE is one bit more than they need, and this path
+    # is reachable by anyone.
+    if not is_valid_client_hash(password_hash):
+        return json_error(401, LOGIN_FAILED)
     try:
         record = get_user_account(key)
     except Exception as e:

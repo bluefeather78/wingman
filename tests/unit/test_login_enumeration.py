@@ -12,6 +12,10 @@ import pytest
 import app.routes.account as account
 from app.auth.ratelimit import RateLimiter
 
+# A well-formed client hash: 64 lowercase hex. S1-11 rejects anything else before the
+# lookup, so these tests have to send the real shape to exercise the paths they are about.
+VALID_HASH = "ab12" * 16
+
 
 @pytest.fixture(autouse=True)
 def _fresh(monkeypatch):
@@ -26,7 +30,7 @@ def _login(userid, monkeypatch, record=None, password_ok=False):
     monkeypatch.setattr(account, "get_user_account", lambda _k: record)
     monkeypatch.setattr(account, "verify_password", lambda *a: (password_ok, False))
     return account.handle_login(request=None,
-                                body={"userid": userid, "passwordHash": "h" * 64})
+                                body={"userid": userid, "passwordHash": VALID_HASH})
 
 
 # ---------------- login ----------------
@@ -56,7 +60,8 @@ def test_the_two_call_sites_share_one_constant():
     import inspect
     code = "\n".join(line for line in inspect.getsource(account.handle_login).split("\n")
                      if not line.lstrip().startswith("#"))
-    assert code.count("LOGIN_FAILED") == 2
+    assert code.count("LOGIN_FAILED") == 3   # unknown user, wrong password,
+                                            # and S1-11's malformed-hash path
     assert "Incorrect password." not in code
     assert "No account found with that user ID." not in code
 
@@ -76,7 +81,7 @@ def test_a_supabase_failure_is_still_a_502_not_a_disguised_401(monkeypatch):
     def _boom(_k):
         raise RuntimeError("down")
     monkeypatch.setattr(account, "get_user_account", _boom)
-    resp = account.handle_login(request=None, body={"userid": "a", "passwordHash": "h"})
+    resp = account.handle_login(request=None, body={"userid": "a", "passwordHash": VALID_HASH})
     assert resp.status_code == 502
 
 
@@ -92,7 +97,7 @@ def _register(email, monkeypatch, taken_email=False):
     monkeypatch.setattr(account, "hash_password", lambda h: "argon2$" + h)
     return account.handle_register(request=None, body={
         "firstName": "A", "lastName": "B", "email": email, "userid": "newuser",
-        "passwordHash": "h" * 64, "isAdult": True, "acceptedTerms": True,
+        "passwordHash": VALID_HASH, "isAdult": True, "acceptedTerms": True,
     })
 
 
@@ -135,7 +140,7 @@ def test_the_userid_conflict_is_deliberately_left_alone(monkeypatch):
     monkeypatch.setattr(account, "get_user_by_email", lambda _e: None)
     resp = account.handle_register(request=None, body={
         "firstName": "A", "lastName": "B", "email": "x@example.com", "userid": "newuser",
-        "passwordHash": "h" * 64, "isAdult": True, "acceptedTerms": True,
+        "passwordHash": VALID_HASH, "isAdult": True, "acceptedTerms": True,
     })
     assert resp.status_code == 409
     assert "user ID" in json.loads(resp.body)["error"]

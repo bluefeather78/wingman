@@ -31,6 +31,18 @@ def is_legacy_hash(stored):
     return bool(stored) and bool(_SHA256_HEX.match(stored))
 
 
+def is_valid_client_hash(value):
+    """True if `value` is the shape the client contract promises: 64 lowercase hex chars.
+
+    S1-11, finding L1: nothing validated this server-side, so `passwordHash` was whatever
+    the caller sent. It is hashed with argon2 and stored either way, so a client sending a
+    one-character "hash" produced an account whose password-equivalent secret was one
+    character — and the browser's own hashing was the only thing making that not happen.
+    A server must not depend on its client for that.
+    """
+    return bool(value) and isinstance(value, str) and bool(_SHA256_HEX.match(value))
+
+
 def hash_password(client_hash):
     """argon2-hash the client-supplied SHA-256 hex for storage."""
     return _ph.hash(client_hash)

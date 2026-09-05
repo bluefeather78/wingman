@@ -213,8 +213,11 @@ def _expired(expires_at):
 # --------------------------------------------------------------------------------------
 
 def _db_current(url, key, name):
+    # order_by="name": agent_locks is keyed on `name`, not `id`. supabase_get orders by `id`
+    # unless told otherwise (audit 4.14), and a column that does not exist is a 400 — which is
+    # how this read failed the first time it ever ran against the real table.
     rows = supabase_get(url, LOCK_TABLE, {"select": "name,holder,expires_at",
-                                          "name": f"eq.{name}"}, key)
+                                          "name": f"eq.{name}"}, key, order_by="name")
     return (rows or [None])[0]
 
 

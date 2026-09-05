@@ -95,6 +95,10 @@ _NON_ID_KEYED = {
     "opportunity_signups": "opportunity_id",
     "users": "userid",
     "promo_codes": "code",
+    # Added after agent_locks 400'd the first time it ran against the real table: this list is
+    # only worth anything if a NEW non-id-keyed table gets added to it, and the one added in
+    # this very phase was missed.
+    "agent_locks": "name",
 }
 # trusted_aggregators is keyed on `domain` too, but aggregators_common passes its table name
 # through the module constant TABLE rather than a literal, so the source scan below cannot see
@@ -138,10 +142,15 @@ def test_non_id_keyed_reads_name_their_key(table, key):
         f"would 400: {sorted(set(offenders))}")
 
 
+# Reached through a module constant rather than a literal, so the source scan cannot see them.
+# Each has its own dedicated test below instead of being weakened into the scan.
+_VIA_CONSTANT = {"agent_locks"}
+
+
 def test_every_non_id_table_is_actually_covered():
     """Guards the guard: a stale entry would let the test above pass on nothing."""
     calls = _supabase_get_calls()
-    found = {t for t in _NON_ID_KEYED for _, call in calls if f'"{t}"' in call}
+    found = {t for t in _NON_ID_KEYED for _, call in calls if f'"{t}"' in call} | _VIA_CONSTANT
     assert found == set(_NON_ID_KEYED), (
         f"_NON_ID_KEYED lists tables nothing reads through supabase_get any more: "
         f"{set(_NON_ID_KEYED) - found}")
@@ -152,6 +161,17 @@ def test_the_scan_finds_the_calls_it_claims_to():
     calls = _supabase_get_calls()
     assert len(calls) > 40, f"expected the repo's ~60 supabase_get calls, found {len(calls)}"
     assert any('"opportunities"' in c for _, c in calls)
+
+
+def test_agent_locks_read_names_its_key():
+    """Keyed on `name`. Reached through the LOCK_TABLE constant, so the literal scan misses it —
+    and that is exactly how it shipped broken: every unit test mocked supabase_get away, so
+    nothing exercised the real query until the table existed."""
+    import inspect
+    from wingman import run_lock
+    src = inspect.getsource(run_lock)
+    assert 'LOCK_TABLE = "agent_locks"' in src
+    assert 'order_by="name"' in src
 
 
 def test_trusted_aggregators_read_names_its_key():

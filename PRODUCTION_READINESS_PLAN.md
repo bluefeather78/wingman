@@ -297,7 +297,8 @@ Pipeline + repo. Branched off `origin/main` (which already carried the Phase 2 m
 | | |
 |---|---|
 | Exit test | **all three met**, each pinned by a named test: two agents at once refuse to overlap (`test_two_agents_at_once_refuse_to_overlap_db` / `_file`), a simulated insert timeout fails loudly (`test_statement_timeout_raises_and_never_narrows`), a snapshot commit inserts 0 dupes (`test_snapshot_commit_inserts_zero_dupes`) |
-| Tests | **2617 passing**, up from 2447 at the end of Phase 2. 7 new test files |
+| Tests | **2626 passing**, up from 2447 at the end of Phase 2. 7 new test files |
+| Verified how | unit suite + `tsc` + a **live smoke test**: the real server booted, the real console route exercised. That smoke test found two run-lock bugs every mocked test had missed (see below) — worth repeating in Phase 4 rather than trusting green units alone |
 | Marquee | **none taken.** No prompt text moved and no paid call changed. The one item that would have been M8+M9 is deliberately left undone — see "Left for Shama" below |
 | Approvals used | decision 4 (retire `opportunity-matching`) answered yes; new decision 9 (do not touch the merge logic) recorded |
 
@@ -340,6 +341,26 @@ deliberately left on `origin`** so they stay recoverable.
 If the answer is yes, the port is more than a copy: bare-name imports, a move under `agents/`,
 and the Phase 3 rules every inserting agent now follows — the catalog run lock,
 `require_service_key()`, ordered pagination.
+
+### What the live smoke test caught, and the lesson
+
+The unit suite was green and all three exit-test conditions passed before the service was ever
+started. Booting it and launching an agent through the real console route then failed on the
+first try, twice over:
+
+1. **`current_holder` reported the lock free while a run held it.** With Supabase creds set but
+   `db/agent_locks_schema.sql` not yet run, the 42P01 from the DB read hit a `try/except`
+   wrapped around both reads and jumped past the file fallback to `return None`. The console
+   returned 202 and **started a second paid agent** on top of a run holding the file lock. The
+   agent's own guard would still have refused it — the two layers are not redundant by accident
+   — but the console layer was simply broken.
+2. **A lock left by a killed process wedged the pipeline for the full 900s lease.**
+
+Both fixed, both pinned by regression tests. The lesson is the one worth carrying into Phase 4:
+**every unit test here mocked `agent_locks` as present, so the entire class of "the migration
+has not been run yet" was untested — which is the state of every checkout, including the one
+this will next be pulled into.** Green units did not mean working software; six seconds of
+running the real thing did.
 
 ### Two things that need a human at the database, not in the code
 

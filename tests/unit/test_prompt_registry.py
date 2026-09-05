@@ -95,12 +95,12 @@ def test_the_expensive_features_carry_their_own_ceilings():
     assert prompts.build("profile_synthesis", {})[3] == prompts.PROFILE_SYNTH_MAX_TOKENS
 
 
-def test_only_profile_synthesis_retries_at_a_higher_ceiling():
-    """The retry used to live in the client, which meant the client chose both budgets."""
+def test_no_feature_retries_at_a_higher_ceiling():
+    """Profile synthesis used to call at 4000 then retry at 8000; it now buys its whole
+    (generous) budget in one call, so no feature declares a retry ceiling. The retry
+    machinery on Feature/the route stays in place for any future feature that needs it."""
     retrying = [n for n, f in prompts.FEATURES.items() if f.retry_max_tokens]
-    assert retrying == ["profile_synthesis"]
-    assert (prompts.FEATURES["profile_synthesis"].retry_max_tokens
-            > prompts.PROFILE_SYNTH_MAX_TOKENS)
+    assert retrying == []
 
 
 def test_the_subject_list_matches_the_one_the_client_filters_against():

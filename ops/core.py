@@ -4471,9 +4471,16 @@ def list_discovered_leads(limit=60):
             queue.append({"url": l.get("url"), "kind": kind, "scope": scope,
                           "signal": l.get("signal"), "angle": l.get("angle"),
                           "seed_id": l.get("seed_id"), "first_seen": l.get("first_seen")})
+    # `backend` tells the operator whether this queue is the SHARED one or this laptop's copy
+    # (Phase 4). Without it there is no way to tell, from the console, whether the leads on
+    # screen are the ones another machine is also working through — and the whole point of
+    # db/discovered_leads_schema.sql is that they should be.
+    backend = discovered_leads.queue_backend()
     return {"ok": True, "counts": counts, "leads": queue,
             "truncated": max(0, counts["new"] - len(queue)),
-            "path": os.path.basename(discovered_leads.LEADS_PATH)}
+            "backend": backend,
+            "path": ("discovered_leads (Supabase)" if backend == "supabase"
+                     else os.path.basename(discovered_leads.LEADS_PATH))}
 
 
 def list_recent_merges(limit=50):

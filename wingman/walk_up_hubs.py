@@ -250,7 +250,12 @@ def main():
     ap.add_argument("--timeout", type=int, default=url_repair.DEFAULT_TIMEOUT)
     ap.add_argument("--commit", action="store_true",
                     help="Write the leads (default: preview). Free either way.")
-    ap.add_argument("--path", default=discovered_leads.LEADS_PATH)
+    # Default None, not LEADS_PATH: None means "the shared queue" (the discovered_leads table
+    # when db/discovered_leads_schema.sql has been run, the file otherwise). Naming the file
+    # here would have pinned this one tool to a local copy while every other consumer moved to
+    # the shared queue — so a walk-up would queue leads the miner could not see.
+    ap.add_argument("--path", default=None,
+                    help="A specific leads JSONL file. Omit to use the shared queue.")
     args = ap.parse_args()
     # A catalog row's NAME reaches this console -- and one of them carries a Hawaiian okina
     # (U+02BB), which a cp1252 console cannot encode. Without this the whole run died on a print

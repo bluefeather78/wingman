@@ -25,10 +25,19 @@ it is the same split `--preview` makes everywhere else in this repo.
 ~40% of hand-picked civic hubs refusing our client at all. A search that spins off its own hubs
 turns discovery into something that compounds: the more angles run, the more hubs exist to mine.
 
-STORAGE is a JSONL file at the repo root (`discovered_leads.jsonl`), deliberately not a table.
-A migration needs the operator to run DDL by hand, and this has to earn that first; the file is
-append-only, greppable, and readable by both consumers today. The plan's `discovered_leads`
-table stays the mature form.
+STORAGE is the `discovered_leads` TABLE when db/discovered_leads_schema.sql has been run, and
+the JSONL file at the repo root otherwise. Until Phase 4 it was only ever the file, which this
+module argued for at the time — "a migration needs the operator to run DDL by hand, and this has
+to earn that first". It earned it: agents_report 4.20 and operational risk 8 record that the
+file is the ONLY queue for hub mining and name harvesting, that there is no backup, that it is
+208 KB of work a search already paid for, and that `mark_processed` truncates and rewrites it
+non-atomically. A second machine — or a fresh clone — is simply a different pipeline.
+
+The file is not deleted and not deprecated. It is the fallback whenever the table is absent,
+which is the state of every checkout until somebody opens the Supabase SQL editor, and every
+function here still takes an explicit `path=` for a caller that genuinely means one file
+(wingman/walk_up_hubs.py --path, and the tests). What changed is the DEFAULT: `path=None` now
+means "the shared queue", which is the table if there is one.
 
     python -m wingman.discovered_leads --list              # FREE: what is queued, by kind
     python -m wingman.discovered_leads --list --kind hub   # just the hub-mining leads
@@ -405,8 +414,110 @@ def fetch_rejected_rows(supabase_url, service_key, limit=None, any_reason=False)
     return rows[:limit] if limit else rows
 
 
-def load_leads(path=LEADS_PATH):
-    """Every lead on disk, oldest first. A malformed line is skipped, never fatal."""
+# --------------------------------------------------------------------------- the two backends
+#
+# PHASE 4 (agents_report 4.20 / operational risk 8). The queue lives in the `discovered_leads`
+# table when db/discovered_leads_schema.sql has been run, and in the JSONL file otherwise.
+#
+# WHICH ONE YOU GET IS NOT A DETAIL. The file is 208 KB of work a paid search already did, it
+# has no backup, it is rewritten in place (non-atomically) by mark_processed, and it exists on
+# exactly one laptop — so a second checkout or a second machine is a different pipeline, mining
+# hubs the first one already mined and paying again for it.
+#
+# `path=None` means "the shared queue" and is the default everywhere. An EXPLICIT `path=` means
+# that one file and never the table: wingman/walk_up_hubs.py's --path and the tests genuinely
+# mean a file, and silently redirecting them at the database would be a nasty surprise.
+TABLE = "discovered_leads"
+
+_MISSING_CODES = ("PGRST205", "42P01", "PGRST202", "42883", "42703", "PGRST204")
+
+_db_available = True
+_db_warned = False
+
+
+def _creds():
+    """(url, service_key) or (None, None). Soft, unlike supabase_common.require_service_key.
+
+    That helper raises SystemExit, which is right for a job whose whole purpose needs the
+    database. This one must be able to answer "no database configured" and fall back to the
+    file, because a lead queue with no Supabase creds is exactly the offline-dev case
+    CLAUDE.md protects.
+    """
+    from wingman import supabase_common
+    supabase_common.load_dotenv()
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    return (url, key) if url and key else (None, None)
+
+
+def _db_on():
+    return _db_available and all(_creds())
+
+
+def _fall_back(reason):
+    global _db_available, _db_warned
+    _db_available = False
+    if not _db_warned:
+        _db_warned = True
+        print(f"[WARN] discovered_leads table unavailable ({reason}) — the lead queue is a "
+              f"LOCAL FILE, so another machine or checkout has a different one. Run "
+              f"db/discovered_leads_schema.sql in the Supabase SQL editor.")
+
+
+def _is_missing(exc):
+    body = ""
+    try:
+        body = exc.read().decode("utf-8", "replace")
+    except Exception:                                                # noqa: BLE001
+        body = str(exc)
+    return any(code in body for code in _MISSING_CODES)
+
+
+def _row_to_lead(row):
+    """A table row as the dict every consumer already expects.
+
+    The stored `lead` blob is the lead as the capture wrote it; the columns beside it are the
+    ones the queue itself owns, so they WIN — a status read from the blob would be whatever it
+    was when the row was inserted, i.e. always "new".
+    """
+    lead = dict(row.get("lead") or {})
+    lead["url"] = row.get("url") or lead.get("url")
+    lead["kind"] = row.get("kind") or lead.get("kind")
+    lead["status"] = row.get("status") or STATUS_NEW
+    if row.get("processed_at"):
+        lead["processed_at"] = row["processed_at"]
+    return lead
+
+
+def _db_load(kind=None, status=None, limit=None):
+    from wingman import supabase_common
+    url, key = _creds()
+    params = {"select": "url,kind,status,lead,processed_at"}
+    if kind:
+        params["kind"] = f"eq.{kind}"
+    if status:
+        params["status"] = f"eq.{status}"
+    if limit:
+        params["limit"] = str(limit)
+    # order_by="id" is supabase_get's default and is CORRECT here: the table has an identity
+    # id, so id order is insertion order, which is the "oldest first" the append-only file
+    # gave for free.
+    rows = supabase_common.supabase_get(url, TABLE, params, key)
+    return [_row_to_lead(r) for r in rows]
+
+
+def load_leads(path=None):
+    """Every lead in the queue, oldest first. A malformed file line is skipped, never fatal."""
+    if path is None and _db_on():
+        try:
+            return _db_load()
+        except Exception as e:                                        # noqa: BLE001
+            if _is_missing(e):
+                _fall_back(str(e)[:80])
+            else:
+                print(f"[WARN] could not read the lead queue from Supabase: {e}")
+                raise
+    path = path or LEADS_PATH
     if not os.path.exists(path):
         return []
     out = []
@@ -428,10 +539,24 @@ def lead_keys(leads):
     return {_key(l.get("url")) for l in leads if l.get("url")}
 
 
-def append_leads(leads, path=LEADS_PATH):
-    """Append, skipping anything already on file. Returns how many were actually written."""
+def append_leads(leads, path=None):
+    """Add leads not already queued. Returns how many were actually written.
+
+    Deduped on `url_key` — url_dedupe.match_key — on BOTH backends, which is the same key the
+    consumers compare with. The table additionally carries a UNIQUE constraint on it, so two
+    machines capturing the same round-up cannot both queue it even if their reads interleave.
+    """
     if not leads:
         return 0
+    if path is None and _db_on():
+        try:
+            return _db_append(leads)
+        except Exception as e:                                        # noqa: BLE001
+            if _is_missing(e):
+                _fall_back(str(e)[:80])
+            else:
+                raise
+    path = path or LEADS_PATH
     known = lead_keys(load_leads(path))
     fresh = []
     for lead in leads:
@@ -448,22 +573,83 @@ def append_leads(leads, path=LEADS_PATH):
     return len(fresh)
 
 
-def pending(kind, path=LEADS_PATH, limit=None):
+def _db_append(leads):
+    from wingman import supabase_common
+    url, key = _creds()
+    known = {_key(l.get("url")) for l in _db_load()}
+    rows, seen = [], set()
+    for lead in leads:
+        k = _key(lead.get("url"))
+        if not k or k in known or k in seen:
+            continue
+        seen.add(k)
+        rows.append({
+            "url_key": k,
+            "url": lead.get("url"),
+            "kind": lead.get("kind") or KIND_HUB,
+            "status": lead.get("status") or STATUS_NEW,
+            "lead": lead,
+        })
+    if not rows:
+        return 0
+    # on_conflict=url_key so a lead another machine queued between the read above and this
+    # insert is absorbed rather than failing the whole batch (supabase_post's on_conflict is
+    # merge-duplicates). A lead this machine has ALREADY processed cannot be reset by a
+    # re-capture, because `known` is built from _db_load(), which returns every row whatever
+    # its status — and the scraper re-captures the same round-up on every run over the same
+    # angle, so without that a hub would be re-mined, and re-paid for, on every pass.
+    #
+    # The one case this does not cover, stated rather than hidden: if another machine marks a
+    # lead processed in the milliseconds between the read above and this write, the merge
+    # rewrites it back to "new" and it is mined once more. The window is one round trip, the
+    # cost is one hub, and closing it would mean an ignore-duplicates insert that
+    # supabase_post does not offer — not worth a second POST helper for that.
+    supabase_common.supabase_post(url, TABLE, rows, key, on_conflict="url_key")
+    return len(rows)
+
+
+def pending(kind, path=None, limit=None):
     """The unprocessed leads of one kind, oldest first — what a consumer should work on."""
+    if path is None and _db_on():
+        try:
+            return _db_load(kind=kind, status=STATUS_NEW, limit=limit)
+        except Exception as e:                                        # noqa: BLE001
+            if _is_missing(e):
+                _fall_back(str(e)[:80])
+            else:
+                raise
     out = [l for l in load_leads(path)
            if l.get("kind") == kind and l.get("status", STATUS_NEW) == STATUS_NEW]
     return out[:limit] if limit else out
 
 
-def mark_processed(urls, path=LEADS_PATH):
+def mark_processed(urls, path=None):
     """Stamp these leads processed so the next gated run does not re-pay for them.
 
-    Rewrites the file rather than appending a tombstone: the file is the work-list, and a
-    work-list you have to replay to interpret is how a queue quietly grows forever.
+    On the file backend this REWRITES the whole file rather than appending a tombstone: the
+    file is the work-list, and a work-list you have to replay to interpret is how a queue
+    quietly grows forever. That rewrite is also why the table exists — it is not atomic, so an
+    interrupted mark_processed can truncate the only copy of the queue.
     """
     keys = {_key(u) for u in (urls or []) if u}
     if not keys:
         return 0
+    if path is None and _db_on():
+        try:
+            from wingman import supabase_common
+            url, key = _creds()
+            # An RPC taking an array, not a PATCH with url_key=in.(...): a url_key can contain
+            # a comma or a parenthesis, and building that filter by string concatenation from
+            # URLs is the shape of bug this repo already has a rule about.
+            result = supabase_common.supabase_rpc(url, "mark_leads_processed",
+                                                  {"keys": sorted(keys)}, key)
+            return int(result if not isinstance(result, list) else (result or [0])[0])
+        except Exception as e:                                        # noqa: BLE001
+            if _is_missing(e):
+                _fall_back(str(e)[:80])
+            else:
+                raise
+    path = path or LEADS_PATH
     leads, n = load_leads(path), 0
     for lead in leads:
         if _key(lead.get("url")) in keys and lead.get("status") != STATUS_DONE:
@@ -475,6 +661,21 @@ def mark_processed(urls, path=LEADS_PATH):
             for lead in leads:
                 f.write(json.dumps(lead, ensure_ascii=False) + "\n")
     return n
+
+
+def queue_backend():
+    """"supabase" or "file" — what the shared queue actually is right now.
+
+    The console prints this. An operator who cannot tell which backend is live cannot tell
+    whether the queue they are looking at is the one the other machine sees.
+    """
+    return "supabase" if _db_on() else "file"
+
+
+def _reset_for_tests():
+    global _db_available, _db_warned
+    _db_available = True
+    _db_warned = False
 
 
 def lead_scope(lead):

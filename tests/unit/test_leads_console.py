@@ -18,6 +18,12 @@ class _Leads:
     def lead_scope(self, lead):
         return lead.get("scope") or self.SCOPE_OFF_DOMAIN
 
+    def queue_backend(self):
+        # Phase 4: the console reports whether the queue is the shared table or this
+        # laptop's file, because an operator cannot otherwise tell whether the leads on
+        # screen are the ones another machine is also working through.
+        return "file"
+
 
 def _install(monkeypatch, rows):
     """ops.core does `from wingman import discovered_leads` inside the function, so BOTH the
@@ -55,6 +61,13 @@ def test_the_list_is_in_queue_order_not_sorted(monkeypatch):
     r = core.list_discovered_leads(limit=3)
     assert [l["url"] for l in r["leads"]] == ["https://x/0", "https://x/1", "https://x/2"]
     assert r["truncated"] == 2
+
+
+def test_the_backend_is_reported_so_the_operator_knows_whose_queue_this_is(monkeypatch):
+    _install(monkeypatch, [{"url": "https://x.edu/a", "kind": "hub", "status": "new"}])
+    r = core.list_discovered_leads()
+    assert r["backend"] == "file"
+    assert "discovered_leads.jsonl" in r["path"]
 
 
 def test_a_lead_with_no_status_counts_as_waiting(monkeypatch):

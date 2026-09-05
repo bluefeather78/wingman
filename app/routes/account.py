@@ -12,7 +12,8 @@ from app.core import (
     _check_signup_consent, ensure_trial_started, touch_user_activity,
     update_password_hash, normalize_email,
 )
-from app.deps import json_body, json_response, json_error, client_ip, login_response
+from app.deps import (json_body, json_response, json_error, client_ip, login_response,
+                      opaque_error, DB_UNAVAILABLE)
 from app.auth import hash_password, verify_password, AuthConfigError
 from app.auth.ratelimit import (login_limiter, login_ip_limiter, register_limiter,
                                 register_email_limiter)
@@ -74,7 +75,7 @@ def handle_register(request: Request, body: dict = Depends(json_body)):
             return json_error(409, "That user ID is already taken.")
         existing = get_user_by_email(email)
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="account.db")
     if existing:
         return json_error(409, "An account already exists with that email "
                                "address. Sign in instead, or use a different "
@@ -99,9 +100,9 @@ def handle_register(request: Request, body: dict = Depends(json_body)):
     except urllib.error.HTTPError as e:
         if e.code == 409:
             return json_error(409, "That user ID is already taken.")
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="account.db")
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="account.db")
 
     # Auto-login the new account: the client goes straight to showApp() after register, so
     # it needs a token immediately or every gated call would 401. Fetch the fresh row and
@@ -116,7 +117,10 @@ def handle_register(request: Request, body: dict = Depends(json_body)):
     try:
         return json_response(200, login_response(record))
     except AuthConfigError as e:
-        return json_error(503, str(e))
+        # Not str(e): that message names JWT_SECRET and where to set it, which is
+        # operational detail a signed-out caller has no business reading (S1-13, L5).
+        return opaque_error(503, "Sign-in is temporarily unavailable. Please try again "
+                                 "shortly.", e, op="auth.config")
 
 
 @router.post("/api/login")
@@ -135,7 +139,7 @@ def handle_login(request: Request, body: dict = Depends(json_body)):
     try:
         record = get_user_account(key)
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="account.db")
     # ONE message for both failures (S1-7, finding M7). This used to answer
     # 404 "No account found with that user ID." here and 401 "Incorrect password." below,
     # which enumerates valid userids for free — and the two are told apart by the STATUS as
@@ -162,4 +166,7 @@ def handle_login(request: Request, body: dict = Depends(json_body)):
     try:
         return json_response(200, login_response(record))
     except AuthConfigError as e:
-        return json_error(503, str(e))
+        # Not str(e): that message names JWT_SECRET and where to set it, which is
+        # operational detail a signed-out caller has no business reading (S1-13, L5).
+        return opaque_error(503, "Sign-in is temporarily unavailable. Please try again "
+                                 "shortly.", e, op="auth.config")

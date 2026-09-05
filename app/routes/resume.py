@@ -11,7 +11,8 @@ from app.config import (RESUME_MAX_BODY_BYTES, USER_SUBMISSION_MAX_NAME,
                         USER_SUBMISSION_MAX_LIST)
 from app.core import touch_user_activity
 from app.deps import (json_body, json_response, json_error, subscription_block_reason,
-                      require_subscription, capped_raw_body)
+                      require_subscription, capped_raw_body,
+                      opaque_error)
 from app.auth import get_current_user, AuthedUser
 from app.auth.ratelimit import user_submission_limiter
 from app.services import resume as resume_service
@@ -70,7 +71,9 @@ def handle_extract_from_resume(request: Request, raw: bytes = Depends(resume_raw
             "filename": filename,
         })
     except Exception as e:
-        return json_error(500, f"Failed to extract resume: {str(e)}")
+        return opaque_error(500, "We could not read that resume. Try a different "
+                                 "PDF or DOCX, or paste the text instead.",
+                            e, op="resume.pdf")
 
 
 @router.post("/api/extract-from-linkedin")
@@ -99,7 +102,8 @@ def handle_extract_from_linkedin(body: dict = Depends(json_body),
 
         return json_response(200, {"extracted_text": extracted, "source": "linkedin"})
     except Exception as e:
-        return json_error(500, f"Failed to extract LinkedIn profile: {str(e)}")
+        return opaque_error(500, "We could not read that LinkedIn text. "
+                                 "Please try again.", e, op="resume.linkedin")
 
 
 def _clipped(body, key, limit):

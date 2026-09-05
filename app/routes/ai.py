@@ -26,7 +26,7 @@ from app.core import (
     record_api_error,
 )
 from app.deps import (json_response, json_error, subscription_block_reason, client_ip,
-                      capped_raw_body)
+                      capped_raw_body, _ERROR_LOGGED_HEADER)
 from app.auth import get_optional_user, AuthedUser
 from app.auth.ratelimit import ai_ip_limiter, ai_user_limiter
 from app.services.ai import generate_mock_text
@@ -58,7 +58,8 @@ _USE_WEB_SEARCH = False
 # A response header the capture middleware (app/main.py) skips over, so a provider failure
 # recorded HERE with its real upstream status + error message is not ALSO recorded generically
 # as a 5xx server_error. The header never reaches the client — the middleware strips it.
-_ERROR_LOGGED_HEADER = "x-wingman-error-logged"
+# Imported, not re-declared: app.deps.opaque_error sets the same marker, and a header name
+# copied into a second file is exactly the kind of pin that drifts.
 
 
 def _mark_logged(resp):
@@ -68,6 +69,25 @@ def _mark_logged(resp):
     except Exception:                                              # noqa: BLE001
         pass
     return resp
+
+
+# What the caller is told when a provider fails. S1-13, finding L5: both proxies used to
+# relay the provider's error JSON VERBATIM — quota states, model names, org ids, the
+# provider's own error taxonomy — straight to any browser that asked. The upstream STATUS is
+# kept, because the client already branches on it (429 is "slow down", 5xx is "try again"),
+# but the body is ours. The provider's real message still reaches the API Errors tab through
+# _record_provider_failure, which is where it was always the more useful thing to read.
+_PROVIDER_MESSAGES = {
+    429: "Wingman is busy right now. Give it a few seconds and try again.",
+    529: "Wingman is busy right now. Give it a few seconds and try again.",
+}
+_PROVIDER_DEFAULT = "The AI service had a problem answering that. Please try again."
+
+
+def _provider_error_response(status):
+    """An opaque {"error": ...} at the provider's own status code."""
+    return _mark_logged(json_error(
+        status, _PROVIDER_MESSAGES.get(status, _PROVIDER_DEFAULT)))
 
 
 def _provider_detail(body):
@@ -157,11 +177,10 @@ def _proxy_to_gemini(raw_body, ip, userid):
     except urllib.error.HTTPError as e:
         body = e.read()
         _record_provider_failure("gemini", "/api/messages", e.code, _provider_detail(body))
-        return _mark_logged(Response(content=body, status_code=e.code,
-                                     media_type="application/json"))
+        return _provider_error_response(e.code)
     except Exception as e:
         _record_provider_failure("gemini", "/api/messages", 0, str(e))
-        return _mark_logged(json_error(502, str(e)))
+        return _mark_logged(json_error(502, _PROVIDER_DEFAULT))
     resp = json_response(200, {"content": [{"type": "text", "text": text}]})
     log_conversation_async(userid, ip, "live", system, user_content, text)
     record_interactive_cost_async("interactive_gemini", usage, MESSAGES_MODEL,
@@ -211,11 +230,10 @@ def _proxy_to_anthropic(raw_body, ip, userid):
         body = e.read()
         _record_provider_failure("anthropic", "/api/messages-claude", e.code,
                                  _provider_detail(body))
-        return _mark_logged(Response(content=body, status_code=e.code,
-                                     media_type="application/json"))
+        return _provider_error_response(e.code)
     except Exception as e:
         _record_provider_failure("anthropic", "/api/messages-claude", 0, str(e))
-        return _mark_logged(json_error(502, str(e)))
+        return _mark_logged(json_error(502, _PROVIDER_DEFAULT))
     # Best-effort logging + cost, after the response body is captured.
     try:
         resp_json = json.loads(data)

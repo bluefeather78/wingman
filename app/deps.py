@@ -3,10 +3,12 @@ request-body readers, and the subscription gate. Kept tiny so the routers read l
 the old Handler methods they replace.
 """
 import json
+import secrets
 
 from fastapi import Depends, HTTPException, Request, Response
 
-from app.core import get_user_account, subscription_state, _login_payload
+from app.core import (get_user_account, subscription_state, _login_payload,
+                      record_api_error)
 from app.auth import issue_tokens, get_current_user, get_optional_user, AuthedUser
 
 
@@ -23,6 +25,47 @@ def json_response(status, obj, default=None):
 def json_error(code, message):
     """Mirror Handler.send_json_error: {"error": message} at the given status."""
     return json_response(code, {"error": message})
+
+
+# --- Opaque failures with a correlation id (S1-13, finding L5) ----------------------
+#
+# Routes used to hand the caller the raw exception: `f"Could not reach Supabase: {e}"`,
+# `f"Matching failed: {e}"`, `str(e)` out of the resume parser, and — worst — the AI
+# proxies relayed the provider's own error JSON verbatim. None of that carries a key, but
+# it names the database vendor, the HTTP library, quota states, model names and PostgREST
+# error codes, which is a free map of the stack for anybody poking at the app.
+#
+# The detail is not discarded, it is MOVED: a short reference goes to the caller, and the
+# full text goes to stdout and to api_errors, where the admin console's API Errors tab
+# already shows it. A student who reports "it said ref 3f9c1a04" can be answered exactly.
+_ERROR_LOGGED_HEADER = "x-wingman-error-logged"
+
+# What the caller sees when a Supabase read or write fails. Deliberately does not name the
+# vendor: "which database are they on" is not something an error message owes anyone.
+DB_UNAVAILABLE = "We could not reach your account data just now. Please try again."
+
+
+def opaque_error(status, public_message, exc, *, op):
+    """json_error(status, public_message + a ref), with the real detail logged not sent.
+
+    `op` is a short, stable label for the failing operation ("login.lookup",
+    "calendar.sync") — it groups rows in the API Errors tab, so keep it stable rather than
+    descriptive. Marks the response as already-recorded so app.main's capture middleware
+    does not log a second, detail-free row for the same failure.
+    """
+    ref = secrets.token_hex(4)
+    detail = f"{type(exc).__name__}: {exc}"
+    print(f"[error] ref={ref} op={op}: {detail}")
+    try:
+        record_api_error("", op, status, f"{op}_failed", message=f"ref={ref} {detail}")
+    except Exception:                                      # noqa: BLE001
+        pass                                               # logging must never be the fault
+    resp = json_error(status, f"{public_message} (ref {ref})")
+    try:
+        resp.headers[_ERROR_LOGGED_HEADER] = "1"
+    except Exception:                                      # noqa: BLE001
+        pass
+    return resp
 
 
 async def read_json_body(request: Request):

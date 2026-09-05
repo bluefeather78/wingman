@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends
 
 from app.core import (touch_user_activity, update_user_data, get_user_data,
                       update_user_location)
-from app.deps import json_body, json_response, json_error, require_subscription
+from app.deps import (json_body, json_response, json_error, require_subscription,
+                      opaque_error, DB_UNAVAILABLE)
 from app.auth import AuthedUser
 
 router = APIRouter()
@@ -34,7 +35,7 @@ def handle_data_save(body: dict = Depends(json_body),
     try:
         ok = update_user_data(userid, key, body.get("value"))
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="user_data.db")
     if not ok:
         return json_error(404, "No account found with that user ID.")
     return json_response(200, {"ok": True})
@@ -59,7 +60,7 @@ def handle_data_load(body: dict = Depends(json_body),
     try:
         data = get_user_data(userid)
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="user_data.db")
     data = data or {}
     if isinstance(keys, list):
         # An unknown key answers null, exactly as the single-key form does — absent and
@@ -78,7 +79,7 @@ def handle_update_location(body: dict = Depends(json_body),
     try:
         ok = update_user_location(userid, location)
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="user_data.db")
     if not ok:
         return json_error(404, "No account found with that user ID.")
     return json_response(200, {"ok": True})

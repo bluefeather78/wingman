@@ -15,7 +15,8 @@ from fastapi import APIRouter, Depends
 
 from app.config import GEMINI_API_KEY, MESSAGES_MODEL, SUPABASE_URL, SUPABASE_ANON_KEY
 from app.core import touch_user_activity, record_interactive_cost_async
-from app.deps import json_body, json_response, json_error, require_subscription
+from app.deps import (json_body, json_response, json_error, require_subscription,
+                      opaque_error, DB_UNAVAILABLE)
 from app.auth import AuthedUser
 from app.services.opportunities import fetch_opportunities
 from app.services.embeddings import embed_student_themes
@@ -86,7 +87,7 @@ def handle_match(body: dict = Depends(json_body),
     try:
         rows = fetch_opportunities()
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="matching.db")
 
     student = _student_from_body(body)
 
@@ -122,7 +123,8 @@ def handle_match(body: dict = Depends(json_body),
         gate = gate_pool_eligibility(pool, student, _gate, extract_json)
         results = attach_display(gate["pool"], scores)
     except Exception as e:
-        return json_error(502, f"Matching failed: {e}")
+        return opaque_error(502, "We could not build your matches just now. "
+                            "Please try again.", e, op="matching.run")
 
     if elig_usage:
         record_interactive_cost_async("interactive_gemini", elig_usage, MESSAGES_MODEL,

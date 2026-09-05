@@ -9,7 +9,8 @@ from app.core import (
     get_user_account, ensure_trial_started, subscription_state, touch_user_activity,
     update_subscription, redeem_promo_conditional,
 )
-from app.deps import json_body, json_response, json_error
+from app.deps import (json_body, json_response, json_error,
+                      opaque_error, DB_UNAVAILABLE)
 from app.services.email import send_lifecycle_email_async
 from app.auth import get_current_user, get_optional_user, AuthedUser
 from wingman.subscription_common import (
@@ -26,7 +27,7 @@ def handle_subscription_status(user: AuthedUser = Depends(get_current_user)):
     try:
         record = get_user_account(userid)
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="subscription.db")
     if not record:
         return json_error(404, "User not found.")
     touch_user_activity(userid, "subscription_status")
@@ -48,7 +49,7 @@ def handle_subscription_checkout(body: dict = Depends(json_body),
     try:
         record = get_user_account(userid)
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="subscription.db")
     if not record:
         return json_error(404, "User not found.")
 
@@ -56,12 +57,16 @@ def handle_subscription_checkout(body: dict = Depends(json_body),
         customer_id, error = get_or_create_customer(
             userid, email, f"{record.get('first_name', '')} {record.get('last_name', '')}")
         if error:
-            return json_error(502, f"Failed to create Stripe customer: {error}")
+            return opaque_error(502, "We could not start checkout just now. "
+                                     "Please try again.",
+                                RuntimeError(error), op="subscription.customer")
 
         session_id, checkout_url, error = create_checkout_session(
             customer_id, email, success_url, cancel_url, promo_code)
         if error:
-            return json_error(502, f"Failed to create checkout session: {error}")
+            return opaque_error(502, "We could not start checkout just now. "
+                                     "Please try again.",
+                                RuntimeError(error), op="subscription.checkout")
         if not checkout_url:
             return json_error(502, "Stripe did not return a checkout URL.")
 
@@ -69,7 +74,8 @@ def handle_subscription_checkout(body: dict = Depends(json_body),
 
         return json_response(200, {"session_id": session_id, "checkout_url": checkout_url})
     except Exception as e:
-        return json_error(502, f"Subscription error: {str(e)}")
+        return opaque_error(502, "Something went wrong with your subscription. "
+                                 "Please try again.", e, op="subscription.run")
 
 
 @router.post("/api/subscription/cancel")
@@ -78,7 +84,7 @@ def handle_subscription_cancel(user: AuthedUser = Depends(get_current_user)):
     try:
         record = get_user_account(userid)
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="subscription.db")
     if not record:
         return json_error(404, "User not found.")
 
@@ -89,7 +95,9 @@ def handle_subscription_cancel(user: AuthedUser = Depends(get_current_user)):
     try:
         result, error = cancel_subscription(stripe_subscription_id)
         if error:
-            return json_error(502, f"Failed to cancel subscription: {error}")
+            return opaque_error(502, "We could not cancel your subscription just now. "
+                                     "Please try again.",
+                                RuntimeError(error), op="subscription.cancel")
 
         period_end = (result or {}).get("current_period_end")
         updates = {"subscription_status": "canceled"}
@@ -111,7 +119,8 @@ def handle_subscription_cancel(user: AuthedUser = Depends(get_current_user)):
             "subscription_end_at": updates.get("subscription_end_at"),
         })
     except Exception as e:
-        return json_error(502, f"Subscription error: {str(e)}")
+        return opaque_error(502, "Something went wrong with your subscription. "
+                                 "Please try again.", e, op="subscription.run")
 
 
 @router.post("/api/subscription/redeem-promo")
@@ -136,7 +145,7 @@ def handle_redeem_promo(body: dict = Depends(json_body),
     try:
         record = get_user_account(userid)
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="subscription.db")
     if not record:
         return json_error(404, "User not found.")
 
@@ -165,7 +174,7 @@ def handle_redeem_promo(body: dict = Depends(json_body),
             "promo_codes_used": used + [code],
         })
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="subscription.db")
 
     if not won:
         # Zero rows matched: somebody else redeemed on this account between our read and
@@ -182,7 +191,7 @@ def handle_redeem_promo(body: dict = Depends(json_body),
     try:
         record = get_user_account(userid)
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="subscription.db")
 
     return json_response(200, {
         "ok": True,

@@ -27,7 +27,8 @@ from app.core import (
 )
 from app.services.email import send_lifecycle_email_async
 from app.deps import (json_body, json_response, json_error, login_response,
-                      require_subscription)
+                      require_subscription,
+                      opaque_error, DB_UNAVAILABLE)
 from app.auth import AuthedUser
 from app.auth.tokens import AuthConfigError
 from app.services import google_oauth as g
@@ -273,7 +274,7 @@ def handle_google_callback(request: Request):
                 _users_request("PATCH", query_patch, data={"google_id": google_id})
                 record["google_id"] = google_id
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="google.db")
 
     if record:
         token = g._mint_google_token({"kind": "login", "userid": record["userid"]})
@@ -315,14 +316,17 @@ def handle_google_session(request: Request):
     try:
         record = get_user(entry["userid"])
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="google.db")
     if not record:
         return json_error(404, "No account found.")
     record = ensure_trial_started(record["userid"], record)
     try:
         return json_response(200, login_response(record))
     except AuthConfigError as e:
-        return json_error(503, str(e))
+        # Not str(e): that message names JWT_SECRET and where to set it, which is
+        # operational detail a signed-out caller has no business reading (S1-13, L5).
+        return opaque_error(503, "Sign-in is temporarily unavailable. Please try again "
+                                 "shortly.", e, op="auth.config")
 
 
 @router.post("/api/auth/google/finish")
@@ -348,7 +352,7 @@ def handle_google_finish(request: Request, body: dict = Depends(json_body)):
             return json_error(409, "An account for this Google profile "
                                    "already exists. Please sign in again.")
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="google.db")
 
     userid = _unique_userid_from_email(entry["email"])
     try:
@@ -364,7 +368,7 @@ def handle_google_finish(request: Request, body: dict = Depends(json_body)):
         return json_error(409, "An account already exists with that email "
                                "address. Please sign in instead.")
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="google.db")
 
     record = get_user(userid)
 
@@ -375,7 +379,10 @@ def handle_google_finish(request: Request, body: dict = Depends(json_body)):
     try:
         return json_response(200, login_response(record))
     except AuthConfigError as e:
-        return json_error(503, str(e))
+        # Not str(e): that message names JWT_SECRET and where to set it, which is
+        # operational detail a signed-out caller has no business reading (S1-13, L5).
+        return opaque_error(503, "Sign-in is temporarily unavailable. Please try again "
+                                 "shortly.", e, op="auth.config")
 
 
 @router.post("/api/auth/google/calendar/handoff")
@@ -416,7 +423,7 @@ def handle_google_calendar_start(request: Request):
         if not get_user(userid):
             return json_error(404, "No account found.")
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="google.db")
 
     g._prune_google_calendar_states()
     state = secrets.token_urlsafe(24)
@@ -501,9 +508,9 @@ def handle_google_calendar_callback(request: Request):
             return json_error(503, "Google Calendar sync is temporarily "
                                    "unavailable: run db/google_calendar_schema.sql "
                                    "in the Supabase SQL editor, then try again.")
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="google.db")
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="google.db")
 
     # Back to the Quest Log, where the Sync to Calendar button lives — the student pressed
     # it there, so landing on Home Base would leave them to find their way back. In
@@ -688,7 +695,9 @@ def handle_calendar_sync(body: dict = Depends(json_body),
     try:
         access_token = g.get_google_calendar_access_token(userid)
     except Exception as e:
-        return json_error(502, f"Could not refresh Google Calendar access: {e}")
+        return opaque_error(502, "We could not refresh your Google Calendar access. "
+                                  "Reconnect Google Calendar and try again.",
+                            e, op="google.calendar_token")
     if not access_token:
         return json_error(409, "Google Calendar is not connected for this "
                                "account. Connect it first.")
@@ -700,9 +709,13 @@ def handle_calendar_sync(body: dict = Depends(json_body),
             return json_error(503, "Google Calendar sync is temporarily "
                                    "unavailable: run db/google_calendar_schema.sql "
                                    "in the Supabase SQL editor, then try again.")
-        return json_error(502, f"Could not prepare your {WINGMAN_CALENDAR_NAME} calendar: {e}")
+        return opaque_error(502, f"We could not prepare your {WINGMAN_CALENDAR_NAME} "
+                                 f"calendar just now. Please try again.",
+                            e, op="google.calendar_prepare")
     except Exception as e:
-        return json_error(502, f"Could not prepare your {WINGMAN_CALENDAR_NAME} calendar: {e}")
+        return opaque_error(502, f"We could not prepare your {WINGMAN_CALENDAR_NAME} "
+                                 f"calendar just now. Please try again.",
+                            e, op="google.calendar_prepare")
 
     # Marker -> existing event id, so a client that has lost its googleEventId PATCHes the
     # event it already wrote instead of creating a second one. Without this, anything that

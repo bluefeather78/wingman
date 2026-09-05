@@ -15,7 +15,8 @@ from app.config import (
 )
 from app.core import touch_user_activity, record_user_cost_async, record_api_error
 from app.deps import (json_response, json_error, require_subscription,
-                      optional_subscribed_user)
+                      optional_subscribed_user,
+                      opaque_error, DB_UNAVAILABLE)
 from app.auth import AuthedUser
 from app.services.opportunities import fetch_opportunities
 from app.services import action_items as action_items_service
@@ -46,7 +47,7 @@ def handle_opportunities(user: AuthedUser = Depends(optional_subscribed_user)):
     try:
         data = fetch_opportunities()
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="opportunities.db")
     # Strip the server-only match_vector (~9MB across the catalog, no display value) before it
     # reaches the client — recall scores it server-side; the browser never needs it.
     strip = OPPORTUNITIES_CLIENT_STRIP_FIELDS
@@ -77,7 +78,7 @@ def handle_deadline_check(opp_id: str, request: Request,
     try:
         opp = deadlines.get_opportunity_for_deadline_check(opp_id)
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="opportunities.db")
     if not opp:
         return json_error(404, "Opportunity not found.")
 
@@ -243,7 +244,8 @@ def handle_tracker_sync(ids: str = "", user: AuthedUser = Depends(require_subscr
     try:
         items = deadlines.get_cached_tracker_data(id_list)
     except Exception as e:
-        return json_error(502, f"Could not read tracker sync data: {e}")
+        return opaque_error(502, "We could not refresh your Quest Log just now. "
+                                 "Please try again.", e, op="opportunities.sync")
     return json_response(200, {"items": items})
 
 
@@ -274,7 +276,8 @@ def handle_action_items(opp_id: str, user: AuthedUser = Depends(require_subscrip
         payload, cost = action_items_service.resolve(opp_id,
                                                      allow_paid=not budget.circuit_open())
     except Exception as e:
-        return json_error(502, f"Could not resolve action items: {e}")
+        return opaque_error(502, "We could not build the checklist just now. "
+                                 "Please try again.", e, op="opportunities.tasks")
     if payload is None:
         # No catalog row (a tracker item with no id we know), or the columns have not been
         # migrated in yet. 404 rather than an empty list: the client must be able to tell

@@ -15,7 +15,8 @@ Login/register live in account.py; these two are the token lifecycle around them
 from fastapi import APIRouter, Depends
 
 from app.core import get_user_account, bump_token_version
-from app.deps import json_body, json_response, json_error, login_response
+from app.deps import (json_body, json_response, json_error, login_response,
+                      opaque_error, DB_UNAVAILABLE)
 from app.auth import (
     get_current_user, AuthedUser, verify_refresh_token, AuthError, AuthConfigError,
 )
@@ -36,7 +37,7 @@ def handle_refresh(body: dict = Depends(json_body)):
     try:
         record = get_user_account(userid)
     except Exception as e:
-        return json_error(502, f"Could not reach Supabase: {e}")
+        return opaque_error(502, DB_UNAVAILABLE, e, op="auth.db")
     if not record:
         return json_error(401, "Your session has expired. Please sign in again.")
 
@@ -50,7 +51,10 @@ def handle_refresh(body: dict = Depends(json_body)):
     try:
         return json_response(200, login_response(record))
     except AuthConfigError as e:
-        return json_error(503, str(e))
+        # Not str(e): that message names JWT_SECRET and where to set it, which is
+        # operational detail a signed-out caller has no business reading (S1-13, L5).
+        return opaque_error(503, "Sign-in is temporarily unavailable. Please try again "
+                                 "shortly.", e, op="auth.config")
 
 
 @router.post("/api/auth/logout-all")

@@ -1,7 +1,7 @@
 # Security Hardening Plan — Phases S0 and S1
 
 Standalone, self-contained security workstream extracted from
-[PRODUCTION_READINESS_PLAN.md](../../PRODUCTION_READINESS_PLAN.md) (2026-09-02 review).
+[PRODUCTION_READINESS_PLAN.md](../archive/PRODUCTION_READINESS_PLAN.md) (2026-09-02 review).
 Written 2026-09-04 to be picked up in a fresh session with no prior conversation context.
 
 **Source of record for every finding id below:**

@@ -168,7 +168,10 @@ db/                       one-time manual DDL, run by hand in the Supabase SQL e
                           503 messages, so keep the basenames stable.
 docs/                     plans/ (unbuilt or part-shipped — incl. SECURITY_HARDENING_PLAN.md,
                           moved off the repo root 2026-09-05) · archive/ (shipped, superseded,
-                          dated snapshots) · review-2026-09-02/ (the production audit) ·
+                          dated snapshots — incl. PRODUCTION_READINESS_PLAN.md, CLOSED and
+                          moved here 2026-09-05 once phases 0-5 were all done; every bare
+                          mention of it in code comments still names it by filename alone) ·
+                          review-2026-09-02/ (the production audit) ·
                           SUBSCRIPTION_SETUP.md + MATCHING_UX_REQUIREMENTS.md (live refs)
 data/                     Opportunities.xlsx, the diffable opportunities.json snapshot,
                           the two hand-curated hub registries. Not read at runtime.
@@ -199,7 +202,7 @@ Serving is **opt-in: to publish a file, put it in `public/`.** Nothing else on d
 reachable, whatever its extension — which closes the gap that `_DENY_EXT`, a file-TYPE
 list with no `.json`/`.xlsx`/`.docx`, could never close on its own. Those deny-lists are
 kept as a second line, not the only one. This is
-[PRODUCTION_READINESS_PLAN.md](PRODUCTION_READINESS_PLAN.md) High #5 ("catch-all static
+[PRODUCTION_READINESS_PLAN.md](docs/archive/PRODUCTION_READINESS_PLAN.md) High #5 ("catch-all static
 route serves the repo"), closed. `agents/build_legal.py` writes into `public/`.
 
 Retired at tag `workingwithauth`: `index.html`, `script.js`, the old icon SVGs. Every

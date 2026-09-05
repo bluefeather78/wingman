@@ -1,7 +1,23 @@
 # Production Readiness Review and Plan — 2026-09-02
 
-Full review of `main` (commit 2718301), every unmerged branch, a measured load probe, and a
-phased plan to a production-grade service at 50 requests/second across all endpoints.
+## CLOSED 2026-09-05 — every phase is DONE. This document is history, not a to-do list.
+
+Phases 0 through 5 are built, tested and pushed. Phase 6 is ongoing operations rather than a
+body of work to finish. **Nothing in this file is outstanding**, and a future session should
+read it as a record of what was decided and why — particularly the decision list, several
+entries of which say "do not change this" and mean it.
+
+Two practical notes, and they are the only live things left anywhere in here:
+
+- **Five SQL migrations are waiting to be run by hand** in the Supabase SQL editor (four from
+  Phase 4, listed in its status section, plus `db/agent_locks_schema.sql` which is already
+  run). Every code path falls back and warns without them, so nothing is broken — they are
+  what turns the shared-state work on.
+- **Four deploy-time checks from Phase 1** are carried forward in the Phase 1 status section.
+
+The review below is preserved verbatim. It was a full review of `main` (commit 2718301), every
+unmerged branch, a measured load probe, and a phased plan to a production-grade service at
+50 requests/second across all endpoints.
 
 **The full, PM-readable document with flowcharts is the published artifact:**
 https://claude.ai/code/artifact/dfcad0e6-d2d8-4589-a344-d2b2cf8bb906
@@ -1017,7 +1033,7 @@ merge would revert the `wingman/` reorg; its plan doc was ported and the prototy
 an M8+M9 item**; CI marquee-tag check; ~~move one-offs/eval out of root~~ **already done — `scripts/one-off/` and `eval/` exist and `server.py` is the only `.py` left at the root (verified 2026-09-05)**; `scrape_common.py` **(now `wingman/scrape_common.py`)**; tests for untested paid paths | Wk 3–5 | 6 d | **none taken — no prompt text moved and no paid call changed**; decision 4 answered yes | **ALL THREE MET**, each pinned by a named test, and the lock verified live against the real `agent_locks` table |
 | **4 DONE** Shared state — handoff tokens survive a second worker; lock file batch-only; idempotent rollups via RPC; `jsonb_set` RPC for saves; leads + snapshots in tables; ~~scheduled worker (free agents first, paid behind toggle + dollar ceiling)~~ **DROPPED 2026-09-05 (decision 14 — Shama has dropped the idea; do not build it)**; ~~optional direct Postgres for hot queries~~ **SKIPPED 2026-09-05 (decision 15 — deferred to the launch gate)** | Wk 5–7 | 6 d | ~~M3 per scheduled paid run~~ **not needed — no scheduler.** M9 granted for the Gemini lock change (decision 13) | ~~two instances pass the 50 rps test~~ **deferred with every other throughput bar (decisions 3 and 8)**; second machine sees same lead queue |
 | **5 DONE** Product accuracy — grade parser context; date validation; sort-on-refresh + calendar ids by label; synthesis failure keeps transcript; unreachable ≠ revoked; reset singletons on logout; one retry per action; client timeouts; drop icon fonts + dead ~~prompts/~~code (**no dead prompt text is left in the bundle — S1-1 removed it; verified 2026-09-05, so this is NOT an M8 item**); Vitest ~40 cases; a11y labels; split big screens | Wk 6–8 | 5 d | ~~none~~ **M9 granted for the retry caps + client timeouts (decision 13)** | frontend tests in CI; ~~golden-set score holds~~ **the paid golden run is DEFERRED (decision 16); the M10 harness is still kept in sync**; bundle −300 KB |
-| 6 Operate — dashboards, dependency bumps, key rotation, runbook, Stripe webhook route, re-arm trial cron | Wk 8+ | ongoing | none | "is it up / fast / what did it cost" on one screen |
+| **6 ONGOING OPS** Operate — dashboards, dependency bumps, key rotation, runbook, Stripe webhook route, re-arm trial cron | Wk 8+ | ongoing | none | "is it up / fast / what did it cost" on one screen |
 
 ## Trade-offs worth weighing
 

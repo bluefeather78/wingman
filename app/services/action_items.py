@@ -132,7 +132,17 @@ def _is_fresh(checked_at):
     return age <= datetime.timedelta(days=TASK_TTL_DAYS)
 
 
-def resolve(opp_id, allow_paid=True):
+def _free_answer(opp, stored, has_stored):
+    """The honest free answer for a row we may not spend on: whatever the batch last verified,
+    else a generic checklist. Extracted in Phase 2 item 8 because a third caller (the paid
+    lane being full) now needs exactly the same fallback, and three copies of it would be
+    three chances for the degraded paths to drift apart."""
+    if has_stored:
+        return payload(stored, opp.get("action_items_source") or "stored"), 0.0
+    return payload(generic_items(opp), "generic-fallback"), 0.0
+
+
+def resolve(opp_id, allow_paid=True, paid_gate=None):
     """(payload, cost). Serves the stored list while it is fresh, otherwise re-runs the same
     fetch-verify-decide pipeline the batch uses and caches the result on the row.
 
@@ -145,6 +155,15 @@ def resolve(opp_id, allow_paid=True):
     return the generic checklist, and never call a model. That is how the global spend
     circuit breaker (S0-5) degrades this route — reusing the existing honest fallback rather
     than inventing a second one that could drift from it.
+
+    `paid_gate` (Phase 2 item 8, MARQUEE M9) is an app.services.lanes.PaidLane, or None. It
+    bounds how many process_one calls run at once. It is consulted at the LAST possible
+    moment — after the two free exits above it — because this function is free almost every
+    time it is called, and a lane taken any earlier would let four slow generations shed the
+    cached reads that are the overwhelming majority of this route's traffic. A full lane
+    degrades to the same free answer as allow_paid=False rather than raising: unlike the
+    deadline route, the caller cannot know in advance whether this call was going to cost
+    anything, so refusing it would refuse mostly-free work.
     """
     opp = get_opportunity_for_action_items(opp_id)
     if not opp:
@@ -160,10 +179,12 @@ def resolve(opp_id, allow_paid=True):
     # and otherwise give the student an honest generic checklist for free. Generic items
     # assert nothing about the program, so producing them without reading anything is safe.
     if not ANTHROPIC_API_KEY or not allow_paid:
-        if has_stored:
-            return payload(stored, opp.get("action_items_source") or "stored"), 0.0
-        return payload(generic_items(opp), "generic-fallback"), 0.0
+        return _free_answer(opp, stored, has_stored)
 
+    # MARQUEE M9 (Phase 2 item 8). Everything above this line is free; everything below can
+    # call a model. This is the seam, so this is where the lane is taken.
+    if paid_gate is not None and not paid_gate.try_acquire():
+        return _free_answer(opp, stored, has_stored)
     try:
         # full_capture=True (T6): go through the shared finder with the date ladder too, so a
         # deadline check firing alongside this reads the program ONCE (the finder caches the
@@ -172,9 +193,14 @@ def resolve(opp_id, allow_paid=True):
     except Exception as e:
         print(f"[WARN] action-item generation failed for {opp_id}: {e}")
         # Never blank a verified list because a re-verify raised. Keep what we have.
-        if has_stored:
-            return payload(stored, opp.get("action_items_source") or "stored"), 0.0
-        return payload(generic_items(opp), "generic-fallback"), 0.0
+        return _free_answer(opp, stored, has_stored)
+    finally:
+        # Released as soon as the model call returns, not at the end of the function: the
+        # write-back below is Supabase work, and holding a paid-lane slot across it would
+        # narrow the lane for no reason. Runs on the except path too, or one provider failure
+        # would leak a slot permanently.
+        if paid_gate is not None:
+            paid_gate.release()
 
     if decision.write:
         patch = {"action_items": decision.items,

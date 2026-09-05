@@ -12,6 +12,7 @@ from fastapi import APIRouter, Request, Depends
 from app.config import (
     SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
     OPPORTUNITIES_CLIENT_STRIP_FIELDS,
+    PAID_CHECK_MAX_CONCURRENCY, PAID_CHECK_SHED_RETRY_AFTER_SECONDS,
 )
 from app.core import touch_user_activity, record_user_cost_async, record_api_error
 from app.deps import (json_response, json_error, require_subscription,
@@ -22,6 +23,7 @@ from app.services.opportunities import fetch_opportunities
 from app.services import action_items as action_items_service
 from app.services import deadlines
 from app.services import budget
+from app.services.lanes import PaidLane
 # Imported, never re-declared: user_costs.model must name the model that was actually
 # billed. The Sonnet/Haiku drift this repo already paid for came from exactly that — a pin
 # copied into a second file and left behind when the first one moved.
@@ -35,6 +37,40 @@ from agents.check_deadlines import (
 )
 
 router = APIRouter()
+
+# MARQUEE M9: the concurrency bound in front of this module's two paid calls (Phase 2 item 8).
+# See app/services/lanes.py for why it is a semaphore rather than the event-loop counter
+# /api/ai uses, and app/config.py for why the limit is 4.
+#
+# ONE lane shared by both routes, not one each. The two are the same scarce resource — a
+# threadpool slot held against a slow Anthropic call — and giving each its own budget of 4
+# would let 8 run at once, which is the number this is supposed to prevent. They are also
+# genuinely sequential in the product: the Quest Log fires the deadline check and the
+# checklist for the same card together, and want_requirements=True on the deadline check
+# exists precisely so the second one reuses the first one's page capture.
+paid_check_lane = PaidLane(PAID_CHECK_MAX_CONCURRENCY, "paid_check")
+
+
+def _paid_lane_busy_response():
+    """503 + Retry-After when four paid checks are already running.
+
+    503, not 429, for the reason the AI lane gives: 429 is one caller's fault and the budget
+    and cooldown layers above already own it, while this is "the service is at capacity" and
+    is nobody's. Retry-After is longer than the AI lane's because the work is longer — a
+    deadline check is tens of seconds, so telling a student to come back in 5 would mostly
+    produce a second 503.
+
+    Turning the student away here is the APPROVED behaviour, not a fallback: Shama, 2026-09-05,
+    "ok to turn student away for now... we will revisit when I buy hosting on Render". Both
+    routes do have a free degraded answer available (cached_deadline_payload / resolve with
+    allow_paid=False, the paths the circuit breaker takes), so serving that instead of a 503
+    is the obvious alternative to weigh at the launch gate. It is deliberately NOT done here:
+    that is a product decision about what a student sees, and it was not the one approved.
+    """
+    resp = json_error(503, "We're checking a lot of programs right now. "
+                           "Give it a few seconds and try again.")
+    resp.headers["Retry-After"] = str(PAID_CHECK_SHED_RETRY_AFTER_SECONDS)
+    return resp
 
 
 @router.get("/api/opportunities")
@@ -141,6 +177,12 @@ def handle_deadline_check(opp_id: str, request: Request,
                                      payload.get("was_estimated"), "Mock mode - no API key")
         return json_response(200, payload)
 
+    # MARQUEE M9 (Phase 2 item 8): the lane, taken as late as possible. Everything above
+    # this line is free — the cross-user cache hit, the cooldown, the budget and circuit
+    # layers — and none of it may be shed, or four slow paid checks would start refusing the
+    # cached reads that make up almost all of this route's traffic.
+    if not paid_check_lane.try_acquire():
+        return _paid_lane_busy_response()
     try:
         # retry_on_silent (check_one's default) costs one extra round-trip when Claude
         # answers without searching. Worth it: the answer is cached for 7 days, so a
@@ -219,6 +261,12 @@ def handle_deadline_check(opp_id: str, request: Request,
         deadlines.log_deadline_check(opp_id, "stale-fallback", opp.get("status"), None, None,
                                      opp.get("was_estimated"), f"Error: {str(e)[:100]}")
         return json_response(200, payload)
+    finally:
+        # Released on the degrade path as well as the success one. The except above returns a
+        # 200, so a leak here would be invisible: a run of Anthropic failures would narrow the
+        # lane one slot at a time until every fresh check 503s, and the only symptom would be
+        # deadline checks quietly stopping while the route still looked healthy.
+        paid_check_lane.release()
 
 
 @router.get("/api/tracker/sync")
@@ -273,8 +321,13 @@ def handle_action_items(opp_id: str, user: AuthedUser = Depends(require_subscrip
     # Degrade, don't error: allow_paid=False takes resolve()'s existing no-API-key path,
     # which serves the stored list if there is one and an honest generic checklist otherwise.
     try:
+        # MARQUEE M9 (Phase 2 item 8): the lane is passed IN rather than wrapped around this
+        # call, because resolve() is free almost every time — it serves a stored list — and
+        # only it can tell, once it has the row, whether this particular call will pay. See
+        # app/services/action_items.py for where it is taken.
         payload, cost = action_items_service.resolve(opp_id,
-                                                     allow_paid=not budget.circuit_open())
+                                                     allow_paid=not budget.circuit_open(),
+                                                     paid_gate=paid_check_lane)
     except Exception as e:
         return opaque_error(502, "We could not build the checklist just now. "
                                  "Please try again.", e, op="opportunities.tasks")

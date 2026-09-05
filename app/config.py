@@ -153,6 +153,21 @@ AI_MAX_CONCURRENCY = int(os.environ.get("AI_MAX_CONCURRENCY", "") or 12)
 # 503, because the caller did nothing wrong and should simply try again.
 AI_SHED_RETRY_AFTER_SECONDS = int(os.environ.get("AI_SHED_RETRY_AFTER_SECONDS", "") or 5)
 
+# ---------- The paid-check lane: deadline + checklist generation (Phase 2 item 8) ----------
+# MARQUEE M9. Same disease as the AI lane above, in a second place.
+# handle_deadline_check calls check_deadlines.check_one — a Claude web-search call measured at
+# ~$0.07 that takes tens of seconds — directly from a threadpool slot, and nothing bounded how
+# many could run at once. A class opening the Quest Log together could hold most of the 40
+# shared slots in paid checks while the catalog stopped answering.
+#
+# 4, from the plan, and unlike the AI lane there is no reason to argue with it: this work is
+# far slower and far more expensive per call than an /api/ai request, it is never on the
+# app-open path (the cross-user 7-day cache serves that), and four concurrent fresh checks is
+# already more than this catalog's real traffic produces.
+PAID_CHECK_MAX_CONCURRENCY = int(os.environ.get("PAID_CHECK_MAX_CONCURRENCY", "") or 4)
+PAID_CHECK_SHED_RETRY_AFTER_SECONDS = int(
+    os.environ.get("PAID_CHECK_SHED_RETRY_AFTER_SECONDS", "") or 10)
+
 # Ceiling on web searches per Anthropic call. Unlike Gemini's max_searches — a number folded
 # into the prompt and nothing more — Anthropic ENFORCES max_uses server-side, so this is a
 # real cost ceiling ($0.01/search). It is moot while _USE_WEB_SEARCH pins search off; it

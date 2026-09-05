@@ -1016,8 +1016,13 @@ automatically; a scrape always writes inactive and stays that way until a person
 here, because the scraper does return plausible-looking rows that are wrong and the catalog is
 what students see. Activation takes an explicit id list — there is deliberately no
 "activate everything matching" path. `active: false` reverses a mistake without a DB console.
-Both paths bust `_opportunities_cache`, or the operator activates a row and then cannot find
-it in the app for `OPPORTUNITIES_CACHE_TTL` seconds.
+Both paths call `bust_catalog_cache()` (`app/services/opportunities.py`), or the operator
+activates a row and then cannot find it in the app for `OPPORTUNITIES_CACHE_TTL` seconds.
+It is a FUNCTION CALL, not a poke at a dict: Phase 2 item 5 split the catalog and the
+embeddings into two caches with different TTLs, and the old
+`_opportunities_cache["fetched_at"] = 0.0` spelling would now clear only the first — leaving a
+row that is live in the browser but un-matchable until the 24h vector backstop expires. The
+old names no longer exist, so a merge that resolves back toward them will not compile.
 
 **Rejecting a queued row** — `POST /api/agents/pending/moderate` (`{ids, status}`) writes
 `moderation_status` + `reviewed_by`/`reviewed_at`, backing the queue's **Queue / Rejected**

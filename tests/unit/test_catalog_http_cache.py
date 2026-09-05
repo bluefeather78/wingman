@@ -73,11 +73,14 @@ def test_a_fresh_request_gets_the_body_and_an_etag():
     assert "max-age" in resp.headers["Cache-Control"]
 
 
-def test_the_cache_control_is_private():
-    """The route 402s a lapsed account, so the response depends on who is asking — a shared
-    proxy must never hand one student's 200 to a lapsed one."""
-    resp = opps.handle_opportunities(_Req(), user=None)
-    assert "private" in resp.headers["Cache-Control"]
+def test_the_cache_control_is_private_and_revalidates():
+    """`private` because the route 402s a lapsed account, so a shared proxy must never hand one
+    student's 200 to a lapsed one. `must-revalidate` so a browser asks every load and gets a
+    304 rather than serving a catalog that may be minutes out of date."""
+    cc = opps.handle_opportunities(_Req(), user=None).headers["Cache-Control"]
+    assert "private" in cc
+    assert "must-revalidate" in cc
+    assert "no-store" not in cc
 
 
 def test_a_conditional_request_gets_a_304_with_no_body():
@@ -126,3 +129,69 @@ def test_a_db_failure_is_still_an_opaque_502(monkeypatch):
     resp = opps.handle_opportunities(_Req(), user=None)
     assert resp.status_code == 502
     assert b"supabase down" not in resp.body
+
+
+# ---------- the route AND the middleware, together ----------
+#
+# These exist because everything above calls the handler DIRECTLY, and that blind spot hid a
+# real bug: app/main.py's no_cache middleware unconditionally overwrote Cache-Control with
+# `no-store` on every non-asset response, so the browser never kept the catalog, never sent
+# If-None-Match, and the entire conditional-request path was dead on arrival. The ETag went
+# out; nothing ever came back to match it. Nothing in the route's own tests could see it.
+
+def _through_middleware(response, path="/api/opportunities"):
+    """Run one response through app.main.no_cache, as a real request would."""
+    import asyncio
+    from app.main import no_cache
+
+    class _URL:
+        def __init__(self, p):
+            self.path = p
+
+    class _Request:
+        def __init__(self, p):
+            self.url = _URL(p)
+
+    async def _call_next(_request):
+        return response
+
+    return asyncio.run(no_cache(_Request(path), _call_next))
+
+
+def test_the_middleware_does_not_overwrite_the_catalogs_cache_control():
+    """The regression that made item 5's biggest win unreachable."""
+    resp = _through_middleware(opps.handle_opportunities(_Req(), user=None))
+    cc = resp.headers["Cache-Control"]
+    assert "no-store" not in cc, "the middleware is back to forbidding the browser to cache"
+    assert "must-revalidate" in cc
+
+
+def test_the_etag_survives_the_middleware():
+    resp = _through_middleware(opps.handle_opportunities(_Req(), user=None))
+    assert resp.headers["ETag"] == ETAG
+
+
+def test_a_304_survives_the_middleware_intact():
+    resp = _through_middleware(
+        opps.handle_opportunities(_Req(if_none_match=ETAG), user=None))
+    assert resp.status_code == 304
+    assert "no-store" not in resp.headers["Cache-Control"]
+
+
+def test_a_route_that_sets_nothing_still_gets_no_store():
+    """The exemption is narrow on purpose. Every silent route keeps the blanket no-store that
+    stops Chrome serving a stale app shell — the failure the middleware was written for."""
+    from fastapi import Response
+    resp = _through_middleware(Response(content=b"{}", media_type="application/json"),
+                               path="/api/data/load")
+    assert "no-store" in resp.headers["Cache-Control"]
+    assert resp.headers["Pragma"] == "no-cache"
+
+
+def test_hashed_assets_are_still_immutable():
+    """The font-flash fix is untouched."""
+    from fastapi import Response
+    path = ("/assets/node_modules/@expo-google-fonts/space-grotesk/700Bold/"
+            "SpaceGrotesk_700Bold.52e5e29a7805a81bac01a170e45d103d.ttf")
+    resp = _through_middleware(Response(content=b"x"), path=path)
+    assert "immutable" in resp.headers["Cache-Control"]

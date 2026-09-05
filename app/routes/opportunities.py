@@ -11,7 +11,6 @@ from fastapi import APIRouter, Request, Response, Depends
 
 from app.config import (
     SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY,
-    OPPORTUNITIES_CACHE_TTL,
     PAID_CHECK_MAX_CONCURRENCY, PAID_CHECK_SHED_RETRY_AFTER_SECONDS,
 )
 from app.core import touch_user_activity, record_user_cost_async, record_api_error
@@ -110,13 +109,20 @@ def handle_opportunities(request: Request,
     except Exception as e:
         return opaque_error(502, DB_UNAVAILABLE, e, op="opportunities.db")
 
-    # max-age matches the server TTL, so the staleness a client can see is the staleness the
-    # server already had — an activation shows up to OPPORTUNITIES_CACHE_TTL late either way.
+    # `max-age=0, must-revalidate` rather than a 5-minute max-age. Both get the win that
+    # matters — a returning student sends If-None-Match and gets a 304 instead of the largest
+    # payload in the app — but this one never serves a stale catalog. The plan's trade-off
+    # table sanctioned letting an activation show up to OPPORTUNITIES_CACHE_TTL late; that
+    # allowance is not needed to get the bandwidth back, and app/main.py's no_cache middleware
+    # exists precisely because a browser holding stale app state is the failure this codebase
+    # has already been bitten by. Revalidating costs one conditional request per load, which
+    # is a few hundred bytes.
+    #
     # `private` because the 402 above makes this response depend on who is asking; a shared
     # proxy must not hand one student's 200 to a lapsed account.
     headers = {
         "ETag": etag,
-        "Cache-Control": f"private, max-age={int(OPPORTUNITIES_CACHE_TTL)}",
+        "Cache-Control": "private, max-age=0, must-revalidate",
         "Vary": "Accept-Encoding",
     }
     # A conditional request that already has these bytes costs a 304 and no body at all. This

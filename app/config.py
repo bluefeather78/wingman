@@ -132,6 +132,25 @@ AI_UPSTREAM_TIMEOUT_SECONDS = float(os.environ.get("AI_UPSTREAM_TIMEOUT_SECONDS"
 # for the same reason.
 ANTHROPIC_MAX_WEB_SEARCH_USES = int(os.environ.get("ANTHROPIC_MAX_WEB_SEARCH_USES", "") or 1)
 
+# ---------- User-submitted opportunity caps (S1-4; findings M1, M10) ----------
+# POST /api/user-submitted-opportunities took a row from ANYBODY with no token at all, and
+# every call reads the whole catalog (~1,400 rows across two pages) for dedupe — a cheap
+# amplification against a free-tier instance, and a way to bury real submissions under
+# thousands of fakes. It is now require_subscription'd, so these bound an ACCOUNT rather
+# than the internet: the Quest Log's custom-add is the only caller, and a student adding
+# more than a handful of programs a day is not the case being served.
+USER_SUBMISSION_LIMIT_PER_DAY = int(
+    os.environ.get("USER_SUBMISSION_LIMIT_PER_DAY", "") or 20)
+# Length ceilings on the free-text fields. These are stored on a catalog row and RENDERED
+# IN THE ADMIN CONSOLE, so an unbounded `name` is both a storage lever and a thing a
+# reviewer has to scroll past. Generous relative to real values (the longest catalog name
+# is well under 200 characters) — this bounds abuse, it does not validate content.
+USER_SUBMISSION_MAX_NAME = int(os.environ.get("USER_SUBMISSION_MAX_NAME", "") or 300)
+USER_SUBMISSION_MAX_TEXT = int(os.environ.get("USER_SUBMISSION_MAX_TEXT", "") or 2000)
+USER_SUBMISSION_MAX_URL = int(os.environ.get("USER_SUBMISSION_MAX_URL", "") or 2048)
+# Ceiling on the two array fields, which land in jsonb.
+USER_SUBMISSION_MAX_LIST = int(os.environ.get("USER_SUBMISSION_MAX_LIST", "") or 40)
+
 # ---------- Spend caps (S0-5; finding H4) ----------
 # Nothing anywhere read spend BACK to refuse a call — the rollups only recorded it. One
 # 7-day trial account (which costs $0) could loop

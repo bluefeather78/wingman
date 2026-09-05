@@ -119,7 +119,9 @@ def test_default_fetch_gunzip_roundtrip(monkeypatch):
         def __exit__(self, *a): return False
         def read(self, n): return payload
 
-    monkeypatch.setattr(sm.urllib.request, "urlopen", lambda *a, **k: Resp())
+    # safe_urlopen, not urllib.request.urlopen: default_fetch is the SSRF sink from
+    # finding M1 and goes through the url_guard seam as of S1-4.
+    monkeypatch.setattr(sm, "safe_urlopen", lambda *a, **k: Resp())
     body = sm.default_fetch("https://h/sitemap.xml.gz")
     assert b"<loc>https://h/x</loc>" in body
 

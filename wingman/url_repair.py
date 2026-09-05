@@ -61,6 +61,7 @@ import urllib.request
 
 from wingman import url_dedupe
 from wingman import url_validate as uv
+from wingman.url_guard import safe_urlopen
 
 DEFAULT_TIMEOUT = 20
 MAX_CANDIDATES = 10
@@ -94,7 +95,9 @@ def _fetch(url, timeout=DEFAULT_TIMEOUT):
     """(page_text, final_url). page_text is None for a non-HTML or failed response."""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": uv.USER_AGENT})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        # S1-4: url_repair walks candidate paths on a stored host, so a submitted private
+        # address would be probed repeatedly — from the operator's laptop, on the LAN.
+        with safe_urlopen(req, timeout=timeout) as r:
             if r.status >= 400:
                 return None, None
             ctype = (r.headers.get("Content-Type") or "").lower()

@@ -15,7 +15,7 @@ import time
 from collections import defaultdict, deque
 
 from app.config import (AI_RATE_LIMIT_PER_USER, AI_RATE_LIMIT_PER_IP,
-                        AI_RATE_LIMIT_WINDOW_SECONDS)
+                        AI_RATE_LIMIT_WINDOW_SECONDS, USER_SUBMISSION_LIMIT_PER_DAY)
 
 
 class RateLimiter:
@@ -81,3 +81,12 @@ register_limiter = RateLimiter(10, 60 * 60)
 # constants in app/config.py.
 ai_user_limiter = RateLimiter(AI_RATE_LIMIT_PER_USER, AI_RATE_LIMIT_WINDOW_SECONDS)
 ai_ip_limiter = RateLimiter(AI_RATE_LIMIT_PER_IP, AI_RATE_LIMIT_WINDOW_SECONDS)
+
+# Catalog submissions, per ACCOUNT per day (S1-4, finding M10). Keyed on the userid rather
+# than the address on purpose: the route is require_subscription'd now, so identity is
+# always known, and a school NAT would otherwise make one classroom share a bucket.
+#
+# Same per-process caveat as every limiter in this file — with N uvicorn workers the
+# effective ceiling is N x this. That is acceptable here because the thing being bounded
+# is review-queue noise from a paying account, not a credential attack.
+user_submission_limiter = RateLimiter(USER_SUBMISSION_LIMIT_PER_DAY, 24 * 60 * 60)

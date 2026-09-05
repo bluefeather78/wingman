@@ -205,8 +205,15 @@ class _FakeResp:
 
 @pytest.fixture
 def patch_urlopen(monkeypatch):
+    """Replaces check_url's fetch seam.
+
+    That seam is url_guard.safe_urlopen as of S1-4, not urllib.request.urlopen — check_url
+    runs over user-submitted catalog rows, so it must refuse non-public addresses and
+    re-check every redirect. Patching the name check_url actually calls keeps these tests
+    about liveness classification, which is what they are for.
+    """
     def _install(handler):
-        monkeypatch.setattr(uv.urllib.request, "urlopen", handler)
+        monkeypatch.setattr(uv, "safe_urlopen", handler)
     return _install
 
 

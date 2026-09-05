@@ -30,6 +30,7 @@ import urllib.request
 from urllib.parse import urljoin, urlparse
 
 from wingman import aggregators_common
+from wingman.url_guard import safe_urlopen
 
 # ---------- bounds (a hostile/huge host must never hang or blow memory) ----------
 DEFAULT_TIMEOUT = 8.0
@@ -92,9 +93,16 @@ class Candidate:
 def default_fetch(url, timeout=DEFAULT_TIMEOUT):
     """Return the raw body bytes of `url` (gunzipped if it is a .gz / gzip-magic file), or
     raise on any error. Bounded read. A student's browser would fetch these same public pages;
-    we send a plain UA and never request compression, so only explicit .gz needs gunzip."""
+    we send a plain UA and never request compression, so only explicit .gz needs gunzip.
+
+    This is THE SSRF sink named in finding M1: the deadline check reaches it with a URL that
+    came off a user-submitted catalog row, and it probes `origin + "/robots.txt"` plus every
+    guessed sitemap path. safe_urlopen refuses a non-public address here and after every
+    redirect. _safe_fetch above swallows the resulting BlockedURLError like any other fetch
+    failure, which is the right outcome — an unfetchable sitemap is a fallback, not an error.
+    """
     req = urllib.request.Request(url, headers={"User-Agent": "WingmanBot/1.0 (+sitemap)"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with safe_urlopen(req, timeout=timeout) as resp:
         raw = resp.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES:
         raw = raw[:MAX_BYTES]

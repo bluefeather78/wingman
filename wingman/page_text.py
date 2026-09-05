@@ -59,6 +59,7 @@ import urllib.error
 import urllib.request
 
 from wingman import url_validate as uv
+from wingman.url_guard import safe_urlopen
 
 DEFAULT_TIMEOUT = 20
 
@@ -170,7 +171,10 @@ def _fetch_urllib(url, timeout):
     final = url
     try:
         req = urllib.request.Request(url, headers={"User-Agent": uv.USER_AGENT})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        # S1-4: the URL can have come off a user-submitted catalog row, and this runs both
+        # in the web service and on the operator's laptop. A BlockedURLError lands in the
+        # except-Exception below as an ordinary fetch failure.
+        with safe_urlopen(req, timeout=timeout) as r:
             final = getattr(r, "url", None) or url
             # Anything but a plain 200 is not a page we can quote from. nyu.edu answers a
             # bot wall with 202 and an EMPTY body, which would otherwise be reported as

@@ -6,12 +6,16 @@ lives in app.services.resume; these are the HTTP glue.
 
 from fastapi import APIRouter, Request, Depends
 
-from app.config import RESUME_MAX_BODY_BYTES
+from app.config import (RESUME_MAX_BODY_BYTES, USER_SUBMISSION_MAX_NAME,
+                        USER_SUBMISSION_MAX_TEXT, USER_SUBMISSION_MAX_URL,
+                        USER_SUBMISSION_MAX_LIST)
 from app.core import touch_user_activity
 from app.deps import (json_body, json_response, json_error, subscription_block_reason,
-                      optional_subscribed_user, capped_raw_body)
+                      require_subscription, capped_raw_body)
 from app.auth import get_current_user, AuthedUser
+from app.auth.ratelimit import user_submission_limiter
 from app.services import resume as resume_service
+from wingman.url_guard import url_block_reason
 
 router = APIRouter()
 
@@ -98,9 +102,24 @@ def handle_extract_from_linkedin(body: dict = Depends(json_body),
         return json_error(500, f"Failed to extract LinkedIn profile: {str(e)}")
 
 
+def _clipped(body, key, limit):
+    """One free-text field, trimmed and hard-truncated. S1-4: these are stored on a catalog
+    row and rendered in the admin console, so an unbounded value is a storage lever and a
+    thing a reviewer has to scroll past. Truncating rather than refusing keeps a fat-fingered
+    paste from losing the student's submission — the row is review-queue data either way."""
+    return (body.get(key) or "").strip()[:limit] if isinstance(body.get(key), str) else ""
+
+
+def _clipped_list(body, key):
+    """One array field, bounded. Both land in jsonb on the row, so an unbounded list is a
+    storage lever; a non-list is dropped rather than coerced."""
+    value = body.get(key)
+    return value[:USER_SUBMISSION_MAX_LIST] if isinstance(value, list) else []
+
+
 @router.post("/api/user-submitted-opportunities")
 def handle_user_submitted_opportunity(body: dict = Depends(json_body),
-                                      user: AuthedUser = Depends(optional_subscribed_user)):
+                                      user: AuthedUser = Depends(require_subscription)):
     """Accept user-submitted opportunity data, dedupe by URL, and insert into the
     opportunities table with is_active=false.
 
@@ -119,27 +138,60 @@ def handle_user_submitted_opportunity(body: dict = Depends(json_body),
     the time this is called, so an unresolvable submission comes back 200 with id=null and
     the client simply carries on unlinked.
 
-    Soft auth: the userid here is provenance for the review queue, not access control (the
-    row is public-review-queue data, not owned data). Use the token's identity when signed
-    in, else record it as an unattributed submission — same residual as before. A token
-    belonging to a LAPSED account is still refused (402): adding to your Quest Log is
-    using the app."""
-    name = (body.get("name") or "").strip()
+    AUTHENTICATED, as of S1-4 (finding M10). This was `optional_subscribed_user` — soft auth,
+    on the rationale that the userid was provenance for the review queue rather than access
+    control. That rationale was wrong in one specific way: it made a WRITE to the shared
+    catalog reachable with no token at all. Anyone could insert rows with attacker-controlled
+    name/url/summary/important_dates/category, each call also reading the whole catalog
+    (~1,400 rows, two pages) for dedupe — so a script could both amplify against a free-tier
+    instance and bury real submissions under thousands of fakes, with the stored text
+    rendering in the admin console. It also fed finding M1: the deadline check has no
+    is_active filter by design, so an attacker-submitted URL could be fetched server-side.
+
+    Losing the signed-out path costs nothing real — the client only calls this from the
+    authed Quest Log, and a signed-out user cannot use the Quest Log either."""
+    userid = user.id
+
+    # Per-account daily ceiling. Checked before the catalog read, which is the expensive
+    # half of this route.
+    if not user_submission_limiter.allow(userid):
+        resp = json_error(429, "You have added a lot of opportunities today. "
+                               "Try again tomorrow.")
+        resp.headers["Retry-After"] = str(user_submission_limiter.retry_after(userid))
+        return resp
+
+    name = _clipped(body, "name", USER_SUBMISSION_MAX_NAME)
     # NOT lowercased — the stored URL must stay exactly as given (case-sensitive paths).
-    url = (body.get("url") or "").strip()
-    opp_type = (body.get("type") or "").strip()
-    section = (body.get("section") or "").strip()
-    meta = (body.get("meta") or "").strip()
-    fit = (body.get("fit") or "").strip()
-    note = (body.get("note") or "").strip()
-    important_dates = body.get("important_dates") or []
-    requirements = body.get("requirements") or []
-    apply_url = (body.get("apply_url") or "").strip()
-    category = (body.get("category") or "").strip()
-    userid = user.id if user else None
+    url = _clipped(body, "url", USER_SUBMISSION_MAX_URL)
+    opp_type = _clipped(body, "type", USER_SUBMISSION_MAX_NAME)
+    section = _clipped(body, "section", USER_SUBMISSION_MAX_NAME)
+    meta = _clipped(body, "meta", USER_SUBMISSION_MAX_TEXT)
+    fit = _clipped(body, "fit", USER_SUBMISSION_MAX_TEXT)
+    note = _clipped(body, "note", USER_SUBMISSION_MAX_TEXT)
+    apply_url = _clipped(body, "apply_url", USER_SUBMISSION_MAX_URL)
+    category = _clipped(body, "category", USER_SUBMISSION_MAX_NAME)
+    # isinstance-checked, not just sliced: a client sending a string here would otherwise
+    # be truncated to a 40-character string and stored as if it were a list.
+    important_dates = _clipped_list(body, "important_dates")
+    requirements = _clipped_list(body, "requirements")
 
     if not url or not name:
         return json_error(400, "URL and name are required.")
+
+    # S1-4 / finding M1: refuse a URL that is not on the public internet BEFORE it is
+    # stored. The row would otherwise become a standing SSRF target — the deadline check
+    # deliberately has no is_active filter, and the free agents later fetch these URLs from
+    # the operator's own laptop. url_guard also guards every fetch site, so this is the
+    # front door rather than the only door; refusing at submission time is what keeps the
+    # bad row out of the reviewer's queue in the first place.
+    blocked = url_block_reason(url)
+    if blocked:
+        return json_error(400, "That link does not point at a public web page. "
+                               "Paste the program's own URL.")
+    # apply_url is optional and is only kept in submission_payload, so a bad one is dropped
+    # rather than failing the whole submission.
+    if apply_url and url_block_reason(apply_url):
+        apply_url = ""
 
     try:
         opp_id = resume_service.insert_user_opportunity(

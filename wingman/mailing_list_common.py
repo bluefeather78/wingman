@@ -53,6 +53,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from wingman.url_guard import safe_urlopen
+
 # A short, ordinary browser UA. Not evasion - several of these endpoints 403 a bare
 # Python default UA, and we are making exactly the request the site's own form makes.
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -82,7 +84,10 @@ def fetch_page(url, timeout=FETCH_TIMEOUT):
             "User-Agent": USER_AGENT,
             "Accept": "text/html,application/xhtml+xml",
         })
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        # S1-4: find_mailing_lists walks catalog URLs (user-submitted rows included) from
+        # the operator's laptop. The bare `except Exception` below turns a blocked address
+        # into the same (url, None) a 404 produces.
+        with safe_urlopen(req, timeout=timeout) as resp:
             raw = resp.read(2_000_000)  # 2MB ceiling; no signup form lives past that
             charset = resp.headers.get_content_charset() or "utf-8"
             return resp.geturl(), raw.decode(charset, errors="replace")

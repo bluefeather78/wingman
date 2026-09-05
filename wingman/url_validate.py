@@ -42,6 +42,7 @@ import urllib.request
 # url_dedupe owns registrable_domain() and the rest of this repo's URL-matching rules.
 # It imports nothing from here, so this direction is safe; keep it that way.
 from wingman import url_dedupe
+from wingman.url_guard import safe_urlopen
 
 # A browser UA is required, not cosmetic: many university sites 403 the default
 # urllib agent, which would misreport live pages as unverified.
@@ -249,7 +250,11 @@ def check_url(url, timeout=DEFAULT_TIMEOUT):
         result["code"] = "malformed"
         return result
     try:
-        with urllib.request.urlopen(
+        # S1-4: check_links runs this over every catalog row, user submissions included.
+        # A BlockedURLError is a ValueError, so it lands in the generic except below and
+        # the row reads UNVERIFIED with code "BlockedURLError" — not DEAD. That is the
+        # honest answer: we refused to look, which is not evidence the page is gone.
+        with safe_urlopen(
                 urllib.request.Request(url, headers={"User-Agent": USER_AGENT}),
                 timeout=timeout) as resp:
             result["code"] = resp.status

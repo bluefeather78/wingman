@@ -13,6 +13,15 @@ users_db.json
 __pycache__/
 *.pyc
 
+# Local virtualenv for the test suite:
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+#   .venv/bin/pytest
+# `python -m venv` writes a self-ignoring .gitignore inside the directory, so this
+# rule is belt-and-braces -- an env built by an older tool would not carry one, and
+# a `git add -A` would then commit several thousand files.
+.venv/
+venv/
+
 # Logs
 server.log
 server_err.log

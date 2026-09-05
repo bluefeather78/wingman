@@ -13,10 +13,17 @@
 >   underneath), structured 429 + `meta.allowance` echo, wired into `/api/ai`, the deadline check,
 >   resume import, action items; `record_user_cost` counts every call (M11). **Ships in OBSERVE
 >   mode — `FREE_TIER_AI_GATE_ENFORCED` off — so nobody is blocked by the action cap yet.**
-> - **Step 5 — client UI:** in progress (Home Base banner, meter chip, cap card, Manage Plan
->   compare, My Vibe badge, 429-with-allowance handling, remove trial countdown).
-> - **Step 6 — legal + Stripe + email:** pending (Terms edit + `TERMS_VERSION` bump; repurpose the
->   `trial_ending` email to a limit-hit nudge; configure Stripe before promoting the upsell).
+> - **Step 5 — client UI (done):** Home Base upsell banner + live meter, My Vibe tier badge +
+>   actions-used, Manage Plan Free-vs-Unlimited dashboard, NavBar tier label, 429-with-allowance
+>   handling in httpClient → AuthContext, trial copy removed from login/landing. tsc clean.
+> - **Step 6 — legal + email (partly done):** Terms §3 rewritten (permanent Free plan + daily AI
+>   allowance + $9.99 Unlimited, no trial; the "beta is free" contradiction fixed), effective date
+>   + `TERMS_VERSION` bumped to 2026-09-05, `public/*.html` regenerated; the **welcome email** is
+>   reframed to the Free plan. **Still open:** (a) configure Stripe (`STRIPE_API_KEY` /
+>   `STRIPE_PRICE_ID` — secrets) before promoting the upsell; (b) repurpose the now-dormant
+>   `trial_ending` email into a limit-hit nudge (a new trigger off `ai_limit_hit` + dedupe key +
+>   re-arming the disarmed sweep) — the plan's own bracketed follow-up; (c) flip
+>   `FREE_TIER_AI_GATE_ENFORCED` on once the console histogram confirms the number.
 >
 > The §§ below are the original design; Q0/Q0b resolved, plus §14 Q1 (first-day: boosted allowance)
 > and the action-counting mechanism (time-bucket collapse by class) resolved by Shama 2026-09-05.

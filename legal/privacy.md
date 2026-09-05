@@ -1,6 +1,6 @@
 # Wingman Privacy Policy
 
-**Effective Date:** August 22, 2026
+**Effective Date:** September 5, 2026
 
 This Privacy Policy explains how **Shama Bildikar**, the operator of Wingman ("Wingman," "we," "us," or "our"), collects, uses, processes, and protects information in connection with the Wingman beta.
 

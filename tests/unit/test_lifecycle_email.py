@@ -314,12 +314,14 @@ def test_no_placeholder_survives_into_a_rendered_email(kind):
         assert "SET EMAIL_POSTAL_ADDRESS" not in blob
 
 
-def test_trial_length_is_not_hardcoded_to_seven():
-    """A `grant` promo code extends the trial, so a literal '7 days' is wrong for anyone
-    who redeemed one — and the welcome email is exactly where they would read it."""
-    _, html, _ = es.render_for("welcome", _record(trial_ends_at=_iso(21)))
-    assert "21-day trial started" in html
-    assert "7 days" not in html
+def test_welcome_states_the_free_allowance_not_a_trial():
+    """Two-tier model: the welcome email frames the permanent Free plan and its daily AI-action
+    allowance — there is no trial anymore, so no '7 days' and no 'trial' copy."""
+    from app.config import FREE_TIER_DAILY_AI_ACTIONS as N
+    _, html, text = es.render_for("welcome", _record())
+    assert f"{N} AI actions a day" in html
+    assert f"{N} AI actions a day" in text
+    assert "trial" not in html.lower()
 
 
 @pytest.mark.parametrize("days,expected", [
@@ -351,16 +353,12 @@ def test_template_escapes_the_students_own_name():
 
 # ---------- the preview sample is staged per kind ----------
 
-def test_welcome_preview_shows_the_real_trial_length():
-    """The sample used to date every preview off TRIAL_REMINDER_DAYS, so the welcome
-    preview announced a "2-day trial" for a product whose trial is TRIAL_DAYS long. Not a
-    template bug — every date here is computed — but indistinguishable from one, and read
-    as one."""
-    from wingman.subscription_common import TRIAL_DAYS
+def test_welcome_preview_states_the_free_allowance():
+    """The welcome preview shows the Free-plan daily AI allowance the real send does."""
+    from app.config import FREE_TIER_DAILY_AI_ACTIONS as N
     d = es.preview("welcome")
-    assert f"{TRIAL_DAYS}-day trial started" in d["html"]
-    assert f"next {TRIAL_DAYS} days" in d["html"]
-    assert f"Your trial ends in {TRIAL_DAYS} days" in d["html"]
+    assert f"{N} AI actions a day" in d["html"]
+    assert "trial started" not in d["html"]
 
 
 def test_trial_ending_preview_still_shows_an_expiring_trial():

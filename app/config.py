@@ -414,3 +414,17 @@ DEADLINE_ALERT_MAX_ITEMS = 10
 EMAIL_CRON_SECRET = os.environ.get("EMAIL_CRON_SECRET", "")
 
 EMAIL_SETUP_SQL = "db/email_schema.sql"
+
+# ---------- Ops console (S1-8) ----------
+# The local-only console's ONLY protection used to be `request.client.host in
+# ("127.0.0.1", "::1", ...)`, which any localhost tunnel defeats — ngrok, VS Code port
+# forwarding, a Cloudflare tunnel — because the tunnel's peer IS 127.0.0.1. Behind that gate
+# sit subprocess launches that spend real money, a roster with the names and emails of minors,
+# catalog activation, and test email sends to arbitrary addresses.
+#
+# So every ops API route additionally requires this token in a HEADER (X-Ops-Token) — the same
+# shape EMAIL_CRON_SECRET already uses, and for the same reason: a URL carrying a credential is
+# recorded by every proxy and access log between the client and here. It FAILS CLOSED when
+# unset, so a misconfiguration cannot silently mean "no check". `python server.py` mints and
+# prints one for local dev when it is absent.
+WINGMAN_OPS_TOKEN = os.environ.get("WINGMAN_OPS_TOKEN", "")

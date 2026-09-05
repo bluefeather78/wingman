@@ -6,6 +6,7 @@ web service exposes none of these routes — they 404 there. Every route is addi
 gated to localhost by require_local, exactly like the old _require_local, because these
 endpoints spend money and expose a roster of names/emails.
 """
+import hmac
 import threading
 
 from fastapi import APIRouter, Request, Depends, HTTPException
@@ -14,6 +15,7 @@ from starlette.concurrency import run_in_threadpool
 
 from wingman import dryrun_common
 from ops import core
+from app.config import WINGMAN_OPS_TOKEN
 from app.deps import read_json_body, read_json_body_strict, json_response, json_error
 
 _LOCAL_HOSTS = ("127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost")
@@ -21,14 +23,54 @@ _LOCAL_HOSTS = ("127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost")
 
 def require_local(request: Request):
     """Admin routes are localhost-only: the server binds all interfaces and these
-    routes launch subprocesses that spend real money. Mirrors Handler._require_local."""
+    routes launch subprocesses that spend real money. Mirrors Handler._require_local.
+
+    This is NO LONGER the only gate (S1-8). It is defeated by any localhost tunnel — ngrok,
+    VS Code port forwarding, a Cloudflare tunnel — because the tunnel's peer IS 127.0.0.1;
+    and it would become attacker-controlled the moment FORWARDED_ALLOW_IPS were set, which is
+    the plausible "fix" for the login-limiter finding (S0-7). require_ops_token below is what
+    actually holds. Both are kept: neither alone is sufficient."""
     client = request.client.host if request.client else ""
     if client not in _LOCAL_HOSTS:
         print(f"[WARN] Blocked non-local admin request from {client}: {request.url.path}")
         raise HTTPException(status_code=403, detail="Admin routes are restricted to localhost.")
 
 
-router = APIRouter(dependencies=[Depends(require_local)])
+# The browser-navigable HTML shells. A page load cannot carry a custom header, so these are
+# exempt from the token — they are localhost-gated like everything else and contain no
+# credential and no data: the console shell PROMPTS for the token and sends it on every API
+# call it makes. So a tunnel reaches a page asking for a secret, not a console.
+#
+# /evals/data is deliberately NOT here: nothing navigates to it (the hub embeds the same
+# payload), so it is tooling, and tooling can send a header.
+_TOKENLESS_PAGES = frozenset({"/admin", "/admin/logic-map", "/evals", "/evals/scorecard"})
+
+
+def require_ops_token(request: Request):
+    """Every ops API route needs X-Ops-Token (S1-8).
+
+    Header, never a query string — a URL carrying a credential is recorded by every proxy and
+    access log between the client and here; EMAIL_CRON_SECRET already makes the same choice
+    for the same reason. compare_digest, so the comparison is not a timing oracle.
+
+    FAILS CLOSED when the token is unset. What is behind these routes is subprocess launches
+    that spend real money, a roster with the names and emails of minors, catalog activation,
+    and test email sends to arbitrary addresses — an unset secret must never read as
+    "no check needed". `python server.py` mints and prints one for local dev.
+    """
+    if request.url.path in _TOKENLESS_PAGES:
+        return
+    if not WINGMAN_OPS_TOKEN:
+        raise HTTPException(status_code=503,
+                            detail="Ops console is not configured: set WINGMAN_OPS_TOKEN.")
+    supplied = request.headers.get("X-Ops-Token") or ""
+    if not hmac.compare_digest(supplied.encode("utf-8"),
+                               WINGMAN_OPS_TOKEN.encode("utf-8")):
+        print(f"[WARN] Blocked ops request with a bad/absent X-Ops-Token: {request.url.path}")
+        raise HTTPException(status_code=403, detail="Forbidden.")
+
+
+router = APIRouter(dependencies=[Depends(require_local), Depends(require_ops_token)])
 
 
 def _qs_int(request, key, default, lo=None, hi=None):

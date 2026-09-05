@@ -1833,11 +1833,45 @@ function notice(msg) {
   el.textContent = msg; el.classList.remove('hidden');
 }
 
+/* The ops token (S1-8). Every /api/agents/* and /api/seeds route requires it in the
+   X-Ops-Token HEADER — never a query string, which every proxy and access log records.
+
+   The page itself is served without it (a browser navigation cannot set a header), so the
+   token is asked for here and kept in localStorage per origin: opening this page through a
+   localhost tunnel gets you a prompt, not a console. `python server.py` prints a token to
+   paste, and mints one if .env has none. A 403 clears the stored value so the next action
+   re-prompts rather than failing silently forever. */
+const OPS_TOKEN_KEY = 'wingman-ops-token';
+
+function opsToken() {
+  let t = null;
+  try { t = localStorage.getItem(OPS_TOKEN_KEY); } catch (_) { t = null; }
+  if (!t) {
+    t = window.prompt('Ops token (WINGMAN_OPS_TOKEN — server.py prints it at boot):');
+    if (!t) return '';
+    t = t.trim();
+    try { localStorage.setItem(OPS_TOKEN_KEY, t); } catch (_) { /* private mode */ }
+  }
+  return t;
+}
+
+function forgetOpsToken() {
+  try { localStorage.removeItem(OPS_TOKEN_KEY); } catch (_) { /* ignore */ }
+}
+
 async function api(path, opts) {
-  const res = await fetch(path, opts);
+  const init = { ...(opts || {}) };
+  init.headers = { ...(init.headers || {}), 'X-Ops-Token': opsToken() };
+  const res = await fetch(path, init);
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch (_) { data = null; }
+  if (res.status === 403) {
+    // Wrong or stale token: drop it so the next call asks again instead of every action
+    // failing with an opaque "Forbidden" until the tab is reloaded.
+    forgetOpsToken();
+    throw new Error('Ops token rejected — it has been cleared; the next action will ask again.');
+  }
   // `reason` as well as `error`: the ops email routes answer with the send-result shape
   // ({state, reason}) rather than json_error's {error}, so a failed test send surfaced as
   // a bare "HTTP 400" with the actual cause — the thing you need — thrown away.

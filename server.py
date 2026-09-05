@@ -24,13 +24,37 @@ runs `uvicorn app.main:app --host 0.0.0.0 --port $PORT` and never enables ops, s
 shipped service exposes no /api/agents/*, /api/seeds, or /admin route.
 """
 import os
+import secrets
 
 # Local dev convenience: expose the admin console at /admin, as the old server did. Guarded
 # so it is NEVER enabled on Render (which sets RENDER=true) — even if the service's start
 # command is still `python server.py`, the public deploy must not expose /admin or the
-# money-spending /api/agents/* routes. See app.main for the mount.
+# money-spending /api/agents/* routes. As of S1-8 app.main REFUSES the mount when RENDER is
+# set regardless of this flag, so the guarantee no longer rests on this line alone.
 if not os.environ.get("RENDER"):
     os.environ.setdefault("WINGMAN_ENABLE_OPS", "1")
+
+    # The ops routes fail CLOSED without WINGMAN_OPS_TOKEN (S1-8), which would make
+    # `python server.py` useless out of the box. .env is loaded by app.config, not yet — so
+    # read it here before deciding to mint one, or every boot would generate a token that
+    # overrides the operator's configured one.
+    if not os.environ.get("WINGMAN_OPS_TOKEN"):
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")) as fh:
+                for line in fh:
+                    key, _, value = line.partition("=")
+                    if key.strip() == "WINGMAN_OPS_TOKEN" and value.strip():
+                        os.environ["WINGMAN_OPS_TOKEN"] = value.strip().strip("'\"")
+                        break
+        except OSError:
+            pass
+    if not os.environ.get("WINGMAN_OPS_TOKEN"):
+        _minted = secrets.token_urlsafe(24)
+        os.environ["WINGMAN_OPS_TOKEN"] = _minted
+        print("\n[server.py] No WINGMAN_OPS_TOKEN set — minted one for this run:\n"
+              f"    {_minted}\n"
+              "  Paste it when /admin asks. Put WINGMAN_OPS_TOKEN=<value> in .env to keep it\n"
+              "  stable across restarts (.env is gitignored).\n")
 
 if __name__ == "__main__":
     import uvicorn

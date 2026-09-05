@@ -103,6 +103,13 @@ function name in its new home.
   localhost-gated), plus `ops/admin_console.html` (moved from the repo root). **This is
   mounted only when `WINGMAN_ENABLE_OPS` is set** (the `server.py` shim sets it; Render does
   not), so the shipped service exposes no agent/seed/admin route — they 404 there.
+  `app/main.py` additionally **refuses the mount outright when `RENDER` is set**, whatever
+  the flag says. Every ops API route also requires **`WINGMAN_OPS_TOKEN` in an `X-Ops-Token`
+  header** and fails closed without one — localhost-gating alone is defeated by any tunnel,
+  whose peer *is* 127.0.0.1. The browser-navigable page shells (`/admin`,
+  `/admin/logic-map`, `/evals`, `/evals/scorecard`) are exempt because a navigation cannot
+  set a header; the console prompts for the token and sends it on every call. `python
+  server.py` mints and prints one when `.env` has none — put it in `.env` to keep it stable.
 - **Shared offline layer stays at the repo root.** The 6 agents and their libs
   (`gemini_common`, `claude_common`, `agent_common`, `supabase_common`,
   `subscription_common`, `mailing_list_common`, `url_dedupe`, `dryrun_common`,

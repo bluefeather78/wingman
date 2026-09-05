@@ -146,12 +146,22 @@ for module in (ai, opportunities, account, user_data, google_oauth, mailing_list
 
 
 # ---------------- Local-only ops console (never shipped) ----------------
-if os.environ.get("WINGMAN_ENABLE_OPS"):
+# The RENDER check is a HARD refusal, not a convention (S1-8). server.py already declines to
+# SET WINGMAN_ENABLE_OPS there, but "the shim does not turn it on" is not the same guarantee
+# as "it cannot come up": a stray env var in the Render dashboard, or a start command that
+# ever changes, would be enough. What is behind these routes is subprocess launches that
+# spend real money, a roster with the names and emails of minors, catalog activation, and
+# test email sends to arbitrary addresses — so the mount itself refuses.
+if os.environ.get("WINGMAN_ENABLE_OPS") and os.environ.get("RENDER"):
+    print("[ops] WINGMAN_ENABLE_OPS is set but RENDER is too — REFUSING to mount the ops "
+          "console. It is local-only by design; unset one of the two.")
+elif os.environ.get("WINGMAN_ENABLE_OPS"):
     # Imported lazily so the shipped web service never even imports ops/ (which pulls in
-    # agent-orchestration + subprocess code). Every route inside is localhost-gated too.
+    # agent-orchestration + subprocess code). Every route inside is localhost-gated AND
+    # requires WINGMAN_OPS_TOKEN in a header.
     from ops.admin import router as ops_router
     app.include_router(ops_router)
-    print("[ops] Admin console ENABLED at /admin and /api/agents/* (localhost only)")
+    print("[ops] Admin console ENABLED at /admin and /api/agents/* (localhost + ops token)")
 
 
 # ---------------- Static pages (repo root) + optional web-app bundle ----------------

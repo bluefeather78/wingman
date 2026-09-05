@@ -17,6 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the marquee check below resolves a commit RANGE,
+          # which a depth-1 clone cannot do.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -29,3 +33,19 @@ jobs:
 
       - name: Run unit tests
         run: python -m pytest tests/unit -q
+
+      # MARQUEE_DECISIONS.md rule 2 — "a marquee change is always its own dedicated commit
+      # whose message names the entry" — enforced. That file exists because a load-bearing
+      # decision was reversed silently inside a commit about an unrelated feature, and until
+      # now nothing but the author's memory stopped it happening again. This cannot tell an
+      # approved change from an unapproved one (rule 1 is still a human gate in chat); what it
+      # removes is the SILENT case.
+      - name: Check marquee declarations
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            RANGE="${{ github.event.before }}..${{ github.sha }}"
+          fi
+          echo "Checking $RANGE"
+          python scripts/ci/check_marquee_commits.py --range "$RANGE"

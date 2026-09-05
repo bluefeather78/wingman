@@ -148,3 +148,36 @@ def snapshot_stamp(when=None):
     lexicographic sorting of filenames stays chronological.
     """
     return (when or datetime.datetime.now()).strftime("%Y%m%d-%H%M%S")
+
+
+# --- paid-call cost that survives an exception (audit finding 4.3) --------------------------
+#
+# A retry loop around a paid call accumulates cost into a LOCAL. If the retry raises — a
+# timeout, a 429, a provider 5xx — that local dies with the frame and the first attempt's
+# money is never reported. It was really spent: the provider billed the call that succeeded
+# before the one that blew up. Every run total, every agent_runs.cost_usd row and every
+# cost-per-user figure was therefore low by exactly the amount that failed hardest.
+#
+# The fix is to stamp what has been banked so far ONTO the exception and re-raise it
+# unchanged, so existing `except Exception` handlers keep working and can recover the money.
+# Deliberately not a custom exception type: wrapping would change what those handlers see.
+
+_BANKED_ATTR = "wingman_banked_cost"
+
+
+def bank_onto_exception(exc, cost):
+    """Record `cost` (already spent) on `exc`, accumulating if it is re-raised through
+    several frames. Returns exc so a caller can `raise bank_onto_exception(e, c)`."""
+    try:
+        setattr(exc, _BANKED_ATTR, float(getattr(exc, _BANKED_ATTR, 0.0)) + float(cost or 0.0))
+    except Exception:
+        pass    # a built-in with no __dict__; losing the stamp is better than masking the error
+    return exc
+
+
+def banked_cost(exc):
+    """Money a failed paid call had already spent, for the handler to add to the run total."""
+    try:
+        return float(getattr(exc, _BANKED_ATTR, 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0

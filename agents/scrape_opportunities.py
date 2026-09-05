@@ -73,58 +73,29 @@ from wingman import combined_reader
 from wingman import embed_common
 from wingman import dedupe_embed_store
 from wingman import queue_flags
+from wingman import agent_common
 from wingman.agent_common import add_agent_args, apply_timing, clean_email, emit_preview, snapshot_stamp
 from wingman.contact_email_common import resolve_contact_email
 from wingman.gemini_common import call_gemini, extract_json, estimate_cost
 from wingman.seeds_common import load_seeds, record_seed_result, select_seeds
 from wingman.supabase_common import load_dotenv, supabase_get, supabase_post, supabase_insert_one, supabase_patch
 from wingman import REPO_ROOT   # the repo root, defined once (see wingman/__init__.py)
+# The importable core moved to wingman/scrape_common.py (CLAUDE.md's rule: agents/ is for what
+# an operator RUNS, wingman/ for what other code IMPORTS — three agents were importing this
+# plumbing out of a runnable agent). Re-exported here VERBATIM so every existing import site,
+# including eval/grade_scraper_batch, keeps working unchanged.
+from wingman.scrape_common import (        # noqa: F401  (re-export)
+    VALID_SUBJECTS, VALID_TYPES, VALID_PRICE, VALID_LOCATION, VALID_INTL, VALID_SEASON,
+    _NAME_STOPWORDS,
+    FLAG_DEAD_LINK, FLAG_BLOCKED_LINK, FLAG_UNREACHABLE, FLAG_BARE_DOMAIN, FLAG_LOW_VALUE,
+    FLAG_NOT_SEARCHED, FLAG_URL_UNSOURCED, FLAG_URL_REPLACED, FLAG_OFFSITE, FLAG_NO_TYPE,
+    FLAG_URL_RESCUED, FLAG_TITLE_UNPROVEN, FLAG_URL_RESOLVED, FLAG_SHARES_HOMEPAGE,
 
-VALID_SUBJECTS = ['Mixed', 'STEM', 'Medicine', 'Humanities', 'Art', 'Business', 'Engineering',
-                   'Computer Science', 'Mathematics', 'Biology', 'Physics', 'Astronomy',
-                   'Chemistry', 'Leadership', 'Law', 'Logic', 'Education']
-VALID_TYPES = {'Program', 'Internship', 'Competition', 'Research', 'Volunteer', 'Journal', 'Conference'}
-VALID_PRICE = {'Free', 'Paid'}
-VALID_LOCATION = {'In-Person', 'Remote', 'In-Person and Remote'}
-VALID_INTL = {'International Students', 'Domestic Students'}
-VALID_SEASON = {'Summer', 'Year-Long', 'Spring', 'Fall', 'Winter'}
+    next_id_generator, clean_value, _netloc, build_row, gate_dup_candidates,
+    ATTRIBUTION_KEYS, _SCHEMA_ERROR_CODES, _http_detail, _is_missing_column, _without,
+    insert_rows, _url_rank, collapse_intra_run_twins,
+)
 
-# Dropped when matching a candidate's name against a grounding span: they carry no
-# identifying signal and appear in almost every opportunity name, so requiring them would
-# only make the match brittle.
-_NAME_STOPWORDS = {"the", "a", "an", "of", "for", "and", "at", "in", "on", "to", "program",
-                   "programs", "summer", "high", "school", "students", "student"}
-
-# Review flags. The console renders each as a pill and truncates the visible text, so these
-# must stay SHORT and must say what the reviewer should go and check — a flag that only
-# names a symptom makes someone re-derive the diagnosis row by row.
-FLAG_DEAD_LINK = "dead link (404) — program may be real; find the correct URL"
-FLAG_BLOCKED_LINK = "link unverifiable ({code}) — site blocks checks; open it manually"
-FLAG_UNREACHABLE = "link timed out — could not reach the site; open it manually"
-FLAG_BARE_DOMAIN = "URL is a site homepage, not a program page"
-FLAG_LOW_VALUE = "URL is a sub-page (faq/about/apply), not the main page"
-FLAG_NOT_SEARCHED = "not search-verified — model answered from memory; check every field"
-FLAG_URL_UNSOURCED = "URL not among the pages actually searched — may be from memory"
-FLAG_URL_REPLACED = "URL replaced with the page the search returned — confirm it matches"
-# Live, not a homepage, not a sub-page — and still the wrong page. 10 of the 166 rows on
-# 2026-08-23 stored an SEO round-up ("19 Selective Internships for High School Students")
-# that only mentions the program. Every other URL check passes those, so this is the one
-# flag that catches them. See url_validate.domain_matches_org().
-FLAG_OFFSITE = "URL is on an unrelated site — may be an article about it, not its own page"
-FLAG_NO_TYPE = "no valid type returned — set one before activating"
-# Phase-2 URL truth. A rescued URL was moved off a listicle/mill onto the program's own page
-# (verified on-domain + title-proven); a reviewer still confirms it matches. An unproven title
-# is never a rejection — false negatives like "Algebra II" vs "Algebra 2" are the accepted cost.
-FLAG_URL_RESCUED = "URL rescued to the program's own page (was on {domain}) — confirm it matches"
-FLAG_TITLE_UNPROVEN = "page title does not clearly name this program — confirm it's the right page"
-# Stage 1b (discovery). Discovery returns a NAME with no URL; a per-name search then found and
-# title-proved its own page. Same evidence bar as harvest_names (title_proves), so it is not a
-# guess — but it is worth a reviewer's glance that the resolved page is the right program.
-FLAG_URL_RESOLVED = "URL found by a per-name search (stage 1b) — confirm it's the right program"
-# Phase-3 uniqueness. A row sharing a program's HOMEPAGE with another may be a genuinely
-# distinct program that just has no page of its own (tenet 6), so it is kept + flagged rather
-# than auto-merged — a person confirms it's distinct or a duplicate.
-FLAG_SHARES_HOMEPAGE = "shares a homepage URL with {id} — confirm distinct program vs duplicate"
 
 # Scraper-owned fields a merge may FILL on the surviving row when they are empty there. Name
 # is handled separately (title evidence decides it). Deliberately excludes everything owned by
@@ -494,18 +465,6 @@ concretely explain *why and how* a high schooler could actually use this one, sp
 not generic filler. If you can't come up with a genuinely concrete, specific reason, leave it out."""
 
 
-def next_id_generator(existing_ids):
-    nums = [int(i[2:]) for i in existing_ids if i.startswith("ec") and i[2:].isdigit()]
-    n = (max(nums) if nums else 18220) + 1
-    while True:
-        yield f"ec{n}"
-        n += 1
-
-
-def clean_value(value, valid_set):
-    return value if value in valid_set else None
-
-
 def _name_key(text):
     """Lowercase alphanumeric words, with any parenthetical/after-colon tail dropped."""
     head = re.split(r"[(:—–]", text or "", maxsplit=1)[0]
@@ -535,6 +494,11 @@ def spans_for_name(name, spans):
     return [u for span in hits for u in span["urls"]]
 
 
+# MARQUEE M4 (MARQUEE_DECISIONS.md): the URL of record is never a model-typed or remembered
+# one. Everything reconcile_url returns must be grounding-resolved or title-proven; its final
+# rung labels the unsourced case and main() rejects it rather than storing it (audit 4.1). This
+# is the fix for the measured 26% dead-link rate — do not add a path that stores an unproven
+# address, and do not soften the rejection back into a flag.
 def reconcile_url(model_url, resolved_urls, span_urls):
     """Decide the URL to store, and say why.
 
@@ -596,12 +560,6 @@ def url_flags(check):
         return [FLAG_UNREACHABLE]
     return []
 
-
-def _netloc(url):
-    try:
-        return urllib.parse.urlsplit(url or "").netloc
-    except ValueError:
-        return ""
 
 
 # At most this many grounding siblings are fetched to find a proven alternative, so a candidate
@@ -699,46 +657,6 @@ def resolve_url_truth(candidate, url, flags, resolved_urls, timeout):
     return url, flags
 
 
-def build_row(candidate, mint_id, source, url, flags):
-    """One catalog row, or None if it has no name/url to be identified by.
-
-    No seed category any more: `type` is the model's answer or nothing. `category` is not
-    written at all — it is nullable and already NULL on 1139 of 1440 catalog rows, and
-    nothing in the student-facing app reads it.
-    """
-    name = (candidate.get("name") or "").strip()
-    if not name or not url:
-        return None
-    tags = candidate.get("subject_tags") or []
-    if not isinstance(tags, list):
-        tags = [tags] if tags else []
-    # `type` is non-null on every one of the 1440 catalog rows, so an invalid one cannot
-    # simply be left empty. Park it on the most common value to get the row inserted; the
-    # CALLER attaches FLAG_NO_TYPE so a reviewer sets it properly before activating. Do not
-    # re-derive a type from the seed here — that fallback is exactly what was removed.
-    opp_type = candidate.get("type") if candidate.get("type") in VALID_TYPES else "Program"
-    return {
-        "id": mint_id,
-        "name": name,
-        "org": (candidate.get("org") or "").strip() or None,
-        "summary": candidate.get("summary"),
-        "url": url,
-        "type": opp_type,
-        "price": clean_value(candidate.get("price"), VALID_PRICE),
-        "state": (candidate.get("state") or None),
-        "location": clean_value(candidate.get("location"), VALID_LOCATION),
-        "intl": clean_value(candidate.get("intl"), VALID_INTL),
-        "season": clean_value(candidate.get("season"), VALID_SEASON),
-        "eligibility": candidate.get("eligibility"),
-        "grade_min": candidate.get("grade_min") if isinstance(candidate.get("grade_min"), int) else None,
-        "grade_max": candidate.get("grade_max") if isinstance(candidate.get("grade_max"), int) else None,
-        "cost": candidate.get("cost_detail"),
-        "subject_tags": tags or None,
-        "contact_email": clean_email(candidate.get("contact_email")),
-        "is_active": False,
-        "source": source,
-    }
-
 
 # --- discovery gate glue (pure; the paid part is combined_reader.read_candidate_live) ----------
 # MARQUEE M9: the discovery gate wires paid per-candidate calls (classify + metadata + embedding)
@@ -759,23 +677,6 @@ def gate_metadata_overlay(row, metadata):
             row[k] = v
             changed += 1
     return changed
-
-
-def gate_dup_candidates(hint_candidates, by_id, existing_dups):
-    """Turn combined_reader's dedupe hints ({id,score,reason}) into the console's dup_candidates
-    shape ({id,name,url,confidence,reason,via}), enriched with the survivor's name/url from the
-    catalog, MERGED with any url_dedupe candidates already on the row (this gate's own prior
-    entries replaced, url_dedupe's kept). Pure. A HINT only — it never rejects.
-    """
-    fresh = []
-    for c in (hint_candidates or []):
-        survivor = by_id.get(c.get("id"), {})
-        fresh.append({
-            "id": c.get("id"), "name": survivor.get("name"), "url": survivor.get("url"),
-            "confidence": "hint", "reason": c.get("reason") or "content similarity",
-            "via": queue_flags.DEDUPE_VIA,
-        })
-    return queue_flags.merge_candidates(existing_dups, fresh)
 
 
 def research_seed(angle, addendum, today, gemini_key, args, system=None):
@@ -801,9 +702,16 @@ def research_seed(angle, addendum, today, gemini_key, args, system=None):
     cost = 0.0
     notes, usage, extra = "", {}, {}
     for attempt in (1, 2):
-        notes, usage, extra = call_gemini(system, user_content, gemini_key, use_web_search=True,
-                                          max_tokens=6000, timeout=args.timeout,
-                                          max_searches=args.max_searches, return_grounding=True)
+        try:
+            notes, usage, extra = call_gemini(system, user_content, gemini_key,
+                                              use_web_search=True, max_tokens=6000,
+                                              timeout=args.timeout,
+                                              max_searches=args.max_searches,
+                                              return_grounding=True)
+        except Exception as e:
+            # Attempt 1 already cost money; a timeout or 429 on attempt 2 must not delete it
+            # from the run total (audit 4.3). The caller reads it back with banked_cost().
+            raise agent_common.bank_onto_exception(e, cost)
         cost += estimate_cost(usage)
         searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
         queries = (usage.get("server_tool_use") or {}).get("web_search_queries", [])
@@ -859,50 +767,18 @@ def extract_candidates(notes, resolved_urls, gemini_key, args):
                     f"Return the JSON array now.")
     text, usage = call_gemini(system, user_content, gemini_key, use_web_search=False,
                               max_tokens=6000, timeout=args.timeout)
-    candidates = extract_json(text)
+    # Cost FIRST, then parse. extract_json used to run inside the return expression, so a
+    # ValueError on a truncated answer discarded this call's cost — and, because the caller
+    # re-raises, phase 1's too. The money was spent either way (audit 4.3).
+    cost = estimate_cost(usage)
+    try:
+        candidates = extract_json(text)
+    except Exception as e:
+        raise agent_common.bank_onto_exception(e, cost)
     if not isinstance(candidates, list):
         candidates = [candidates] if candidates else []
-    return candidates, estimate_cost(usage)
+    return candidates, cost
 
-
-ATTRIBUTION_KEYS = ("seed_id", "found_via")
-
-
-def _without(rows, keys):
-    drop = set(keys)
-    return [{k: v for k, v in r.items() if k not in drop} for r in rows]
-
-
-def insert_rows(supabase_url, service_key, rows, review_by_id):
-    """Insert with the review + attribution columns, degrading if either migration is pending.
-
-    PostgREST rejects an entire insert on one unknown key, so a single missing column would
-    mean the whole scrape wrote NOTHING — reading as "the agent found nothing" rather than
-    "every insert 400'd". Two INDEPENDENT migrations can be missing here: the review columns
-    (moderation_status/dup_candidates/quality_flags — db/user_submissions_schema.sql) and the
-    attribution columns (seed_id/found_via — db/scraper_attribution_schema.sql). Either can be
-    present without the other, so the ladder tries all four combinations widest-first and
-    keeps the maximal set the DB actually supports — a live DB with both applied always takes
-    the full path. Returns the tier that succeeded. `rows` carry seed_id/found_via on the base
-    dict, so the attribution-dropping tiers strip them explicitly.
-    """
-    full = [{**row, **review_by_id.get(row["id"], {})} for row in rows]
-    attempts = [
-        ("full", full),                                 # both migrations present
-        ("no-attribution", _without(full, ATTRIBUTION_KEYS)),  # review present, attribution not
-        ("no-review", rows),                            # attribution present, review not
-        ("minimal", _without(rows, ATTRIBUTION_KEYS)),  # neither present
-    ]
-    for i, (tier, payload) in enumerate(attempts):
-        try:
-            supabase_post(supabase_url, "opportunities", payload, service_key)
-            return tier
-        except Exception as e:
-            if i == len(attempts) - 1:
-                raise  # the minimal write is base columns only — a failure here is real
-            print(f"[WARN] Insert tier '{tier}' failed ({e}); trying a narrower column set. "
-                  f"Run db/user_submissions_schema.sql and db/scraper_attribution_schema.sql to "
-                  f"keep review flags and seed attribution.")
 
 
 def auto_disable_mined_seeds(supabase_url, service_key, ran_seeds):
@@ -962,45 +838,6 @@ def auto_disable_mined_seeds(supabase_url, service_key, ran_seeds):
         print(f"  [AUTO-DISABLE] seed {sid}: {reason}")
     return disabled
 
-
-def _url_rank(url, flags):
-    """Phase-2 URL quality, higher is better: title-proven > not-low-value > shallower path.
-    Uses the flags already computed for the row (FLAG_TITLE_UNPROVEN as the proof proxy) so it
-    needs no extra fetch."""
-    proven = 0 if FLAG_TITLE_UNPROVEN in (flags or []) else 1
-    not_low = 0 if url_dedupe.is_low_value_path(url) else 1
-    try:
-        depth = len([s for s in urllib.parse.urlsplit(url or "").path.split("/") if s])
-    except ValueError:
-        depth = 99
-    return (proven, not_low, -depth)
-
-
-def collapse_intra_run_twins(rows, flags_by_id):
-    """Collapse rows minted THIS run that are same-registrable-domain AND name_similarity >= 0.9
-    down to the copy whose URL wins the Phase-2 ranking. Returns (kept_rows, collapsed), where
-    collapsed is [{"loser","winner","name"}]. This is a LOOSER rule than the catalog dedupe and
-    is applied to in-run rows ONLY — it never touches the real catalog, so a false collapse
-    costs at most one freshly-scraped row, not a curated one."""
-    kept, collapsed = [], []
-    for row in rows:
-        dom = url_dedupe.registrable_domain(_netloc(row.get("url")))
-        twin = None
-        for k in kept:
-            if (dom and url_dedupe.registrable_domain(_netloc(k.get("url"))) == dom
-                    and url_dedupe.name_similarity(row.get("name") or "", k.get("name") or "") >= 0.9):
-                twin = k
-                break
-        if not twin:
-            kept.append(row)
-            continue
-        if _url_rank(row.get("url"), flags_by_id.get(row["id"])) > \
-                _url_rank(twin.get("url"), flags_by_id.get(twin["id"])):
-            kept[kept.index(twin)] = row          # new row's URL wins; it replaces the twin
-            collapsed.append({"loser": twin["id"], "winner": row["id"], "name": twin.get("name")})
-        else:
-            collapsed.append({"loser": row["id"], "winner": twin["id"], "name": row.get("name")})
-    return kept, collapsed
 
 
 def main():
@@ -1095,7 +932,8 @@ def main():
     # deletions from 2026-08 were backfilled as source='tombstone-backfill' rejected
     # rows, so the table is the ONLY dedupe memory. Never SQL-DELETE a row; reject it.)
     existing = supabase_get(supabase_url, "opportunities", {"select": "id,name,url"}, service_key)
-    mint_id = next_id_generator({r["id"] for r in existing})
+    # Sequence-backed when db/agent_locks_schema.sql has run; max+1 under the run lock otherwise.
+    mint_id = next_id_generator({r["id"] for r in existing}, supabase_url, service_key)
     print(f"[OK] {len(existing)} existing rows loaded.")
 
     # MARQUEE M9: the always-on discovery gate. Every candidate's page is read ONCE more to
@@ -1128,6 +966,7 @@ def main():
     total_cost = 0.0
     raw_found = duplicates_skipped = invalid_skipped = errors = 0
     not_running_skipped = 0   # programs the notes report as no longer running — DROPPED before insert
+    unsourced_rejected = 0    # model-typed URLs the search never retrieved — never stored (4.1)
     total_searches = silent_search_count = flagged_rows = dead_links = 0
     # Stage 1b (per-name URL resolution) run-level totals + the shared run budget.
     resolve_run_count = names_attempted = names_resolved = names_dropped = 0
@@ -1222,7 +1061,29 @@ def main():
                         candidate.get("running_reason")), "raw": candidate})
                     continue
                 span_urls = spans_for_name(name, spans)
+                unsourced_here = False
                 url, flags = reconcile_url(candidate.get("url"), resolved_urls, span_urls)
+                if url and FLAG_URL_UNSOURCED in flags:
+                    # A MODEL-TYPED URL IS NOT TRUSTWORTHY ANYWHERE IN THIS REPO, and this was
+                    # the last path that still stored one (audit 4.1). reconcile_url's final
+                    # rung returns the model's own URL when the search retrieved neither it nor
+                    # anything on its host — the signature of a remembered address — and the row
+                    # was then staged, liveness-checked and inserted carrying a flag. A flag is
+                    # not a defence: it survives only until a reviewer clears it, and under
+                    # --no-verify-urls the row was inserted without even the liveness check. It
+                    # is also the exact mechanism behind the scraper's measured 26% dead-link
+                    # rate, and refresh_opportunities already stopped writing `url` for it.
+                    #
+                    # Discarded rather than kept-and-flagged — but NOT by dropping the
+                    # candidate. Clearing the URL hands it to stage 1b, which runs one per-name
+                    # search and stores a page only when the page's own title proves it. So the
+                    # program still gets a chance; what it cannot do is keep an unproven
+                    # address. If stage 1b is off (--no-resolve / --no-verify-urls, both meaning
+                    # "spend nothing on URL work") or fails, the existing no-URL branch drops it
+                    # with a reason, and nothing vanishes silently.
+                    unsourced_rejected += 1
+                    unsourced_here = True
+                    url, flags = "", [f for f in flags if f != FLAG_URL_UNSOURCED]
                 if not url:
                     # Stage 1b: discovery found a NAME but no URL. Try one per-name search to
                     # find its own page before dropping it — within the per-angle and per-run
@@ -1253,8 +1114,12 @@ def main():
                         seed_names_dropped += 1
                         names_dropped += 1
                         invalid_skipped += 1
-                        rejected.append({"reason": "name found but no own-page URL could be "
-                                                   "proven (stage 1b)", "raw": candidate})
+                        rejected.append({"reason": ("model named a URL the search never "
+                                                    "retrieved, and no own page could be "
+                                                    "proven for it (stage 1b)")
+                                                   if unsourced_here else
+                                                   ("name found but no own-page URL could be "
+                                                    "proven (stage 1b)"), "raw": candidate})
                         continue
                 # Phase-2 URL truth: rescue a content-mill/off-site URL to the program's own
                 # page and title-prove what we store. Free HTTP, so it rides the same
@@ -1483,6 +1348,7 @@ def main():
     print(f"\n[SUMMARY] seeds run: {len(seeds)}, raw candidates: {raw_found}, "
           f"duplicates skipped: {duplicates_skipped}, invalid skipped: {invalid_skipped}, "
           f"not-running dropped: {not_running_skipped}, "
+          f"unsourced URLs rejected: {unsourced_rejected}, "
           f"errors: {errors}, new rows: {len(inserted_rows)} "
           f"({flagged_rows} flagged for review, {dead_links} with dead links), "
           f"searches: {total_searches}, silent seeds: {silent_search_count}/{len(seeds)}, "
@@ -1554,4 +1420,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # The catalog-insert lock (audit 4.2). This agent mints `ec<max+1>` ids from a
+    # snapshot taken at run start, so a second inserting agent running alongside it
+    # mints the SAME ids. Held here rather than inside main() so the one guard covers
+    # both a hand-run and the console subprocess. See wingman/run_lock.py.
+    from wingman.run_lock import guard_catalog_writes
+    guard_catalog_writes("scraper", main)

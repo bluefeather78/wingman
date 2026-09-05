@@ -117,6 +117,7 @@ import urllib.parse
 
 from wingman.agent_common import add_agent_args, emit_preview, snapshot_stamp
 from wingman.supabase_common import load_dotenv, supabase_get, supabase_insert_one, supabase_patch
+from wingman import page_text
 from wingman import url_repair
 from wingman import url_validate as uv
 from wingman import REPO_ROOT   # the repo root, defined once (see wingman/__init__.py)
@@ -156,6 +157,12 @@ FLAG_SOFT_404 = "link redirects to a site homepage - the program's own page may 
 # made — the row is only marked not_running, never deactivated.
 FLAG_DISCONTINUED = ("summary says program is discontinued/ended - marked not-running; "
                      "confirm it is really gone")
+# The summary said "discontinued" but the program's own page does NOT. A flag only — the row
+# keeps whatever status it had. See discontinued_on_page for why this distinction is the whole
+# point of the check (audit 4.9).
+FLAG_DISCONTINUED_UNCONFIRMED = (
+    "summary says program is discontinued/ended but its own page does not say so - "
+    "status left alone; check whether the summary is stale")
 # Written on a row whose URL was REPAIRED. It carries the old URL because that is the only
 # record of what changed: `url` now holds the new value, and this is what makes the edit
 # auditable and reversible by hand. Truncated to keep the console pill readable.
@@ -168,6 +175,8 @@ FLAG_SUGGESTION = "possible replacement found but NOT verified: {url}"
 _OWNED_PREFIXES = ("dead link (", "link unverifiable (", "link unreachable (",
                    "link redirects to a site homepage", "URL was dead (",
                    "possible replacement found", "summary says program is discontinued")
+# NOTE both discontinuation flags start with "summary says program is discontinued", so the
+# single prefix above already strips either of them on a re-run. Keep it that way.
 
 # The flags whose rows --repair-flagged revisits. Broadened 2026-09-02 from dead-link-only to
 # every link-health finding a person might have deactivated: an "unverifiable" (403/TLS/timeout)
@@ -197,8 +206,45 @@ DISCONTINUED_RX = re.compile("|".join((
 
 
 def discontinued_phrase(row):
-    """The matched discontinuation phrase in a row's summary, or None. Free — no I/O."""
+    """The matched discontinuation phrase in a row's SUMMARY, or None. Free — no I/O.
+
+    A SIGNAL, never a verdict. `summary` is model-written prose that every scraper and refresh
+    pass rewrites, so this says "something worth looking at", not "the program is gone".
+    discontinued_on_page is what may actually change `status`.
+    """
     m = DISCONTINUED_RX.search(row.get("summary") or "")
+    return m.group(0) if m else None
+
+
+def discontinued_on_page(url, timeout=None, fetch=None):
+    """The discontinuation phrase found on the program's OWN PAGE, or None. Free — one HTTP
+    fetch, no model call. `fetch` is injectable so this is testable with no network.
+
+    THE EVIDENCE BAR (audit finding 4.9). Until Phase 3 a `status=not_running` was written off
+    DISCONTINUED_RX matching the row's own `summary` — model-written text, checked against
+    nothing. agents/check_deadlines.py's verify_status_evidence demands a verbatim quote found
+    on a fetched page for exactly the same column, so the catalog had two writers of the same
+    verdict at two different evidence bars, and the free one was the loose one.
+
+    Why that matters more than 3 rows: `not_running` yanks a program out of Fresh Finds and
+    matching, and EMPTY_IS_VALID_STATUS then treats it as authoritative, so
+    deadline_write_decision's empty-result guard stops protecting the row's dates. A summary
+    reading "Applications for the 2026 cohort has closed; the program runs annually" matches
+    `has closed` — the off-season of a healthy annual program read as its death. The measured
+    3/1678 is a snapshot, not a bound: every scrape rewrites summaries, so the population
+    changes on every pass.
+
+    Returns None when the page cannot be fetched. Unreachable is not evidence of death — the
+    caller keeps the review flag and leaves `status` alone.
+    """
+    fetch = fetch or page_text.fetch_page_text
+    try:
+        text, _reason = fetch(url, timeout) if timeout else fetch(url)
+    except Exception:
+        return None
+    if not text:
+        return None
+    m = DISCONTINUED_RX.search(text)
     return m.group(0) if m else None
 
 
@@ -661,10 +707,18 @@ def main():
         # review flag whenever the language is present, but only WRITES status=not_running when
         # the field is still blank — never overwriting agents/check_deadlines.py. Orthogonal to the
         # link verdict above: a discontinued program's URL is usually still live.
+        # PAGE EVIDENCE REQUIRED before `status` changes (audit 4.9). The summary match is
+        # only the trigger to go look; the program's own page has to say it too. One extra
+        # fetch, on the handful of rows that match (3 of 1678 on 2026-09-01) — and only when
+        # the status field is blank, so a row check_deadlines already ruled on costs nothing.
         disc_phrase = discontinued_phrase(row)
-        mark_not_running = bool(disc_phrase) and _status_blank(row)
+        page_phrase = None
+        if disc_phrase and _status_blank(row):
+            page_phrase = discontinued_on_page(row.get("url"), timeout=args.timeout)
+        mark_not_running = bool(page_phrase)
         if disc_phrase:
-            flags = flags + [FLAG_DISCONTINUED]
+            flags = flags + [FLAG_DISCONTINUED if mark_not_running
+                             else FLAG_DISCONTINUED_UNCONFIRMED]
             if mark_not_running:
                 discontinued += 1
 
@@ -694,8 +748,11 @@ def main():
         elif action == "flag":
             flagged += 1
         if mark_not_running:
-            print(f"               summary reads discontinued -> status=not_running "
-                  f"({disc_phrase!r})")
+            print(f"               summary AND page read discontinued -> status=not_running "
+                  f"(summary {disc_phrase!r}; page {page_phrase!r})")
+        elif disc_phrase:
+            print(f"               summary reads discontinued ({disc_phrase!r}) but the page "
+                  f"does not — status left alone, flagged for review")
 
         snapshot.append({
             "id": row["id"], "name": row.get("name"), "org": row.get("org"),
@@ -706,6 +763,9 @@ def main():
             # The discontinuation content signal, independent of the link verdict: the matched
             # phrase (if any) and whether this run marked the row not_running for it.
             "discontinued_phrase": disc_phrase,
+            # The phrase found on the PAGE, which is what actually licensed the write. Kept
+            # separate from the summary match so a snapshot shows which bar was met (4.9).
+            "discontinued_page_phrase": page_phrase,
             "marked_not_running": mark_not_running,
             # The whole repair record, accepted or not: the URL chosen, the title that
             # proved it, and every candidate that was rejected and why. This is what makes

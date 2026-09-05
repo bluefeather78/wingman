@@ -119,7 +119,7 @@ def cmd_worksheet():
     sample = pick_sample(catalog)
     ids = [o["id"] for o in sample]
     recipes = {r["opportunity_id"]: r for r in supabase_get(
-        url, "opportunity_signups", {"select": "*"}, key)
+        url, "opportunity_signups", {"select": "*"}, key, order_by="opportunity_id")
         if r["opportunity_id"] in ids}
 
     missing = [i for i in ids if i not in recipes]
@@ -218,7 +218,7 @@ def cmd_verify(proposed):
         return
     url, key, _ = load_catalog()
     stored = {r["opportunity_id"]: r for r in supabase_get(
-        url, "opportunity_signups", {"select": "*"}, key)}
+        url, "opportunity_signups", {"select": "*"}, key, order_by="opportunity_id")}
 
     print(f"\n  EXECUTION — posting to {len(proposed)} recipe(s) as {test_email}:")
     ok = 0

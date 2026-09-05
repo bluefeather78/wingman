@@ -75,12 +75,10 @@ _SURFACE_TIERS = (dc.TIER_PROOF, dc.TIER_CONFIDENT, dc.TIER_ADJUDICATE, dc.TIER_
 
 
 def _fetch_all():
-    from wingman.supabase_common import supabase_get, load_dotenv
-    load_dotenv()
-    su = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
-    if not su or not key:
-        raise SystemExit("[ERROR] SUPABASE_URL and a key must be set in .env.")
+    from wingman.supabase_common import supabase_get, require_service_key
+    # Service key REQUIRED: both sources need inactive rows — `--source queue` IS the pending
+    # queue, and the active-catalog match set must not silently lose the other pending rows (4.13).
+    su, key = require_service_key()
     return supabase_get(su, "opportunities", {"select": _SELECT}, key) or [], (
         os.environ.get("GEMINI_API_KEY"))
 

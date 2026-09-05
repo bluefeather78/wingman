@@ -112,7 +112,7 @@ def test_the_script_reads_only_two_columns(monkeypatch):
     monkeypatch.setenv("SUPABASE_SERVICE_KEY", "svc")
     monkeypatch.setattr(mod, "load_dotenv", lambda *a: None)
     monkeypatch.setattr(mod, "supabase_get",
-                        lambda url, table, params, key: seen.update(params) or [])
+                        lambda url, table, params, key, **kw: seen.update(params) or [])
     monkeypatch.setattr(mod.sys, "argv", ["wrap"])
     mod.main()
     assert seen["select"] == "userid,password_hash"

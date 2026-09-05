@@ -526,14 +526,10 @@ def main():
     args = ap.parse_args()
 
     if args.from_rejects:
-        import os as _os
-        from wingman.supabase_common import load_dotenv
-        load_dotenv()
-        su = _os.environ.get("SUPABASE_URL", "").rstrip("/")
-        key = _os.environ.get("SUPABASE_SERVICE_KEY") or _os.environ.get("SUPABASE_ANON_KEY")
-        if not su or not key:
-            print("[ERROR] SUPABASE_URL and a key must be set in .env.")
-            raise SystemExit(1)
+        from wingman.supabase_common import require_service_key
+        # Service key REQUIRED: fetch_rejected_rows reads REJECTED rows, which are inactive and
+        # therefore invisible under the anon key (4.13).
+        su, key = require_service_key()
         rows = fetch_rejected_rows(su, key, limit=args.limit, any_reason=args.any_reason)
         scope = "every rejected row" if args.any_reason else f"rejected as {ROUNDUP_REJECT_REASON}"
         print(f"[OK] {len(rows)} row(s) to classify ({scope}; free HTTP, no model calls)...")

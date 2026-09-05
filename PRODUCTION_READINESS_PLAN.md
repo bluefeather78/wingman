@@ -364,11 +364,22 @@ running the real thing did.
 
 ### Two things that need a human at the database, not in the code
 
-1. **`db/agent_locks_schema.sql` has NOT been run.** Until it is, the run lock falls back to a
-   local FILE lock and warns loudly on every acquisition. That still excludes two agents on THIS
-   machine — strictly more than the pipeline had before — but it cannot see a run on another
-   checkout, and `next_opportunity_id` does not exist, so ids fall back to `max+1` under the
-   lock. Running the file gets both.
+1. ~~`db/agent_locks_schema.sql` has NOT been run.~~ **RUN by Shama, 2026-09-05, and verified
+   live.** The lock now takes the `db` backend: acquire writes an `agent_locks` row, a second
+   agent is refused by name, `current_holder` sees the holder, the heartbeat advances the lease,
+   a wrong token cannot release and the real one can, and the console answers **409** through
+   the real HTTP route without starting anything. `next_opportunity_id` is seeded correctly at
+   **ec19575**, one past the live maximum of ec19574, so the sequence can never re-issue an
+   existing id.
+
+   **Running it immediately exposed a bug nothing else could have.** `_db_current` read the lock
+   table without `order_by`, inheriting this phase's `order=id` default — and `agent_locks` is
+   keyed on `name`. Every read of the lock 400'd, so acquiring worked (an INSERT) while the
+   REFUSAL path blew up. It is the exact failure `test_non_id_keyed_reads_name_their_key`
+   exists to catch, and the table was missing from that test's list because it was added in a
+   different commit. Fixed and pinned. Worth carrying forward: **every run_lock unit test mocks
+   `supabase_get` away, so no query string in that module was ever exercised against a real
+   PostgREST until the table existed to reject it.**
 2. **The four deploy-time items from Phase 1 are still outstanding**, carried forward again:
    read the `[client-ip]` line off the Render log; watch `/api/auth/refresh` for a burst of
    401s; set `EMAIL_POSTAL_ADDRESS`; leave `CSP_ENFORCE` unset until the report-only violations

@@ -489,6 +489,97 @@ is rebuilding one, or adding a second thing that does the same job badly.
    gate in chat. Phase 4's scheduled paid runs are M3 territory (approval moves from per-run to
    per-schedule) and the toggle + dollar ceiling the phase row asks for is what makes that safe.
 
+## STATUS: Phase 5 is DONE on branch `phase5-product` (2026-09-05)
+
+Product accuracy. Branched off `phase4-shared-state`. **Pushed but not merged — Shama is
+reviewing.**
+
+| | |
+|---|---|
+| Exit test | **two of three met, the third deferred by decision 16.** *Frontend tests in CI* — a `frontend` job runs `npm ci` → `tsc --noEmit` → `vitest run`. *Bundle −300 KB* — **−453 KiB of JS and −3.89 MiB of fonts, measured**. *Golden-set score holds* — the paid run is deferred; M10 is unaffected |
+| Tests | frontend **0 → 132** (8 files); backend unchanged at **2724**, still green |
+| Verified how | `tsc --noEmit` clean · 132 vitest cases · a real `expo export -p web` · a Metro dev bundle (973 modules, **zero require cycles**, down from one) |
+| Marquee | **one dedicated M9 commit**, approved in advance (decision 13). No prompt text moved — there is none left in the bundle |
+
+| Item | State |
+|---|---|
+| grade parser context | **DONE** — split into `parseGradeLevel` (explicit) / `parseGradeFromText` (prose) |
+| date validation | **DONE** — `src/lib/dateISO.ts`, applied at all four extraction points |
+| sort-on-refresh + calendar ids by label | **DONE** |
+| synthesis failure keeps transcript | **DONE** |
+| unreachable ≠ revoked | **DONE** |
+| reset singletons on logout | **DONE** — `src/lib/sessionScope.ts` |
+| one retry per action | **DONE** — `MARQUEE M9 (Phase 5)` |
+| client timeouts | **DONE** — same M9 commit |
+| drop icon fonts + dead code | **DONE** — measured below |
+| Vitest ~40 cases | **DONE — 132**, plus the CI job |
+| a11y labels | **DONE** — `IconBtn`'s label is now a required prop |
+| split big screens | **DONE for `tracker.tsx` (1,228 → 780)**; `finder.tsx` is largely unchanged — see below |
+
+### The measured bundle number
+
+Exported a real production bundle from this phase's parent commit in a worktree and from the
+tree, on the same machine:
+
+| | before | after | |
+|---|---|---|---|
+| entry JS | 1,918,461 B | 1,454,318 B | **−453 KiB (−24%)** |
+| `.ttf` files | 26 | 7 | −19 |
+| `.ttf` bytes | 4,723,920 B | 647,080 B | **−3.89 MiB** |
+| `dist` total | 7,216 KB | 2,744 KB | **−62%** |
+
+The seven surviving fonts are the two Google families the design system uses. The exit test
+asked for −300 KB.
+
+### Three things worth carrying forward
+
+1. **Making a prop REQUIRED beats adding a label.** `IconBtn`'s `label` is `string`, not
+   `string?`, so the next unlabelled icon button is a build error. Adding it surfaced all five
+   existing call sites immediately. An optional prop gets left off and there is no way to
+   notice from looking at the screen — which is how there came to be five labels in the whole
+   app.
+2. **Running Metro caught what `tsc` and the tests could not.** The date validators first
+   lived in `status.ts`, which already imports `trackerStore` — so `trackerStore` importing
+   them back made a **require cycle**. Metro warns these "can result in uninitialized values".
+   Both uses are inside functions so it was benign, but a benign cycle is one edit from a
+   module-init `undefined` that fails at runtime and nowhere else. `src/lib/dateISO.ts` is a
+   leaf and cannot participate in one. This is Phase 3's lesson again in a different medium:
+   green units did not mean a clean bundle.
+3. **The compiler can make a refactor safe.** Splitting a 136-key shared `StyleSheet` across
+   three files is normally where a silent regression hides — a missed key becomes `undefined`
+   and renders as nothing. `StyleSheet.create` returns a TYPED object, so every misplaced key
+   was a build error, in both directions, along with eleven imports the split made dead.
+
+### Deliberately NOT done, each needing a fresh approval
+
+Both are real, both are in `frontend_report`, and **neither is covered by decision 13** — that
+approval named the retry caps and the client timeouts and nothing else. They are recorded here
+rather than done quietly, which is exactly what MARQUEE_DECISIONS.md rule 1 is for.
+
+1. **Finding 6 — "Check for updates" can run concurrent PAID passes.** The guard is component
+   state, and expo-router remounts the screen on every visit, so leaving the Quest Log and
+   coming back re-enables the button while a pass (N × ~$0.07) is still running. The fix is
+   the same shape as finding 18's: move the in-flight flag to a module singleton. **M9** —
+   it is the guard on a paid path.
+2. **Finding 14 — the dead tag-scoring path, and the duplicated add.** `scoreOpportunitiesForTag`
+   is unreachable (`setSelectedTag` only ever receives `null`), and `addOneToTracker` in
+   `finder.tsx` duplicates `addCatalogOpportunity` in `src/api/trackerAdd.ts`. Deleting the
+   first and collapsing the second both **remove a paid call path**, which is M9 territory
+   whatever the path's reachability. The `kindForOpp` duplicate WAS removed — it is pure and
+   makes no call.
+
+`finder.tsx` is therefore still 1,987 lines. Its recommended split leans on deleting those two
+paths first (the audit says so explicitly: *"First delete the dead tag-scoring path (~130) and
+the `addOneToTracker`/`kindForOpp` duplicates (~95)"*), so the rest is best done in the same
+pass as the approval above. Its pure data did move out, to `src/lib/finderSearch.ts`.
+
+### Needs a human
+
+Nothing new. Phase 4's four migrations are still outstanding and are unaffected by anything
+here; Phase 1's four deploy-time items are still outstanding.
+
+---
+
 ## STATUS: Phase 4 is DONE on branch `phase4-shared-state` (2026-09-05)
 
 Shared state. Five items, built as five commits plus one marquee commit. **Pushed but not
@@ -925,7 +1016,7 @@ departures section for why `agent_runs` cannot hold a lock**; bank cost before p
 merge would revert the `wingman/` reorg; its plan doc was ported and the prototype is parked as
 an M8+M9 item**; CI marquee-tag check; ~~move one-offs/eval out of root~~ **already done — `scripts/one-off/` and `eval/` exist and `server.py` is the only `.py` left at the root (verified 2026-09-05)**; `scrape_common.py` **(now `wingman/scrape_common.py`)**; tests for untested paid paths | Wk 3–5 | 6 d | **none taken — no prompt text moved and no paid call changed**; decision 4 answered yes | **ALL THREE MET**, each pinned by a named test, and the lock verified live against the real `agent_locks` table |
 | **4 DONE** Shared state — handoff tokens survive a second worker; lock file batch-only; idempotent rollups via RPC; `jsonb_set` RPC for saves; leads + snapshots in tables; ~~scheduled worker (free agents first, paid behind toggle + dollar ceiling)~~ **DROPPED 2026-09-05 (decision 14 — Shama has dropped the idea; do not build it)**; ~~optional direct Postgres for hot queries~~ **SKIPPED 2026-09-05 (decision 15 — deferred to the launch gate)** | Wk 5–7 | 6 d | ~~M3 per scheduled paid run~~ **not needed — no scheduler.** M9 granted for the Gemini lock change (decision 13) | ~~two instances pass the 50 rps test~~ **deferred with every other throughput bar (decisions 3 and 8)**; second machine sees same lead queue |
-| 5 NEXT Product accuracy — grade parser context; date validation; sort-on-refresh + calendar ids by label; synthesis failure keeps transcript; unreachable ≠ revoked; reset singletons on logout; one retry per action; client timeouts; drop icon fonts + dead ~~prompts/~~code (**no dead prompt text is left in the bundle — S1-1 removed it; verified 2026-09-05, so this is NOT an M8 item**); Vitest ~40 cases; a11y labels; split big screens | Wk 6–8 | 5 d | ~~none~~ **M9 granted for the retry caps + client timeouts (decision 13)** | frontend tests in CI; ~~golden-set score holds~~ **the paid golden run is DEFERRED (decision 16); the M10 harness is still kept in sync**; bundle −300 KB |
+| **5 DONE** Product accuracy — grade parser context; date validation; sort-on-refresh + calendar ids by label; synthesis failure keeps transcript; unreachable ≠ revoked; reset singletons on logout; one retry per action; client timeouts; drop icon fonts + dead ~~prompts/~~code (**no dead prompt text is left in the bundle — S1-1 removed it; verified 2026-09-05, so this is NOT an M8 item**); Vitest ~40 cases; a11y labels; split big screens | Wk 6–8 | 5 d | ~~none~~ **M9 granted for the retry caps + client timeouts (decision 13)** | frontend tests in CI; ~~golden-set score holds~~ **the paid golden run is DEFERRED (decision 16); the M10 harness is still kept in sync**; bundle −300 KB |
 | 6 Operate — dashboards, dependency bumps, key rotation, runbook, Stripe webhook route, re-arm trial cron | Wk 8+ | ongoing | none | "is it up / fast / what did it cost" on one screen |
 
 ## Trade-offs worth weighing

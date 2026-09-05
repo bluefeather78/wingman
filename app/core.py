@@ -247,43 +247,9 @@ def record_interactive_cost(surface, usage, model=None, userid=None, feature=Non
         return
 
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
-    key = (surface, today)
-    with _interactive_lock:
-        run_id = _interactive_rollup.get(key)
-        if run_id is None:
-            # Reuse an existing row for today if the server restarted mid-day.
-            existing = _supabase_request("agent_runs", params={
-                "select": "id", "agent": f"eq.{surface}", "mode": f"eq.{today}", "limit": "1"})
-            if existing:
-                run_id = existing[0]["id"]
-            else:
-                created = _supabase_request("agent_runs", method="POST", data=[{
-                    "agent": surface,
-                    "mode": today,
-                    "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                    "items_processed": 0, "cost_usd": 0,
-                    "total_web_searches": 0, "errors": 0,
-                    "notes": f"Rolled-up interactive app calls for {today}"
-                             + (f" ({model})" if model else ""),
-                }], extra_headers={"Prefer": "return=representation"})
-                run_id = created[0]["id"] if created else None
-            if run_id is None:
-                return
-            _interactive_rollup[key] = run_id
-
-        current = _supabase_request("agent_runs", params={
-            "select": "items_processed,cost_usd,total_web_searches", "id": f"eq.{run_id}"})
-        if not current:
-            return
-        row = current[0]
-        _supabase_request("agent_runs", method="PATCH", params={"id": f"eq.{run_id}"}, data={
-            "items_processed": (row.get("items_processed") or 0) + 1,
-            "cost_usd": round(float(row.get("cost_usd") or 0) + cost, 6),
-            "total_web_searches": (row.get("total_web_searches") or 0) + searches,
-            # finished_at is kept current so the row never reads as "interrupted".
-            "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        })
-        invalidate_runs_cache()
+    notes = (f"Rolled-up interactive app calls for {today}"
+             + (f" ({model})" if model else ""))
+    _bump_interactive_run(surface, today, calls=1, cost=cost, searches=searches, notes=notes)
 
     # Outside the rollup lock: per-user attribution touches a different table and must not
     # serialize behind it.
@@ -301,6 +267,112 @@ def record_interactive_cost(surface, usage, model=None, userid=None, feature=Non
             output_tokens=usage.get("output_tokens") or 0,
             searches=searches,
         )
+
+
+# Flipped permanently the first time PostgREST reports the RPC missing (db/cost_rollup_rpc.sql
+# not run). Permanent so an un-migrated checkout costs one failed call rather than one per AI
+# call forever.
+_bump_rpc_available = True
+_bump_rpc_warned = False
+
+
+def _bump_rpc(fn, payload):
+    """Call one of the two rollup RPCs. Returns True if it landed, False to use the fallback.
+
+    Raises nothing: both callers are best-effort accounting that must never break or slow the
+    request that triggered them.
+    """
+    global _bump_rpc_available, _bump_rpc_warned
+    if not _bump_rpc_available or not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return False
+    try:
+        _supabase_request_strict(f"rpc/{fn}", "POST", data=payload)
+        return True
+    except urllib.error.HTTPError as e:
+        code = (_error_body(e) or {}).get("code")
+        if code in _MISSING_FUNCTION_CODES:
+            _bump_rpc_available = False
+            if not _bump_rpc_warned:
+                _bump_rpc_warned = True
+                print("[WARN] cost rollup RPCs missing — accounting falls back to "
+                      "read-then-PATCH, which loses increments across workers. Run "
+                      "db/cost_rollup_rpc.sql in the Supabase SQL editor.")
+            return False
+        print(f"[WARN] {fn} failed: {e}")
+        return False
+    except Exception as e:                                            # noqa: BLE001
+        print(f"[WARN] {fn} failed: {e}")
+        return False
+
+
+def _bump_interactive_run(surface, day, calls, cost, searches, notes):
+    """Add one interactive call's totals to today's rollup row for `surface`.
+
+    ONE STATEMENT (Phase 4, perf_report finding 11). This used to be remember-the-id, SELECT
+    the counters, PATCH counters+1 — three round trips holding a global lock, and a race the
+    lock could only hide inside one process: two workers both read N and both write N+1, so
+    one call's cost vanished from the console. `_interactive_rollup`, the per-process id cache
+    that made the first round trip skippable, made the race WORSE rather than better — each
+    worker independently believed it owned the row.
+    """
+    if _bump_rpc("bump_interactive_run", {
+            "p_agent": surface, "p_mode": day, "p_calls": int(calls or 0),
+            "p_cost": round(float(cost or 0), 6), "p_searches": int(searches or 0),
+            "p_notes": notes}):
+        invalidate_runs_cache()
+        return
+
+    # Fallback: the pre-Phase-4 read-then-PATCH, race and all. Kept because a checkout where
+    # db/cost_rollup_rpc.sql has not been run must still attribute spend — losing accounting
+    # entirely is strictly worse than losing an increment under concurrency.
+    try:
+        _bump_interactive_run_via_rest(surface, day, calls, cost, searches, notes)
+    except Exception as e:                                            # noqa: BLE001
+        # record_interactive_cost's contract is "best-effort and fully swallowed on failure:
+        # cost accounting must never break or slow the user-facing request that triggered it."
+        # _supabase_request swallows its own errors, so this only catches the unexpected —
+        # but the contract should hold because it is stated, not because of what a helper
+        # happens to do today.
+        print(f"[WARN] Could not roll up {surface} call: {e}")
+
+
+def _bump_interactive_run_via_rest(surface, day, calls, cost, searches, notes):
+    key = (surface, day)
+    with _interactive_lock:
+        run_id = _interactive_rollup.get(key)
+        if run_id is None:
+            # Reuse an existing row for today if the server restarted mid-day.
+            existing = _supabase_request("agent_runs", params={
+                "select": "id", "agent": f"eq.{surface}", "mode": f"eq.{day}", "limit": "1"})
+            if existing:
+                run_id = existing[0]["id"]
+            else:
+                created = _supabase_request("agent_runs", method="POST", data=[{
+                    "agent": surface,
+                    "mode": day,
+                    "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "items_processed": 0, "cost_usd": 0,
+                    "total_web_searches": 0, "errors": 0,
+                    "notes": notes,
+                }], extra_headers={"Prefer": "return=representation"})
+                run_id = created[0]["id"] if created else None
+            if run_id is None:
+                return
+            _interactive_rollup[key] = run_id
+
+        current = _supabase_request("agent_runs", params={
+            "select": "items_processed,cost_usd,total_web_searches", "id": f"eq.{run_id}"})
+        if not current:
+            return
+        row = current[0]
+        _supabase_request("agent_runs", method="PATCH", params={"id": f"eq.{run_id}"}, data={
+            "items_processed": (row.get("items_processed") or 0) + int(calls or 0),
+            "cost_usd": round(float(row.get("cost_usd") or 0) + float(cost or 0), 6),
+            "total_web_searches": (row.get("total_web_searches") or 0) + int(searches or 0),
+            # finished_at is kept current so the row never reads as "interrupted".
+            "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        })
+        invalidate_runs_cache()
 
 
 def record_interactive_cost_async(surface, usage, model=None, userid=None, feature=None):
@@ -430,6 +502,27 @@ def _write_user_cost(userid, day, surface, feature, model, calls, input_tokens,
     global _user_costs_available, _user_costs_has_model
     if not userid or not _user_costs_available or not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return
+
+    # ONE STATEMENT when db/cost_rollup_rpc.sql has been run (Phase 4, perf_report finding 11).
+    # user_costs already carried the unique constraint this needs — `user_costs_grain` — so the
+    # read-then-PATCH below was never necessary; it was written that way only because
+    # PostgREST's own upsert REPLACES a conflicting row where these counters must ADD.
+    if _bump_rpc("bump_user_cost", {
+            "p_userid": userid, "p_day": day, "p_surface": surface, "p_feature": feature,
+            # "" and not None: the grain constraint includes model and Postgres treats NULLs
+            # as DISTINCT, so a NULL would conflict with nothing and mint a fresh row on every
+            # single call — the opposite of a rollup.
+            "p_model": (model or "") if _user_costs_has_model else "",
+            "p_calls": int(calls or 0),
+            "p_input_tokens": int(input_tokens or 0),
+            "p_output_tokens": int(output_tokens or 0),
+            "p_searches": int(searches or 0),
+            "p_cost": round(float(cost or 0), 6),
+            "p_at": now.isoformat()}):
+        return
+
+    # Fallback: the pre-Phase-4 read-then-PATCH, race and all — and the only path that can
+    # DIAGNOSE an un-migrated user_costs table, which is why the latches below still live here.
     key = (userid, day, surface, feature, model)
     try:
         with _user_costs_lock:

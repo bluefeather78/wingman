@@ -271,3 +271,88 @@ def test_ops_console_knows_the_same_four_scripts():
     os.environ.setdefault("WINGMAN_ENABLE_OPS", "1")
     from ops import core
     assert set(core.CATALOG_INSERT_SCRIPTS) == set(_INSERTING_AGENTS)
+
+
+# --------------------------------------------------------------------------------------
+# Two bugs a LIVE smoke test found that every mocked test above missed. Both are here so the
+# next change to current_holder has to keep them fixed.
+# --------------------------------------------------------------------------------------
+
+def test_current_holder_falls_back_to_the_file_lock_when_the_table_is_missing(monkeypatch):
+    """THE BUG: with Supabase creds present but db/agent_locks_schema.sql not run — the state
+    of every checkout until somebody opens the SQL editor — the 42P01 from the DB read jumped
+    past the file fallback to `return None`. The console then reported the lock FREE while a
+    run held the file lock, and launched a second paid agent on top of it. Observed live; no
+    mocked test caught it, because they all mocked the table as present."""
+    fake = FakeDB(missing_table=True)
+    monkeypatch.setattr(rl, "supabase_get", fake.get)
+    monkeypatch.setattr(rl, "supabase_post", fake.post)
+    held = rl.RunLock(rl.CATALOG_INSERT, "scraper", "http://db", "svc").acquire()
+    assert held.backend == "file"
+    assert rl.current_holder("http://db", "svc") is not None, (
+        "reported the lock free while a run was holding it")
+    held.release()
+    assert rl.current_holder("http://db", "svc") is None
+
+
+def test_an_empty_lock_table_is_authoritative_not_a_fallback(monkeypatch, db):
+    """When the table EXISTS and holds no row, nobody holds the lock — do not then go reading
+    a stale file left by an old run on this box."""
+    path = rl._file_lock_path(rl.CATALOG_INSERT)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"holder": "ancient run pid 1 on nowhere",
+                   "expires_at": (rl._now() + datetime.timedelta(seconds=900)).isoformat()}, f)
+    assert rl.current_holder("http://db", "svc") is None
+
+
+# --- a lock left by a process that is provably gone -------------------------------------
+
+def _dead_holder():
+    import socket
+    return f"scraper pid 999999 on {socket.gethostname()}"
+
+
+def test_a_lock_left_by_a_dead_process_on_this_host_is_taken_over_at_once(monkeypatch):
+    """A lease means a crashed run cannot wedge the pipeline — but 900s is a long time to stare
+    at a lock left by a process you just watched die. gemini_common's lock already solves this
+    with a pid check; the same rule is used here."""
+    path = rl._file_lock_path(rl.CATALOG_INSERT)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"holder": _dead_holder(),
+                   "expires_at": (rl._now() + datetime.timedelta(seconds=900)).isoformat()}, f)
+    lock = rl.RunLock(rl.CATALOG_INSERT, "scraper").acquire()   # lease NOT expired
+    assert lock.backend == "file"
+    lock.release()
+
+
+def test_a_dead_holder_is_not_reported_as_holding(monkeypatch):
+    path = rl._file_lock_path(rl.CATALOG_INSERT)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"holder": _dead_holder(),
+                   "expires_at": (rl._now() + datetime.timedelta(seconds=900)).isoformat()}, f)
+    assert rl.current_holder() is None
+
+
+def test_a_LIVE_holder_on_this_host_still_blocks():
+    """The other half. If the pid check were too eager it would hand the lock to a second
+    agent while the first is mid-run, which is the whole failure this lock prevents."""
+    live = rl.RunLock(rl.CATALOG_INSERT, "scraper").acquire()
+    assert rl.current_holder() is not None
+    with pytest.raises(rl.LockBusy):
+        rl.RunLock(rl.CATALOG_INSERT, "hub_miner").acquire()
+    live.release()
+
+
+def test_a_holder_on_another_machine_is_never_judged_by_pid():
+    """Its pid means nothing here, so it waits out the lease — which is what the lease is for."""
+    assert rl._holder_is_dead_here("scraper pid 1 on some-other-box") is False
+    assert rl._holder_is_dead_here("") is False
+    assert rl._holder_is_dead_here("a holder string with no pid") is False
+
+
+def test_an_ambiguous_liveness_result_assumes_alive(monkeypatch):
+    """A false 'dead' verdict lets two inserting agents race — the exact thing being
+    prevented. Same fail-safe rule as gemini_common._pid_is_alive."""
+    monkeypatch.setattr(rl.os, "kill", lambda *a: (_ for _ in ()).throw(PermissionError()))
+    import socket
+    assert rl._holder_is_dead_here(f"scraper pid 4242 on {socket.gethostname()}") is False

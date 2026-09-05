@@ -1184,6 +1184,14 @@ _VALID_EVENT_ACTIONS = {
 }
 
 
+def _oversized_context(context):
+    """True if this event's context would not fit in EVENT_MAX_CONTEXT_BYTES as JSON."""
+    try:
+        return len(json.dumps(context).encode("utf-8")) > EVENT_MAX_CONTEXT_BYTES
+    except (TypeError, ValueError):
+        return True                       # unserializable is "cannot store", same outcome
+
+
 def record_user_events(userid, events):
     """Buffer a batch of behavioral events for this user. Never raises, never blocks.
 
@@ -1202,7 +1210,12 @@ def record_user_events(userid, events):
             return 0
         stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         rows = []
-        for ev in events:
+        # S1-5, finding M4: bound the batch and each context dict. The buffer below is
+        # capped by COUNT, so without these one caller could still push arbitrary bytes into
+        # user_events.context — and dropping the oldest to make room means those bytes evict
+        # real telemetry rather than merely wasting space. The client batches one tick's
+        # worth of events, which is single digits.
+        for ev in events[:EVENTS_MAX_PER_REQUEST]:
             if not isinstance(ev, dict):
                 continue
             action = str(ev.get("action") or "").strip()
@@ -1213,6 +1226,10 @@ def record_user_events(userid, events):
             context = ev.get("context")
             if not isinstance(context, dict):
                 context = {}
+            elif _oversized_context(context):
+                # Dropped, not truncated: a half a context dict is worse than none — it
+                # reads as real telemetry while being silently incomplete.
+                context = {"dropped": "context too large"}
             rows.append({"userid": uid, "ts": stamp, "action": action,
                          "opportunity_id": opp, "context": context})
         if not rows:

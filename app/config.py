@@ -132,6 +132,27 @@ AI_UPSTREAM_TIMEOUT_SECONDS = float(os.environ.get("AI_UPSTREAM_TIMEOUT_SECONDS"
 # for the same reason.
 ANTHROPIC_MAX_WEB_SEARCH_USES = int(os.environ.get("ANTHROPIC_MAX_WEB_SEARCH_USES", "") or 1)
 
+# ---------- Body caps on the rest of the app (S1-5; finding M4) ----------
+# S0-2 capped the two AI proxies and the resume upload; every OTHER route still read its
+# body with no ceiling at all, so /api/data/save, /api/events, /api/register and the rest
+# each let one request buffer an arbitrary amount of memory. This is the default ceiling
+# json_body applies, i.e. every JSON route that has not asked for its own.
+#
+# 1 MB rather than something tighter: /api/data/save carries the student's whole tracker or
+# profile for one key, and a 37 KB tracker is ordinary. Tight enough to bound a request,
+# loose enough that no real one hits it.
+JSON_MAX_BODY_BYTES = int(os.environ.get("JSON_MAX_BODY_BYTES", "") or 1024 * 1024)
+# A single users.data value. The body cap above bounds ONE request; this bounds what
+# accumulates in the row, which is the thing that actually grows without limit — the row is
+# read in full on every app open.
+USER_DATA_MAX_VALUE_BYTES = int(
+    os.environ.get("USER_DATA_MAX_VALUE_BYTES", "") or 512 * 1024)
+# One event's `context` dict, which lands in user_events.context (jsonb). The events buffer
+# is capped by count, so without this one caller could still push arbitrary bytes per row.
+EVENT_MAX_CONTEXT_BYTES = int(os.environ.get("EVENT_MAX_CONTEXT_BYTES", "") or 4096)
+# Events accepted from one request. The client batches a tick's worth — single digits.
+EVENTS_MAX_PER_REQUEST = int(os.environ.get("EVENTS_MAX_PER_REQUEST", "") or 100)
+
 # ---------- User-submitted opportunity caps (S1-4; findings M1, M10) ----------
 # POST /api/user-submitted-opportunities took a row from ANYBODY with no token at all, and
 # every call reads the whole catalog (~1,400 rows across two pages) for dedupe — a cheap

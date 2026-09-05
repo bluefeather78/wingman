@@ -67,6 +67,18 @@ services:
       # local dev, so Google sign-in from the deployed web app won't complete.
       - key: GOOGLE_APP_REDIRECTS
         sync: false
+      # S1-5, finding M11. app/main.py defaults to the two app origins whenever RENDER is
+      # set, so this is only needed to ADD one (a staging origin, the wingman-web static
+      # site if the domain is ever pointed back at it). Comma-separated exact origins;
+      # setting it to "*" restores the old wide-open behaviour and should not be done.
+      - key: CORS_ALLOW_ORIGINS
+        sync: false
+      # S1-5. The CSP ships REPORT-ONLY until it has been measured against a real
+      # `expo export` bundle — that build inlines @font-face rules and preload tags into the
+      # document head, so the policy needs one iteration. Read the violation reports, fix
+      # the policy in app/main.py, THEN set this to 1.
+      - key: CSP_ENFORCE
+        sync: false
       # ---- Lifecycle email (Resend) ----
       # Without RESEND_API_KEY the send path runs in MOCK mode: signup and cancel still
       # work, nothing is mailed, and no email_sends row is written (a claim row would

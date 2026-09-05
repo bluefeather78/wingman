@@ -1,8 +1,11 @@
 """Per-account data + location routes. Translated from server.py's handle_data_save /
 handle_data_load / handle_update_location (docs/archive/PLAN_1_decompose.md).
 """
+import json
+
 from fastapi import APIRouter, Depends
 
+from app.config import USER_DATA_MAX_VALUE_BYTES
 from app.core import (touch_user_activity, update_user_data, get_user_data,
                       update_user_location)
 from app.deps import (json_body, json_response, json_error, require_subscription,
@@ -30,6 +33,16 @@ def handle_data_save(body: dict = Depends(json_body),
     key = body.get("key")
     if not key:
         return json_error(400, "Missing key.")
+    # S1-5, finding M4. The request body is capped by json_body, but this row ACCUMULATES:
+    # every key written stays in users.data, which is read in full on every app open. So the
+    # per-value ceiling is the one that actually bounds growth, and it has to be checked on
+    # the serialized form — the size that reaches the jsonb column, not len() of a dict.
+    try:
+        value_bytes = len(json.dumps(body.get("value")).encode("utf-8"))
+    except (TypeError, ValueError):
+        return json_error(400, "That value could not be stored.")
+    if value_bytes > USER_DATA_MAX_VALUE_BYTES:
+        return json_error(413, "That is too much data to save in one go.")
     # "Changed something", as opposed to data_load's "opened the app".
     touch_user_activity(userid, "data_save")
     try:

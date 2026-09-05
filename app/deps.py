@@ -7,6 +7,7 @@ import secrets
 
 from fastapi import Depends, HTTPException, Request, Response
 
+from app.config import JSON_MAX_BODY_BYTES
 from app.core import (get_user_account, subscription_state, _login_payload,
                       record_api_error)
 from app.auth import issue_tokens, get_current_user, get_optional_user, AuthedUser
@@ -94,8 +95,21 @@ async def read_json_body(request: Request):
 # Anything that awaits inside the handler body must STAY `async def` — the routes here
 # don't, but that is the line.
 async def json_body(request: Request):
-    """The parsed JSON body, as a dependency. Malformed/empty both give {}."""
-    return await read_json_body(request)
+    """The parsed JSON body, as a dependency. Malformed/empty both give {}.
+
+    Capped at JSON_MAX_BODY_BYTES (S1-5, finding M4). S0-2 capped the two AI proxies and
+    the resume upload; every other route still read its body with no ceiling, so this is
+    where the rest of the app gets one — putting it on the shared dependency rather than
+    route by route means a NEW route is bounded by default instead of by remembering.
+    An over-large body raises 413 before the handler runs.
+    """
+    raw = await _json_raw_body(request)
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
 
 
 async def raw_body(request: Request) -> bytes:
@@ -150,6 +164,10 @@ def capped_raw_body(max_bytes):
         return request._body
 
     return _capped
+
+
+# Bound here rather than beside json_body because capped_raw_body is defined above it.
+_json_raw_body = capped_raw_body(JSON_MAX_BODY_BYTES)
 
 
 async def read_json_body_strict(request: Request):

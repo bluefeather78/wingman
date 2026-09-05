@@ -33,9 +33,19 @@ app = FastAPI(title="Highschool Wingman", docs_url=None, redoc_url=None, openapi
 # Phase 3 (docs/archive/PLAN_3_rn.md): the Expo/RN-web client is a SEPARATE ORIGIN from this API — in dev
 # (Metro on :8081 -> API on :8000) and in prod (Render Static Site -> Render Web Service) —
 # so the browser needs CORS to call it. Auth is a Bearer header, not a cookie, so credentials
-# mode is off and a "*" origin is safe (nothing rides on the ambient session). Set
-# CORS_ALLOW_ORIGINS (comma-separated) to lock this to the static-site origin in production.
-_cors_origins = os.environ.get("CORS_ALLOW_ORIGINS", "*")
+# mode is off and nothing rides on the ambient session.
+#
+# S1-5, finding M11: the default was "*" and render.yaml never set CORS_ALLOW_ORIGINS, so
+# production shipped wide open. Not exploitable on its own — with allow_credentials=False a
+# cross-origin read still needs the caller's own bearer — but there is no reason for it in
+# production, where the app and the API share one origin and the browser sends no preflight
+# at all. So: on Render, "*" means the exact app origins; everywhere else it still means "*",
+# because a dev machine's origins are not knowable here and a CORS rule that breaks
+# `expo start` gets deleted rather than fixed.
+_DEFAULT_PROD_ORIGINS = "https://highschoolwingman.com,https://www.highschoolwingman.com"
+_cors_origins = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
+if not _cors_origins:
+    _cors_origins = _DEFAULT_PROD_ORIGINS if os.environ.get("RENDER") else "*"
 _allow_origins = ["*"] if _cors_origins.strip() == "*" else [
     o.strip() for o in _cors_origins.split(",") if o.strip()
 ]
@@ -46,6 +56,101 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------- Security headers (S1-5, finding M11) ----------------
+#
+# There were none. The only middleware on this app added cache-control.
+#
+# PURE ASGI, not BaseHTTPMiddleware: the perf report already flags the existing
+# BaseHTTPMiddleware-based one (each adds a task group and re-wraps the response stream),
+# and adding a second of the same kind compounds it. This one mutates the header list in
+# the http.response.start message and touches nothing else.
+_SECURITY_HEADERS = [
+    # 2 years, the value HSTS preload requires. Only ever sent over https — sending it on a
+    # plain-http dev response would pin localhost to https in the developer's browser, which
+    # is both wrong and irritatingly persistent.
+    (b"strict-transport-security", b"max-age=63072000; includeSubDomains"),
+    (b"x-content-type-options", b"nosniff"),
+    (b"referrer-policy", b"strict-origin-when-cross-origin"),
+    # Nothing here is meant to be framed. walkthrough.html is the exception and is handled
+    # below — the landing page iframes it.
+    (b"x-frame-options", b"DENY"),
+    # No API in this app needs a camera, a microphone, or a location.
+    (b"permissions-policy", b"camera=(), microphone=(), geolocation=(), payment=()"),
+]
+
+# The landing page iframes public/walkthrough.html, so it gets 'self' rather than DENY —
+# a blanket DENY would blank the film on the landing page.
+_FRAMEABLE_PATHS = ("/walkthrough.html",)
+
+# CSP, REPORT-ONLY to start with. `expo export` inlines @font-face rules and preload tags
+# into the document head, and the exported bundle is what has to be measured against — so
+# this ships observing rather than enforcing, exactly as the plan asks. Read the reports off
+# a real exported bundle, then flip CSP_ENFORCE=1.
+#
+#   'unsafe-inline' for style: expo's inlined @font-face and the RN-web style injector.
+#   'unsafe-inline' for script: the walkthrough's playhead-reset script this file injects.
+#   data: for img/font: the design system's inlined SVG icons.
+#   connect-src 'self' https: — the API is same-origin in production, but dev runs Metro on
+#     :8081 against the API on :8000, and a policy that breaks dev gets deleted.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' data: https://fonts.gstatic.com; "
+    "img-src 'self' data: blob: https:; "
+    "connect-src 'self' https:; "
+    "media-src 'self' data: blob:; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'self'"
+)
+_CSP_ENFORCE = (os.environ.get("CSP_ENFORCE", "").strip().lower()
+                in ("1", "true", "yes"))
+_CSP_HEADER = (b"content-security-policy" if _CSP_ENFORCE
+               else b"content-security-policy-report-only")
+
+
+class SecurityHeaders:
+    """Pure-ASGI middleware adding the response headers above."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        # request.url.scheme is the INTERNAL hop's scheme behind Render's proxy, so
+        # x-forwarded-proto is what actually says whether the student is on https.
+        headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        proto = (headers.get(b"x-forwarded-proto") or b"").decode().split(",")[0].strip()
+        is_https = proto == "https" or scope.get("scheme") == "https"
+
+        async def _send(message):
+            if message["type"] == "http.response.start":
+                out = message.setdefault("headers", [])
+                existing = {k.lower() for k, _ in out}
+                for name, value in _SECURITY_HEADERS:
+                    if name in existing:
+                        continue
+                    if name == b"strict-transport-security" and not is_https:
+                        continue
+                    if name == b"x-frame-options" and path in _FRAMEABLE_PATHS:
+                        out.append((name, b"SAMEORIGIN"))
+                        continue
+                    out.append((name, value))
+                if _CSP_HEADER not in existing and b"content-security-policy" not in existing:
+                    out.append((_CSP_HEADER, _CSP.encode()))
+            await send(message)
+
+        await self.app(scope, receive, _send)
+
+
+app.add_middleware(SecurityHeaders)
 
 
 # `expo export -p web` content-hashes every file it writes under these two prefixes

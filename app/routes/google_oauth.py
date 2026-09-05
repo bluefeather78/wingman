@@ -41,10 +41,35 @@ def _host(request):
     return request.headers.get("Host", f"localhost:{PORT}")
 
 
-def _redirect_uri(request, path):
+def _request_scheme(request):
+    """"http" only on loopback; "https" everywhere else.
+
+    Derived from the Host header rather than request.url.scheme, which behind Render's
+    proxy is the INTERNAL hop's scheme and would read "http" in production.
+    """
     host = _host(request)
-    scheme = "http" if host.startswith("localhost") or host.startswith("127.0.0.1") else "https"
-    return f"{scheme}://{host}{path}"
+    return ("http" if host.startswith("localhost") or host.startswith("127.0.0.1")
+            else "https")
+
+
+def _redirect_uri(request, path):
+    return f"{_request_scheme(request)}://{_host(request)}{path}"
+
+
+def _state_cookie(resp, name, value, request):
+    """Set one short-lived OAuth-state cookie.
+
+    S1-5, finding M11: these were httponly but not `secure`, so on any http hop the CSRF
+    state travelled in the clear. Set secure whenever the request is not loopback —
+    unconditionally would break local dev over plain http, where the browser silently drops
+    a Secure cookie and the callback then fails the CSRF check with no visible cause.
+    SameSite stays at the `lax` default, which is what a top-level OAuth redirect needs;
+    `strict` would drop the cookie on the way back from Google.
+    """
+    resp.set_cookie(name, value, max_age=GOOGLE_TOKEN_TTL_SECONDS,
+                    httponly=True, path="/", samesite="lax",
+                    secure=_request_scheme(request) == "https")
+    return resp
 
 
 # Google treats 127.0.0.1 and localhost as DIFFERENT redirect URIs and matches them exactly,
@@ -192,9 +217,7 @@ def handle_google_start(request: Request):
         }
     resp = RedirectResponse(f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(params)}", status_code=302)
     # Short-lived, HttpOnly CSRF protection for the handshake only (not an app session).
-    resp.set_cookie("google_oauth_state", state, max_age=GOOGLE_TOKEN_TTL_SECONDS,
-                    httponly=True, path="/")
-    return resp
+    return _state_cookie(resp, "google_oauth_state", state, request)
 
 
 @router.get("/api/auth/google/callback")
@@ -450,9 +473,7 @@ def handle_google_calendar_start(request: Request):
         "prompt": "consent",
     }
     resp = RedirectResponse(f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(params)}", status_code=302)
-    resp.set_cookie("google_calendar_oauth_state", state, max_age=GOOGLE_TOKEN_TTL_SECONDS,
-                    httponly=True, path="/")
-    return resp
+    return _state_cookie(resp, "google_calendar_oauth_state", state, request)
 
 
 @router.get("/api/auth/google/calendar/callback")

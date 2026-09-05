@@ -1,3 +1,5 @@
+import { onSessionReset } from './sessionScope';
+
 // The Quest Log's "Last checked: …" line, held across navigation.
 //
 // It used to be plain component state, so it reset to "Last checked: never" the moment the
@@ -20,7 +22,11 @@ export function setLastCheckedLabel(next: string): void {
   label = next || DEFAULT_LABEL;
 }
 
-// Only for tests — the app never resets this, since a session-long memory is the point.
+// A session-long memory is the point, so nothing resets this DURING a session. It does have to
+// end with the session though: on a shared device the next account was greeted with the
+// previous one's "Last checked" line (Phase 5, finding 18).
 export function resetLastCheckedLabel(): void {
   label = DEFAULT_LABEL;
 }
+
+onSessionReset(resetLastCheckedLabel);

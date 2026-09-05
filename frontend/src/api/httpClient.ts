@@ -1,6 +1,7 @@
 import { AuthExpiredError, type ActionItemsResponse, type ApiClient, type CalendarSyncResult, type EventInput, type UserOpportunitySubmission, type WingmanEventAction } from './ApiClient';
 import type { TrackerInfo } from '@/lib/tracker';
 import { sha256Hex } from './hash';
+import { resetSessionScopedState } from '@/lib/sessionScope';
 import { clearSession, clearTokens, loadSession, loadTokens, saveSession, saveTokens } from './tokenStore';
 import type {
   AiResponse,
@@ -28,12 +29,31 @@ export function backendUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+// UNREACHABLE IS NOT REVOKED (Phase 5, frontend_report finding 4).
+//
+// refreshOnce used to answer a bare boolean, and both boot paths called forgetSession() on
+// false. So a transport failure — aeroplane mode, a captive portal, a dead Render instance,
+// a DNS blip on a school network — was read as "your session was revoked", and the app
+// DELETED a perfectly valid refresh token. Opening the app offline logged the student out,
+// and the damage outlived the outage: the tokens were gone.
+//
+// The three outcomes are genuinely different and only one of them justifies destroying
+// credentials:
+//   ok           a fresh pair is in place.
+//   revoked      the server said no — 401/403. The token really is dead: expired, rotated
+//                past, or its lineage revoked by S1-2's replay detection.
+//   unreachable  we did not get an answer. A 5xx counts here too: a server error says
+//                nothing about whether this token is valid.
+type RefreshResult = 'ok' | 'revoked' | 'unreachable';
+
 // --- In-memory session state (persisted via tokenStore) ---------------------
 let _access: string | null = null;
 let _refresh: string | null = null;
 let _currentUser: SessionUser | null = null;
 // Shared so concurrent 401s trigger exactly one refresh, not one each.
-let _refreshInFlight: Promise<boolean> | null = null;
+// RefreshResult, not boolean — see refreshOnce: 'unreachable' must stay distinguishable from
+// 'revoked' all the way to the caller, or a dropped packet logs the student out (finding 4).
+let _refreshInFlight: Promise<RefreshResult> | null = null;
 
 // Fires when a session we booted from cache turns out to be dead (see initAuth).
 const _sessionLostListeners = new Set<() => void>();
@@ -203,6 +223,13 @@ async function forgetSession(): Promise<void> {
   _refresh = null;
   _currentUser = null;
   _dataCache.clear();
+  // Every session-scoped module singleton, cleared through one registry (Phase 5, finding
+  // 18). Those singletons are correct — they describe THIS session's work and must survive a
+  // screen unmounting — but nothing ended them, so on a shared device the next account saw
+  // the previous one's cached search results and "Last checked" line until a full reload.
+  // This is the one place a session ends: sign-out, a revoked refresh token, and a bumped
+  // token_version all arrive here.
+  resetSessionScopedState();
   await Promise.all([clearTokens(), clearSession()]);
   for (const listener of _sessionLostListeners) listener();
 }
@@ -242,22 +269,29 @@ async function rawFetch(path: string, init?: RequestInit, withAuth = true): Prom
 }
 
 // One refresh attempt against POST /api/auth/refresh, shared across concurrent callers.
-// Returns true if a fresh token pair is now in place.
-function refreshOnce(): Promise<boolean> {
+function refreshOnce(): Promise<RefreshResult> {
   if (_refreshInFlight) return _refreshInFlight;
   _refreshInFlight = (async () => {
-    if (!_refresh) return false;
+    // No stored refresh token at all is the one case that IS conclusive without asking.
+    if (!_refresh) return 'revoked' as RefreshResult;
     try {
       const res = await rawFetch(
         '/api/auth/refresh',
         { method: 'POST', body: JSON.stringify({ refresh_token: _refresh }) },
         false,
       );
-      if (!res.ok) return false; // expired/invalid/revoked refresh token
-      await applyTokens((await res.json()) as LoginResponse);
-      return true;
+      if (res.ok) {
+        await applyTokens((await res.json()) as LoginResponse);
+        return 'ok' as RefreshResult;
+      }
+      // 401/403: expired, invalid, or revoked — the server has actually adjudicated.
+      // Anything else (500, 502, 503, a proxy's 504) is the server failing, not a verdict
+      // on this token, and must not cost the student their session.
+      return (res.status === 401 || res.status === 403
+        ? 'revoked' : 'unreachable') as RefreshResult;
     } catch {
-      return false;
+      // fetch itself rejected: offline, DNS, TLS, connection refused.
+      return 'unreachable' as RefreshResult;
     } finally {
       _refreshInFlight = null;
     }
@@ -265,14 +299,20 @@ function refreshOnce(): Promise<boolean> {
   return _refreshInFlight;
 }
 
-// Authed request with the Phase 2 401 flow: on a 401, refresh once and retry; if refresh
-// also fails, drop the session and throw AuthExpiredError so the router can bounce to login.
+// Authed request with the Phase 2 401 flow: on a 401, refresh once and retry; if the server
+// says the refresh token is dead too, drop the session and throw AuthExpiredError so the
+// router can bounce to login.
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res = await rawFetch(path, init);
   if (res.status === 401) {
     const refreshed = await refreshOnce();
-    if (refreshed) {
+    if (refreshed === 'ok') {
       res = await rawFetch(path, init);
+    } else if (refreshed === 'unreachable') {
+      // We could not reach the refresh endpoint, so we do not know whether this session is
+      // over. Surfacing it as a network failure keeps the tokens, and the next call retries.
+      // forgetSession() here would log a student out over one dropped packet (finding 4).
+      throw new HttpError(0, 'Could not reach Wingman. Check your connection and try again.');
     }
     if (res.status === 401) {
       await forgetSession();
@@ -322,17 +362,30 @@ export const httpClient: ApiClient = {
     const cached = await loadSession<SessionUser>();
     if (cached && accessTokenLive(pair.access)) {
       _currentUser = cached;
-      // Fire-and-forget: a failure here tears the session down through forgetSession,
+      // Fire-and-forget: a REVOKED verdict tears the session down through forgetSession,
       // which notifies the listeners. Never awaited, or we are back where we started.
-      void refreshOnce().then((ok) => {
-        if (!ok) void forgetSession();
+      //
+      // 'unreachable' is deliberately ignored. The stored access token has not expired, so
+      // it is still verified server-side on the very next call — nothing is being trusted
+      // that was not trusted before. Tearing the session down here is what logged a student
+      // out for opening the app on a train (finding 4).
+      void refreshOnce().then((result) => {
+        if (result === 'revoked') void forgetSession();
       });
       return _currentUser;
     }
 
-    const ok = await refreshOnce();
-    if (!ok) {
+    // Slow path: no cached identity, or an access token already past its `exp`. We cannot
+    // know who this is without asking.
+    const result = await refreshOnce();
+    if (result === 'revoked') {
       await forgetSession();
+      return null;
+    }
+    if (result === 'unreachable') {
+      // Return null so the router shows the signed-out screen — there is genuinely no
+      // identity to render — but KEEP the tokens. The session is recoverable the moment the
+      // network is back; forgetting them makes an outage permanent.
       return null;
     }
     return _currentUser;
@@ -477,7 +530,7 @@ export const httpClient: ApiClient = {
       headers: _access ? { Authorization: `Bearer ${_access}` } : undefined,
       body: form,
     });
-    if (res.status === 401 && (await refreshOnce())) {
+    if (res.status === 401 && (await refreshOnce()) === 'ok') {
       res = await fetch(`${API_BASE}/api/extract-from-resume`, {
         method: 'POST',
         headers: _access ? { Authorization: `Bearer ${_access}` } : undefined,
@@ -693,7 +746,12 @@ export const httpClient: ApiClient = {
     let res = await rawFetch('/api/calendar/sync', init);
     if (res.status === 401) {
       const refreshed = await refreshOnce();
-      if (refreshed) res = await rawFetch('/api/calendar/sync', init);
+      if (refreshed === 'ok') res = await rawFetch('/api/calendar/sync', init);
+      // 'unreachable' keeps the session: a sync that could not reach the server says nothing
+      // about whether the student is still signed in (finding 4).
+      if (refreshed === 'unreachable') {
+        return { ok: false, error: 'Could not reach Wingman. Check your connection and try again.' };
+      }
       if (res.status === 401) {
         await forgetSession();
         throw new AuthExpiredError();

@@ -4,6 +4,7 @@ import { parseGradeFromText } from './grade';
 import { inferSubjects } from './ranking';
 import { extractTagsAndBasics, type EnrichedTag, type ProfileExtract } from './profileTags';
 import { starterQuestionPoolFromAI } from './profileChat';
+import { onSessionReset } from './sessionScope';
 
 // ONE call, not one per provider. This used to be `{ gemini, claude }`, because picking the
 // provider meant picking an endpoint and the chat openers are the profile chat's deliberate
@@ -99,6 +100,15 @@ interface SlotConfig {
 // stale, the other fresh — reuses the answer instead of paying for the pair again. A
 // rejection is dropped immediately, or one failure would be cached as the permanent answer.
 let sharedExtract: { text: string; promise: Promise<ProfileExtract> } | null = null;
+
+// This holds a student's PROFILE TEXT and the tags derived from it, in memory, for as long as
+// the process lives. Signing out has to drop it (Phase 5, finding 18) — not because the memo
+// would be reused (it is keyed on the exact text, so another account's profile misses) but
+// because one account's profile has no business surviving in memory into another account's
+// session on a shared device.
+onSessionReset(() => {
+  sharedExtract = null;
+});
 
 function tagsAndBasics(calls: ModelCalls, text: string): Promise<ProfileExtract> {
   if (sharedExtract && sharedExtract.text === text) return sharedExtract.promise;

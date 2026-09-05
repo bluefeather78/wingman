@@ -1,3 +1,5 @@
+import { onSessionReset } from './sessionScope';
+
 // The batch of opportunities just added to the Quest Log from Fresh Finds, so the Quest Log
 // can float them to the top of the list and badge them NEW.
 //
@@ -25,3 +27,7 @@ export function getNewlyAdded(): Set<string> {
 export function clearNewlyAdded(): void {
   newlyAdded = new Set();
 }
+
+// The Quest Log's blur clears this during a session; signing out has to as well, or the next
+// account on this device sees the previous one's additions badged NEW (Phase 5, finding 18).
+onSessionReset(clearNewlyAdded);

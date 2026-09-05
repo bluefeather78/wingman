@@ -22,6 +22,7 @@ import {
   type ProfileStore,
 } from '@/lib/profileDerived';
 import { parseGradeFromText, parseGradeLevel } from '@/lib/grade';
+import { onSessionReset } from '@/lib/sessionScope';
 import { extractJSON } from '@/lib/extractJSON';
 import { inferSubjects, preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
 import { markNewlyAdded } from '@/lib/newlyAdded';
@@ -153,6 +154,15 @@ interface SessionSearch {
   tagScores: Map<string, Record<string, TagScore>>;
 }
 let sessionSearch: SessionSearch | null = null;
+
+// Cleared when the session ends (Phase 5, finding 18). This is a whole search result set —
+// the opportunities, the reason blurbs, the tag scores — held across the unmount that
+// expo-router's <Slot/> forces on every tab change. Correct for one student; on a shared
+// device it meant the next account opened Fresh Finds and was shown the previous account's
+// matches, computed from the previous account's profile.
+onSessionReset(() => {
+  sessionSearch = null;
+});
 
 // batchScoreOpportunitiesWithAI, ported: one call scoring the visible results against the
 // selected tag; returns null on failure (distinct from "nothing matched"). Its prompt moved

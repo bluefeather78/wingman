@@ -3,6 +3,7 @@ import { ALL_BUCKETS } from '@/lib/constants';
 import { httpClient } from './httpClient';
 import { isVerifiedDeadlineSource, normalizeVerifiedActionItems, type TrackerInfo } from '@/lib/tracker';
 import { isValidDateISO } from '@/lib/status';
+import { onSessionReset } from '@/lib/sessionScope';
 
 // The tracker is shared with the original web app: it persists under the SAME data key
 // (`hs-tracker-data`) in the SAME shape — a JSON *string* of a 6-bucket object, each bucket
@@ -431,6 +432,17 @@ let _lastCatalogSyncAt = 0;
 // sync. Held so a THROTTLED call can still hand the "Last checked" line a stamp (the line must
 // not blank just because the 5-minute window has not elapsed).
 let _lastCatalogStamp: string | null = null;
+
+// Both belong to ONE session (Phase 5, finding 18). Left alone, the next account on this
+// device inherits the previous one's "Last checked" stamp, and — worse — inherits the
+// THROTTLE, so their first sync is skipped and they see stale tracker data with a timestamp
+// that was never theirs.
+export function resetCatalogSyncState(): void {
+  _lastCatalogSyncAt = 0;
+  _lastCatalogStamp = null;
+}
+
+onSessionReset(resetCatalogSyncState);
 
 export interface CatalogSyncResult {
   /** The updated tracker data, or null when nothing was fetched (throttled / failed). */

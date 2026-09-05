@@ -1,4 +1,5 @@
 import { callFeatureJSON, type FeatureCall } from './aiJson';
+import { onSessionReset } from './sessionScope';
 
 // Profile-chat flow, ported from script.js. CLAUDE.md's long note is the spec:
 //   - OPENERS are cached (a pool of 10, a rotating window of 3 per open) and safe to
@@ -59,6 +60,15 @@ export const FALLBACK_STARTER_QUESTIONS = [
 
 let predeterminedStarterRotationIndex = 0;
 let starterWindowIndex = 0;
+
+// Rotation position belongs to one student's conversation, so it starts over with the next
+// one (Phase 5, finding 18). Cosmetic rather than a data leak — but a new student opening My
+// Vibe and being handed question seven of the rotation is the same class of bug as the
+// "Last checked" line: this device remembering somebody else.
+onSessionReset(() => {
+  predeterminedStarterRotationIndex = 0;
+  starterWindowIndex = 0;
+});
 
 // Next `count` questions from the predetermined pool, rotating so repeated calls don't all
 // land on the same handful.

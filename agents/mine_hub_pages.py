@@ -57,6 +57,7 @@ from wingman import queue_flags
 from wingman import url_dedupe
 from wingman import url_repair
 from wingman import url_validate
+from wingman import agent_common
 from wingman.agent_common import safe_console, snapshot_stamp
 from agents.scrape_opportunities import (build_row, next_id_generator, insert_rows, VALID_TYPES,
                                   collapse_intra_run_twins, gate_dup_candidates,
@@ -358,7 +359,12 @@ def extract_opportunity(url, key, index=None, timeout=40, min_delay=5):
     out, usage = call_gemini(_EXTRACT_SYSTEM, user, key, use_web_search=False,
                              max_tokens=1500, timeout=timeout)
     cost = estimate_cost(usage)
-    cand = extract_json(out)
+    try:
+        cand = extract_json(out)
+    except Exception as e:
+        # main()'s `except Exception` counts an error and moves on; without this stamp the
+        # money this call really spent left the run total with it (audit 4.3).
+        raise agent_common.bank_onto_exception(e, cost)
     if not isinstance(cand, dict) or not (cand.get("name") or "").strip():
         return None, cost, None, []
 

@@ -56,6 +56,7 @@ from wingman import page_text
 from wingman import url_dedupe
 from wingman import url_repair
 from wingman import url_validate
+from wingman import agent_common
 from wingman.agent_common import safe_console, snapshot_stamp
 from agents.scrape_opportunities import (build_row, next_id_generator, insert_rows, VALID_TYPES,
                                   FLAG_BARE_DOMAIN, FLAG_LOW_VALUE, FLAG_OFFSITE, FLAG_NO_TYPE)
@@ -416,7 +417,13 @@ def harvest_names(hub_url, key, timeout=40, min_delay=5, cap=200):
             f"Return the JSON array of opportunity names now.")
     out, usage = call_gemini(_NAME_SYSTEM, user, key, use_web_search=False,
                              max_tokens=2000, timeout=timeout)
-    return parse_names(extract_json(out), cap=cap), text, estimate_cost(usage)
+    # Cost FIRST. This used to be one return expression, so extract_json ran before
+    # estimate_cost and a malformed answer discarded the bill along with the names (4.3).
+    cost = estimate_cost(usage)
+    try:
+        return parse_names(extract_json(out), cap=cap), text, cost
+    except Exception as e:
+        raise agent_common.bank_onto_exception(e, cost)
 
 
 FLAG_SELF_PROMOTED = ("resolved to the same site as the page that named it — may be that "

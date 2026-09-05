@@ -73,6 +73,7 @@ from wingman import combined_reader
 from wingman import embed_common
 from wingman import dedupe_embed_store
 from wingman import queue_flags
+from wingman import agent_common
 from wingman.agent_common import add_agent_args, apply_timing, clean_email, emit_preview, snapshot_stamp
 from wingman.contact_email_common import resolve_contact_email
 from wingman.gemini_common import call_gemini, extract_json, estimate_cost
@@ -837,9 +838,16 @@ def research_seed(angle, addendum, today, gemini_key, args, system=None):
     cost = 0.0
     notes, usage, extra = "", {}, {}
     for attempt in (1, 2):
-        notes, usage, extra = call_gemini(system, user_content, gemini_key, use_web_search=True,
-                                          max_tokens=6000, timeout=args.timeout,
-                                          max_searches=args.max_searches, return_grounding=True)
+        try:
+            notes, usage, extra = call_gemini(system, user_content, gemini_key,
+                                              use_web_search=True, max_tokens=6000,
+                                              timeout=args.timeout,
+                                              max_searches=args.max_searches,
+                                              return_grounding=True)
+        except Exception as e:
+            # Attempt 1 already cost money; a timeout or 429 on attempt 2 must not delete it
+            # from the run total (audit 4.3). The caller reads it back with banked_cost().
+            raise agent_common.bank_onto_exception(e, cost)
         cost += estimate_cost(usage)
         searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
         queries = (usage.get("server_tool_use") or {}).get("web_search_queries", [])
@@ -895,10 +903,17 @@ def extract_candidates(notes, resolved_urls, gemini_key, args):
                     f"Return the JSON array now.")
     text, usage = call_gemini(system, user_content, gemini_key, use_web_search=False,
                               max_tokens=6000, timeout=args.timeout)
-    candidates = extract_json(text)
+    # Cost FIRST, then parse. extract_json used to run inside the return expression, so a
+    # ValueError on a truncated answer discarded this call's cost — and, because the caller
+    # re-raises, phase 1's too. The money was spent either way (audit 4.3).
+    cost = estimate_cost(usage)
+    try:
+        candidates = extract_json(text)
+    except Exception as e:
+        raise agent_common.bank_onto_exception(e, cost)
     if not isinstance(candidates, list):
         candidates = [candidates] if candidates else []
-    return candidates, estimate_cost(usage)
+    return candidates, cost
 
 
 ATTRIBUTION_KEYS = ("seed_id", "found_via")

@@ -219,38 +219,20 @@ def login_response(record, replaces_jti=None):
 
 
 def subscription_block_reason(userid):
-    """The 402 reason if this account's trial has lapsed with nothing paid, else None.
+    """The 402 reason if this account is locked out of the app, else None.
 
-    Same logic as the old Handler._subscription_blocks, minus the response-writing:
-    the caller turns a non-None reason into a 402. A missing userid is never blocked
-    (signed-out calls can't be identified), and a Supabase failure fails open rather
-    than locking everyone out.
+    Two-tier model (TWO_TIER_AI_PLAN.md §2b, §4.3): there is no app-access lockout anymore.
+    subscription_state().has_access is always True for a signed-in account, so this ALWAYS
+    returns None — every signed-in student has at least metered Free access, and a lapsed
+    paid/comped account becomes Free rather than being walled off. The per-user AI allowance
+    is a SEPARATE gate that lives at the AI route and answers 429, not 402 (step 4).
+
+    Kept as the one function every access gate calls (require_subscription /
+    optional_subscribed_user / the AI and resume handlers) so re-introducing a lockout later
+    is a one-place change, and so the wiring tests still have a seam to assert. It no longer
+    reads Supabase — there is nothing about the subscription that can block app access.
     """
-    userid = (userid or "").strip().lower()
-    if not userid:
-        return None
-    try:
-        # Phase 2 item 3: the cached NARROW read, not get_user_account. This runs on every
-        # signed-in request and needs exactly the five columns subscription_state reads;
-        # get_user_account pulled every column but `data` — password_hash and the calendar
-        # refresh token included — across the wire each time to answer it.
-        record = get_user_subscription(userid)
-    except Exception:
-        return None
-    if not record:
-        return None
-    state = subscription_state(record)
-    if state["has_access"]:
-        return None
-    if state["status"] == "past_due":
-        return ("We could not charge your card. Update your payment details to "
-                "restore access to Wingman.")
-    if state["status"] == "canceled":
-        return ("Your subscription has ended. Resubscribe to keep using "
-                "Wingman.")
-    if state["status"] == "beta":
-        return ("Your beta access has ended. Subscribe to keep using Wingman.")
-    return ("Your free trial has ended. Subscribe to keep using Wingman.")
+    return None
 
 
 # --- The gate as a DEPENDENCY ------------------------------------------------------

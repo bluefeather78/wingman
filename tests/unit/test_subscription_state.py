@@ -40,73 +40,82 @@ def test_iso_in_future_naive_treated_as_utc():
     assert _iso_in_future(naive) is True
 
 
-# ---------- subscription_state: six status paths ----------
+# ---------- subscription_state: two-tier model, nobody locked out ----------
+#
+# The load-bearing change: has_access is ALWAYS True for a signed-in account (no lockout).
+# `in_paid_period` is the field that varies, and it is what the AI tier turns on.
 
-def test_state_active():
+def test_state_active_is_paid_period():
     st = subscription_state({"subscription_status": "active"})
     assert st["has_access"] is True
+    assert st["in_paid_period"] is True
     assert st["status"] == "active"
     assert st["days_left"] == 0  # active has no countdown
 
 
-def test_state_trial_valid():
+def test_state_trial_valid_is_free_with_access():
+    # A legacy trial row (pre-migration) keeps access but is NOT a paid period.
     st = subscription_state({"subscription_status": "trial", "trial_ends_at": _iso(3)})
     assert st["has_access"] is True
-    assert st["is_trial_expired"] is False
-    assert st["days_left"] >= 1
+    assert st["in_paid_period"] is False
 
 
-def test_state_trial_expired():
+def test_state_expired_trial_is_not_locked_out():
+    # Was has_access False under the trial model; now a lapsed trial is just Free.
     st = subscription_state({"subscription_status": "trial", "trial_ends_at": _iso(-1)})
-    assert st["has_access"] is False
-    assert st["is_trial_expired"] is True
-    assert st["days_left"] == 0
+    assert st["has_access"] is True
+    assert st["in_paid_period"] is False
 
 
-def test_state_trial_dateless_reads_as_not_expired():
-    # The load-bearing rule: NULL trial_ends_at is "clock not started", not "expired".
+def test_state_trial_dateless_has_access():
     st = subscription_state({"subscription_status": "trial", "trial_ends_at": None})
     assert st["has_access"] is True
-    assert st["is_trial_expired"] is False
+    assert st["in_paid_period"] is False
 
 
-def test_state_beta_active():
+def test_state_beta_active_is_paid_period():
     st = subscription_state({"subscription_status": "beta", "subscription_end_at": _iso(5)})
     assert st["has_access"] is True
+    assert st["in_paid_period"] is True
     assert st["days_left"] >= 1
 
 
-def test_state_beta_expired():
+def test_state_beta_expired_lapses_to_free():
     st = subscription_state({"subscription_status": "beta", "subscription_end_at": _iso(-1)})
-    assert st["has_access"] is False
+    assert st["has_access"] is True       # never a lockout
+    assert st["in_paid_period"] is False  # comp ran out -> metered Free
 
 
 def test_state_canceled_still_in_paid_period():
     st = subscription_state({"subscription_status": "canceled", "subscription_end_at": _iso(2)})
-    assert st["has_access"] is True  # keeps access until the period paid for
+    assert st["has_access"] is True
+    assert st["in_paid_period"] is True   # keeps the tier until the period paid for
 
 
-def test_state_canceled_period_ended():
+def test_state_canceled_period_ended_lapses_to_free():
     st = subscription_state({"subscription_status": "canceled", "subscription_end_at": _iso(-2)})
-    assert st["has_access"] is False
+    assert st["has_access"] is True       # never a lockout
+    assert st["in_paid_period"] is False  # lapses to metered Free
 
 
-def test_state_past_due_no_access():
+def test_state_past_due_is_free_with_access():
     st = subscription_state({"subscription_status": "past_due"})
-    assert st["has_access"] is False
+    assert st["has_access"] is True       # free-with-cap, not locked out
+    assert st["in_paid_period"] is False
     assert st["status"] == "past_due"
 
 
-def test_state_unknown_status_no_access():
+def test_state_unknown_status_is_free_with_access():
     st = subscription_state({"subscription_status": "something_stripe_invented"})
-    assert st["has_access"] is False
-
-
-def test_state_defaults_missing_status_to_trial():
-    st = subscription_state({})
-    assert st["status"] == "trial"
-    # No trial_ends_at -> dateless trial -> access
     assert st["has_access"] is True
+    assert st["in_paid_period"] is False
+
+
+def test_state_defaults_missing_status_to_free():
+    st = subscription_state({})
+    assert st["status"] == "free"
+    assert st["has_access"] is True
+    assert st["in_paid_period"] is False
 
 
 def test_state_carries_through_fields():
@@ -176,65 +185,32 @@ def test_login_payload_missing_location_defaults_empty():
     assert _login_payload(rec)["location"] == ""
 
 
-# ---------- subscription_block_reason ----------
+# ---------- subscription_block_reason (two-tier: never blocks) ----------
+#
+# There is no app-access lockout anymore, so this returns None for EVERY account state —
+# including the ones that used to 402 (expired trial, past_due, lapsed canceled/beta). The
+# daily AI allowance is a separate 429 gate at the AI route, not a 402 here.
 
 def test_block_reason_empty_userid_none():
     assert deps.subscription_block_reason("") is None
     assert deps.subscription_block_reason(None) is None
 
 
-def test_block_reason_read_raises_fails_open(monkeypatch):
-    def boom(_):
-        raise RuntimeError("supabase down")
-    monkeypatch.setattr(deps, "get_user_subscription", boom)
+@pytest.mark.parametrize("record", [
+    {"subscription_status": "active"},
+    {"subscription_status": "past_due"},
+    {"subscription_status": "trial", "trial_ends_at": _iso(-1)},   # was 402 before
+    {"subscription_status": "canceled", "subscription_end_at": _iso(-1)},  # was 402
+    {"subscription_status": "beta", "subscription_end_at": _iso(-1)},      # was 402
+    {},
+])
+def test_block_reason_never_blocks(record):
+    # No Supabase lookup happens anymore — the function short-circuits to None regardless.
     assert deps.subscription_block_reason("alice") is None
 
 
-def test_block_reason_no_record_none(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_subscription", lambda _: None)
+def test_block_reason_does_not_read_supabase(monkeypatch):
+    def unexpected(_uid):
+        raise AssertionError("subscription_block_reason must not read the account anymore")
+    monkeypatch.setattr(deps, "get_user_subscription", unexpected)
     assert deps.subscription_block_reason("alice") is None
-
-
-def test_block_reason_has_access_none(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_subscription", lambda _: {"subscription_status": "active"})
-    assert deps.subscription_block_reason("alice") is None
-
-
-def test_block_reason_past_due_message(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_subscription", lambda _: {"subscription_status": "past_due"})
-    msg = deps.subscription_block_reason("alice")
-    assert msg and "could not charge" in msg.lower()
-
-
-def test_block_reason_canceled_message(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_subscription",
-                        lambda _: {"subscription_status": "canceled",
-                                   "subscription_end_at": _iso(-1)})
-    msg = deps.subscription_block_reason("alice")
-    assert msg and "subscription has ended" in msg.lower()
-
-
-def test_block_reason_beta_message(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_subscription",
-                        lambda _: {"subscription_status": "beta",
-                                   "subscription_end_at": _iso(-1)})
-    msg = deps.subscription_block_reason("alice")
-    assert msg and "beta access has ended" in msg.lower()
-
-
-def test_block_reason_expired_trial_default_message(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_subscription",
-                        lambda _: {"subscription_status": "trial",
-                                   "trial_ends_at": _iso(-1)})
-    msg = deps.subscription_block_reason("alice")
-    assert msg and "free trial has ended" in msg.lower()
-
-
-def test_block_reason_lowercases_userid(monkeypatch):
-    seen = {}
-    def fake_get(uid):
-        seen["uid"] = uid
-        return {"subscription_status": "active"}
-    monkeypatch.setattr(deps, "get_user_subscription", fake_get)
-    deps.subscription_block_reason("  ALICE  ")
-    assert seen["uid"] == "alice"

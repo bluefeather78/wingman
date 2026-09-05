@@ -1,14 +1,15 @@
 """Unit tests for the subscription GATE — app.deps.require_subscription /
-optional_subscribed_user, and the wiring that puts one of them on every route that is
+optional_subscribed_user, and the wiring that keeps one of them on every route that is
 "using the app".
 
-The rule these enforce: once a trial or subscription ends the account keeps its session
-but loses access to the app, not merely to the calls that cost money. subscription_state()
-stays the single source of truth (test_subscription_state.py covers it); these tests cover
-turning its verdict into a 402 and hanging that off the right routes.
+Two-tier model (TWO_TIER_AI_PLAN.md §2b, §4.3): there is no app-access lockout anymore, so
+the gate NEVER 402s — every signed-in account has at least metered Free access, and a lapsed
+paid/comped account is just Free. The gate dependency is kept ON the routes deliberately: it
+still enforces auth (a missing token is 401) and it is the one-place seam where a future
+lockout would live, so the wiring tests still assert its presence. The per-user AI allowance
+is a SEPARATE 429 gate at the AI route (step 4), not a 402 here.
 
-No Supabase: the only network seam is get_user_subscription (Phase 2 item 3's cached
-narrow read), monkeypatched on app.deps.
+No Supabase: subscription_block_reason short-circuits to None and no longer reads an account.
 """
 import datetime
 import inspect
@@ -36,31 +37,21 @@ EXPIRED_TRIAL = {"subscription_status": "trial", "trial_ends_at": _iso(-1)}
 LIVE_TRIAL = {"subscription_status": "trial", "trial_ends_at": _iso(3)}
 
 
-# ---------- require_subscription ----------
+# ---------- require_subscription (never 402s now) ----------
 
-@pytest.mark.parametrize("record", [ACTIVE, LIVE_TRIAL])
+@pytest.mark.parametrize("record", [ACTIVE, LIVE_TRIAL, EXPIRED_TRIAL])
 def test_require_subscription_passes_user_through(monkeypatch, record):
+    # Even a lapsed trial passes: no lockout, they are just Free.
     monkeypatch.setattr(deps, "get_user_subscription", _account(record))
     user = AuthedUser(id="alice")
     assert deps.require_subscription(user) is user
 
 
-def test_require_subscription_402s_expired_trial(monkeypatch):
-    monkeypatch.setattr(deps, "get_user_subscription", _account(EXPIRED_TRIAL))
-    with pytest.raises(HTTPException) as exc:
-        deps.require_subscription(AuthedUser(id="alice"))
-    assert exc.value.status_code == 402
-    # The detail IS the message the paywall screen shows — main.py renders it as
-    # {"error": ...}, which is the shape the client parses.
-    assert "free trial has ended" in exc.value.detail.lower()
-
-
-def test_require_subscription_fails_open_when_supabase_is_down(monkeypatch):
-    """A Supabase outage must not lock out every paying user — same choice
-    subscription_block_reason already makes."""
-    def boom(_uid):
-        raise RuntimeError("supabase down")
-    monkeypatch.setattr(deps, "get_user_subscription", boom)
+def test_require_subscription_does_not_read_supabase(monkeypatch):
+    """No account read at all anymore: a signed-in caller always has access."""
+    def unexpected(_uid):
+        raise AssertionError("must not look up an account — nobody is locked out")
+    monkeypatch.setattr(deps, "get_user_subscription", unexpected)
     user = AuthedUser(id="alice")
     assert deps.require_subscription(user) is user
 
@@ -68,19 +59,17 @@ def test_require_subscription_fails_open_when_supabase_is_down(monkeypatch):
 # ---------- optional_subscribed_user ----------
 
 def test_optional_never_blocks_signed_out(monkeypatch):
-    """No token, no account, nothing to have lapsed — the same unattributed residual the
-    cost accounting reports."""
     def unexpected(_uid):
         raise AssertionError("must not look up an account for a signed-out caller")
     monkeypatch.setattr(deps, "get_user_subscription", unexpected)
     assert deps.optional_subscribed_user(None) is None
 
 
-def test_optional_blocks_a_lapsed_signed_in_caller(monkeypatch):
+def test_optional_passes_a_lapsed_signed_in_caller(monkeypatch):
+    # Was a 402 under the trial model; now a lapsed account is Free and passes through.
     monkeypatch.setattr(deps, "get_user_subscription", _account(EXPIRED_TRIAL))
-    with pytest.raises(HTTPException) as exc:
-        deps.optional_subscribed_user(AuthedUser(id="alice"))
-    assert exc.value.status_code == 402
+    user = AuthedUser(id="alice")
+    assert deps.optional_subscribed_user(user) is user
 
 
 def test_optional_passes_a_current_caller(monkeypatch):
@@ -193,12 +182,13 @@ def test_ai_live_branch_401s_a_signed_out_caller(monkeypatch):
     assert denied is not None and denied.status_code == 401
 
 
-def test_ai_live_branch_402s_a_lapsed_caller(monkeypatch):
+def test_ai_live_branch_allows_a_lapsed_caller(monkeypatch):
+    # Was a 402 under the trial model. Now a lapsed account is Free and reaches the live
+    # branch; the daily allowance (step 4) is what limits it, with a 429, not a 402.
     import app.routes.ai as ai
 
     monkeypatch.setattr(deps, "get_user_subscription", _account(EXPIRED_TRIAL))
-    denied = ai._ai_access_error("alice", key_configured=True)
-    assert denied is not None and denied.status_code == 402
+    assert ai._ai_access_error("alice", key_configured=True) is None
 
 
 def test_ai_live_branch_allows_a_current_caller(monkeypatch):
@@ -220,14 +210,13 @@ def test_ai_mock_branch_stays_reachable_signed_out(monkeypatch):
     assert ai._ai_access_error(None, key_configured=False) is None
 
 
-def test_ai_mock_branch_still_402s_a_lapsed_caller(monkeypatch):
-    """Unchanged from before the gate: an identified lapsed account is blocked on either
-    branch. Only the signed-out case differs between them."""
+def test_ai_mock_branch_allows_a_lapsed_caller(monkeypatch):
+    """No lockout on either branch anymore: an identified lapsed account is Free, so the
+    mock branch is reachable and returns no access error."""
     import app.routes.ai as ai
 
     monkeypatch.setattr(deps, "get_user_subscription", _account(EXPIRED_TRIAL))
-    denied = ai._ai_access_error("alice", key_configured=False)
-    assert denied is not None and denied.status_code == 402
+    assert ai._ai_access_error("alice", key_configured=False) is None
 
 
 def test_ai_handlers_consult_the_gate_before_spending(monkeypatch):
@@ -255,17 +244,15 @@ def test_resume_routes_gate_by_hand():
         assert "subscription_block_reason" in inspect.getsource(fn)
 
 
-# ---------- the wire format the client sees ----------
+# ---------- no lockout: the gate raises nothing for any account state ----------
 
-def test_402_detail_is_a_string_so_it_renders_as_error(monkeypatch):
-    """main.py's HTTPException handler renders `detail` as {"error": detail} — the shape
-    httpClient parses and shows on the paywall. A non-str detail would come back as the
-    generic "Request failed.", losing the reason. (No TestClient here: this environment
-    cannot open the socketpair its event loop needs.)"""
-    import app.main as main
-
-    monkeypatch.setattr(deps, "get_user_subscription", _account(EXPIRED_TRIAL))
-    with pytest.raises(HTTPException) as exc:
-        deps.require_subscription(AuthedUser(id="alice"))
-    assert isinstance(exc.value.detail, str) and exc.value.detail
-    assert main.http_exception_as_error  # the handler that turns it into {"error": ...}
+def test_gate_raises_nothing_for_any_state(monkeypatch):
+    """The subscription gate has no 402 path left — every signed-in account passes. (The AI
+    allowance 429 lives at the AI route, not here.)"""
+    for record in (ACTIVE, LIVE_TRIAL, EXPIRED_TRIAL,
+                   {"subscription_status": "past_due"},
+                   {"subscription_status": "canceled", "subscription_end_at": _iso(-1)}):
+        monkeypatch.setattr(deps, "get_user_subscription", _account(record))
+        user = AuthedUser(id="alice")
+        assert deps.require_subscription(user) is user
+        assert deps.optional_subscribed_user(user) is user

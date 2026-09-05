@@ -20,9 +20,7 @@ import urllib.parse
 import urllib.request
 
 from app.config import *  # noqa: F401,F403 -- shared constants by bare name (as in the monolith)
-from wingman.subscription_common import (
-    is_trial_expired, days_until_trial_end, trial_ends_at_iso,
-)
+from wingman.subscription_common import days_until_trial_end
 from app.http_pool import pooled_urlopen
 
 
@@ -43,63 +41,50 @@ def _iso_in_future(value):
 def subscription_state(record):
     """Normalize a user row into the one subscription block everything reads.
 
-    Both the client (which hides the app behind a paywall) and the server-side gate
-    below derive from this single function, so the two can't disagree about whether
-    an account still has access.
+    Two-tier model (TWO_TIER_AI_PLAN.md): there is NO trial and NO app-access lockout. Every
+    signed-in account has full app access — `has_access` is always True — and the only axis
+    that varies is the AI tier: an account in a live paid/comped period is Unlimited, and
+    everything else (free, past_due, a lapsed active/beta/canceled, a legacy trial row) is the
+    metered Free tier. A subscription lapsing turns an account into a normal Free user, never a
+    lockout screen. Both the client paywall and the server gate read this one function, so they
+    cannot disagree.
+
+    `in_paid_period` is the load-bearing field now — the AI tier turns on it, not on has_access.
+    `trial_ends_at` / `is_trial_expired` are retained (null / False for a Free account) only so
+    older readers and cached clients don't KeyError; nothing gates on them anymore.
     """
-    status = record.get("subscription_status") or "trial"
-    trial_ends = record.get("trial_ends_at")
-    # A trial row with no end date has not started its clock yet — that's every account
-    # created before db/subscription_schema.sql ran, since ALTER TABLE backfills NULL. Read
-    # it as "not expired": is_trial_expired(None) says True, and taking that literally
-    # would paywall every pre-existing user the moment the migration lands.
-    # ensure_trial_started() below stamps a real date on them at next sign-in.
-    expired = is_trial_expired(trial_ends) if (status == "trial" and trial_ends) else False
-    if status == "trial":
-        days_left = days_until_trial_end(trial_ends) if not expired else 0
-    elif status == "beta":
-        # A beta grant runs on subscription_end_at, not trial_ends_at, but the client
-        # renders the same countdown off days_left either way.
-        days_left = days_until_trial_end(record.get("subscription_end_at"))
+    status = record.get("subscription_status") or "free"
+    end = record.get("subscription_end_at")
+    # In a live PAID or comped period? active is paid outright; beta (a comped grant) and a
+    # cancel-at-period-end account keep the tier until the period they paid for runs out.
+    if status == "active":
+        in_paid_period = True
+    elif status in ("beta", "canceled"):
+        in_paid_period = _iso_in_future(end)
+    else:
+        in_paid_period = False        # free, past_due, legacy trial, anything Stripe invents
+    # A countdown only means anything for a paid/comped window winding down. Legacy `trial`
+    # rows (pre-migration) still surface their day count — no lockout, Free for AI, but the
+    # number is kept so the lifecycle emails render until they are repurposed (§13 step 6).
+    if in_paid_period and status in ("beta", "canceled"):
+        days_left = days_until_trial_end(end)
+    elif status == "trial":
+        days_left = days_until_trial_end(record.get("trial_ends_at"))
     else:
         days_left = 0
-
-    if status == "active":
-        has_access = True
-    elif status == "trial":
-        has_access = not expired
-    elif status == "beta":
-        # Granted by a promo code (BETAUSER). Time-boxed like a trial, and it ends the
-        # same way — no card involved, so there is nothing to renew.
-        has_access = _iso_in_future(record.get("subscription_end_at"))
-    elif status == "canceled":
-        # Cancelling is cancel-at-period-end (see subscription_common.cancel_subscription),
-        # so a canceled account keeps access until the period it already paid for runs out.
-        has_access = _iso_in_future(record.get("subscription_end_at"))
-    else:
-        # past_due and anything Stripe invents later: no access, and it surfaces as the
-        # literal status so the paywall can say something more useful than "expired".
-        has_access = False
-
     return {
         "status": status,
-        "trial_ends_at": trial_ends,
-        "is_trial_expired": expired,
+        "in_paid_period": in_paid_period,
+        "trial_ends_at": record.get("trial_ends_at"),   # legacy; null for Free accounts
+        "is_trial_expired": False,                        # no trials anymore — shape compat
         "days_left": days_left,
-        "subscription_end_at": record.get("subscription_end_at"),
+        "subscription_end_at": end,
         "stripe_customer_id": record.get("stripe_customer_id"),
-        "has_access": has_access,
+        "has_access": True,                               # nobody is locked out of the app
     }
 
 
 # ---------- AI tier (two-tier model) ----------
-# The subscription statuses that resolve to the PAID (unlimited-AI) tier. Everything else —
-# trial (pre-retirement), free (post-retirement), past_due, unknown — is the metered Free tier.
-# beta counts as paid: it is a comped paid experience, the same way the metrics already treat
-# a beta grant as "converted-adjacent".
-PAID_AI_STATUSES = frozenset({"active", "beta", "canceled"})
-
-
 def ai_tier(record):
     """Derive this account's AI tier ∈ {"paid", "free"} from subscription_state().
 
@@ -107,15 +92,12 @@ def ai_tier(record):
     of storing it: a stored copy drifts out of step with the source of truth after one bad
     write. subscription_state() stays the single authority.
 
-    Paid requires BOTH a paid status AND live access, so a canceled-but-in-period or an
-    unexpired beta is paid, while a lapsed canceled/beta row falls back to free (metered) —
-    never to a lockout. Works identically before and after the trial is retired: a trial or a
-    free account both resolve here to "free".
+    Paid iff the account is in a live paid/comped period (active outright, or an unexpired
+    beta/canceled). A lapsed active/beta/canceled falls back to metered Free, and free /
+    past_due / a legacy trial row are Free too — never a lockout. (Keyed on in_paid_period,
+    not has_access: has_access is always True now, so it can no longer distinguish the tiers.)
     """
-    state = subscription_state(record)
-    if state["status"] in PAID_AI_STATUSES and state["has_access"]:
-        return "paid"
-    return "free"
+    return "paid" if subscription_state(record)["in_paid_period"] else "free"
 
 
 def _login_payload(record):
@@ -136,24 +118,9 @@ def _login_payload(record):
     }
 
 
-def ensure_trial_started(userid, record):
-    """Give a dateless trial row a real end date, and return the updated record.
-
-    Accounts that predate the subscription columns come out of the migration with
-    subscription_status defaulting to 'trial' and trial_ends_at NULL. Rather than
-    backfilling in SQL (which would start everyone's trial at migration time, including
-    accounts nobody ever signs into again), the clock starts the first time they sign in.
-    """
-    if (record.get("subscription_status") or "trial") != "trial" or record.get("trial_ends_at"):
-        return record
-    starts = trial_ends_at_iso()
-    try:
-        update_subscription(userid, {"subscription_status": "trial", "trial_ends_at": starts})
-    except Exception:
-        return record  # best-effort: they keep access either way, we just re-try next login
-    record = dict(record)
-    record["trial_ends_at"] = starts
-    return record
+# ensure_trial_started() was deleted with the trial (TWO_TIER_AI_PLAN.md §2b): there is no
+# clock to start. A new account lands on `free` directly (see create_user), and legacy dateless
+# `trial` rows read as Free with full access, so nothing needs stamping at sign-in.
 
 # ---------- De-identified logging (S1-9) ----------
 #
@@ -1036,7 +1003,7 @@ class MissingUserColumns(Exception):
 
 def create_user(userid, first_name, last_name, email, password_hash, location="",
                 is_adult=False, parental_consent=False, google_id=None):
-    """Insert a new account, starting its free trial and recording signup consent.
+    """Insert a new account on the permanent Free tier, recording signup consent.
 
     is_adult / parental_consent come from the registration checkboxes; the caller
     (handle_register / handle_google_finish) is what enforces them, this just records
@@ -1053,8 +1020,10 @@ def create_user(userid, first_name, last_name, email, password_hash, location=""
         "password_hash": password_hash,
         "location": location,
         "data": {},
-        "subscription_status": "trial",
-        "trial_ends_at": trial_ends_at_iso(),
+        # Two-tier model: a new account lands on the permanent Free tier — no trial, no clock,
+        # no lockout (TWO_TIER_AI_PLAN.md §2b). trial_ends_at stays NULL for good.
+        "subscription_status": "free",
+        "trial_ends_at": None,
         "subscription_end_at": None,
         "stripe_customer_id": None,
         "stripe_subscription_id": None,

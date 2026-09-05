@@ -22,7 +22,7 @@ from app.config import (
 )
 from app.core import (
     get_user, get_user_account, select_user, user_exists,
-    get_user_by_email, get_user_by_google_id, create_user, ensure_trial_started,
+    get_user_by_email, get_user_by_google_id, create_user,
     _check_signup_consent, _unique_userid_from_email, _users_request,
     _is_missing_column_error, MissingUserColumns, DuplicateEmail,
 )
@@ -376,7 +376,6 @@ def handle_google_session(body: dict = Depends(json_body)):
         return opaque_error(502, DB_UNAVAILABLE, e, op="google.db")
     if not record:
         return json_error(404, "No account found.")
-    record = ensure_trial_started(record["userid"], record)
     try:
         return json_response(200, login_response(record))
     except AuthConfigError as e:

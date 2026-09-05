@@ -6,7 +6,7 @@ import datetime
 from fastapi import APIRouter, Request, Depends
 
 from app.core import (
-    get_user_account, ensure_trial_started, subscription_state, touch_user_activity,
+    get_user_account, subscription_state, touch_user_activity,
     update_subscription, redeem_promo_conditional,
 )
 from app.deps import (json_body, json_response, json_error,
@@ -32,7 +32,7 @@ def handle_subscription_status(user: AuthedUser = Depends(get_current_user)):
     if not record:
         return json_error(404, "User not found.")
     touch_user_activity(userid, "subscription_status")
-    return json_response(200, subscription_state(ensure_trial_started(userid, record)))
+    return json_response(200, subscription_state(record))
 
 
 @router.post("/api/subscription/checkout")

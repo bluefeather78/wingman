@@ -51,10 +51,8 @@ new cases in `test_subscription_gate.py` (S0-1).
 
 **Three things S0 deliberately did NOT close, each flagged in its commit:**
 
-1. **Deleting `intakeExtractAndClassify`** from `frontend/src/lib/tracker.ts` (part of S0-3).
-   It is prompt text, so it is **M8** and was not covered by the M9 approval. Harmless now —
-   search is pinned off server-side — but it still advertises the exploit shape. Fold it into
-   the S1-1 commit.
+1. ~~**Deleting `intakeExtractAndClassify`**~~ — **CLOSED by S1-1**, which deleted it along
+   with the other two genuinely-dead prompts.
 2. **Moving the Google token into the URL fragment** (the second half of S0-9). The takeover
    is closed by the exact-origin check; the fragment move is the plan's "better, and cheap"
    hardening that keeps the token out of access logs and `Referer`. It needs matching changes
@@ -76,8 +74,9 @@ limiters are still sharing one bucket.
 
 **Open decisions still waiting on Shama** (§6 below): the real per-user daily allowance
 (S0-5 shipped a conservative $0.50 placeholder behind `USER_DAILY_BUDGET_USD`, not the
-measured 5x-median the plan asks for); M8 approval for S1-1; the `conversations` question;
-password reset. §6's question 5 (Anthropic `max_uses`) is answered — S0-4 set it to 1.
+measured 5x-median the plan asks for) and password reset. Answered since: q5 (Anthropic
+`max_uses`) by S0-4 = 1; q1 (M8 for S1-1) approved and shipped; q3 (`conversations`) decided
+as "keep writing it, drop `client_ip`" and shipped — see §0b.
 
 **Unrelated config gap found while running the suite.** `EMAIL_POSTAL_ADDRESS` is unset
 locally, so `test_lifecycle_email.py` and `test_deadline_alert_template.py` fail on the
@@ -111,48 +110,103 @@ note above on why it is **not** `*`.
 
 ---
 
-## 0b. Start here for Phase S1
+## 0b. Phase S1 status (updated 2026-09-04)
 
-S1 is §5 of this same file. **Fourteen items remain** — S1-8 is done (see above). Two
-decisions block part of it; everything else can proceed on normal judgement.
+**Phase S1 is COMPLETE.** All fourteen remaining items shipped, one commit per item, in the
+cheapest-first order §0b previously recommended. S1-8 was already done in the S0 pass.
 
-**Blocked on Shama:**
+| | |
+|---|---|
+| Commits | `4c0b866..0c032a1` on `codecleanup`, 14 commits |
+| Tests | 11 new test files, ~230 new test functions; suite green at **2331 passing** |
+| Migrations to run | `db/auth_schema.sql` (S1-2), `db/promo_codes_schema.sql` (S1-10), `db/conversations_schema.sql` + `db/agent_runs_schema.sql` + `db/deadline_check_log_schema.sql` (S1-9) |
 
-- **S1-1 needs M8 approval.** It moves every system prompt out of the web bundle into
-  `app/`, keyed by a server-side feature id. It is the largest item in the plan and it also
-  carries the S0-3 leftover (deleting `intakeExtractAndClassify`). Recommended yes — §6
-  question 1.
-- **S1-9 needs the `conversations` decision** — stop writing it, or add RLS and hash the IP.
-  §6 question 3.
+| Item | State | Commit |
+|---|---|---|
+| S1-1 prompts server-side `[C1.2]` `[M8]` | done | `MARQUEE M8 (S1-1)` |
+| S1-2 refresh rotation + reuse detection `[M2]` | done | `S1-2:` |
+| S1-3 calendar handoff nonce `[M3]` | done | `S1-3 + S1-14:` |
+| S1-4 `url_is_public()` + auth on submission `[M1,M10]` | done | `S1-4:` |
+| S1-5 body limits, headers, `Secure` cookies `[M4,M11]` | done | `S1-5:` |
+| S1-6 conditional promo PATCH `[M6]` | done | `S1-6:` |
+| S1-7 one login-failure message `[M7]` | done | `S1-7:` |
+| S1-8 ops token + Render refusal | done in S0 | `S1-8:` |
+| S1-9 `conversations` RLS + no `client_ip` | done | `S1-9:` |
+| S1-10 promo codes into a table `[L3]` | done | `S1-10:` |
+| S1-11 wrap legacy password hashes `[L1]` | done | `S1-11:` |
+| S1-12 `compare_digest` on non-ASCII `[L2]` | done | `S1-12:` |
+| S1-13 stop relaying upstream error bodies `[L5]` | done | `S1-13:` |
+| S1-14 calendar sync input handling `[L6]` | done | `S1-3 + S1-14:` |
+| S1-15 narrow the row reads `[L10]` | done | `S1-15:` |
 
-**Needs SQL run by hand** in the Supabase editor (this repo's convention: a `db/*.sql` file
-with `create table if not exists` **plus an ALTER block**, and the code degrades rather than
-breaks when the migration has not been run):
+**The M8 approval and how it was honoured.** Shama approved the whole plan in chat before
+any editing. S1-1 is its own dedicated commit naming M8. The prompt text was moved
+VERBATIM, and that was verified rather than asserted: a script extracted each original
+template literal from git, substituted its interpolations, and compared character by
+character against what `app/services/prompts.py` builds. All ten system prompts match byte
+for byte, as do both conditional branches and every user-content template.
 
-- **S1-2** — a `users.refresh_jti` column (or a small set, for two devices).
-- **S1-11** — the legacy-hash wrapping migration.
+### Two decisions taken during the pass, recorded because they differ from the text above
 
-**Suggested order for the unblocked items,** cheapest-first within severity so the
-Medium-severity exploits close early:
+1. **`conversations`: Shama chose "keep writing it, drop `client_ip` outright"** (§6 q3),
+   rather than hashing the IP. `db/conversations_schema.sql` drops the column.
+2. **S1-7's preferred fix could not ship as written.** The plan asks register to answer the
+   success shape for a taken email and mail the existing account. `/api/register` hands
+   back tokens inline (the client goes straight to `showApp()`), so there is no 200 to
+   return that is not either a lie the client chokes on or somebody else's session. The
+   plan's own stated fallback shipped instead: a per-address sign-up rate limit.
 
-1. **S1-12** (`compare_digest` on non-ASCII) — 20 minutes, a plain unhandled 500.
-2. **S1-6** (conditional promo PATCH) — a live race giving free access indefinitely from a
-   7-day code. One filter on an existing request, no migration.
-3. **S1-4** (`url_is_public()` + auth on submission) — the unauthenticated catalog write and
-   the blind SSRF that chains off it. The biggest of the unblocked items.
-4. **S1-3** (calendar handoff nonce), **S1-7** (one login-failure message),
-   **S1-14** (calendar sync input handling), **S1-13** (stop relaying upstream error bodies),
-   **S1-15** (narrow the row reads).
-5. **S1-5** (body limits everywhere, security headers, `Secure` cookies) — note S0-2 already
-   built `capped_raw_body()` in `app/deps.py`; S1-5 is extending it to the remaining routes
-   plus the headers. CSP **report-only first**, and `public/walkthrough.html` needs
-   `frame-ancestors 'self'`, not `DENY`.
-6. **S1-10** (promo codes into a table) — must ship **after** S1-6 or the race outlives the
-   move.
+### Three corrections to the plan's own text, found while implementing
 
-**Remember the exit criterion is not "zero findings".** The plan parks M5 (the process-wide
-5 s Gemini sleep) and the argon2 parameters in Phase 2, and L9 in Phase 4. Finishing S1 means
-no High or Medium open **except M5** — see §1's table.
+1. **`scoreOpportunitiesForTag` is NOT dead.** S1-1's inventory lists it as having no
+   caller; `frontend/app/(app)/finder.tsx` calls it from a live effect whenever a profile
+   tag is selected. It was ported as `tag_suggestions`, not deleted. The other three dead
+   prompts were confirmed dead and deleted.
+2. **S1-6's `not.cs.{CODE}` filter alone is not enough.** It closes the compound-one-code
+   exploit but leaves the two-different-codes case: two grant codes redeemed concurrently
+   both pass their own filter, both apply, and last-write-wins drops one from the array —
+   so the dropped one can be redeemed again. The shipped filter is a full compare-and-swap
+   on the array. It also has to name `is.null` explicitly, because every array operator
+   against NULL evaluates to NULL and a row predating the column's DEFAULT could otherwise
+   never redeem anything.
+3. **S1-11's "consider a server pepper" was deliberately not done.** Adding one changes the
+   argon2 input, so every already-wrapped row stops verifying without a second migration and
+   a dual-verify path. It belongs with the Phase 2 argon2 parameter work, done once.
+
+### What still needs a human
+
+- **Run the five SQL files** listed above in the Supabase SQL editor. Everything degrades
+  rather than breaking until they run — rotation is simply off, promo codes fall back to the
+  built-in table — but nothing is actually fixed until they do.
+- **Confirm RLS in the Supabase dashboard** for `conversations`, `agent_runs` and
+  `deadline_check_log`. A schema file cannot retroactively secure a table somebody created
+  by hand from a code comment; that confirmation IS the fix for S1-9.
+- **Run `cd frontend && npx tsc --noEmit`.** There was no node toolchain in the environment
+  this work was done in, so the frontend changes in S1-1, S1-2 and S1-3 are unverified by
+  the compiler. They are mechanical (signature changes and call-site updates), but that is
+  exactly the class of change tsc catches.
+- **Read the `[client-ip]` line off the Render log** after deploy — still open from S0-7.
+- **Turn on `CSP_ENFORCE`** only after reading the report-only violations against a real
+  `expo export` bundle (S1-5).
+- Still open from S0: the Render free tier, `EMAIL_POSTAL_ADDRESS` in the dashboard, and the
+  real per-user daily allowance (§6 q2 — `USER_DAILY_BUDGET_USD` is still the conservative
+  $0.50 placeholder).
+
+### Deliberately NOT done, with reasons
+
+- **Moving the Google sign-in token into the URL fragment** (the S0-9 leftover). H2 itself is
+  closed by the exact-origin check, and the token in that URL is already a single-use
+  60-second nonce rather than a bearer — so this is log hygiene, not an open exploit. Doing
+  it means changing the server redirect, `globalThis.location.hash` parsing on web, and
+  `Linking.parse` handling on native, on the ONLY sign-in path, with no way to run any of it
+  in this environment. The same reasoning the S0 pass gave still holds. Related and cheaper
+  if it is picked up: `GET /api/auth/google/session?token=` puts that same one-time token in
+  a query string on an API request, which is the identical leak S1-3 just closed for the
+  calendar flow — moving it to a POST body is a two-line change and does not touch the
+  redirect mechanics.
+- **M5** (the process-wide 5s Gemini sleep) and the argon2 parameters stay in Phase 2, and
+  L9 in Phase 4, exactly as §1 says. Finishing S1 means no High or Medium open EXCEPT M5 —
+  that is now true.
 
 ---
 
@@ -551,9 +605,10 @@ and receives the student's access **and refresh** tokens.
 
 ## 5. Phase S1 — Security hardening (~5 days)
 
-> **NOT STARTED, except S1-8, which is done** (marked inline below). Read § 0b first — it
-> carries the two decisions that block part of this phase, which items need SQL run by hand,
-> and a suggested order for the rest.
+> **COMPLETE as of 2026-09-04.** Every item below shipped; § 0b carries the per-item commit
+> table, the three corrections to this section's own text that implementing it turned up,
+> and what still needs a human. The text below is kept UNCHANGED as the record of what each
+> finding was and why — the commits reference it.
 
 ---
 
@@ -923,12 +978,12 @@ and never pass a full `record` to code that only needs a `userid`.
 
 Blocking, or near enough:
 
-1. **Prompts server-side (S1-1)?** Marquee M8. Recommended yes — it is the only fix that stops
-   an account holder running arbitrary prompts on your keys, and it makes cost attribution
-   exact.
+1. ~~**Prompts server-side (S1-1)?**~~ **ANSWERED — approved and shipped.** See §0b; the
+   prompt text was moved verbatim and that was verified character by character.
 2. **The daily per-user AI allowance (S0-5).** Recommended ~5x measured median daily spend,
    with an operator override. Read the median off the Cost per user tab.
-3. **`conversations` (S1-9)** — stop writing it, or add RLS and hash the IP?
+3. ~~**`conversations` (S1-9)**~~ **ANSWERED** — keep writing it, add RLS, and drop
+   `client_ip` outright rather than hashing it. Shipped.
 4. **Password reset (S1-11 note).** There is no recovery path today. Product decision.
 5. ~~**Anthropic `max_uses` value (S0-4).**~~ **ANSWERED** — S0-4 set it to **1**. The layer
    only matters if S0-3's pin is lifted by accident, so the blast radius should be one search,

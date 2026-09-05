@@ -200,10 +200,11 @@ for byte, as do both conditional branches and every user-content template.
   `jti`, and the route adopts those once and rotates them in rather than treating them as
   reuse — that path is tested, but it is the one change here that could sign the whole user
   base out if it is wrong, and the symptom would be a spike of 401s on `/api/auth/refresh`.
-- **Run `cd frontend && npx tsc --noEmit`.** There was no node toolchain in the environment
-  this work was done in, so the frontend changes in S1-1, S1-2 and S1-3 are unverified by
-  the compiler. They are mechanical (signature changes and call-site updates), but that is
-  exactly the class of change tsc catches.
+- ~~**Run `cd frontend && npx tsc --noEmit`**~~ — **DONE 2026-09-04, clean (exit 0, zero
+  errors)** across all 16 changed frontend files, once node was available. Note for whoever
+  hits this next: `node` was installed but its Homebrew symlink was not on PATH; the binary
+  was at `/opt/homebrew/Cellar/node/<version>/bin/node`, and `npm ci` in `frontend/` was
+  needed first because `node_modules` was absent.
 - **Read the `[client-ip]` line off the Render log** after deploy — still open from S0-7.
 - **Turn on `CSP_ENFORCE`** only after reading the report-only violations against a real
   `expo export` bundle (S1-5).

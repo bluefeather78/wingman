@@ -288,6 +288,37 @@ def _enforce_rate_limit():
 # Parallel execution prevention: scripts using web_search share the same quota.
 # Only one script can run at a time. Implemented via a lockfile that persists
 # for the duration of the script's execution.
+#
+# MARQUEE M9 (Phase 4, finding 11 / agents_report §5.2b): THIS LOCK IS BATCH-ONLY. A process
+# that has called set_interactive_process() — only app/main.py does — skips it entirely.
+#
+# It is a FILE on one machine, and _lock_acquired is a module global released only at process
+# EXIT. Both are right for an agent, which is a short-lived subprocess on the operator's
+# laptop. Both are wrong for a long-lived web server that imports the same module, which broke
+# three ways at once:
+#
+#   1. One interactive search would make the server OWN the lock for its whole lifetime.
+#      Every agent launched afterwards then failed fast until somebody restarted the server.
+#   2. The reverse: while an agent run was live on the same machine, an interactive search
+#      raised RuntimeError -> 502 for a student.
+#   3. With two uvicorn workers, worker B's first search call finds worker A's live-PID lock
+#      and raises PERMANENTLY for worker B — the finding-11 blocker on `--workers > 1`.
+#
+# WHY SKIPPING IS SAFE, and it is the same argument set_interactive_process already carries:
+# the agents run as SUBPROCESSES (`python -m agents.<name>`), so they never shared this
+# module's state with the web process — the file was the only channel between them, and it is
+# the channel doing the damage. What the lock protects is a BATCH googleSearch quota against
+# a second 100-call batch run; an interactive search is one call inside one student's request.
+# Nothing about the agents changes here: same file, same PID liveness check, same fail-fast on
+# genuine contention, and M6's 5-second floor is untouched.
+#
+# Today no interactive path searches at all — app/routes/ai.py pins _USE_WEB_SEARCH False
+# (S0-3) and matching/resume pass use_web_search=False — so this is currently unreachable in
+# the web process. That is exactly why it was worth fixing now rather than after a
+# server-side feature legitimately turns search on, which app/routes/ai.py explicitly
+# anticipates ("when a feature genuinely needs search, derive it here from the feature id").
+# The honest cost: from then on, those interactive calls will not serialise against a running
+# batch agent. That is the trade being made, not an oversight.
 _lock_file = os.path.join(REPO_ROOT, ".gemini_web_search.lock")
 _lock_acquired = False
 
@@ -333,6 +364,11 @@ def _acquire_web_search_lock(_retried=False):
     live contention so callers like server.py's proxy_to_gemini() can catch it and
     return a proper error response instead of the request thread dying silently."""
     global _lock_acquired
+    # MARQUEE M9 (Phase 4, finding 11 / audit §5.2b): the lock is BATCH-ONLY. See the block
+    # above _lock_file for the whole argument; the short version is that a web process taking
+    # this file lock breaks three ways and protects nothing.
+    if _interactive_process:
+        return
     if _lock_acquired:
         return  # Already acquired in this process
 

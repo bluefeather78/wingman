@@ -33,7 +33,10 @@ import sys
 import urllib.error
 import urllib.request
 
-CRED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".test-account.json")
+# Anchored at the REPO ROOT, not at this file's directory: the 2026-09-04 tidy-up
+# moved this script down a level and `dirname(__file__)` no longer means the root.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CRED_FILE = os.path.join(ROOT, ".test-account.json")
 DEFAULT_BASE = "http://127.0.0.1:8000"
 
 

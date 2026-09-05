@@ -24,10 +24,13 @@ import sys
 import urllib.error
 import urllib.request
 
-WINGMAN_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "opportunities.json")
-FINDER_JSON = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "opportunity finder", "opportunities.json"
-)
+# Anchored at the REPO ROOT, not at this file's directory: the 2026-09-04 tidy-up
+# moved this script down a level and `dirname(__file__)` no longer means the root.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Anchored at the REPO ROOT, not at this file's directory: the 2026-09-04 tidy-up
+# moved this script down a level and `dirname(__file__)` no longer means the root.
+WINGMAN_JSON = os.path.join(ROOT, "data", "opportunities.json")
+FINDER_JSON = os.path.join(ROOT, "..", "opportunity finder", "opportunities.json")
 
 WINGMAN_LOCATIONS = {'Remote', 'In-Person', 'In-Person and Remote'}
 

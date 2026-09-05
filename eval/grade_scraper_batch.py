@@ -38,7 +38,9 @@ sys.path.insert(0, ROOT)
 
 import scrape_opportunities  # classify_same_url — the SAME rule the live scraper runs (Phase 5)
 
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+# Anchored at the REPO ROOT, not at this file's directory: the 2026-09-04 tidy-up
+# moved this script down a level and `dirname(__file__)` no longer means the root.
+REPO_ROOT = ROOT
 DEFAULT_FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures",
                                "scraper_grading_20260823.json")
 

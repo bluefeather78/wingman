@@ -33,7 +33,9 @@ sys.path.insert(0, ROOT)
 
 from supabase_common import load_dotenv, supabase_get
 
-REPO = os.path.dirname(os.path.abspath(__file__))
+# Anchored at the REPO ROOT, not at this file's directory: the 2026-09-04 tidy-up
+# moved this script down a level and `dirname(__file__)` no longer means the root.
+REPO = ROOT
 # moderation_status -> fixture verdict. All three negatives grade identically; the hand-built
 # 08-23 fixture used "deleted" for the 7 rows an operator SQL-deleted before tombstones existed.
 STATUS_TO_VERDICT = {"approved": "approved", "rejected": "rejected", "duplicate": "duplicate"}

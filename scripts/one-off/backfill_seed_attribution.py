@@ -39,7 +39,9 @@ sys.path.insert(0, ROOT)
 import url_dedupe
 from supabase_common import load_dotenv, supabase_get, supabase_patch
 
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+# Anchored at the REPO ROOT, not at this file's directory: the 2026-09-04 tidy-up
+# moved this script down a level and `dirname(__file__)` no longer means the root.
+REPO_ROOT = ROOT
 LOG_DIR = os.path.join(REPO_ROOT, "agent_logs")
 # scraper_20260823-012518_seed14.json  and  scraper_20260819_seed5.json (date-only stamp).
 _LOG_RE = re.compile(r"scraper_(\d{8})(?:-\d{6})?_seed(\d+)\.json$")

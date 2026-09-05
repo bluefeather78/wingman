@@ -29,7 +29,9 @@ import scrape_opportunities as so   # merge_row (best-copy-wins)
 import url_repair
 from supabase_common import load_dotenv, supabase_get, supabase_patch
 
-REPO = os.path.dirname(os.path.abspath(__file__))
+# Anchored at the REPO ROOT, not at this file's directory: the 2026-09-04 tidy-up
+# moved this script down a level and `dirname(__file__)` no longer means the root.
+REPO = ROOT
 PAIRS = os.path.join(REPO, "tests", "fixtures", "pair_resolution_20260826.json")
 _SELECT = ("id,name,org,summary,eligibility,grade_min,grade_max,"
            "subject_tags,contact_email,url,quality_flags")

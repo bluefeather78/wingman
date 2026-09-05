@@ -44,7 +44,10 @@ import sys
 import urllib.error
 import urllib.request
 
-USERS_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users_db.json")
+# Anchored at the REPO ROOT, not at this file's directory: the 2026-09-04 tidy-up
+# moved this script down a level and `dirname(__file__)` no longer means the root.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+USERS_JSON = os.path.join(ROOT, "users_db.json")
 
 
 def load_dotenv(path=".env"):

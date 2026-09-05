@@ -174,7 +174,7 @@ def test_handlers_throttle_before_spending(monkeypatch):
         monkeypatch.setattr(ai, attr, lambda *a, **k: pytest.fail("reached past the throttle"))
     monkeypatch.setattr(ai, "client_ip", lambda _r: "1.2.3.4")
 
-    resp = ai.handle_ai(request=None, raw_body=b'{"feature":"ranking"}', user=None)
+    resp = ai._serve_ai(request=None, raw_body=b'{"feature":"ranking"}', user=None)
     assert resp.status_code == 429
 
 

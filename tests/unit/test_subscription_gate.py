@@ -171,7 +171,7 @@ def test_ai_route_gates_by_hand():
     handler. One route since S1-1 (POST /api/ai), which picks the provider — and therefore
     which key the gate consults — from the server-side feature id."""
     import app.routes.ai as ai
-    assert "_ai_access_error" in inspect.getsource(ai.handle_ai)
+    assert "_ai_access_error" in inspect.getsource(ai._serve_ai)
     assert "subscription_block_reason" in inspect.getsource(ai._ai_access_error)
 
 
@@ -243,7 +243,7 @@ def test_ai_handlers_consult_the_gate_before_spending(monkeypatch):
     monkeypatch.setattr(ai, "client_ip", lambda _r: "1.2.3.4")
 
     for feature in ("ranking", "profile_chat"):     # one Gemini, one Claude
-        resp = ai.handle_ai(request=None,
+        resp = ai._serve_ai(request=None,
                             raw_body=('{"feature":"%s"}' % feature).encode(), user=None)
         assert resp.status_code == 401
 

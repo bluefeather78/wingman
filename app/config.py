@@ -126,6 +126,33 @@ AI_RATE_LIMIT_PER_IP = int(os.environ.get("AI_RATE_LIMIT_PER_IP", "") or 120)
 # already in flight — so waiting longer only costs more.
 AI_UPSTREAM_TIMEOUT_SECONDS = float(os.environ.get("AI_UPSTREAM_TIMEOUT_SECONDS", "") or 60)
 
+# ---------- The AI lane: how many AI calls may be in flight at once (Phase 2 item 2) ----------
+# MARQUEE M9. FastAPI runs a plain-`def` handler in the anyio threadpool, which has 40 slots
+# shared by EVERY route. Nothing bounded how many of those slots /api/ai could hold, and an
+# AI call holds one for as long as the provider takes to answer — up to
+# AI_UPSTREAM_TIMEOUT_SECONDS above. So ~40 concurrent AI calls starved the pool and the
+# whole service stopped answering, including students who only wanted the catalog and never
+# touched a model. That is finding M5 / perf_report.md §B, and it is the reason Phase 2
+# exists at all.
+#
+# 12, not the 30 the plan proposed. Three reasons, and the first is the binding one:
+#   1. The number has to leave the shared pool usable. 12 of 40 leaves 28 slots for data
+#      routes under a full AI burst; 30 of 40 leaves 10, which is not meaningfully better
+#      than the starvation it is supposed to prevent.
+#   2. The provider tier is UNCONFIRMED (see the plan's Method section, still open). Letting
+#      30 requests through to an org whose Anthropic tier allows fewer just relocates the
+#      queue to Anthropic's door and turns a wait into a 429.
+#   3. Render Free is 0.1 CPU. It cannot usefully drive 30 concurrent anything.
+# Raise it via the env var once the tier is known and the host is paid — that is a launch-gate
+# task, deliberately not done here.
+AI_MAX_CONCURRENCY = int(os.environ.get("AI_MAX_CONCURRENCY", "") or 12)
+
+# What a shed request is told to wait. Deliberately small: the lane frees up as soon as any
+# in-flight call returns, which is seconds, not minutes. This is a "the app is busy" signal,
+# not a rate-limit penalty — the limiter above owns penalties and answers 429; a shed answers
+# 503, because the caller did nothing wrong and should simply try again.
+AI_SHED_RETRY_AFTER_SECONDS = int(os.environ.get("AI_SHED_RETRY_AFTER_SECONDS", "") or 5)
+
 # Ceiling on web searches per Anthropic call. Unlike Gemini's max_searches — a number folded
 # into the prompt and nothing more — Anthropic ENFORCES max_uses server-side, so this is a
 # real cost ceiling ($0.01/search). It is moot while _USE_WEB_SEARCH pins search off; it

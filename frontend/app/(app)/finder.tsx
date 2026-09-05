@@ -227,6 +227,14 @@ export default function Finder() {
   const [askLocation, setAskLocation] = useState(false);
   const [locationInput, setLocationInput] = useState('');
   const [savingLocation, setSavingLocation] = useState(false);
+  // One-time grade capture — the same one-shot pattern as location above, asked right after it.
+  // Grade is a hard filter (client-side isGradeEligible AND the server eligibility gate), so a
+  // search with no grade quietly shows opportunities the student is too young or too old for.
+  // Asked once, when we can't already tell their grade; stored on the shared student-profile
+  // record and fed into POST /api/match. Once recorded we never ask again.
+  const [askGrade, setAskGrade] = useState(false);
+  const [gradeInput, setGradeInput] = useState('');
+  const [savingGrade, setSavingGrade] = useState(false);
 
   const [description, setDescription] = useState('');
   const [grade, setGrade] = useState('');
@@ -525,16 +533,21 @@ export default function Finder() {
     return extra ? [...picked, { tag: extra }] : picked;
   }
 
-  // Grade the same way the form path resolves it: the form dropdown wins, else the grade the
-  // profile's stored filter values inferred. getProfileFilterValues is cached per profile
-  // text, so this is not a per-search paid call.
+  // Grade the same way the form path resolves it: the form dropdown wins, then the grade the
+  // student explicitly gave us via the one-time question (stored on the profile record), then
+  // the grade the profile's stored filter values inferred from the prose. getProfileFilterValues
+  // is cached per profile text, so this is not a per-search paid call — and it is skipped
+  // entirely once we have an explicit stored grade.
   async function resolveGradeNum(): Promise<number | null> {
-    let profileGrade: number | null = null;
-    try {
-      const fv = await getProfileFilterValues(profileStore, modelCalls, profileRecord.current);
-      profileGrade = fv.grade;
-    } catch {
-      /* best effort — no grade just means no grade filter */
+    const stored = profileRecord.current?.grade;
+    let profileGrade: number | null = typeof stored === 'number' ? stored : null;
+    if (profileGrade == null) {
+      try {
+        const fv = await getProfileFilterValues(profileStore, modelCalls, profileRecord.current);
+        profileGrade = fv.grade;
+      } catch {
+        /* best effort — no grade just means no grade filter */
+      }
     }
     return parseGradeFromText(grade) ?? profileGrade;
   }
@@ -702,9 +715,11 @@ export default function Finder() {
       } catch {
         /* best effort — no hints just means keyword-only scoring */
       }
-      // The form's dropdown wins when set; otherwise the grade comes from whatever
-      // grade-level language the student's own profile text happens to contain, if any.
-      const gradeNum = parseGradeFromText(grade) ?? profileGrade;
+      // The form's dropdown wins when set; then the grade the student explicitly gave us via
+      // the one-time question (stored on the profile record); then whatever grade-level
+      // language the student's own profile text happens to contain, if any.
+      const storedGrade = profileRecord.current?.grade;
+      const gradeNum = parseGradeFromText(grade) ?? (typeof storedGrade === 'number' ? storedGrade : profileGrade);
 
       // ---- The profile-driven path is now semantic recall (PR4) ----
       // Instead of the per-kind preFilter + rankCandidates fan-out, the suggest path posts the
@@ -817,12 +832,28 @@ export default function Finder() {
     return (typeof fromProfile === 'string' && fromProfile.trim() ? fromProfile : user?.location ?? '').trim();
   }
 
+  // The student's grade, if we already have it: the grade they explicitly told us (captured by
+  // the one-time question below and stored on the profile record), falling back to whatever
+  // grade-level language their synthesized profile text contains. Either one means we never ask.
+  function knownGrade(): number | null {
+    const stored = profileRecord.current?.grade;
+    if (typeof stored === 'number') return stored;
+    return parseGradeFromText(profileText);
+  }
+
   // The theme-picker "Find my matches" entry point. If we don't yet know where the student is
-  // based, ask once (mandatory) BEFORE searching; otherwise go straight to the suggest search.
+  // based, or what grade they're in, ask once (mandatory) BEFORE searching — location first,
+  // then grade; otherwise go straight to the suggest search. Both are hard filters, so a search
+  // without them is one that quietly shows opportunities the student can't apply to.
   function startSuggestFlow() {
     if (!knownLocation()) {
       setLocationInput('');
       setAskLocation(true);
+      return;
+    }
+    if (knownGrade() == null) {
+      setGradeInput('');
+      setAskGrade(true);
       return;
     }
     void suggestForMe();
@@ -848,6 +879,35 @@ export default function Finder() {
     } finally {
       setSavingLocation(false);
       setAskLocation(false);
+    }
+    // Location captured — chain into the one-time grade question (or straight to the search if
+    // we already know the grade). Checked directly rather than re-entering startSuggestFlow so a
+    // failed location save can't bounce the student back to the location screen in a loop.
+    if (knownGrade() == null) {
+      setGradeInput('');
+      setAskGrade(true);
+      return;
+    }
+    await suggestForMe();
+  }
+
+  // Persist the grade onto the shared student-profile record (merge — never clobber the derived
+  // slots or the location stored alongside it), then run the search. Mirrors
+  // submitLocationAndSearch; a save failure must not block the search.
+  async function submitGradeAndSearch() {
+    const value = parseGradeFromText(gradeInput);
+    if (value == null || savingGrade) return;
+    setSavingGrade(true);
+    try {
+      const rec = (await profileStore.load()) ?? profileRecord.current ?? {};
+      const next: ProfileRecord = { ...rec, grade: value };
+      await profileStore.save(next);
+      profileRecord.current = next;
+    } catch (e) {
+      console.warn('Could not save grade to profile:', (e as Error).message);
+    } finally {
+      setSavingGrade(false);
+      setAskGrade(false);
     }
     await suggestForMe();
   }
@@ -1177,6 +1237,36 @@ export default function Finder() {
                   onPress={() => void submitLocationAndSearch()}
                 />
                 <Pressable onPress={() => setAskLocation(false)}>
+                  <Text style={styles.link}>Back</Text>
+                </Pressable>
+              </View>
+            </>
+          ) : askGrade ? (
+            /* One-time, mandatory grade question — shown right after location (or on its own, if
+               we already know where they're based) the first time we search for a student whose
+               grade we can't tell. What they pick is saved to their profile and used to hide
+               opportunities outside their grade range; we never ask again. */
+            <>
+              <Text style={styles.heroTitle}>What grade are you in?</Text>
+              <Text style={[styles.heroSub, styles.heroSubItalic]}>
+                We use this once to hide opportunities you’re not eligible for — many are open only
+                to a specific grade range. We won’t ask again.
+              </Text>
+              <View style={{ maxWidth: 360, marginTop: 8, alignSelf: 'stretch' }}>
+                <SoftSelect
+                  value={gradeInput || 'Select your grade'}
+                  options={['Middle School', '9th grade', '10th grade', '11th grade', '12th grade']}
+                  onChange={setGradeInput}
+                />
+              </View>
+              <View style={styles.heroActions}>
+                <PopButton
+                  label={savingGrade ? 'Saving…' : 'Continue →'}
+                  loading={savingGrade}
+                  disabled={!gradeInput.trim() || savingGrade}
+                  onPress={() => void submitGradeAndSearch()}
+                />
+                <Pressable onPress={() => setAskGrade(false)}>
                   <Text style={styles.link}>Back</Text>
                 </Pressable>
               </View>

@@ -223,7 +223,6 @@ def test_anthropic_attaches_no_search_tool_while_search_is_off(monkeypatch):
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(ai, "record_interactive_cost_async", lambda *a, **k: None)
-    monkeypatch.setattr(ai, "log_conversation_async", lambda *a, **k: None)
 
     ai._anthropic_call("s", "u", 1000)
     assert "tools" not in sent["body"]
@@ -258,7 +257,6 @@ def test_anthropic_urlopen_is_given_an_explicit_timeout(monkeypatch):
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(ai, "record_interactive_cost_async", lambda *a, **k: None)
-    monkeypatch.setattr(ai, "log_conversation_async", lambda *a, **k: None)
 
     ai._anthropic_call("s", "u", 1000)
     assert seen["timeout"] == AI_UPSTREAM_TIMEOUT_SECONDS
@@ -277,7 +275,6 @@ def test_gemini_call_passes_an_explicit_timeout(monkeypatch):
 
     monkeypatch.setattr(ai, "call_gemini", fake_call_gemini)
     monkeypatch.setattr(ai, "record_interactive_cost_async", lambda *a, **k: None)
-    monkeypatch.setattr(ai, "log_conversation_async", lambda *a, **k: None)
 
     ai._proxy_to_gemini("s", "u", 2000, "alice", "ranking")
     assert seen["timeout"] == AI_UPSTREAM_TIMEOUT_SECONDS

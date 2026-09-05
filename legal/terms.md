@@ -1,6 +1,6 @@
 # Wingman Beta Terms of Use
 
-**Effective Date:** August 22, 2026
+**Effective Date:** September 5, 2026
 
 These Beta Terms of Use ("Terms") govern your access to and use of Wingman ("Wingman," the "Service," "we," "us," or "our"), a beta product operated by **Shama Bildikar** ("Operator").
 

@@ -75,30 +75,14 @@ on conflict (code) do nothing;
 
 
 -- ---------------------------------------------------------------------------
--- db/conversations_schema.sql - S1-9. THE ONE THAT MATTERS MOST. This table
--- holds a minor describing themselves in their own words, and its only
--- definition was a comment in app/core.py with no RLS line. The DROP COLUMN is
--- what makes "we no longer store the address" true of the rows already
--- written, not just the next ones.
+-- conversations table - REMOVED. Wingman no longer stores verbatim user
+-- conversations at all. The table that persisted profile-chat <question,
+-- answer> turns was dropped as a privacy improvement (see db/drop_conversations.sql
+-- and the removed log_conversation helpers in app/core.py). The original S1-9
+-- create/RLS block that lived here has been replaced by this drop so re-running
+-- this bundle never recreates the table.
 -- ---------------------------------------------------------------------------
-create table if not exists conversations (
-    id            bigint generated always as identity primary key,
-    created_at    timestamptz not null default now(),
-    userid        text,
-    mode          text,
-    system_prompt text,
-    user_content  text
-);
-
-alter table conversations add column if not exists userid text;
-alter table conversations add column if not exists mode text;
-alter table conversations add column if not exists system_prompt text;
-alter table conversations add column if not exists user_content text;
-
-alter table conversations enable row level security;
-create index if not exists conversations_created_at_idx on conversations (created_at desc);
-
-alter table conversations drop column if exists client_ip;
+drop table if exists conversations;
 
 
 -- ---------------------------------------------------------------------------
@@ -165,7 +149,9 @@ alter table deadline_check_log enable row level security;
 
 
 -- ============================================================================
--- VERIFY. Run this after the above; all five rows should read rls = true.
+-- VERIFY. Run this after the above; all rows should read rls = true. The
+-- `conversations` table is intentionally gone (dropped above), so it should
+-- NOT appear in the results.
 --
 -- Schema-qualified to 'public' on purpose. An earlier version of this query
 -- read pg_class without joining pg_namespace, so it matched relations of the
@@ -180,6 +166,6 @@ select n.nspname            as schema,
 from pg_class c
 join pg_namespace n on n.oid = c.relnamespace
 where n.nspname = 'public'
-  and c.relname in ('conversations', 'agent_runs', 'deadline_check_log',
+  and c.relname in ('agent_runs', 'deadline_check_log',
                     'promo_codes', 'users')
 order by c.relname;

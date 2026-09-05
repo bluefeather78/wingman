@@ -98,14 +98,11 @@ export default function Login() {
             </Pressable>
           </View>
 
-          {/* Google sign-in row — visually matches the live app's coming-soon button. */}
+          {/* Google sign-in row. */}
           <View style={{ gap: 12 }}>
             <Pressable onPress={google} style={styles.googleBtn} disabled={busy}>
               <GoogleG />
               <Text style={styles.googleText}>Continue with Google</Text>
-              <View style={styles.comingSoon}>
-                <Text style={styles.comingSoonText}>COMING SOON</Text>
-              </View>
             </Pressable>
             <View style={styles.orRow}>
               <View style={styles.rule} />
@@ -218,8 +215,6 @@ const styles = StyleSheet.create({
   googleText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.slate400 },
   gWrap: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center', opacity: 0.5 },
   gText: { fontFamily: fonts.bodyXBold, fontSize: 13, color: '#4285F4' },
-  comingSoon: { position: 'absolute', top: -8, right: -8, backgroundColor: colors.orange, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 2 },
-  comingSoonText: { fontFamily: fonts.bodyXBold, fontSize: 9, color: colors.white, letterSpacing: 0.5 },
   orRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   rule: { flex: 1, height: 1, backgroundColor: colors.slate200 },
   orText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate400 },

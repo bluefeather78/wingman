@@ -262,14 +262,14 @@ def test_chat_findings_no_student_lines():
 
 
 # --------------------------------------------------------------------------- #
-# mock_profile_basics — regex grade/state, gender always null
+# mock_profile_basics — regex grade/state (gender is no longer a basics field)
 # --------------------------------------------------------------------------- #
 def test_profile_basics_matches_grade_and_state():
     # Regression guard for the fixed \b bug: the two regexes previously held literal
     # backspace (0x08) bytes instead of \b word-boundaries, so they never matched
     # ordinary text. Now they must extract grade + state from normal prose.
     out = json.loads(ai.mock_profile_basics("I'm a junior in Washington studying"))
-    assert out == {"grade": "junior", "state": "Washington", "gender": None}
+    assert out == {"grade": "junior", "state": "Washington"}
 
 
 def test_profile_basics_numeric_grade_and_from_state():
@@ -287,7 +287,7 @@ def test_profile_basics_state_needs_in_or_from_prefix():
 
 def test_profile_basics_none_when_absent():
     out = json.loads(ai.mock_profile_basics("just some text"))
-    assert out == {"grade": None, "state": None, "gender": None}
+    assert out == {"grade": None, "state": None}
 
 
 # --------------------------------------------------------------------------- #
@@ -431,7 +431,7 @@ def test_dispatch_profile_basics():
     out = ai.generate_mock_text(
         "pull out a small set of specific profile facts",
         "I'm a senior in Oregon")
-    assert json.loads(out) == {"grade": "senior", "state": "Oregon", "gender": None}
+    assert json.loads(out) == {"grade": "senior", "state": "Oregon"}
 
 
 def test_dispatch_tracker_extract_with_section(seeded_random):

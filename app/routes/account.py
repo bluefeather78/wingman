@@ -10,14 +10,25 @@ from app.config import EMAIL_RE
 from app.core import (
     get_user_account, get_user_by_email, create_user, MissingUserColumns, DuplicateEmail,
     _check_signup_consent, ensure_trial_started, touch_user_activity,
-    update_password_hash,
+    update_password_hash, normalize_email,
 )
 from app.deps import json_body, json_response, json_error, client_ip, login_response
 from app.auth import hash_password, verify_password, AuthConfigError
-from app.auth.ratelimit import login_limiter, login_ip_limiter, register_limiter
+from app.auth.ratelimit import (login_limiter, login_ip_limiter, register_limiter,
+                                register_email_limiter)
 from app.services.email import send_lifecycle_email_async
 
 router = APIRouter()
+
+# The single answer to every sign-in failure (S1-7, finding M7). Named rather than repeated
+# so the two call sites cannot drift back apart — which is exactly how they got here.
+#
+# Residual, recorded rather than hidden: a missing account skips the argon2 verify, so the
+# two paths still differ by roughly the hash time. Closing that means running a dummy verify
+# on every miss, and argon2 is configured at 64 MiB / 1-3s per call here — so the "fix"
+# would hand an attacker a far better DoS lever than the oracle it removes. The rate
+# limiter above is what bounds this in the meantime; the argon2 parameters are Phase 2.
+LOGIN_FAILED = "Incorrect user ID or password."
 
 
 @router.post("/api/register")
@@ -46,6 +57,16 @@ def handle_register(request: Request, body: dict = Depends(json_body)):
 
     if not EMAIL_RE.match(email):
         return json_error(400, "Please enter a valid email address.")
+
+    # S1-7, finding M7: the "already exists with that email" 409 below is an enumeration
+    # oracle, and this population is largely minors — a list of "these addresses have
+    # accounts" is itself sensitive. Bounded per ADDRESS rather than per IP, so a script
+    # cannot walk a list from one machine. Checked after the format check so a malformed
+    # address does not consume a real one's budget, and before the lookup so the probe does
+    # not even reach Supabase.
+    if not register_email_limiter.allow(normalize_email(email)):
+        return json_error(429, "Too many sign-up attempts for that email address. "
+                               "Please wait and try again.")
 
     key = userid.lower()
     try:
@@ -115,15 +136,19 @@ def handle_login(request: Request, body: dict = Depends(json_body)):
         record = get_user_account(key)
     except Exception as e:
         return json_error(502, f"Could not reach Supabase: {e}")
+    # ONE message for both failures (S1-7, finding M7). This used to answer
+    # 404 "No account found with that user ID." here and 401 "Incorrect password." below,
+    # which enumerates valid userids for free — and the two are told apart by the STATUS as
+    # much as the text, so both have to converge, not just the wording.
     if not record:
-        return json_error(404, "No account found with that user ID.")
+        return json_error(401, LOGIN_FAILED)
 
     # Verify against the stored hash. verify_password handles both argon2 rows and legacy
     # bare-SHA-256 rows; a legacy row that matches is transparently upgraded to argon2 here,
     # so accounts migrate one login at a time with no lockout and no client change.
     ok, needs_upgrade = verify_password(record.get("password_hash"), password_hash)
     if not ok:
-        return json_error(401, "Incorrect password.")
+        return json_error(401, LOGIN_FAILED)
     if needs_upgrade:
         try:
             update_password_hash(key, hash_password(password_hash))

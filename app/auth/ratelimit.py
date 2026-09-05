@@ -73,6 +73,16 @@ login_ip_limiter = RateLimiter(100, 5 * 60)
 # 10 registrations per IP per hour, unchanged. Its site-wide-capacity problem was the same
 # forwarded-IP bug, not the key.
 register_limiter = RateLimiter(10, 60 * 60)
+# Registration attempts per EMAIL ADDRESS per hour (S1-7, finding M7). Register answers a
+# distinct 409 for a taken email, which is an enumeration oracle — and the population here
+# is largely minors, so "these addresses have accounts" is itself sensitive. The plan's
+# preferred fix (answer the success shape and mail the existing account) cannot ship without
+# a signup flow that does not hand back tokens inline, so this is its stated fallback: the
+# oracle stays, but reading it costs an hour per three addresses instead of being free.
+#
+# Keyed on the normalized address, NOT the IP, so a script cannot walk a list from one
+# machine — and 3 is generous for a real person mistyping their own address.
+register_email_limiter = RateLimiter(3, 60 * 60)
 
 # The AI proxies (S0-2, findings D1/D4). Two buckets rather than one composite (ip, user)
 # key: a per-(ip,user) bucket would let one attacker with N accounts, or one account across N

@@ -99,10 +99,16 @@ def _dict(inputs, key):
 #
 # Output budget, not a content limit: the profile is rewritten whole on every merge, so the
 # answer grows with the profile and a fixed cap eventually cuts it mid-sentence. Unused
-# budget is free (billed on tokens produced), so ask generously and retry once at the
-# ceiling. There is deliberately no word limit in the prompt, storage, or display.
-PROFILE_SYNTH_MAX_TOKENS = 4000
-PROFILE_SYNTH_MAX_TOKENS_RETRY = 8000
+# budget is free (billed on tokens produced), so ask generously in ONE call. There is
+# deliberately no word limit in the prompt, storage, or display.
+#
+# This used to be a 4000-then-8000 retry: the first call truncated on any sizeable profile,
+# and that truncated attempt was a fully billed call (its output tokens AND a second copy of
+# the input) thrown away before the 8000 retry produced the real answer. Since the ceiling is
+# free when unused, buying the whole budget up front costs nothing on small profiles and SAVES
+# the wasted partial + duplicated input on large ones. profileHasTruncatedTail()/"Tidy it up"
+# in the client stays as the safety net for a profile that somehow exceeds even this.
+PROFILE_SYNTH_MAX_TOKENS = 16000
 
 
 def _profile_synthesis(inputs):
@@ -502,8 +508,7 @@ Respond with ONLY a raw JSON object, no markdown fences, no preamble, no text af
 # any way to send a prompt of your own through this app.
 FEATURES = {
     "profile_synthesis": Feature("claude", _profile_synthesis,
-                                 max_tokens=PROFILE_SYNTH_MAX_TOKENS,
-                                 retry_max_tokens=PROFILE_SYNTH_MAX_TOKENS_RETRY),
+                                 max_tokens=PROFILE_SYNTH_MAX_TOKENS),
     # Both chat-starter calls bill as one product feature, so the console's spend breakdown
     # reads exactly as it did when a substring guess produced it.
     "chat_starter_pool": Feature("claude", _chat_starter_pool,

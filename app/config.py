@@ -87,9 +87,11 @@ CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 # mid-sentence once a student's story got past a few paragraphs — Anthropic returns the
 # partial text with stop_reason "max_tokens", so it looked like a complete answer.
 CLAUDE_MAX_TOKENS = 1000
-# Ceiling on a client-supplied maxTokens. Haiku 4.5 allows far more; this is a cost guard
-# on an endpoint any signed-in browser can post to, not a model limit.
-CLAUDE_MAX_TOKENS_CEILING = 8000
+# Ceiling on a client-supplied maxTokens. Haiku 4.5 allows far more (32k+); this is a cost
+# guard on an endpoint any signed-in browser can post to, not a model limit. Raised from 8000
+# so profile synthesis — which now buys its whole budget in ONE call rather than a 4k-then-8k
+# retry — has room to finish a long profile without truncating (see PROFILE_SYNTH_MAX_TOKENS).
+CLAUDE_MAX_TOKENS_CEILING = 16000
 
 # ---------- Request caps on the two AI proxies (S0-2; findings D1, D4, M4) ----------
 # Before these there was no limiter on either proxy route and no body-size limit anywhere in

@@ -1,11 +1,11 @@
 # Security Hardening Plan — Phases S0 and S1
 
 Standalone, self-contained security workstream extracted from
-[PRODUCTION_READINESS_PLAN.md](PRODUCTION_READINESS_PLAN.md) (2026-09-02 review).
+[PRODUCTION_READINESS_PLAN.md](../../PRODUCTION_READINESS_PLAN.md) (2026-09-02 review).
 Written 2026-09-04 to be picked up in a fresh session with no prior conversation context.
 
 **Source of record for every finding id below:**
-[docs/review-2026-09-02/security_report.md](docs/review-2026-09-02/security_report.md) — it
+[docs/review-2026-09-02/security_report.md](../review-2026-09-02/security_report.md) — it
 carries the exploit walkthrough, the code excerpt and the file:line for each. Frontend-side
 detail is in `frontend_report.md`; the live red-team of the AI proxy is in
 PRODUCTION_READINESS_PLAN.md § "Live verification (2026-09-03)".
@@ -179,7 +179,7 @@ for byte, as do both conditional branches and every user-content template.
 
 ### What still needs a human
 
-- ~~**Run [db/RUN_ME_S1.sql](db/RUN_ME_S1.sql)**~~ — **DONE 2026-09-04, and VERIFIED.** The
+- ~~**Run [db/RUN_ME_S1.sql](../../db/RUN_ME_S1.sql)**~~ — **DONE 2026-09-04, and VERIFIED.** The
   verification query returned `rls = true` for `conversations`, `agent_runs`,
   `deadline_check_log`, `promo_codes` and `users`. That confirmation is what actually closes
   S1-9: the schema files could only make the ALTER available to run, and could not
@@ -255,7 +255,7 @@ so they are not lost):
 
 ## 2. Approval gates — read before touching anything
 
-Per [MARQUEE_DECISIONS.md](MARQUEE_DECISIONS.md) and CLAUDE.md:
+Per [MARQUEE_DECISIONS.md](../../MARQUEE_DECISIONS.md) and CLAUDE.md:
 
 - **M9 — any code path that makes a paid API call.** Covers `use_web_search` / `max_searches`
   / `max_uses` toggles, model pins, per-row model calls, provider swaps. **S0-1, S0-2, S0-3,

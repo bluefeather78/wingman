@@ -166,7 +166,8 @@ eval/                     grading + golden-set harness (matching_eval, dedupe_ev
 db/                       one-time manual DDL, run by hand in the Supabase SQL editor.
                           Never opened by code; the filenames appear in ~130 setup and
                           503 messages, so keep the basenames stable.
-docs/                     plans/ (unbuilt or part-shipped) · archive/ (shipped, superseded,
+docs/                     plans/ (unbuilt or part-shipped — incl. SECURITY_HARDENING_PLAN.md,
+                          moved off the repo root 2026-09-05) · archive/ (shipped, superseded,
                           dated snapshots) · review-2026-09-02/ (the production audit) ·
                           SUBSCRIPTION_SETUP.md + MATCHING_UX_REQUIREMENTS.md (live refs)
 data/                     Opportunities.xlsx, the diffable opportunities.json snapshot,
@@ -246,14 +247,15 @@ the regular dev loop.
 
 CLAUDE.md is loaded into **every** session, so it holds only what is true regardless of what
 you are working on: the marquee rules, the layout, how to run things, and the security notes.
-The two domain files below are **not** auto-loaded — say which one you are working in at the
-start of a session and read it then. They were split out of this file on 2026-09-04 (it had
-reached 177KB); the text in them is unchanged, only relocated.
+The files below are **not** auto-loaded — say which one you are working in at the start of a
+session and read it then. The two domain files were split out of this file on 2026-09-04 (it
+had reached 177KB); the text in them is unchanged, only relocated.
 
 | Working on | Read | Covers |
 |---|---|---|
 | the student-facing app — `frontend/`, `app/` | [docs/CLAUDE-app.md](docs/CLAUDE-app.md) | the API endpoints, auth, subscription/trial/consent, the profile chat and its caching, AI call flow, app screens, app-open latency, the font-flash fix, lifecycle email |
 | the catalog pipeline or the console — `agents/`, `wingman/`, `ops/` | [docs/CLAUDE-ops.md](docs/CLAUDE-ops.md) | the seven agents and what each costs, dry-run/preview/commit tiers, cost accounting, the Metrics and Cost-per-user views, link health, URL repair, action-item generation, the scraper, dedupe and the review queue |
+| anything security-adjacent — auth, the AI proxy, spend caps, rate limits, RLS, the ops gate | [docs/plans/SECURITY_HARDENING_PLAN.md](docs/plans/SECURITY_HARDENING_PLAN.md) | every S0/S1 finding and what was done about it, the three approval gates, the sequencing hazards, what was deliberately not done, and what still needs a human after deploy. **It lived at the repo root until 2026-09-05** — that is the path older commits, plan text and code comments name |
 
 If you are touching both — a feature that adds a column the agents write and the app reads —
 read both. **Read the relevant one BEFORE editing**, not after: most of what is in them is a

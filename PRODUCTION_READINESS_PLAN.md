@@ -21,8 +21,9 @@ Phase 2 (capacity) is the next unstarted phase and is where this document picks 
 
 The blow-by-blow — every finding, what was done, what was deliberately not done, and the
 three places this plan's own text turned out to be wrong — is in
-[SECURITY_HARDENING_PLAN.md](SECURITY_HARDENING_PLAN.md), sections 0 and 0b. Read that
-before touching anything security-adjacent; this section is only the summary.
+[docs/plans/SECURITY_HARDENING_PLAN.md](docs/plans/SECURITY_HARDENING_PLAN.md), sections 0
+and 0b. Read that before touching anything security-adjacent; this section is only the
+summary.
 
 | | |
 |---|---|

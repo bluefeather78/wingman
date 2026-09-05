@@ -2,9 +2,12 @@
 
 Translated from server.py's handle_messages / proxy_to_gemini / mock_response /
 handle_messages_claude / proxy_to_anthropic (docs/archive/PLAN_1_decompose.md). The client sends a
-plain {system, userContent, useWebSearch, userid} body either way; the response is the
+plain {system, userContent, userid} body either way; the response is the
 {"content":[{"type":"text","text":...}]} envelope for both live and mock, so script.js
 doesn't branch on mode.
+
+The client may still send "useWebSearch" — it is read and IGNORED. Whether the server runs a
+paid web search is a server-side decision now; see _USE_WEB_SEARCH below (M9 / S0-3).
 """
 import json
 import urllib.error
@@ -34,6 +37,21 @@ router = APIRouter()
 # through this rather than app.deps.raw_body, so an over-limit request is 413'd by the
 # dependency — before the handler exists to make an upstream call.
 ai_raw_body = capped_raw_body(AI_MAX_BODY_BYTES)
+
+# MARQUEE M9 (S0-3, finding D3): whether the server performs PAID web searches is a
+# server-side decision. It used to be the CLIENT's — both proxies read
+# `use_web_search = bool(payload.get("useWebSearch"))` straight off the request body, so any
+# caller could turn on billed searches. Verified live 2026-09-03: useWebSearch:true on
+# /api/messages-claude produced web_search_requests=1 and +2,240 billed input tokens.
+#
+# Pinned False rather than feature-gated, because nothing needs it. Every live feature on
+# both routes passes false; the ONLY `true` in the whole frontend is
+# intakeExtractAndClassify (frontend/src/lib/tracker.ts), which has zero callers anywhere in
+# the repo (frontend_report.md §14 lists it under dead code — re-verified 2026-09-04).
+#
+# A client "useWebSearch" is now read and ignored. When a feature genuinely needs search,
+# derive it here from the S1-1 server-side feature id — never from a client flag.
+_USE_WEB_SEARCH = False
 
 # A response header the capture middleware (app/main.py) skips over, so a provider failure
 # recorded HERE with its real upstream status + error message is not ALSO recorded generically
@@ -123,11 +141,10 @@ def _proxy_to_gemini(raw_body, ip, userid):
     system = payload.get("system", "") or ""
     user_content = payload.get("userContent", "")
     user_content = user_content if isinstance(user_content, str) else json.dumps(user_content)
-    use_web_search = bool(payload.get("useWebSearch"))
     try:
         text, usage = call_gemini(
             system, user_content, GEMINI_API_KEY,
-            use_web_search=use_web_search,
+            use_web_search=_USE_WEB_SEARCH,
             max_tokens=_clamped_gemini_max_tokens(payload.get("maxTokens")),
             model=MESSAGES_MODEL,
         )
@@ -154,14 +171,13 @@ def _proxy_to_anthropic(raw_body, ip, userid):
     system = payload.get("system", "") or ""
     user_content = payload.get("userContent", "")
     user_content = user_content if isinstance(user_content, str) else json.dumps(user_content)
-    use_web_search = bool(payload.get("useWebSearch"))
     body = {
         "model": CLAUDE_MODEL,
         "max_tokens": _clamped_max_tokens(payload.get("maxTokens")),
         "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": user_content}],
     }
-    if use_web_search:
+    if _USE_WEB_SEARCH:
         body["tools"] = [{"type": "web_search_20250305", "name": "web_search"}]
     req = urllib.request.Request(
         ANTHROPIC_URL,

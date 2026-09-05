@@ -10,6 +10,7 @@ before the handler exists to make a call at all. No TestClient (this environment
 the socketpair its event loop needs); the dependencies are awaited directly instead.
 """
 import asyncio
+import json
 
 import pytest
 from fastapi import HTTPException
@@ -174,3 +175,55 @@ def test_handlers_throttle_before_spending(monkeypatch):
     for handler in (ai.handle_messages, ai.handle_messages_claude):
         resp = handler(request=None, raw_body=b"{}", user=None)
         assert resp.status_code == 429
+
+
+# ---------- S0-3 / finding D3: the client does not decide whether we pay for search ----------
+
+def test_web_search_is_pinned_off():
+    """The flag is the server's, not the request's. A client `useWebSearch: true` used to
+    turn on billed searches — live 2026-09-03 it produced web_search_requests=1 and +2,240
+    billed input tokens. Nothing in the app needs search, so it is pinned off."""
+    assert ai._USE_WEB_SEARCH is False
+
+
+def test_neither_proxy_reads_usewebsearch_from_the_body():
+    """The precise regression to prevent: re-deriving the flag from the payload. If a feature
+    ever genuinely needs search, derive it from the server-side feature id (S1-1), never from
+    a client flag — so reading it back off `payload` here is always wrong."""
+    import inspect
+    for fn in (ai._proxy_to_gemini, ai._proxy_to_anthropic):
+        src = inspect.getsource(fn)
+        assert "useWebSearch" not in src
+        assert "_USE_WEB_SEARCH" in src
+
+
+def test_anthropic_attaches_no_search_tool_while_search_is_off(monkeypatch):
+    """The tool block survives as the defence-in-depth layer (S0-4), but must not be reachable
+    while the pin is off — assert on the request body actually sent upstream."""
+    import urllib.request
+
+    sent = {}
+
+    class FakeUpstream:
+        status = 200
+
+        def read(self):
+            return b'{"content":[{"type":"text","text":"hi"}],"usage":{}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, *a, **k):
+        sent["body"] = json.loads(req.data.decode())
+        return FakeUpstream()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(ai, "record_interactive_cost_async", lambda *a, **k: None)
+    monkeypatch.setattr(ai, "log_conversation_async", lambda *a, **k: None)
+
+    ai._proxy_to_anthropic(json.dumps({"system": "s", "userContent": "u",
+                                       "useWebSearch": True}).encode(), "1.2.3.4", "alice")
+    assert "tools" not in sent["body"]

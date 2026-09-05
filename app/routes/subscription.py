@@ -2,21 +2,22 @@
 docs/archive/PLAN_1_decompose.md). Translated from server.py's handle_subscription_* handlers.
 """
 import datetime
+import json
 
 from fastapi import APIRouter, Request, Depends
 
 from app.core import (
     get_user_account, ensure_trial_started, subscription_state, touch_user_activity,
-    update_subscription, redeem_promo_conditional,
+    update_subscription, redeem_promo_conditional, get_userid_by_stripe_customer,
 )
 from app.deps import (json_body, json_response, json_error,
-                      opaque_error, DB_UNAVAILABLE)
+                      opaque_error, DB_UNAVAILABLE, capped_raw_body)
 from app.services.email import send_lifecycle_email_async
 from app.auth import get_current_user, get_optional_user, AuthedUser
 from wingman.subscription_common import (
     get_or_create_customer, create_checkout_session, cancel_subscription,
     validate_promo_code, promo_kind, extend_from, note_promo_redemption,
-    GRANTABLE_STATUSES,
+    verify_stripe_webhook_signature, GRANTABLE_STATUSES,
 )
 
 router = APIRouter()
@@ -240,3 +241,132 @@ def handle_validate_promo(body: dict = Depends(json_body),
         "discount_months": promo_data.get("discount_months"),
         "discount_percent": promo_data.get("discount_percent"),
     })
+
+
+# ---------------------------------------------------------------------------
+# Stripe webhook
+# ---------------------------------------------------------------------------
+# The one endpoint Stripe itself calls. It is UNAUTHENTICATED by design — Stripe sends no
+# bearer token — so its entire trust comes from the signature check below, exactly as
+# verify_stripe_webhook_signature enforces. Without this endpoint, a Checkout Session
+# charges the card but nothing ever writes `subscription_status = 'active'` /
+# `stripe_subscription_id` back onto the row, so a paying user would stay behind the paywall.
+#
+# It reads the RAW body (bytes) via a dependency and stays a plain `def`: the signature is
+# computed over the exact bytes Stripe sent, so it must not go through JSON parsing first,
+# and the Supabase writes below are blocking, so FastAPI must run this in the threadpool
+# (see the note in app/deps.py). The cap mirrors the AI proxies' capped_raw_body — a Stripe
+# event is a few KB; 512 KB is generous headroom that still refuses a junk flood.
+_STRIPE_WEBHOOK_MAX_BYTES = 512 * 1024
+_stripe_raw_body = capped_raw_body(_STRIPE_WEBHOOK_MAX_BYTES)
+
+
+def _period_end_iso(period_end):
+    """A Stripe unix `current_period_end` as our ISO-8601 UTC string, or None."""
+    if not period_end:
+        return None
+    try:
+        return datetime.datetime.fromtimestamp(
+            int(period_end), datetime.timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _updates_from_subscription(sub):
+    """The users-row updates implied by a Stripe subscription object.
+
+    Maps Stripe's status onto our own (see subscription_state): active/trialing → active,
+    past_due → past_due, canceled/unpaid/incomplete_expired → canceled. A status we do not
+    recognise (incomplete, paused, anything new) leaves the row untouched — a status we
+    cannot confidently map must not silently grant or revoke access.
+
+    Mirrors the app's cancel-at-period-end model (see cancel_subscription): a subscription
+    still active at Stripe but flagged `cancel_at_period_end` is written 'canceled' with the
+    period-end date, so subscription_state() keeps access until that date — they paid for it.
+    """
+    status = sub.get("status")
+    updates = {}
+    sub_id = sub.get("id")
+    if sub_id:
+        updates["stripe_subscription_id"] = sub_id
+    end_iso = _period_end_iso(sub.get("current_period_end"))
+    if status in ("active", "trialing"):
+        if sub.get("cancel_at_period_end"):
+            updates["subscription_status"] = "canceled"
+            if end_iso:
+                updates["subscription_end_at"] = end_iso
+        else:
+            updates["subscription_status"] = "active"
+    elif status == "past_due":
+        updates["subscription_status"] = "past_due"
+    elif status in ("canceled", "unpaid", "incomplete_expired"):
+        updates["subscription_status"] = "canceled"
+        if end_iso:
+            updates["subscription_end_at"] = end_iso
+    return updates
+
+
+def _apply_updates_for_customer(customer_id, updates):
+    """Write `updates` to the account owning this Stripe customer id.
+
+    A no-op when there is nothing to write or the customer maps to no account — a stray or
+    test event referencing a customer we never stored is acknowledged, not an error.
+    """
+    if not updates:
+        return
+    userid = get_userid_by_stripe_customer(customer_id)
+    if userid:
+        update_subscription(userid, updates)
+
+
+@router.post("/api/webhook/stripe")
+def handle_stripe_webhook(request: Request, payload: bytes = Depends(_stripe_raw_body)):
+    # The signature IS the authentication. verify_stripe_webhook_signature returns False on
+    # a bad signature AND when STRIPE_WEBHOOK_SECRET is unset — both mean "do not trust this
+    # body", so an unconfigured secret fails closed rather than processing forged events.
+    signature = request.headers.get("stripe-signature", "")
+    if not verify_stripe_webhook_signature(payload, signature):
+        return json_error(400, "Invalid or missing Stripe signature.")
+
+    try:
+        event = json.loads(payload.decode())
+    except Exception:
+        return json_error(400, "Malformed webhook body.")
+
+    event_type = event.get("type") or ""
+    obj = (event.get("data") or {}).get("object") or {}
+
+    try:
+        if event_type == "checkout.session.completed":
+            # Checkout finished. Mark the customer active and record the subscription id; the
+            # customer.subscription.* events that follow keep the status precise from here on.
+            updates = {"subscription_status": "active"}
+            sub_id = obj.get("subscription")
+            if sub_id:
+                updates["stripe_subscription_id"] = sub_id
+            _apply_updates_for_customer(obj.get("customer"), updates)
+
+        elif event_type in ("customer.subscription.created",
+                            "customer.subscription.updated",
+                            "customer.subscription.deleted"):
+            # For these, obj IS the subscription object.
+            _apply_updates_for_customer(obj.get("customer"),
+                                        _updates_from_subscription(obj))
+
+        elif event_type == "invoice.payment_succeeded":
+            # A renewal cleared — restore/confirm access.
+            _apply_updates_for_customer(obj.get("customer"),
+                                        {"subscription_status": "active"})
+
+        elif event_type == "invoice.payment_failed":
+            _apply_updates_for_customer(obj.get("customer"),
+                                        {"subscription_status": "past_due"})
+
+        # Any other event type is acknowledged (200) and ignored.
+    except Exception as e:
+        # A non-2xx makes Stripe retry with backoff, which is the right behaviour for a
+        # transient Supabase failure. opaque_error logs the detail and returns only a ref.
+        return opaque_error(502, "Could not process the webhook just now.",
+                            e, op="subscription.webhook")
+
+    return json_response(200, {"received": True})

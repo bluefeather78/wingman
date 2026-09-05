@@ -1147,6 +1147,30 @@ def update_subscription(userid, updates):
     return True
 
 
+# Stripe customer ids are `cus_` + URL-safe base62. The value reaching us comes from a
+# signature-verified webhook payload, so it is already trusted — this guard is defence in
+# depth against ever interpolating something stranger than an id into a PostgREST filter.
+_STRIPE_CUSTOMER_RE = re.compile(r"^cus_[A-Za-z0-9]+$")
+
+
+def get_userid_by_stripe_customer(customer_id):
+    """The userid whose row carries this Stripe customer id, or None.
+
+    The Stripe webhook is unauthenticated (Stripe calls it, with no bearer token), so this
+    is the only way to tie an incoming event back to an account: the checkout handler stamps
+    `stripe_customer_id` on the row before redirecting to Stripe, so by the time an event
+    arrives the mapping already exists. Returns the first match — the column is one-per-account
+    in practice, and `limit=1` keeps a stray duplicate from turning into a list.
+    """
+    customer_id = (customer_id or "").strip()
+    if not _STRIPE_CUSTOMER_RE.match(customer_id):
+        return None
+    query = "?" + urllib.parse.urlencode({
+        "stripe_customer_id": f"eq.{customer_id}", "select": "userid", "limit": "1"})
+    rows = _users_request("GET", query)
+    return rows[0]["userid"] if rows else None
+
+
 # A promo code is about to be interpolated into a PostgREST filter, so its shape is
 # checked rather than assumed. Today every code comes from the hard-coded PROMO_CODES
 # table and cannot be anything else — but S1-10 moves them into a database table, at

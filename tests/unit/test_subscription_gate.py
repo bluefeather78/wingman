@@ -129,6 +129,10 @@ UNGATED = {
     # account (we still record what they do) and never 402, so it uses get_optional_user,
     # not the subscription gate.
     ("POST", "/api/events"),
+    # Stripe calls this with a signature, not a bearer token — it must never require auth or
+    # the subscription gate. Its events are what LIFT the block (write status='active'), so
+    # gating it would make it unreachable exactly when it matters.
+    ("POST", "/api/webhook/stripe"),
 }
 
 GATE_DEPENDENCIES = {deps.require_subscription, deps.optional_subscribed_user}

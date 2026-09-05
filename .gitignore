@@ -63,3 +63,11 @@ htmlcov/
 
 # Dev-only test account credentials (dev_test_account.py)
 .test-account.json
+
+# Expo web build output and cache. `expo export -p web` writes frontend/dist (a ~1.9MB
+# bundle) and frontend/.expo; Render regenerates both on every deploy from its own build
+# command, so a committed copy is dead weight that also churns on every build. node_modules
+# was already covered; these two were not, and a local `expo export` run leaves them
+# staged-able.
+frontend/dist/
+frontend/.expo/

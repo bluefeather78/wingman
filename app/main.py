@@ -42,13 +42,27 @@ app = FastAPI(title="Highschool Wingman", docs_url=None, redoc_url=None, openapi
 # at all. So: on Render, "*" means the exact app origins; everywhere else it still means "*",
 # because a dev machine's origins are not knowable here and a CORS rule that breaks
 # `expo start` gets deleted rather than fixed.
-_DEFAULT_PROD_ORIGINS = "https://highschoolwingman.com,https://www.highschoolwingman.com"
+# RENDER_EXTERNAL_URL is set by Render to this service's own public URL. Including it means
+# the allow-list configures itself for whatever the service is actually reachable at — the
+# `*.onrender.com` hostname before a custom domain is pointed at it, a preview deploy, a
+# renamed service. Without it, hard-coding the custom domain would silently break a
+# cross-origin caller the day the URL differs from what was guessed here, and CORS failures
+# read as "the app is broken" rather than as a config problem.
+_DEFAULT_PROD_ORIGINS = ["https://highschoolwingman.com",
+                         "https://www.highschoolwingman.com"]
+_render_url = (os.environ.get("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
+if _render_url:
+    _DEFAULT_PROD_ORIGINS.append(_render_url)
+
 _cors_origins = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
-if not _cors_origins:
-    _cors_origins = _DEFAULT_PROD_ORIGINS if os.environ.get("RENDER") else "*"
-_allow_origins = ["*"] if _cors_origins.strip() == "*" else [
-    o.strip() for o in _cors_origins.split(",") if o.strip()
-]
+if _cors_origins:
+    _allow_origins = ["*"] if _cors_origins == "*" else [
+        o.strip() for o in _cors_origins.split(",") if o.strip()
+    ]
+elif os.environ.get("RENDER"):
+    _allow_origins = _DEFAULT_PROD_ORIGINS
+else:
+    _allow_origins = ["*"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allow_origins,

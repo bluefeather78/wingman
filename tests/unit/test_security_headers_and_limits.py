@@ -110,6 +110,24 @@ def test_cors_is_pinned_to_the_app_origins_on_render(monkeypatch):
         importlib.reload(main)
 
 
+def test_render_s_own_url_is_allowed_automatically(monkeypatch):
+    """Hard-coding only the custom domain breaks the day the service is reachable at a
+    different URL — an onrender.com hostname before the domain is pointed, a preview deploy,
+    a rename. A CORS failure reads as "the app is broken", not as a config problem."""
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://wingman-abc.onrender.com/")
+    monkeypatch.delenv("CORS_ALLOW_ORIGINS", raising=False)
+    reloaded = importlib.reload(main)
+    try:
+        assert "https://wingman-abc.onrender.com" in reloaded._allow_origins
+        assert "https://highschoolwingman.com" in reloaded._allow_origins
+        assert "*" not in reloaded._allow_origins
+    finally:
+        monkeypatch.delenv("RENDER", raising=False)
+        monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
+        importlib.reload(main)
+
+
 def test_an_explicit_setting_still_wins(monkeypatch):
     monkeypatch.setenv("RENDER", "true")
     monkeypatch.setenv("CORS_ALLOW_ORIGINS", "https://staging.example.com")

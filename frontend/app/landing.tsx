@@ -1,4 +1,3 @@
-import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
@@ -6,7 +5,7 @@ import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from
 import { backendUrl } from '@/api/httpClient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Logo, PopButton, PopCard, SoftCard, usePopInteraction } from '@/ui/components';
-import { PersonIcon } from '@/ui/icons';
+import { ContractIcon, ExpandIcon, PersonIcon, PlayIcon } from '@/ui/icons';
 import { colors, fonts, LANDING_MAX_WIDTH, navShadow, popShadow, radius, space } from '@/ui/theme';
 
 // Self-contained bundle (its own React runtime + fonts), same shape as the retired SPA's
@@ -267,7 +266,9 @@ export default function Landing() {
                     accessibilityRole="button"
                     accessibilityLabel={isFullscreen ? 'Exit full screen' : 'Enter full screen'}
                   >
-                    <Ionicons name={isFullscreen ? 'contract' : 'expand'} size={16} color={colors.white} />
+                    {isFullscreen
+                      ? <ContractIcon size={16} color={colors.white} />
+                      : <ExpandIcon size={16} color={colors.white} />}
                     {isFullscreen ? <Text style={styles.fsToggleText}>Exit full screen</Text> : null}
                   </Pressable>
                 </>
@@ -283,7 +284,7 @@ export default function Landing() {
                     <Text style={styles.filmTitle}>Wingman, in 47 seconds</Text>
                   </View>
                   <View style={styles.playChip}>
-                    <Ionicons name="play" size={22} color={colors.white} style={{ marginLeft: 3 }} />
+                    <View style={{ marginLeft: 3 }}><PlayIcon size={22} color={colors.white} /></View>
                   </View>
                   <Text style={styles.filmNote}>No sound. Nothing to sign up for.</Text>
                 </Pressable>

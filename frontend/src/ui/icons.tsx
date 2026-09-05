@@ -120,3 +120,59 @@ export function XIcon({ size, color, strokeWidth = 2.5 }: IconProps) {
     </S>
   );
 }
+
+
+// ---------------------------------------------------------------------------------------
+// The four glyphs that used to come from @expo/vector-icons (Phase 5, frontend_report
+// finding 13).
+//
+// That barrel pulled EVERY icon family's glyph map into JS — 13,033 entries, ~320 KB measured
+// — plus 17 .ttf files (4.5 MB) into `dist`, and fetched Ionicons.ttf (390 KB) at RUNTIME, on
+// a screen a signed-out visitor sees. For four glyphs, in an app that already had a
+// hand-authored SVG icon set.
+//
+// Drawn in the same 24×24 stroke style as the rest of this file so the swap is not a visual
+// change of subject; `play` is the one filled shape, because a stroked triangle reads as an
+// outline button rather than a play control.
+
+export function SettingsIcon({ size, color, strokeWidth }: IconProps) {
+  return (
+    <S size={size}>
+      <Circle cx={12} cy={12} r={3} {...stroke(color, strokeWidth)} />
+      <Path
+        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+        {...stroke(color, strokeWidth)}
+      />
+    </S>
+  );
+}
+
+export function ExpandIcon({ size, color, strokeWidth }: IconProps) {
+  return (
+    <S size={size}>
+      <Path d="M8 3H5a2 2 0 0 0-2 2v3" {...stroke(color, strokeWidth)} />
+      <Path d="M16 3h3a2 2 0 0 1 2 2v3" {...stroke(color, strokeWidth)} />
+      <Path d="M8 21H5a2 2 0 0 1-2-2v-3" {...stroke(color, strokeWidth)} />
+      <Path d="M16 21h3a2 2 0 0 0 2-2v-3" {...stroke(color, strokeWidth)} />
+    </S>
+  );
+}
+
+export function ContractIcon({ size, color, strokeWidth }: IconProps) {
+  return (
+    <S size={size}>
+      <Path d="M3 8h3a2 2 0 0 0 2-2V3" {...stroke(color, strokeWidth)} />
+      <Path d="M21 8h-3a2 2 0 0 1-2-2V3" {...stroke(color, strokeWidth)} />
+      <Path d="M3 16h3a2 2 0 0 1 2 2v3" {...stroke(color, strokeWidth)} />
+      <Path d="M21 16h-3a2 2 0 0 0-2 2v3" {...stroke(color, strokeWidth)} />
+    </S>
+  );
+}
+
+export function PlayIcon({ size, color }: IconProps) {
+  return (
+    <S size={size}>
+      <Polygon points="7,4 20,12 7,20" fill={color} />
+    </S>
+  );
+}

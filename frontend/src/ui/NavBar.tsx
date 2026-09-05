@@ -1,4 +1,3 @@
-import { Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
@@ -6,7 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { backendUrl } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
 import { Logo, RightDrawer, usePopInteraction } from './components';
-import { CalendarIcon, HomeIcon, PersonIcon, SearchIcon } from './icons';
+import { CalendarIcon, HomeIcon, PersonIcon, SearchIcon, SettingsIcon } from './icons';
 import { APP_MAX_WIDTH, colors, fonts, navShadow, popShadow, radius, space } from './theme';
 
 // The live app's floating pill navigation: sticky, centered in the max-w-4xl column with
@@ -115,7 +114,7 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
             <ScrollView contentContainerStyle={styles.drawerScroll} showsVerticalScrollIndicator={false}>
               <View style={styles.drawerHead}>
                 <View style={styles.drawerHeadLeft}>
-                  <Ionicons name="settings-outline" size={22} color={colors.slate900} />
+                  <SettingsIcon size={22} color={colors.slate900} />
                   <Text style={styles.drawerTitle}>Your Account</Text>
                 </View>
                 <Pressable onPress={() => setDrawerOpen(false)} hitSlop={10}>

@@ -11,7 +11,7 @@ import datetime
 
 import pytest
 
-from app.core import subscription_state, _iso_in_future, _login_payload
+from app.core import subscription_state, _iso_in_future, _login_payload, ai_tier
 import app.deps as deps
 
 
@@ -115,6 +115,42 @@ def test_state_carries_through_fields():
     st = subscription_state(rec)
     assert st["stripe_customer_id"] == "cus_123"
     assert st["subscription_end_at"] == rec["subscription_end_at"]
+
+
+# ---------- ai_tier (two-tier model, derived from subscription_state) ----------
+
+def test_ai_tier_active_is_paid():
+    assert ai_tier({"subscription_status": "active"}) == "paid"
+
+
+def test_ai_tier_beta_in_period_is_paid():
+    assert ai_tier({"subscription_status": "beta", "subscription_end_at": _iso(3)}) == "paid"
+
+
+def test_ai_tier_beta_lapsed_is_free():
+    # A lapsed comp falls back to metered Free, never to a lockout.
+    assert ai_tier({"subscription_status": "beta", "subscription_end_at": _iso(-1)}) == "free"
+
+
+def test_ai_tier_canceled_in_period_is_paid():
+    assert ai_tier({"subscription_status": "canceled", "subscription_end_at": _iso(2)}) == "paid"
+
+
+def test_ai_tier_canceled_lapsed_is_free():
+    assert ai_tier({"subscription_status": "canceled", "subscription_end_at": _iso(-2)}) == "free"
+
+
+def test_ai_tier_trial_is_free():
+    # Pre-retirement: a valid trial is still the metered Free tier for AI purposes.
+    assert ai_tier({"subscription_status": "trial", "trial_ends_at": _iso(3)}) == "free"
+
+
+def test_ai_tier_past_due_is_free():
+    assert ai_tier({"subscription_status": "past_due"}) == "free"
+
+
+def test_ai_tier_default_is_free():
+    assert ai_tier({}) == "free"
 
 
 # ---------- _login_payload ----------

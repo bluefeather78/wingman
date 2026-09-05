@@ -91,6 +91,74 @@ def _sum_cost(params):
     return round(total, 6)
 
 
+def _sum_calls(params):
+    """Sum user_costs.calls over `params`, or None if it could not be read.
+
+    The request-count analogue of _sum_cost. `calls` counts BILLED, attributable calls only —
+    mock, cached, stale-fallback and signed-out calls are never recorded there (CLAUDE.md's
+    user_costs exclusions), which is exactly what keeps ordinary browsing and repeat visits
+    from decrementing a Free student's daily AI allowance. None means "unknown" and every
+    caller treats it as "do not block", identical to _sum_cost.
+    """
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return None
+    total = 0
+    offset = 0
+    try:
+        for _ in range(_MAX_PAGES):
+            page = _supabase_request("user_costs", params={
+                **params, "select": "calls",
+                "limit": str(_PAGE), "offset": str(offset)})
+            if page is None:
+                return None
+            total += sum(int(r.get("calls") or 0) for r in page)
+            if len(page) < _PAGE:
+                return total
+            offset += _PAGE
+    except Exception as e:                                         # noqa: BLE001
+        print(f"[WARN] Could not read request count for a tier check: {e}")
+        return None
+    print(f"[WARN] Request-count read hit the {_MAX_PAGES}-page bound; treating "
+          f"{total} as the total.")
+    return total
+
+
+def _cached_calls(key, params):
+    """Today's summed request count for `key`, re-read at most once per BUDGET_CACHE_TTL_SECONDS.
+
+    A separate cache from _cached_total: dollars and call-counts are different quantities and
+    note_spend() bumps only the dollar cache. The cached day is part of the entry, so the first
+    read after UTC midnight starts a fresh count. (There is deliberately no in-process bump yet
+    — step 1 of TWO_TIER_AI_PLAN.md is read-only instrumentation; the note_call() bump the
+    gate needs lands with the gate itself, M9/M10.)
+    """
+    day = _today()
+    now = time.monotonic()
+    ckey = ("calls", key)
+    with _lock:
+        entry = _cache.get(ckey)
+        if entry and entry[2] == day and (now - entry[1]) < BUDGET_CACHE_TTL_SECONDS:
+            return entry[0]
+    total = _sum_calls({**params, "day": f"eq.{day}"})
+    if total is None:
+        return None
+    with _lock:
+        _cache[ckey] = (total, now, day)
+    return total
+
+
+def user_requests_today(userid):
+    """This user's billed AI request count today, or None if it could not be read.
+
+    The request-count sibling of user_spend_today() and the source of the Free-tier daily
+    allowance figure. Read-only for now (§13 step 1); the tier-aware gate reads it in step 4.
+    """
+    userid = (userid or "").strip().lower()
+    if not userid:
+        return None
+    return _cached_calls(userid, {"userid": f"eq.{userid}"})
+
+
 def _cached_total(key, params):
     """Today's summed spend for `key`, re-read at most once per BUDGET_CACHE_TTL_SECONDS.
 

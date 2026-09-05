@@ -280,6 +280,21 @@ GLOBAL_DAILY_BUDGET_USD = float(os.environ.get("GLOBAL_DAILY_BUDGET_USD", "") or
 # limiter (30/min/user) bounds how far a user can overshoot inside one window.
 BUDGET_CACHE_TTL_SECONDS = int(os.environ.get("BUDGET_CACHE_TTL_SECONDS", "") or 60)
 
+# ---------- Two-tier AI allowance (TWO_TIER_AI_PLAN.md) ----------
+# The permanent Free tier's daily AI-action allowance, pooled across every AI-backed thing a
+# student does, resetting at midnight UTC. Paid (Unlimited) is exempt.
+#
+# NOT YET ENFORCED. Step 1 is read-only instrumentation: these numbers are DISPLAYED on the
+# console (the tuning readout next to the measured median) so the real value can be set from
+# data, but nothing gates on them until the tier-aware gate ships (§13 step 4, MARQUEE M9/M10).
+# 10 is a pre-revenue anchor, to be tuned from the console's per-user request histogram.
+FREE_TIER_DAILY_AI_ACTIONS = int(os.environ.get("FREE_TIER_DAILY_AI_ACTIONS", "") or 10)
+# A new account's natural first session burns ~6 actions (build profile, find matches, add a
+# few opportunities, one deadline check), so hitting the wall mid-onboarding is the worst
+# possible moment. A higher allowance on the signup day (created_at == today, UTC) avoids it.
+# Also not enforced until step 4.
+FIRST_DAY_AI_ACTIONS = int(os.environ.get("FIRST_DAY_AI_ACTIONS", "") or 20)
+
 # ---------- Opportunities catalog (Supabase-backed) ----------
 # The opportunity catalog lives in a Supabase (hosted Postgres) table rather than
 # the old static opportunities.json — see scripts/one-off/migrate_to_supabase.py for the one-time

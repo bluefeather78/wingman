@@ -92,6 +92,32 @@ def subscription_state(record):
     }
 
 
+# ---------- AI tier (two-tier model) ----------
+# The subscription statuses that resolve to the PAID (unlimited-AI) tier. Everything else —
+# trial (pre-retirement), free (post-retirement), past_due, unknown — is the metered Free tier.
+# beta counts as paid: it is a comped paid experience, the same way the metrics already treat
+# a beta grant as "converted-adjacent".
+PAID_AI_STATUSES = frozenset({"active", "beta", "canceled"})
+
+
+def ai_tier(record):
+    """Derive this account's AI tier ∈ {"paid", "free"} from subscription_state().
+
+    DERIVED, never stored — for the same reason provider_for_model() derives provider instead
+    of storing it: a stored copy drifts out of step with the source of truth after one bad
+    write. subscription_state() stays the single authority.
+
+    Paid requires BOTH a paid status AND live access, so a canceled-but-in-period or an
+    unexpired beta is paid, while a lapsed canceled/beta row falls back to free (metered) —
+    never to a lockout. Works identically before and after the trial is retired: a trial or a
+    free account both resolve here to "free".
+    """
+    state = subscription_state(record)
+    if state["status"] in PAID_AI_STATUSES and state["has_access"]:
+        return "paid"
+    return "free"
+
+
 def _login_payload(record):
     """The response shape handle_login/handle_google_session/handle_google_finish all
     return — the client caches this as-is into currentUser (see loginUser() in script.js),

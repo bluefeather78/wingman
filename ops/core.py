@@ -40,7 +40,7 @@ from app.core import (
     _is_missing_column_error, _missing_table_error, _runs_cache, _runs_cache_lock,
     RUNS_CACHE_TTL, RECENT_RUNS_LIMIT, invalidate_runs_cache, flush_user_activity,
     INTERACTIVE_AGENTS, FEATURE_LABELS, PROVIDER_LABELS, provider_for_model,
-    subscription_state,
+    subscription_state, ai_tier,
 )
 from app.services.opportunities import bust_catalog_cache
 from wingman.subscription_common import (is_trial_expired, promo_kind,
@@ -1094,23 +1094,61 @@ def _fetch_all_accounts():
 
 
 def _fetch_user_spend(since_day):
-    """({userid: {cost, calls}}, {userids that ran a search}) from user_costs."""
+    """(spend, searched_ids, costs_ready, day_calls, latest_day) from user_costs.
+
+    spend        {userid: {cost_usd, calls}} summed over the window.
+    searched_ids {userids that ran a billed search}.
+    day_calls    {userid: {day: calls}} — the per-day request counts the Free-tier
+                 allowance histogram reads (TWO_TIER_AI_PLAN.md §6).
+    latest_day   the most recent day that has ANY billed calls, or None. Used as the
+                 histogram's reference day for exactly the reason the Cost-per-user tab uses
+                 it — the UTC day rolls at 5pm Pacific, so a "today" figure reads 0 every
+                 evening and looks like a dead pipeline.
+    """
     rows = _supabase_request("user_costs", params={
-        "select": "userid,feature,calls,cost_usd", "day": f"gte.{since_day}",
+        "select": "userid,feature,calls,cost_usd,day", "day": f"gte.{since_day}",
         "limit": "20000"})
-    spend, searched = {}, set()
+    spend, searched, day_calls = {}, set(), {}
+    latest_day = None
     if rows is None:
-        return spend, searched, False
+        return spend, searched, False, day_calls, latest_day
     for r in rows:
         uid = str(r.get("userid") or "").strip().lower()
         if not uid:
             continue
         e = spend.setdefault(uid, {"cost_usd": 0.0, "calls": 0})
         e["cost_usd"] += float(r.get("cost_usd") or 0)
-        e["calls"] += int(r.get("calls") or 0)
+        calls = int(r.get("calls") or 0)
+        e["calls"] += calls
+        day = r.get("day")
+        if day and calls:
+            day_calls.setdefault(uid, {})[day] = day_calls.setdefault(uid, {}).get(day, 0) + calls
+            if latest_day is None or day > latest_day:
+                latest_day = day
         if r.get("feature") in SEARCH_FEATURES:
             searched.add(uid)
-    return spend, searched, True
+    return spend, searched, True, day_calls, latest_day
+
+
+def _fetch_activity_surface(surface, since_day):
+    """{userid: set(day)} for every day a user recorded `surface` at/after since_day.
+
+    Reads the user_activity.surfaces jsonb (which fetch_user_activity ignores). None if the
+    table is unavailable — the same degrade signal activity_ready carries. Used for the
+    ai_limit_hit cap-tracking signal (§3.3); returns {} until the tier gate begins writing it.
+    """
+    rows = _supabase_request("user_activity", params={
+        "select": "userid,day,surfaces", "day": f"gte.{since_day}",
+        "order": "day.desc", "limit": "50000"})
+    if rows is None:
+        return None
+    by_user = {}
+    for r in rows:
+        uid = str(r.get("userid") or "").strip().lower()
+        surfaces = r.get("surfaces") or {}
+        if uid and r.get("day") and isinstance(surfaces, dict) and surfaces.get(surface):
+            by_user.setdefault(uid, set()).add(r["day"])
+    return by_user
 
 
 def _fetch_mailing_list_users():
@@ -1142,7 +1180,8 @@ def get_user_metrics(days=30, limit=500):
     flush_user_activity()
 
     accounts = _fetch_all_accounts()
-    spend, searched_ids, costs_ready = _fetch_user_spend(window_start.isoformat())
+    spend, searched_ids, costs_ready, day_calls, spend_latest_day = \
+        _fetch_user_spend(window_start.isoformat())
     mailing_ids = _fetch_mailing_list_users()
 
     # Retention needs history from before the window, so activity is read from the earlier
@@ -1171,6 +1210,9 @@ def get_user_metrics(days=30, limit=500):
     by_status, sides = {}, {"returned": 0, "rich_profile": 0, "deep_engagement": 0,
                             "calendar": 0, "mailing_list": 0, "google_signup": 0,
                             "terms_stale": 0, "terms_missing": 0}
+    # AI tier membership (TWO_TIER_AI_PLAN.md §5). userid lists so each tile clicks through
+    # to its roster, exactly like the funnel's missing_userids.
+    tier_members = {"paid": [], "free": []}
     signups_by_day = {}
     # Kept beside `shaped` rather than inside it: "has a Stripe subscription id" is
     # conversion evidence the code below needs, not something the console should render.
@@ -1187,6 +1229,8 @@ def get_user_metrics(days=30, limit=500):
         state = subscription_state(record)
         status = state["status"]
         by_status[status] = by_status.get(status, 0) + 1
+        tier = ai_tier(record)
+        tier_members[tier].append(uid)
 
         for i, key in enumerate(FUNNEL_STAGE_KEYS):
             if flags.get(key):
@@ -1228,6 +1272,7 @@ def get_user_metrics(days=30, limit=500):
             "email": record.get("email"),
             "created_at": record.get("created_at"),
             "status": status,
+            "ai_tier": tier,
             "has_access": state["has_access"],
             "days_left": state["days_left"],
             "trial_ends_at": state["trial_ends_at"],
@@ -1388,6 +1433,47 @@ def get_user_metrics(days=30, limit=500):
                                 "rate": round(kept / len(mature), 4)}
             cohorts.append(row)
 
+    # --- AI tiers (TWO_TIER_AI_PLAN.md §5-6) — read-only instrumentation, nothing enforced ---
+    free_ids = set(tier_members["free"])
+    allowance = FREE_TIER_DAILY_AI_ACTIONS
+    # The billed-request distribution for Free accounts on the most recent day that had any
+    # spend (never "today", for the Cost-per-user tab's reason). Reported as REQUESTS: the
+    # action-mapping that collapses a fan-out to 1 arrives with the gate (step 3/4); until
+    # then raw request counts are the honest thing to tune the allowance against (§12).
+    def _free_calls_on(day):
+        return {uid: day_calls.get(uid, {}).get(day, 0) for uid in free_ids} if day else {}
+
+    latest_free_calls = _free_calls_on(spend_latest_day)
+    # Only accounts that actually used AI that day inform the tuning percentiles; a roster
+    # full of zeros would drag the median to 0 and hide where the heavy users sit.
+    active_free_calls = sorted(c for c in latest_free_calls.values() if c > 0)
+
+    def _pct(vals, q):
+        if not vals:
+            return None
+        return vals[min(len(vals) - 1, int(round((q / 100.0) * (len(vals) - 1))))]
+
+    _hist_defs = [
+        ("0-50%", lambda c: c < 0.5 * allowance),
+        ("50-80%", lambda c: 0.5 * allowance <= c < 0.8 * allowance),
+        ("80-99%", lambda c: 0.8 * allowance <= c < allowance),
+        ("100%+", lambda c: c >= allowance),
+    ]
+    tier_histogram = []
+    for label, pred in _hist_defs:
+        members = [uid for uid, c in latest_free_calls.items() if pred(c)]
+        tier_histogram.append({"label": label, "count": len(members),
+                               "userids": members[:limit]})
+
+    # ai_limit_hit: distinct Free users who hit the cap, on the most recent day any did (§3.3).
+    # Empty until the step-4 gate begins writing the surface — the plumbing ships now.
+    limit_hits = _fetch_activity_surface("ai_limit_hit", activity_since.isoformat())
+    cap_ready = limit_hits is not None
+    limit_hits = limit_hits or {}
+    cap_latest_day = max((d for dset in limit_hits.values() for d in dset), default=None)
+    cap_hit_ids = ([uid for uid, dset in limit_hits.items() if cap_latest_day in dset]
+                   if cap_latest_day else [])
+
     active_count = by_status.get("active", 0)
     activated = sum(1 for u in shaped if u["activated"])
     window_spend = round(sum(u["cost_usd"] for u in shaped), 6)
@@ -1418,6 +1504,29 @@ def get_user_metrics(days=30, limit=500):
                           "lost": biggest_drop["lost"]}
                          if biggest_drop and biggest_drop["lost"] else None),
         "side_metrics": sides,
+        "tiers": {
+            "paid": len(tier_members["paid"]),
+            "free": len(tier_members["free"]),
+            "paid_userids": tier_members["paid"][:limit],
+            "free_userids": tier_members["free"][:limit],
+            "allowance": allowance,
+            "first_day_allowance": FIRST_DAY_AI_ACTIONS,
+            "unit": "requests",   # step 1 measures raw requests; actions arrive with the gate
+            "enforced": False,    # nothing gates on the allowance yet (§13 step 1)
+            "usage": {
+                "latest_day": spend_latest_day,
+                "histogram": tier_histogram,
+                "active_free": len(active_free_calls),
+                "median_requests": _pct(active_free_calls, 50),
+                "p90_requests": _pct(active_free_calls, 90),
+            },
+            "cap_hits": {
+                "ready": cap_ready,
+                "day": cap_latest_day,
+                "count": len(cap_hit_ids),
+                "userids": cap_hit_ids[:limit],
+            },
+        },
         "signups_by_day": signup_series,
         "activity_by_day": activity_series,
         "cohorts": cohorts,

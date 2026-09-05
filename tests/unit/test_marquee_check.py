@@ -194,3 +194,18 @@ def test_tests_and_the_checker_itself_are_not_protected_sites():
     assert mc.entries_touched("scripts/ci/check_marquee_commits.py", {1}, text) == set()
     # ...but a real source file with the same content still is.
     assert mc.entries_touched("agents/scrape_opportunities.py", {1}, text) == {"M4"}
+
+
+def test_a_message_can_declare_several_entries_naturally():
+    """"MARQUEE M4 + M6 + M7" is how a coherent multi-entry change is actually written.
+    Requiring the word before each one would push authors to split a single change into three
+    commits for the checker's benefit."""
+    assert mc.declared_entries("MARQUEE M4 + M6 + M7: add the missing sentinels") == {
+        "M4", "M6", "M7"}
+    assert mc.declared_entries("MARQUEE M9 (Phase 2 item 1): bound the AI lane") == {"M9"}
+
+
+def test_a_message_that_never_says_marquee_declares_nothing():
+    """Otherwise a passing 'M9' in unrelated prose would silently authorise a change to it."""
+    assert mc.declared_entries("Fix the M9 highway routing test") == set()
+    assert mc.declared_entries("bumped to M2 of the rollout") == set()

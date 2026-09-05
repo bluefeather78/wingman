@@ -137,8 +137,24 @@ def entries_touched(path, lines_touched, file_text):
     return hit
 
 
+# A commit message declaring several entries writes them naturally — "MARQUEE M4 + M6 + M7" —
+# so requiring the word MARQUEE before EACH one would reject the honest form and push authors
+# toward splitting a single coherent change into three commits for the checker's benefit.
+_ENTRY_RX = re.compile(r"\bM(\d+)\b", re.I)
+
+
 def declared_entries(message):
-    return {m.group(1).upper() for m in SENTINEL_RX.finditer(message or "")}
+    """Every entry a commit message declares.
+
+    The word MARQUEE must appear somewhere — that is what makes the declaration deliberate
+    rather than an accident of prose — and then every M<n> token in the message counts. A
+    message that never says MARQUEE declares nothing, so a passing reference to "M9" in an
+    unrelated commit cannot silently authorise a change to it.
+    """
+    text = message or ""
+    if not re.search(r"MARQUEE", text, re.I):
+        return set()
+    return {f"M{m.group(1)}" for m in _ENTRY_RX.finditer(text)}
 
 
 def check_commit(sha):

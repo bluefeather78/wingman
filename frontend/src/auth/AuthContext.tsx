@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { httpClient } from '@/api/httpClient';
 import { syncTrackerFromCatalog } from '@/api/trackerStore';
-import type { GoogleFinishInput, GoogleSessionResult, RegisterInput, SessionUser } from '@/api/types';
+import type { AllowanceSnapshot, GoogleFinishInput, GoogleSessionResult, RegisterInput, SessionUser } from '@/api/types';
 
 // App-wide auth state, backed by the ApiClient. `ready` is false until the persisted token
 // pair has been loaded/validated on startup, so the router can avoid flashing the wrong
@@ -9,6 +9,9 @@ import type { GoogleFinishInput, GoogleSessionResult, RegisterInput, SessionUser
 interface AuthState {
   ready: boolean;
   user: SessionUser | null;
+  // The Free-tier daily AI allowance snapshot (two-tier model), or null until one is known.
+  // Broadcast by the ApiClient from 429s, /api/ai meta.allowance, and subscriptionStatus().
+  allowance: AllowanceSnapshot | null;
   login: (userid: string, password: string) => Promise<void>;
   register: (input: RegisterInput) => Promise<void>;
   logout: () => Promise<void>;
@@ -23,6 +26,7 @@ const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState<SessionUser | null>(null);
+  const [allowance, setAllowance] = useState<AllowanceSnapshot | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -53,6 +57,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // the paywall, instead of leaving it on a screen whose every request now fails.
   useEffect(() => httpClient.onUserChanged((u) => setUser(u)), []);
 
+  // The Free-tier allowance meter, broadcast the same way: a 429 cap hit, a successful AI
+  // call's echoed snapshot, or a subscriptionStatus() read. Screens read it via useAuth().
+  useEffect(() => httpClient.onAllowanceChanged((a) => setAllowance(a)), []);
+
   // App-open / login: force a free catalog sync so already-tracked items pick up whatever
   // changed while the app was closed (an agent run, another student's on-demand check). Keyed
   // on userid, NOT the user object, so it fires once per genuine login/restore and NOT on
@@ -67,6 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       ready,
       user,
+      allowance,
       async login(userid, password) {
         setUser(await httpClient.login(userid, password));
       },
@@ -86,7 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(await httpClient.googleFinish(handoff, consent));
       },
     }),
-    [ready, user],
+    [ready, user, allowance],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

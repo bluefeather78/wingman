@@ -1,6 +1,7 @@
 import type { RawActionItem, TrackerInfo } from '@/lib/tracker';
 import type {
   AiResult,
+  AllowanceSnapshot,
   GoogleFinishInput,
   GoogleSessionResult,
   MatchRequest,
@@ -137,6 +138,10 @@ export interface ApiClient {
   // returning a fresh subscription block, a 402 telling us access has lapsed, or a
   // subscriptionStatus() read. Returns an unsubscribe.
   onUserChanged(listener: (user: SessionUser | null) => void): () => void;
+  // Subscribe to the Free-tier AI allowance snapshot (two-tier model): fired on a 429 cap hit,
+  // on a successful /api/ai call's meta.allowance, and on subscriptionStatus(). Seeds the
+  // listener with the latest known snapshot on subscribe. Returns an unsubscribe.
+  onAllowanceChanged(listener: (a: AllowanceSnapshot) => void): () => void;
   // Update the account's location (POST /api/account/location, hard-gated).
   saveLocation(location: string): Promise<void>;
   // Resume / LinkedIn quick-add extraction (both hard-gated; return the extracted text).

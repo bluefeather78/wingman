@@ -20,6 +20,21 @@ export interface AiTextBlock {
 export interface AiResponse {
   content?: AiTextBlock[];
   stop_reason?: string;
+  // Two-tier model: a successful /api/ai call echoes the caller's Free-tier allowance so the
+  // client meter can tick without a second request. Absent for Paid (unlimited) and mock.
+  meta?: { allowance?: AllowanceSnapshot };
+}
+
+// The Free-tier daily AI allowance snapshot (TWO_TIER_AI_PLAN.md §4.2). Carried on a 429
+// (cap hit) and echoed on a successful /api/ai call. `unlimited` marks the Paid tier, where
+// the numeric fields are null.
+export interface AllowanceSnapshot {
+  tier?: 'free' | 'paid' | string;
+  unlimited?: boolean;
+  used?: number | null;
+  limit?: number | null;
+  remaining?: number | null;
+  reset_at?: string | null;
 }
 
 export interface AiResult {
@@ -29,9 +44,14 @@ export interface AiResult {
 
 // The subscription block from subscription_state() — carried on every login payload.
 export interface SubscriptionState {
-  status?: string; // trial | beta | active | canceled | past_due | ...
+  status?: string; // free | beta | active | canceled | past_due | (legacy) trial
   days_left?: number;
   has_access?: boolean;
+  // Two-tier model: `in_paid_period` is true for a live paid/comped subscription and drives
+  // the AI tier. `ai_tier` is the derived label the UI shows. has_access is always true now
+  // (no lockout); the tier is the axis that varies.
+  in_paid_period?: boolean;
+  ai_tier?: 'free' | 'paid' | string;
   [key: string]: unknown;
 }
 

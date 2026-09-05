@@ -114,7 +114,9 @@ def _login_payload(record):
         "lastName": record["last_name"],
         "email": record["email"],
         "location": record.get("location") or "",
-        "subscription": subscription_state(record),
+        # ai_tier rides inside the subscription block so the client can label the tier
+        # (Free / Unlimited) without deriving it — additive, backward-compatible.
+        "subscription": {**subscription_state(record), "ai_tier": ai_tier(record)},
     }
 
 

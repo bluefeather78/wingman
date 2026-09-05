@@ -6,9 +6,10 @@ import datetime
 from fastapi import APIRouter, Request, Depends
 
 from app.core import (
-    get_user_account, subscription_state, touch_user_activity,
+    get_user_account, subscription_state, ai_tier, touch_user_activity,
     update_subscription, redeem_promo_conditional,
 )
+from app.services import budget
 from app.deps import (json_body, json_response, json_error,
                       opaque_error, DB_UNAVAILABLE)
 from app.services.email import send_lifecycle_email_async
@@ -32,7 +33,12 @@ def handle_subscription_status(user: AuthedUser = Depends(get_current_user)):
     if not record:
         return json_error(404, "User not found.")
     touch_user_activity(userid, "subscription_status")
-    return json_response(200, subscription_state(record))
+    # Carry the tier + a Free-tier allowance snapshot so the client can render the meter and
+    # the tier badge from the status call the app already makes, without a second request.
+    # feature=None reads the dollar/action state without decrementing anything.
+    state = {**subscription_state(record), "ai_tier": ai_tier(record)}
+    state["allowance"] = budget.ai_allowance_state(userid, feature=None)
+    return json_response(200, state)
 
 
 @router.post("/api/subscription/checkout")

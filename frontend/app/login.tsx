@@ -141,7 +141,7 @@ export default function Login() {
                   <ConsentRow label="I have read and agree to the Terms of Use and the Privacy Policy." value={acceptedTerms} onValueChange={setAcceptedTerms} />
                 </View>
                 <Text style={styles.trialNote}>
-                  Every new account starts with a <Text style={styles.bold}>7-day free trial</Text>. No card required to start.
+                  Every account is <Text style={styles.bold}>free to start</Text>, with a daily allowance of AI actions. No card required.
                 </Text>
               </>
             )}

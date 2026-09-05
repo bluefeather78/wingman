@@ -218,7 +218,7 @@ export default function Landing() {
               <Text style={styles.ctaSecondaryText}>See how it works</Text>
             </Pressable>
           </View>
-          <Text style={styles.trialNote}>7-day free trial. No card required.</Text>
+          <Text style={styles.trialNote}>Free to start. No card required.</Text>
         </View>
 
         {/* Audience cards */}

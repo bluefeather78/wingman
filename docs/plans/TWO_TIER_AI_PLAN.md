@@ -1,5 +1,26 @@
 # TWO_TIER_AI_PLAN.md
 
+> **IMPLEMENTATION STATUS (branch `two-tiersystem`, 2026-09-05).** Being built in sequence:
+> - **Step 1 — instrumentation (done, `962e9f0`):** `ai_tier()`, `budget.user_requests_today()`,
+>   config anchors (`FREE_TIER_DAILY_AI_ACTIONS=10`, `FIRST_DAY_AI_ACTIONS=20`), the console
+>   "AI tiers" card (tier counts, allowance histogram, `ai_limit_hit` plumbing). Read-only.
+> - **Step 2 — retire the trial (done, `aacf416`, MARQUEE):** `subscription_state()` reworked —
+>   `has_access` always True, `in_paid_period` drives the tier, no lockout; `free` is the default;
+>   `db/two_tier_free_migration.sql` backfills trial→free.
+> - **Step 3 — set numbers:** anchors in place (10 / 20 first day); tune from the console later.
+> - **Step 4 — the gate (done, `2d4fcb9`, MARQUEE M9 + new M11):** `budget.ai_allowance_state()`
+>   (actions/day, time-bucket collapse by class, first-day boost, dollar backstop + circuit
+>   underneath), structured 429 + `meta.allowance` echo, wired into `/api/ai`, the deadline check,
+>   resume import, action items; `record_user_cost` counts every call (M11). **Ships in OBSERVE
+>   mode — `FREE_TIER_AI_GATE_ENFORCED` off — so nobody is blocked by the action cap yet.**
+> - **Step 5 — client UI:** in progress (Home Base banner, meter chip, cap card, Manage Plan
+>   compare, My Vibe badge, 429-with-allowance handling, remove trial countdown).
+> - **Step 6 — legal + Stripe + email:** pending (Terms edit + `TERMS_VERSION` bump; repurpose the
+>   `trial_ending` email to a limit-hit nudge; configure Stripe before promoting the upsell).
+>
+> The §§ below are the original design; Q0/Q0b resolved, plus §14 Q1 (first-day: boosted allowance)
+> and the action-counting mechanism (time-bucket collapse by class) resolved by Shama 2026-09-05.
+
 Planning document — **not yet approved, no code written**. Author: Claude, 2026-09-05, at
 Shama's request; **Q0 + Q0b resolved by Shama 2026-09-05** (see §0). This designs a two-tier
 AI model: a **permanent Free tier** metered to a daily AI-request allowance, and a **Paid

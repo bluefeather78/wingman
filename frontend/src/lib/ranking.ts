@@ -145,11 +145,14 @@ export async function rankCandidates(
   return Array.isArray(arr) ? (arr as RankedPick[]) : [];
 }
 
-// The five "basics" tiles are read out of the profile prose rather than collected as a form.
+// The "basics" tiles are read out of the profile prose rather than collected as a form.
+// Gender was removed deliberately: it is no longer stored anywhere permanent. Because
+// normalizeProfileBasics (below) only persists keys listed here, dropping it from this
+// array is what stops it being written into the saved student-profile.basics blob — even
+// if a model still surfaces it transiently, it is never kept.
 export const PROFILE_BASICS_FIELDS = [
   { key: 'grade', label: 'Grade level' },
   { key: 'state', label: 'Home state' },
-  { key: 'gender', label: 'Gender' },
 ] as const;
 
 // PROFILE_BASICS_RULE moved to app/services/prompts.py with the prompts that embed it

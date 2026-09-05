@@ -5,7 +5,7 @@ when the resolved target is an existing, allowed file; returns None otherwise
 (empty/root path, dotfile/dotdir, a blocked directory, traversal escape, denied ext/name,
 or missing file). Paths are anchored under main.REPO_ROOT. Since the Phase 3
 cutover (tag `workingwithauth`) the old SPA is gone: the route only serves the
-static pages the app still links to (terms/privacy/about + styles.css/favicon.svg),
+static pages the app still links to (terms/privacy/about + public/styles.css/favicon.svg),
 and the root path is handled by serve_static (status/redirect), never by a file.
 """
 import os
@@ -14,9 +14,20 @@ from app import main
 
 
 REPO_ROOT = main.REPO_ROOT
+PUBLIC_DIR = main.PUBLIC_DIR
 
 
 def _norm(*parts):
+    """Resolve against public/ — the only directory _resolve_static looks in.
+
+    It was REPO_ROOT until 2026-09-04, when the route stopped resolving against the whole
+    repository. Serving is now opt-in by putting a file in public/, rather than opt-out via
+    the deny-lists (PRODUCTION_READINESS_PLAN.md High #5)."""
+    return os.path.normpath(os.path.join(PUBLIC_DIR, *parts))
+
+
+def _repo(*parts):
+    """A path in the repo but OUTSIDE public/ — for asserting it cannot be served."""
     return os.path.normpath(os.path.join(REPO_ROOT, *parts))
 
 
@@ -91,7 +102,7 @@ def test_missing_file_returns_none():
 
 def test_retired_spa_files_return_none():
     # The old SPA was deleted at the cutover — these must 404, not resurrect.
-    # walkthrough.html is NOT one of them; see test_walkthrough_film_is_served.
+    # public/walkthrough.html is NOT one of them; see test_walkthrough_film_is_served.
     assert main._resolve_static("index.html") is None
     assert main._resolve_static("script.js") is None
 
@@ -148,7 +159,7 @@ def test_blocked_dirs_rejected():
         "docs/review-2026-09-02/load_results.json",
         "frontend/package.json",
     ):
-        assert os.path.isfile(_norm(rel)), f"fixture moved: {rel}"
+        assert os.path.isfile(_repo(rel)), f"fixture moved: {rel}"
         assert main._resolve_static(rel) is None, rel
 
 
@@ -156,6 +167,24 @@ def test_root_pages_still_served():
     """The five pages this route exists for must survive the directory block."""
     for name in ("terms.html", "privacy.html", "about.html", "styles.css", "favicon.svg"):
         assert main._resolve_static(name) == _norm(name)
+
+
+def test_nothing_outside_public_is_reachable():
+    """The inversion this route exists for since 2026-09-04.
+
+    Every one of these is a real file in the repo. Before the change they were refused
+    only because _DENY_EXT/_DENY_NAMES/_DENY_DIRS happened to name them -- a file type or
+    directory nobody thought of was served. Now the resolver never looks outside public/,
+    so the deny-lists are a second line rather than the only one. ops/logic_map.html is the
+    one that was NOT covered: it returned 200 in production, publishing the ops console's
+    internal pipeline map, and it now lives in ops/."""
+    for rel in ("README.md", "CLAUDE.md", "requirements.txt", "render.yaml",
+                "pyproject.toml", "server.py", "wingman/gemini_common.py",
+                "agents/scrape_opportunities.py", "ops/logic_map.html",
+                "ops/admin_console.html", "data/opportunities.json",
+                "db/email_schema.sql", "legal/terms.md"):
+        assert os.path.isfile(_repo(rel)), f"fixture moved: {rel}"
+        assert main._resolve_static(rel) is None, rel
 
 
 # --------------------------------------------------------------------------- #

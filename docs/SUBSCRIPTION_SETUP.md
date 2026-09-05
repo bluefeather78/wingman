@@ -264,7 +264,7 @@ Cancels an active subscription:
 - [ ] Set correct `STRIPE_PRICE_ID` (for live product)
 - [ ] Configure webhook endpoint
 - [ ] Test payment flow with real cards
-- [x] Add terms of service/privacy policy (`legal/*.md` → `terms.html` / `privacy.html`)
+- [x] Add terms of service/privacy policy (`legal/*.md` → `public/terms.html` / `public/privacy.html`)
 - [ ] Review Terms §3, which still says the beta is free of charge — see "Consent at signup"
 - [ ] Enable HTTPS (required by Stripe)
 - [ ] Set up email receipts
@@ -280,7 +280,7 @@ Cancels an active subscription:
 - `.env` - Stripe API keys (gitignored)
 - `../db/subscription_schema.sql` - the one-time DDL from §1
 - `legal/terms.md`, `legal/privacy.md` - source of record for the two legal documents
-- `terms.html`, `privacy.html` - generated from those by `agents/build_legal.py`; do not hand-edit
+- `public/terms.html`, `public/privacy.html` - generated from those by `agents/build_legal.py`; do not hand-edit
 - `agents/build_legal.py` - re-run after any edit under `legal/`
 
 ## 8b. Consent at signup

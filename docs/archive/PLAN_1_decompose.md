@@ -8,7 +8,7 @@
 
 ## The migration in one picture
 
-Highschool Wingman is today a static vanilla-JS SPA (`index.html`, `script.js`, `styles.css`)
+Highschool Wingman is today a static vanilla-JS SPA (`index.html`, `script.js`, `public/styles.css`)
 served by a 6,956-line stdlib `http.server` monolith (`server.py`), plus ~34 Python files of
 offline agent/utility code, all talking to Supabase. The three phases:
 
@@ -117,7 +117,7 @@ Exact folder names are the implementer's call; what matters is the **two-package
   the shipped `app/` at all (they live in `ops/`), which is *better* than the guard — but if
   any stay in `app/` for convenience, they MUST keep the guard. Confirm the shipped service
   exposes **no** agent/seed/admin route.
-- **Static file serving.** `app/main.py` keeps serving `index.html`/`script.js`/`styles.css`
+- **Static file serving.** `app/main.py` keeps serving `index.html`/`script.js`/`public/styles.css`
   for now (FastAPI `StaticFiles`), because the old frontend is still the client this phase.
   Phase 3 later moves the frontend to a Render Static Site and this can be dropped.
 - **The `SUPABASE_SERVICE_KEY` must only be in `app/`'s and `ops/`'s environments, never in

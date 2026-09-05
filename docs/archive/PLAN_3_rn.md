@@ -118,7 +118,7 @@ a retrofit.
 
 ## Phase 3 goal
 
-Replace the vanilla-JS SPA (`index.html` + `script.js` 5,969 lines + `styles.css`) with an
+Replace the vanilla-JS SPA (`index.html` + `script.js` 5,969 lines + `public/styles.css`) with an
 **Expo** app that targets iOS, Android, and web from one codebase. The RN rewrite **is** the
 frontend modularization — the global-functions-plus-inline-`onclick` blob becomes screens,
 components, and reusable logic modules.
@@ -140,14 +140,14 @@ components, and reusable logic modules.
 **One codebase for all three platforms, or keep a separate web app and add native?** The
 design session left this open. Default recommendation: **one Expo codebase (RN + RN-web)** —
 it's why Expo was chosen. But if `script.js`'s web-specific pieces (e.g. the vendored
-`walkthrough.html` self-extracting film, see `CLAUDE.md`) prove painful under RN-web, a
+`public/walkthrough.html` self-extracting film, see `CLAUDE.md`) prove painful under RN-web, a
 split-web option is the fallback. Decide up front; it drives how much logic is shared vs.
 platform-specific.
 
 ## Decisions recorded at session start (2026-08-23)
 
 - **One Expo codebase (RN + RN-web)** for all three platforms — the default recommendation.
-  Web-only assets (the `walkthrough.html` film, Tailwind CDN) get native-appropriate
+  Web-only assets (the `public/walkthrough.html` film, Tailwind CDN) get native-appropriate
   equivalents or are gated web-only; they do not block the shared codebase.
 - **The Expo app lives in `frontend/`, NOT the repo root.** The FastAPI package already
   owns `app/`, and expo-router also defaults to an `app/` routes directory — scaffolding
@@ -298,7 +298,7 @@ frontends share state (required for cutover):
   `script.js` ~line 5552). Verified: Shama's 5 items appear in the RN app.
 
 ### Design system (`frontend/src/ui/`)
-- `theme.ts` — tokens matched to `styles.css` + screenshots: cream `#FBF8F3`, navy `#1D4E89`,
+- `theme.ts` — tokens matched to `public/styles.css` + screenshots: cream `#FBF8F3`, navy `#1D4E89`,
   ORANGE primary `#F79256`, lavender inputs `#EEF0FB`, teal `#00B2CA`, `popShadow`/`softShadow`.
   Fonts Space Grotesk + Plus Jakarta Sans (import **per-weight subpath**, not the barrel).
 - `components.tsx` — `Screen`, `Txt`, `SoftCard` (content), `PopCard` (bordered), `PopButton`
@@ -365,17 +365,17 @@ in both DOMs, getComputedStyle side-by-side; note the noise classes — RN repor
 fontWeight 400 because weight is baked into the font file, and 9999px vs 999px radii are
 identical). It caught: buttons are 16px/24 weight-700 (48px tall), square orange buttons
 KEEP the 2px navy border (only pill CTAs set border:none inline), card h2s are slate-900
-(the body tag's Tailwind class beats styles.css's navy), and several missing line-heights.
+(the body tag's Tailwind class beats public/styles.css's navy), and several missing line-heights.
 Also: the account drawer is now the full #profilePanel port (location save via new
 `ApiClient.saveLocation`, live subscription line, Legal/Contact/About), logout lands on
 /landing (navigate BEFORE clearing the session or the (app) guard's /login redirect wins),
 the tab is titled "Wingman" with the real favicon (expo-router Head + favicon.png rendered
-from favicon.svg), and Home gained the See-all-tasks modal with persisted status cycling.
+from public/favicon.svg), and Home gained the See-all-tasks modal with persisted status cycling.
 
 **Round 3 (same day, commit ec2b890)** — user-reported details: `src/ui/icons.tsx` copies
 the live app's inline stroke SVGs path-for-path via **react-native-svg** (new dep — Metro
 restart needed; icon approximations from Ionicons read wrong, the Quest Log calendar
-especially); the Logo is redrawn from favicon.svg's REAL geometry (**four** bars + glow-halo
+especially); the Logo is redrawn from public/favicon.svg's REAL geometry (**four** bars + glow-halo
 dot, #F97316/#FACC15 — the 3-bar version came from the hero's inline variant); My Vibe
 prose is **PlusJakartaSans_600SemiBold** (`.vibe-value.vibe-body` = 600, new font face
 loaded); the finder's **"Your Profile" facet** is implemented — it reads the
@@ -392,7 +392,7 @@ a verbatim port of flagNewProfileText's sentence diff); the chat drawer gained
 🔄 Regenerate + 🎤 dictation + 🔇/🔊 spoken questions (feature-detected like the live app);
 the Fresh Finds selection bar is pinned (position:fixed doesn't hold inside RN-web's
 ScrollView — the bar is an absolute SIBLING of the scroller); ranking retries once with
-backoff before the keyword fallback; landing's "Read our full story" opens about.html;
+backoff before the keyword fallback; landing's "Read our full story" opens public/about.html;
 register's name columns flex. NOT a bug: the Quest Log "dates are from the last cycle"
 banner — the old app renders the identical banner on the same card (verified live).
 **Ops gotcha:** never start Metro with `CI=1` — CI mode disables the file watcher and
@@ -449,7 +449,7 @@ port it line-by-line. Split it:
   researchCompetitions, pureCompetitions, conferences, journals).
 - **Profile** — the profile card + profile-chat drawer (openers/follow-ups behavior preserved).
 - Landing/marketing — decide whether this stays web-only (it's desktop-authored; the
-  `walkthrough.html` film is a heavy vendored web bundle that won't port to native as-is).
+  `public/walkthrough.html` film is a heavy vendored web bundle that won't port to native as-is).
 
 ## API client
 
@@ -460,7 +460,7 @@ phase-2 token model. Do not hand-write request types the spec can generate.
 
 ## Cautions
 
-- **RN-web parity for web-only assets.** The `walkthrough.html` film and any Tailwind-CDN
+- **RN-web parity for web-only assets.** The `public/walkthrough.html` film and any Tailwind-CDN
   styling in `index.html` don't cross to native. Plan native-appropriate equivalents or make
   them web-only.
 - **Mock mode.** The backend still fabricates AI responses with no API key (`CLAUDE.md`).

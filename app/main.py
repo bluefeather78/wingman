@@ -157,8 +157,8 @@ if os.environ.get("WINGMAN_ENABLE_OPS"):
 # ---------------- Static pages (repo root) + optional web-app bundle ----------------
 # The old vanilla-JS SPA was retired at tag `workingwithauth` (Phase 3 cutover): the web
 # frontend is now the Expo app in frontend/. The repo-root route survives ONLY to serve
-# the static pages the app still links to on this host — terms.html / privacy.html /
-# about.html plus the styles.css + favicon.svg they use — with the same deny-list so the
+# the static pages the app still links to on this host — public/terms.html / public/privacy.html /
+# public/about.html plus the public/styles.css + public/favicon.svg they use — with the same deny-list so the
 # service can't hand out source, secrets, or logs.
 #
 # SERVE_WEB_DIST=1 (set on Render, never locally) additionally serves the exported Expo
@@ -185,6 +185,21 @@ _DENY_DIRS = {"agent_logs", "data", "db", "docs", "tests", "eval", "legal", "fro
 WEB_APP_URL = os.environ.get("WEB_APP_URL", "").strip()
 
 SERVE_WEB_DIST = bool(os.environ.get("SERVE_WEB_DIST"))
+# Everything this route is allowed to serve, and the ONLY directory it looks in.
+# It used to resolve against REPO_ROOT and defend with the extension/name/dir deny-lists
+# below -- i.e. every file in the repo was reachable unless something remembered to
+# exclude it, which is PRODUCTION_READINESS_PLAN.md High #5 ("catch-all static route
+# serves the repo"). Measured before the change: GET /logic_map.html returned 200 in
+# production, publishing the ops console's internal pipeline map. Resolving inside
+# public/ inverts the default -- a file is served because it was PUT there, and the
+# deny-lists are now belt-and-braces rather than the only thing standing in the way.
+#
+# URLs are unchanged: `rel` is the request path and this is only where we look for it,
+# so /terms.html still serves (from public/terms.html). That matters because /terms.html
+# and /privacy.html are in lifecycle emails already delivered, and the pages reference
+# public/styles.css / public/favicon.svg with RELATIVE hrefs, which the browser resolves to /styles.css.
+PUBLIC_DIR = os.path.join(REPO_ROOT, "public")
+
 WEB_DIST_ROOT = os.path.join(REPO_ROOT, "frontend", "dist")
 
 
@@ -231,8 +246,8 @@ def _resolve_static(rel: str):
     parts = rel.split("/")
     if any(p.startswith(".") for p in parts) or _DENY_DIRS.intersection(parts):
         return None
-    candidate = os.path.normpath(os.path.join(REPO_ROOT, rel))
-    if candidate != REPO_ROOT and not candidate.startswith(REPO_ROOT + os.sep):
+    candidate = os.path.normpath(os.path.join(PUBLIC_DIR, rel))
+    if candidate != PUBLIC_DIR and not candidate.startswith(PUBLIC_DIR + os.sep):
         return None
     base = os.path.basename(candidate).lower()
     _, ext = os.path.splitext(base)

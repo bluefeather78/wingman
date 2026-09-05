@@ -39,12 +39,12 @@ conferences, journals). The frontend is an **Expo (React Native + RN-web) app in
 `frontend/`** targeting web + iOS + Android from one codebase; the backend is a FastAPI
 service in `app/`.
 
-**The old vanilla-JS SPA (index.html / script.js / styles.css / walkthrough.html) was
+**The old vanilla-JS SPA (index.html / script.js / public/styles.css / public/walkthrough.html) was
 retired 2026-08-23 at git tag `workingwithauth`** — check out that tag to see it. Every
 `script.js`/`index.html` reference in this file is historical: the *behavioral rationale*
 (profile-chat caching, tracker classification, mock mode, etc.) was ported verbatim into
-`frontend/src/lib/*` and still applies; the DOM-glue descriptions do not. `styles.css` and
-`favicon.svg` survive at the repo root only because terms/privacy/about pages use them.
+`frontend/src/lib/*` and still applies; the DOM-glue descriptions do not. `public/styles.css` and
+`public/favicon.svg` survive at the repo root only because terms/privacy/about pages use them.
 
 ## Running the app
 
@@ -96,7 +96,7 @@ function name in its new home.
   `subscription_state`), `app/services/*.py` (opportunities, deadlines, ai mocks,
   mailing_list, google_oauth, resume), `app/routes/*.py` (one router per domain),
   `app/main.py` (the app; a deny-listed static route serves ONLY the surviving root-level
-  static pages — terms/privacy/about + styles.css/favicon.svg — the SPA itself is gone).
+  static pages — terms/privacy/about + public/styles.css/favicon.svg — the SPA itself is gone).
 - **`ops/`** — the local-only operations console: `ops/core.py` (agent orchestration,
   metrics, user-costs, seeds, snapshots, review-queue moderation — everything that backed
   `/api/agents/*` and `/api/seeds`) and `ops/admin.py` (the router, every route
@@ -163,10 +163,10 @@ docs/                     plans/ (unbuilt or part-shipped) · archive/ (shipped,
                           SUBSCRIPTION_SETUP.md + MATCHING_UX_REQUIREMENTS.md (live refs)
 data/                     Opportunities.xlsx, the diffable opportunities.json snapshot,
                           the two hand-curated hub registries. Not read at runtime.
-legal/*.md                source of record -> agents/build_legal.py -> terms.html/privacy.html
+legal/*.md                source of record -> agents/build_legal.py -> public/terms.html/privacy.html
 tests/                    pytest suite for the backend (945 tests, all green)
-walkthrough.html          the landing film (vendored ~1.5MB bundle) — see its section below
-styles.css, favicon.svg   kept ONLY for the legal/about pages the RN app links to
+public/walkthrough.html          the landing film (vendored ~1.5MB bundle) — see its section below
+public/styles.css, public/favicon.svg   kept ONLY for the legal/about pages the RN app links to
 ```
 
 **Adding a module: does it go in `wingman/` or `agents/`?** `agents/` is for something an
@@ -200,7 +200,7 @@ in `frontend/src/api/` (`httpClient` implements the Phase-2 bearer/refresh contr
 keys the old app used); the "BENTO & POP" design system in `frontend/src/ui/` (`theme.ts`
 tokens, `components.tsx`, `NavBar.tsx`, `icons.tsx` — exact SVG ports). Pixel parity with
 the retired SPA was verified against tag `workingwithauth` via computed-style diffs; the
-design source of truth is styles.css (kept for legal pages) plus the Claude Design
+design source of truth is public/styles.css (kept for legal pages) plus the Claude Design
 "Wingman Design System" project.
 
 **How the two halves are served.** In dev they are two origins (Metro `:8081` -> API
@@ -1759,7 +1759,7 @@ in `server.py`.
   `terms_version`). **Bump `TERMS_VERSION` in `server.py` whenever `legal/*.md` changes
   materially** or old and new acceptances become indistinguishable.
 - **The legal documents are generated.** `legal/terms.md` and `legal/privacy.md` are the
-  source of record; `terms.html` / `privacy.html` are built from them by
+  source of record; `public/terms.html` / `public/privacy.html` are built from them by
   **`agents/build_legal.py`** and must not be hand-edited — re-run it after any edit under
   `legal/`. Note Terms §3 still states the beta is free of charge, which the $9.99 plan
   contradicts.
@@ -2091,7 +2091,7 @@ to pay its way back in**; the only route out today is a `grant` promo code
 (`BETAUSER`), which the paywall screen does accept. Configure `STRIPE_API_KEY` /
 `STRIPE_PRICE_ID` before the first real trial expires.
 
-**The landing page's walkthrough film** is [walkthrough.html](walkthrough.html) at the repo
+**The landing page's walkthrough film** is [public/walkthrough.html](public/walkthrough.html) at the repo
 root — a **vendored, self-extracting ~1.5MB bundle** exported from a design canvas, carrying
 its own React runtime, the composition source and every webfont in one file. **Do not
 hand-edit it**: the real source is a `<script type="__bundler/manifest">` block of gzipped,
@@ -2108,7 +2108,7 @@ system browser.
 **It must stay git-tracked or production breaks silently.** The file lives at the repo root,
 which is mostly gitignored build/log noise, and it was untracked at one point after the SPA
 cutover — the landing page then iframes a URL that 404s on Render while working perfectly
-against a local checkout. If you touch the film, confirm `git ls-files walkthrough.html`
+against a local checkout. If you touch the film, confirm `git ls-files public/walkthrough.html`
 prints it.
 
 ## Lifecycle email — three messages, Resend, and the claim table

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render legal/*.md into standalone terms.html / privacy.html pages.
+"""Render legal/*.md into standalone public/terms.html / public/privacy.html pages.
 
 The repo has no build step and no markdown dependency, so rather than teach the
 browser to parse markdown, the two legal documents are kept as markdown (the form
@@ -18,8 +18,8 @@ import html
 import re
 
 DOCS = [
-    ("legal/terms.md", "terms.html", "Terms of Use", "privacy.html", "Privacy Policy"),
-    ("legal/privacy.md", "privacy.html", "Privacy Policy", "terms.html", "Terms of Use"),
+    ("legal/terms.md", "public/terms.html", "Terms of Use", "privacy.html", "Privacy Policy"),
+    ("legal/privacy.md", "public/privacy.html", "Privacy Policy", "terms.html", "Terms of Use"),
 ]
 
 PAGE = """<!DOCTYPE html>

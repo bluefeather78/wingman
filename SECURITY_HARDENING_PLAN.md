@@ -243,7 +243,7 @@ denied. Traversal is correctly blocked (verified in the report's "checked — no
 section) — the problem is the policy, not the path handling.
 
 **Currently servable in production:** `ops/admin_console.html` (the full operator console UI,
-naming every `/api/agents/*` endpoint), `logic_map.html`, `opportunities.json` **and
+naming every `/api/agents/*` endpoint), `ops/logic_map.html`, `opportunities.json` **and
 `Opportunities.xlsx`** (the entire 1,330-row catalog as a bulk download — the product's core
 asset), `review_check_dry_run_*.json`, `scrape_review_*.json`, `eval/golden_profiles.json`,
 `eval/golden_scorecard.html`, `frontend/package-lock.json`, `render.yaml`, `pyproject.toml`,
@@ -254,8 +254,8 @@ inventory). Locally, `python server.py` binds `0.0.0.0`, so `discovered_leads.js
 Nothing exposes credentials or student PII **today** — that is luck. Only `.env` and
 `agent_settings.json` are denied by name; a `users_db.json` at the root would be served.
 
-**Fix.** Allow exactly: `terms.html`, `privacy.html`, `about.html`, `walkthrough.html`,
-`styles.css`, `favicon.svg`, plus the `frontend/dist` bundle. Everything else 404s.
+**Fix.** Allow exactly: `public/terms.html`, `public/privacy.html`, `public/about.html`, `public/walkthrough.html`,
+`public/styles.css`, `public/favicon.svg`, plus the `frontend/dist` bundle. Everything else 404s.
 
 **Preserve** the documented resolution order in `serve_static()` — dist file → exported route
 html → repo-root page → dist index.html fallback. The repo-root step sits **before** the
@@ -374,7 +374,7 @@ and receives the student's access **and refresh** tokens.
   required.
 - **Rotate the GitHub PAT embedded in the git remote URL** (`git remote -v`). Local config, not
   in the tree.
-- Check `git ls-files walkthrough.html` still prints it — CLAUDE.md notes production breaks
+- Check `git ls-files public/walkthrough.html` still prints it — CLAUDE.md notes production breaks
   silently if that file ever becomes untracked.
 
 ---
@@ -563,7 +563,7 @@ row's jsonb, and the resume upload (parsed wholly in memory). Add `timeout=` to 
 Three things to get right:
 - **CSP `report-only` first.** `expo export` inlines `@font-face` rules and preload tags into
   the document head; the policy needs one iteration against a real exported bundle.
-- **`walkthrough.html` is iframed by the landing page** — give it `frame-ancestors 'self'`
+- **`public/walkthrough.html` is iframed by the landing page** — give it `frame-ancestors 'self'`
   rather than `DENY`.
 - Use **pure ASGI middleware, not `BaseHTTPMiddleware`** (the perf report flags the existing
   one; adding a second of the same kind compounds it).
@@ -639,7 +639,7 @@ arbitrary addresses (`/api/agents/emails/test`).
   **closed** when unset). The console's own fetch calls must send it.
 - **Refuse to mount ops when `RENDER` is set, regardless of `WINGMAN_ENABLE_OPS`.** Today
   `server.py` only *declines to set* the flag; make the mount itself refuse.
-- S0-6 already removes `ops/admin_console.html` and `logic_map.html` from the public route.
+- S0-6 already removes `ops/admin_console.html` and `ops/logic_map.html` from the public route.
 
 ---
 

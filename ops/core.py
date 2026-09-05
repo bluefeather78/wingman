@@ -3294,17 +3294,21 @@ def get_admin_console_html():
 
 
 def get_logic_map_html():
-    """The Catalog Control Room logic map (repo-root logic_map.html), read fresh from disk
+    """The Catalog Control Room logic map (ops/logic_map.html), read fresh from disk
     on each request so an edit shows up on reload with no restart. This is the SINGLE source
     of the map — the console's guide tab links here instead of carrying its own text copy, so
     there is nothing to keep in sync. Repo-tracked, so it lives on GitHub with the code."""
-    map_path = os.path.join(REPO_ROOT, "logic_map.html")
+    # ops/logic_map.html, not the repo root: it moved there on 2026-09-04 because the
+    # repo-root static route was serving it publicly (GET /logic_map.html returned 200
+    # in production, publishing this console's internal pipeline map). ops/ is never
+    # mounted on Render, so here it is reachable only through the localhost-gated console.
+    map_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logic_map.html")
     if os.path.exists(map_path):
         with open(map_path, "r", encoding="utf-8") as f:
             return f.read()
     return """<!doctype html><html><head><meta charset="utf-8"><title>Logic Map</title></head>
     <body style="font-family:system-ui;padding:40px"><h1>Logic map not found</h1>
-    <p>logic_map.html is missing from the repo root.</p></body></html>"""
+    <p>ops/logic_map.html is missing.</p></body></html>"""
 
 
 # ---------------- Evals hub ----------------
@@ -4050,7 +4054,7 @@ MAINTENANCE_TOOLS = {
     },
     "legal": {
         "name": "Rebuild Legal Pages",
-        "description": "Regenerate terms.html / privacy.html from the legal markdown source. "
+        "description": "Regenerate public/terms.html / public/privacy.html from the legal markdown source. "
                        "Run after editing anything under legal/.",
         "script": "agents/build_legal.py",
         "free": True, "writes": True, "params": [],

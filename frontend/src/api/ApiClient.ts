@@ -168,10 +168,15 @@ export interface ApiClient {
   // --- Google Calendar sync ---
   // The backend URL to open to grant calendar access. This is a SEPARATE grant from
   // Google Sign-In (which only ever asks for openid/email/profile), so an account that
-  // signed in with Google still has to go through it. A top-level navigation can't carry
-  // an Authorization header, so the access token rides in the query string and the server
-  // derives the userid from it.
-  googleCalendarConnectUrl(appRedirect?: string): string | null;
+  // signed in with Google still has to go through it.
+  //
+  // Async as of S1-3: a top-level navigation can't carry an Authorization header, and the
+  // access token used to ride in the query string — which put a 45-minute bearer into
+  // Render's access logs, the browser history and every proxy log in between. It now costs
+  // one POST first, with the bearer in the header, to mint a single-use 60-second nonce;
+  // only the nonce goes in the URL. Resolves to null when signed out or when the mint
+  // fails, exactly as the synchronous version did.
+  googleCalendarConnectUrl(appRedirect?: string): Promise<string | null>;
   // Upsert the given deadline events into the user's dedicated Wingman calendar, and
   // (when sweep is set) delete the events we previously wrote for anything no longer in
   // the list. Returns the raw outcome rather than throwing on 409, because "calendar not

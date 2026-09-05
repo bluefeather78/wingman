@@ -29,7 +29,7 @@ from app.services.email import send_lifecycle_email_async
 from app.deps import (json_body, json_response, json_error, login_response,
                       require_subscription)
 from app.auth import AuthedUser
-from app.auth.tokens import verify_access_token, AuthError, AuthConfigError
+from app.auth.tokens import AuthConfigError
 from app.services import google_oauth as g
 
 router = APIRouter()
@@ -378,25 +378,40 @@ def handle_google_finish(request: Request, body: dict = Depends(json_body)):
         return json_error(503, str(e))
 
 
+@router.post("/api/auth/google/calendar/handoff")
+def handle_google_calendar_handoff(user: AuthedUser = Depends(require_subscription)):
+    """Mint the single-use nonce that /calendar/start takes (S1-3, finding M3).
+
+    The bearer travels in the Authorization HEADER on this call, and only the nonce goes
+    into the URL of the navigation that follows. It costs one extra round trip, which is
+    the entire price of keeping a 45-minute access token out of Render's access logs, the
+    browser history, and every proxy log between a school network and here.
+
+    Subscription-gated like the sync itself, so a lapsed account cannot start a connect
+    flow that its next step would refuse anyway.
+    """
+    return json_response(200, {"nonce": g.mint_calendar_handoff(user.id),
+                               "expires_in": g.CALENDAR_HANDOFF_TTL_SECONDS})
+
+
 @router.get("/api/auth/google/calendar/start")
 def handle_google_calendar_start(request: Request):
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         return json_error(503, "Google Sign-In is not configured: set "
                                "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env.")
     # This is a top-level browser navigation (location.href), so it cannot carry an
-    # Authorization header — the access token rides in the query string instead, and the
-    # userid is derived from it, never taken from the URL directly. Same trust model as the
-    # rest of the app: identity comes from the signed token.
+    # Authorization header. It used to take the full access JWT as ?token= — S1-3, finding
+    # M3: a bearer in a URL is a bearer in a logfile, and this one is good for 45 minutes.
+    # It now takes a single-use 60-second nonce minted by the /handoff POST above, which
+    # DOES carry the bearer in a header. `token=` is no longer accepted at all; leaving it
+    # as a fallback would leave the leak exactly where it was.
     canonical = _canonicalize_loopback(request)
     if canonical:
         return canonical
-    token = request.query_params.get("token") or ""
-    try:
-        userid = verify_access_token(token)
-    except AuthConfigError:
-        return json_error(503, "Authentication is temporarily unavailable.")
-    except AuthError:
-        return json_error(401, "Please sign in to connect Google Calendar.")
+    nonce = request.query_params.get("nonce") or ""
+    userid = g.take_calendar_handoff(nonce) if nonce else None
+    if not userid:
+        return json_error(401, "That connect link expired. Try Sync to Calendar again.")
     try:
         if not get_user(userid):
             return json_error(404, "No account found.")
@@ -589,7 +604,10 @@ def _delete_events(access_token, calendar_path, event_ids):
         try:
             _calendar_request(
                 "DELETE",
-                f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events/{urllib.parse.quote(event_id)}",
+                # safe="" for the same reason as the PATCH path above: quote's default
+                # leaves "/" alone, which is the character that re-targets the request.
+                f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events/"
+                f"{urllib.parse.quote(str(event_id), safe='')}",
                 access_token,
             )
             deleted += 1
@@ -715,12 +733,25 @@ def handle_calendar_sync(body: dict = Depends(json_body),
             results.append({"id": item_id, "status": "error", "error": "Missing id, title, or dateISO."})
             continue
 
-        year, month, day = date_iso.split("-")
-        end_obj = (datetime.date(int(year), int(month), int(day)) + datetime.timedelta(days=1))
+        # S1-14, finding L6: this was a bare `year, month, day = date_iso.split("-")`
+        # followed by int(). A malformed dateISO from ONE tracker item raised ValueError
+        # out of the loop and 500'd the WHOLE sync, taking every other event with it — and
+        # tracker dates come from a model extraction, so malformed is a normal input here,
+        # not an attack. Report the one item and carry on.
+        try:
+            parsed = datetime.date.fromisoformat(date_iso)
+        except ValueError:
+            results.append({"id": item_id, "status": "error",
+                            "error": "Unreadable date on this item."})
+            continue
+        end_obj = parsed + datetime.timedelta(days=1)
         body_payload = {
             "summary": title,
             "description": description,
-            "start": {"date": date_iso},
+            # parsed.isoformat(), not date_iso: date.fromisoformat also accepts "20260901"
+            # and ISO week dates, and Google's all-day `date` field wants YYYY-MM-DD. Send
+            # the normalized value so start and end can never be in different formats.
+            "start": {"date": parsed.isoformat()},
             "end": {"date": end_obj.isoformat()},
             # Stamped so the sweep below can tell an event WE wrote from one the student
             # added to this calendar by hand. Without it a sweep is "delete everything
@@ -735,7 +766,13 @@ def handle_calendar_sync(body: dict = Depends(json_body),
         try:
             calendar_path = f"calendars/{urllib.parse.quote(calendar_id)}"
             if google_event_id:
-                url = f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events/{google_event_id}"
+                # quote(safe=""), so a googleEventId containing `/` or `?` cannot re-target
+                # the request at a different Google API path (S1-14, finding L6). The token
+                # in play is this user's own calendar grant, so there is no cross-user
+                # impact — but a client-supplied value interpolated raw into a URL is a bug
+                # whether or not today's blast radius is interesting.
+                url = (f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events/"
+                       f"{urllib.parse.quote(str(google_event_id), safe='')}")
                 method = "PATCH"
             else:
                 url = f"{GOOGLE_CALENDAR_API_BASE}/{calendar_path}/events"

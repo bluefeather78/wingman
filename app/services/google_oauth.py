@@ -46,6 +46,53 @@ def _take_google_token(token):
     _prune_google_tokens()
     return _google_session_tokens.pop(token, None)
 
+# ---------- Calendar handoff nonces (S1-3, finding M3) ----------
+#
+# /api/auth/google/calendar/start is a top-level browser navigation, so it cannot carry an
+# Authorization header. It used to take the full 45-minute access JWT in the query string —
+# which lands in Render's access logs, the browser history, the Referer of anything the
+# OAuth flow touches, and any school or corporate proxy log between the student and here.
+# A bearer token in a URL is a bearer token in a logfile.
+#
+# The nonce is the same shape as _mint_google_token above, with two differences that matter:
+# it carries only a userid (never a credential), and its TTL is 60 seconds rather than five
+# minutes, because the only gap it has to survive is one POST followed immediately by one
+# navigation. Single-use on top of that, so a replayed URL out of history is inert.
+CALENDAR_HANDOFF_TTL_SECONDS = 60
+
+_google_calendar_handoffs = {}
+
+
+def _prune_calendar_handoffs():
+    now = time.time()
+    for nonce in [n for n, e in _google_calendar_handoffs.items() if e["expires_at"] < now]:
+        del _google_calendar_handoffs[nonce]
+
+
+def mint_calendar_handoff(userid):
+    """A single-use nonce standing in for `userid` for the next 60 seconds."""
+    _prune_calendar_handoffs()
+    nonce = secrets.token_urlsafe(32)
+    _google_calendar_handoffs[nonce] = {
+        "userid": userid,
+        "expires_at": time.time() + CALENDAR_HANDOFF_TTL_SECONDS,
+    }
+    return nonce
+
+
+def take_calendar_handoff(nonce):
+    """The userid this nonce stands for, consuming it. None if unknown or expired.
+
+    Look-up and delete in one step, like _take_google_token: a URL that reaches browser
+    history or a Referer header must not resolve twice.
+    """
+    _prune_calendar_handoffs()
+    entry = _google_calendar_handoffs.pop(nonce, None)
+    if not entry or entry["expires_at"] < time.time():
+        return None
+    return entry["userid"]
+
+
 # state -> {"userid": ..., "expires_at": ...}. Mirrors _google_session_tokens: in-process,
 # short-lived, fine for a single-process server. Keyed separately from the sign-in state
 # cookie so a stale calendar-connect attempt can't be replayed against the sign-in flow

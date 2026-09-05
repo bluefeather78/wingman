@@ -655,11 +655,27 @@ export const httpClient: ApiClient = {
   },
 
   // --- Google Calendar sync ---
-  googleCalendarConnectUrl(appRedirect?: string): string | null {
+  async googleCalendarConnectUrl(appRedirect?: string): Promise<string | null> {
     if (!_access) return null;
-    const params = new URLSearchParams({ token: _access });
-    if (appRedirect) params.set('app_redirect', appRedirect);
-    return `${API_BASE}/api/auth/google/calendar/start?${params.toString()}`;
+    // S1-3: the bearer goes in the HEADER of this POST (request() attaches it and handles
+    // the 401-refresh-once dance); only the single-use nonce it returns goes in the URL of
+    // the navigation that follows. Putting the access token in the query string, as this
+    // did, wrote a 45-minute bearer into Render's access logs and the browser history.
+    try {
+      const { nonce } = await request<{ nonce?: string }>(
+        '/api/auth/google/calendar/handoff',
+        { method: 'POST', body: '{}' },
+      );
+      if (!nonce) return null;
+      const params = new URLSearchParams({ nonce });
+      if (appRedirect) params.set('app_redirect', appRedirect);
+      return `${API_BASE}/api/auth/google/calendar/start?${params.toString()}`;
+    } catch (e) {
+      // Same contract as before: null means "we could not build a connect link", and the
+      // caller shows the sign-in-again prompt rather than an error.
+      console.warn('Calendar handoff failed:', (e as Error).message);
+      return null;
+    }
   },
 
   async syncCalendar(events, sweep = false): Promise<CalendarSyncResult> {

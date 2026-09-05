@@ -308,7 +308,7 @@ export default function Tracker() {
     try {
       const out = await syncTrackerToCalendar();
       if (out.kind === 'not-connected') {
-        const url = httpClient.googleCalendarConnectUrl(googleCalendarReturnUri());
+        const url = await httpClient.googleCalendarConnectUrl(googleCalendarReturnUri());
         setSyncState('error');
         setSyncNote(
           url

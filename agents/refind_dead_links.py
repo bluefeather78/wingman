@@ -117,13 +117,10 @@ def main():
     ap.add_argument("--timeout", type=int, default=280)
     args = ap.parse_args()
 
-    from wingman.supabase_common import load_dotenv, supabase_get, supabase_patch, supabase_insert_one
-    load_dotenv()
-    supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    service_key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
-    if not supabase_url or not service_key:
-        print("[ERROR] SUPABASE_URL and a key must be set in .env.")
-        raise SystemExit(1)
+    from wingman.supabase_common import require_service_key, supabase_get, supabase_patch, supabase_insert_one
+    # Service key REQUIRED: the selection below is `is_active=eq.false` — the anon key returns
+    # nothing at all for it, so the job would silently do no work (4.13).
+    supabase_url, service_key = require_service_key()
 
     rows = supabase_get(supabase_url, "opportunities",
                         {"select": "id,name,org,url,quality_flags,moderation_reason,is_active",

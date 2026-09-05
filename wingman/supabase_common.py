@@ -33,6 +33,33 @@ def load_dotenv(path=".env"):
                 os.environ[key] = value
 
 
+def require_service_key():
+    """(SUPABASE_URL, SUPABASE_SERVICE_KEY) for a job that must SEE THE WHOLE TABLE. Exits if unset.
+
+    Never fall back to SUPABASE_ANON_KEY here. Under the anon key RLS returns only
+    `is_active=true` rows, so a read that is meant to cover the catalog silently comes back
+    without every queued, rejected or otherwise inactive row — and the failure is invisible: a
+    dedupe/known-URL set built that way looks complete, omits the whole review queue, and the
+    job then re-extracts (and pays for) pages that are already sitting in it. Any subsequent
+    insert fails on RLS anyway, so the fallback never bought a working run, only a misleading
+    one. agents/scrape_opportunities.py has always required the service key; this is that rule
+    made shared (audit finding 4.13).
+
+    Callers that legitimately only ever want ACTIVE rows (the public catalog read in `app/`)
+    do not use this — they pass the anon key deliberately.
+    """
+    load_dotenv()
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if not url or not key:
+        missing = " and ".join(n for n, v in (("SUPABASE_URL", url),
+                                              ("SUPABASE_SERVICE_KEY", key)) if not v)
+        raise SystemExit(
+            f"[ERROR] {missing} must be set in .env. This job reads inactive rows (the review "
+            f"queue), which the anon key cannot see — it is not interchangeable here.")
+    return url, key
+
+
 def supabase_get(supabase_url, table, params, key, page_size=PAGE_SIZE):
     """Paginated GET against a Supabase/PostgREST table. `params` is a dict of
     query params, e.g. {"select": "id,url", "is_active": "eq.true"}.

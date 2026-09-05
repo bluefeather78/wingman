@@ -684,10 +684,10 @@ def main():
         print("[ERROR] Give --hubs or --hubs-file.")
         raise SystemExit(1)
 
-    from wingman.supabase_common import load_dotenv, supabase_get
-    load_dotenv()
-    supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    service_key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+    from wingman.supabase_common import require_service_key, supabase_get
+    # Service key REQUIRED: `existing` below is the pre-spend known-URL check and must include
+    # the review queue's inactive rows, which the anon key cannot see (finding 4.13).
+    supabase_url, service_key = require_service_key()
     gemini_key = os.environ.get("GEMINI_API_KEY")
     existing = supabase_get(supabase_url, "opportunities", {"select": "id,name,url"},
                             service_key) if supabase_url else []

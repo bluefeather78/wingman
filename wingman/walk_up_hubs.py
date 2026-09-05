@@ -257,14 +257,10 @@ def main():
     # after every fetch had already completed. Same crash the hub miner hit on a model's U+2011.
     safe_console()
 
-    import os
-    from wingman.supabase_common import load_dotenv
-    load_dotenv()
-    su = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
-    if not su or not key:
-        print("[ERROR] SUPABASE_URL and a key must be set in .env.")
-        raise SystemExit(1)
+    from wingman.supabase_common import require_service_key
+    # Service key REQUIRED: catalog_keys() is the already-known set and must include the
+    # inactive rows the anon key hides (4.13).
+    su, key = require_service_key()
 
     rows = fetch_trusted_rows(su, key, limit=args.rows)
     known = catalog_keys(su, key) | discovered_leads.lead_keys(

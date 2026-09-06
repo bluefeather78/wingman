@@ -318,7 +318,7 @@ export default function Home() {
         <SoftCard style={{ gap: space.lg }} hoverTint onPress={goProfile}>
           <View style={styles.rowBetween}>
             <Txt variant="h2" style={styles.cardTitle}>Your Story So Far</Txt>
-            <PopButton label="View & deepen it →" small square onPress={(e) => { stop(e); goProfile(); }} />
+            <PopButton label="View & deepen it →" small onPress={(e) => { stop(e); goProfile(); }} />
           </View>
           <Txt style={styles.teaserText} numberOfLines={3}>{profile}</Txt>
         </SoftCard>
@@ -361,17 +361,15 @@ export default function Home() {
               label="Look for Fresh Finds"
               variant="secondary"
               small
-              square
-              textStyle={styles.freshFindsText}
               onPress={(e) => { stop(e); router.push('/(app)/finder'); }}
-              style={[styles.selfStart, styles.freshFindsBtn]}
+              style={styles.selfStart}
             />
           </>
         ) : (
           <>
             <ProgressTrack segments={[]} />
             <Txt variant="small" style={styles.emptyState}>Nothing here yet.</Txt>
-            <PopButton label="Find your first match" variant="secondary" onPress={(e) => { stop(e); router.push('/(app)/finder'); }} style={styles.selfEnd} />
+            <PopButton label="Find your first match" variant="secondary" small onPress={(e) => { stop(e); router.push('/(app)/finder'); }} style={styles.selfStart} />
           </>
         )}
       </SoftCard>
@@ -411,9 +409,6 @@ export default function Home() {
                 label="See all tasks"
                 variant="secondary"
                 small
-                square
-                textStyle={styles.freshFindsText}
-                style={styles.freshFindsBtn}
                 onPress={(e) => { stop(e); setTasksOpen(true); }}
               />
             </View>
@@ -619,9 +614,6 @@ const styles = StyleSheet.create({
   trackedText: { fontFamily: fonts.bodyXBold, fontSize: 10, lineHeight: 14, letterSpacing: 0.2, textTransform: 'uppercase', color: colors.statusPastFg },
   legend: { flexDirection: 'row', gap: space.lg, flexWrap: 'wrap' },
   selfStart: { alignSelf: 'flex-start' },
-  selfEnd: { alignSelf: 'flex-end' },
-  freshFindsText: { fontSize: 12, lineHeight: 16, color: colors.navy },
-  freshFindsBtn: { paddingVertical: 8 },
   emptyState: { color: '#9AA9B8', fontStyle: 'italic', fontSize: 13 },
 
   // flexShrink + minWidth:0 are load-bearing: RN-web defaults flex items to flex-shrink:0,

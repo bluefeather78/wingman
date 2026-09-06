@@ -136,6 +136,12 @@ _DEFAULT_APP_REDIRECTS = [
     "wingman://", "exp://",
     "http://localhost:8081", "http://localhost:8082",
     "http://127.0.0.1:8081", "http://127.0.0.1:8082",
+    # SERVE_WEB_DIST=1 serves the app AND the API from :8000 (the same-origin production
+    # shape, exercised locally). The app's googleRedirectUri() is then
+    # http://localhost:8000/google-auth, so it must be allow-listed or the callback drops it
+    # and strands the sign-in token at "/" (which never reads it). Loopback only, so this
+    # carries none of the open-redirect risk _parse_allowlist guards against.
+    "http://localhost:8000", "http://127.0.0.1:8000",
 ]
 _ALLOWED_APP_REDIRECTS = [
     p.strip() for p in os.environ.get("GOOGLE_APP_REDIRECTS", "").split(",") if p.strip()
@@ -342,8 +348,13 @@ def handle_google_callback(request: Request):
         return json_error(503, "Sign-in is temporarily unavailable. Please try again "
                                "shortly.")
     # Phase 3: if the app registered a redirect for this handshake, send the one-time token
-    # there (the Expo app captures it); otherwise fall back to the backend-root SPA.
-    dest = g.take_login_redirect(req_state) or "/"
+    # there (the Expo app captures it); otherwise fall back to the /google-auth route on THIS
+    # origin. The fallback used to be "/" (the backend-root SPA consumed the token there), but
+    # the token consumer is now the /google-auth route — the auth gate at "/" never reads the
+    # google_token fragment, so a token delivered to "/" is silently dropped and the user
+    # lands back signed-out. /google-auth is same-origin as this callback, so this is correct
+    # for the production same-origin deploy too.
+    dest = g.take_login_redirect(req_state) or "/google-auth"
     return RedirectResponse(_handoff_url(dest, token), status_code=302)
 
 

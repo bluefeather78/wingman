@@ -374,8 +374,8 @@ def _footer_text(reason, unsubscribe_url):
         f"{EMAIL_POSTAL_ADDRESS}\n")
 
 
-_WELCOME_REASON = "You&rsquo;re receiving this because you started a Wingman trial."
-_WELCOME_REASON_TXT = "You're receiving this because you started a Wingman trial."
+_WELCOME_REASON = "You&rsquo;re receiving this because you created a Wingman account."
+_WELCOME_REASON_TXT = "You're receiving this because you created a Wingman account."
 _GOODBYE_REASON = "You&rsquo;re receiving this because you had a Wingman subscription."
 _GOODBYE_REASON_TXT = "You're receiving this because you had a Wingman subscription."
 
@@ -384,24 +384,23 @@ _GOODBYE_REASON_TXT = "You're receiving this because you had a Wingman subscript
 
 def _welcome(ctx, unsubscribe_url):
     name = ctx.get("first_name") or "there"
-    days = ctx.get("trial_days")
+    # Two-tier model: no trial. A new account lands on the permanent Free plan with a daily
+    # allowance of AI actions. The number is passed in (FREE_TIER_DAILY_AI_ACTIONS); with none
+    # known the copy stays generic rather than guessing.
+    actions = ctx.get("free_actions")
     app = EMAIL_APP_URL
 
-    # "7" is never hardcoded: a grant promo code extends the trial, so the number is only
-    # true for an account that redeemed nothing. With no known figure the copy drops the
-    # count rather than guessing one.
-    badge = f"{_e(days)}-day trial started" if days else "Trial started"
-    span = f"the next {_e(days)} days" if days else "your trial period"
-    banner_title = (f"Your trial ends in {_e(days)} days" if days
-                    else "Your trial is running now")
+    allowance_phrase = (f"{_e(actions)} AI actions a day" if actions
+                        else "a daily allowance of AI actions")
 
     content = "".join([
         _hero(
-            badge=badge, badge_fg=ORANGE, badge_bg=ORANGE_SOFT,
+            badge="Welcome to Wingman", badge_fg=ORANGE, badge_bg=ORANGE_SOFT,
             heading=f"You&rsquo;re in, {_e(name)} &#127881;",
-            body=(f"Your Wingman trial is live for {span}. That&rsquo;s enough time to build "
-                  "your profile, get matched to real opportunities, and start tracking "
-                  "deadlines &mdash; no credit card, no pressure."),
+            body=(f"Your Wingman account is live and free to use. Build your profile, get "
+                  "matched to real opportunities, and track deadlines &mdash; no credit card, "
+                  f"no pressure. You get {allowance_phrase} (profile chats, match-finding, "
+                  "deadline checks) that reset every morning."),
             cta_url=app, cta_label="Start exploring →", cta_width=240),
         _gap(32),
         _section("Here&rsquo;s what&rsquo;s waiting for you"),
@@ -417,30 +416,30 @@ def _welcome(ctx, unsubscribe_url):
              "can match you to the right things."),
         ]),
         _gap(32),
-        _banner(banner_title,
-                "Build your profile now so your matches are ready before the trial&rsquo;s up.",
+        _banner("Start with your profile",
+                "Build your profile now so your matches are ready when you are.",
                 f"{app}/profile", "Build my profile"),
     ])
 
     text = (
         f"You're in, {name}\n\n"
-        f"Your Wingman trial is live for {'the next %s days' % days if days else 'your trial period'}.\n"
-        "That's enough time to build your profile, get matched to real opportunities, and\n"
-        "start tracking deadlines — no credit card, no pressure.\n\n"
+        "Your Wingman account is live and free to use. Build your profile, get matched to\n"
+        "real opportunities, and track deadlines — no credit card, no pressure.\n"
+        f"You get {'%s AI actions a day' % actions if actions else 'a daily allowance of AI actions'} "
+        "(profile chats, match-finding, deadline checks) that reset every morning.\n\n"
         f"Start exploring: {app}\n\n"
         "HERE'S WHAT'S WAITING FOR YOU\n\n"
         "  Fresh Finds — summer programs, internships and competitions matched to your\n"
         "    interests, grade and budget, out of a catalog of 1,300+.\n"
         "  Quest Log — track every deadline you're chasing on one calendar.\n"
         "  My Vibe — a quick quiz builds your profile so we can match you properly.\n\n"
-        + (f"Your trial ends in {days} days. " if days else "")
-        + "Build your profile now so your matches are ready before the trial's up.\n"
+        "Build your profile now so your matches are ready when you are.\n"
         f"{app}/profile\n"
         + _footer_text(_WELCOME_REASON_TXT, unsubscribe_url)
     )
 
-    return ("Welcome to your Wingman trial",
-            "Your Wingman trial just started &mdash; let&rsquo;s find you something worth applying to.",
+    return ("Welcome to Wingman",
+            "Your Wingman account is ready &mdash; let&rsquo;s find you something worth applying to.",
             content, text, _WELCOME_REASON, unsubscribe_url)
 
 

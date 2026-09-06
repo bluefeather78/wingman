@@ -4,38 +4,19 @@ import { httpClient } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
 import { PopButton, Screen, SoftCard, usePopInteraction } from '@/ui/components';
 import { colors, fonts, popShadow, radius } from '@/ui/theme';
+import { isPaidTier, resetsInLabel } from '@/lib/tier';
+import type { AllowanceSnapshot } from '@/api/types';
 
 interface SubState {
   status?: string;
   days_left?: number;
   has_access?: boolean;
+  in_paid_period?: boolean;
+  ai_tier?: string;
   trial_ends_at?: string | null;
   subscription_end_at?: string | null;
+  allowance?: AllowanceSnapshot;
   [key: string]: unknown;
-}
-
-// What the paywall says, mirroring subscription_block_reason() in app/deps.py so the
-// screen names the same situation the server's 402 does.
-function lapsedCopy(status: string): { title: string; body: string } {
-  if (status === 'past_due')
-    return {
-      title: 'We could not charge your card',
-      body: 'Update your payment details to restore access to Wingman. Your profile and Quest Log are untouched and come straight back.',
-    };
-  if (status === 'canceled')
-    return {
-      title: 'Your subscription has ended',
-      body: 'Resubscribe to pick up exactly where you left off — nothing has been deleted.',
-    };
-  if (status === 'beta')
-    return {
-      title: 'Your beta access has ended',
-      body: 'Subscribe to keep using Wingman. Everything you saved is still here.',
-    };
-  return {
-    title: 'Your free trial has ended',
-    body: 'Subscribe to keep using Wingman. Your profile and Quest Log are still here, waiting for you.',
-  };
 }
 
 function fmtDate(iso: string | null | undefined): string {
@@ -45,16 +26,14 @@ function fmtDate(iso: string | null | undefined): string {
   return new Date(t).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
-// The subscription page (#page-subscription), reached from the account drawer's Manage
-// Plan. Payments stay deferred: status, plans, and the promo-code flow work; Upgrade
-// surfaces the backend's answer (Stripe is not configured in this environment).
-//
-// It is ALSO the paywall screen: (app)/_layout redirects every other route here once
-// has_access goes false, so this is the only thing a lapsed account can see. The status
-// read on mount write-throughs to the cached session, so redeeming a grant code here lifts
-// the block immediately rather than on the next sign-in.
+// Manage Plan, reached from the account drawer. Two-tier model: no lockout, so this is a
+// tier dashboard — the Free plan's daily AI-action meter vs Wingman Unlimited — not a paywall.
+// Payments stay deferred: the promo-code flow works and Upgrade surfaces the backend's answer
+// (Stripe is not configured here, which is what keeps the CTA "gated" until it is). The status
+// read on mount write-throughs to the cached session, so redeeming a grant code here flips the
+// tier to Unlimited immediately rather than on the next sign-in.
 export default function Subscription() {
-  const { user } = useAuth();
+  const { user, allowance: liveAllowance } = useAuth();
   const [sub, setSub] = useState<SubState | null>((user?.subscription as SubState) ?? null);
   const [promo, setPromo] = useState('');
   const [promoStatus, setPromoStatus] = useState('');
@@ -67,18 +46,25 @@ export default function Subscription() {
     return () => { alive = false; };
   }, []);
 
-  const status = sub?.status ?? 'trial';
-  const blocked = sub?.has_access === false;
-  const lapsed = lapsedCopy(status);
-  const badge =
-    blocked ? { label: 'Ended', bg: '#FEE2E2', fg: '#991B1B' } :
-    status === 'active' ? { label: 'Active', bg: '#D1FAE5', fg: '#065F46' }
-    : status === 'beta' ? { label: 'Beta', bg: '#DEF5B0', fg: colors.navy }
-    : status === 'canceled' ? { label: 'Canceled', bg: '#FEE2E2', fg: '#991B1B' }
-    : { label: 'Trial', bg: '#DEF5B0', fg: colors.navy };
-  const planName = status === 'active' ? 'Pro Plan' : status === 'beta' ? 'Beta access' : 'Free Trial';
-  const daysLeft = sub?.days_left ?? 0;
-  const endDate = fmtDate((sub?.trial_ends_at as string) ?? (sub?.subscription_end_at as string));
+  const status = sub?.status ?? 'free';
+  // Two-tier model: no lockout. `paid` (Unlimited) vs the metered Free plan is the only axis.
+  const paid = sub?.ai_tier === 'paid' || sub?.in_paid_period === true || isPaidTier(user);
+  // Prefer the live meter (429 / AI echo); fall back to the snapshot the status read carried.
+  const allowance: AllowanceSnapshot | null = liveAllowance ?? sub?.allowance ?? null;
+  const used = typeof allowance?.used === 'number' ? allowance.used : null;
+  const limit = typeof allowance?.limit === 'number' ? allowance.limit : null;
+  const remaining = typeof allowance?.remaining === 'number' ? allowance.remaining : null;
+  const badge = paid
+    ? { label: status === 'active' ? 'Unlimited' : 'Comped', bg: '#D1FAE5', fg: '#065F46' }
+    : { label: 'Free', bg: '#DEF5B0', fg: colors.navy };
+  const planName = paid ? 'Wingman Unlimited' : 'Free plan';
+  const renewsDate = fmtDate(sub?.subscription_end_at as string);
+  // past_due / canceled are still Free-with-access now — a gentle note, never a lockout.
+  const softNote = !paid && status === 'past_due'
+    ? 'We could not charge your card, so you are on the Free plan for now. Update your payment details to go back to Unlimited.'
+    : !paid && status === 'canceled'
+    ? 'Your subscription has ended and you are on the Free plan. Resubscribe any time to lift the daily AI cap.'
+    : null;
 
   async function applyPromo() {
     const code = promo.trim();
@@ -126,13 +112,9 @@ export default function Subscription() {
           <Text style={styles.subTitle}>Manage your plan and billing</Text>
         </View>
 
-        {blocked && (
-          <View style={styles.lapsedCard}>
-            <Text style={styles.lapsedTitle}>{lapsed.title}</Text>
-            <Text style={styles.lapsedBody}>{lapsed.body}</Text>
-            <View style={styles.lapsedActions}>
-              <PopButton label="Subscribe — $9.99/month" small square onPress={upgrade} />
-            </View>
+        {!!softNote && (
+          <View style={styles.softNote}>
+            <Text style={styles.softNoteText}>{softNote}</Text>
           </View>
         )}
 
@@ -147,56 +129,76 @@ export default function Subscription() {
               <Text style={[styles.badgeText, { color: badge.fg }]}>{badge.label}</Text>
             </View>
           </View>
-          {!blocked && (status === 'trial' || status === 'beta') && (
-            <View style={styles.countdown}>
-              <Text style={styles.countdownTitle}>
-                {daysLeft} day{daysLeft === 1 ? '' : 's'} left {status === 'beta' ? 'of beta access' : 'in trial'}
-              </Text>
-              <Text style={styles.countdownSub}>Your access ends {endDate}</Text>
-            </View>
-          )}
-          {!blocked && status === 'active' && (
+          {paid ? (
             <View style={[styles.countdown, styles.activeInfo]}>
-              <Text style={[styles.countdownTitle, { color: '#065F46' }]}>✓ Subscription Active</Text>
-              <Text style={[styles.countdownSub, { color: '#047857' }]}>Renews {endDate}</Text>
+              <Text style={[styles.countdownTitle, { color: '#065F46' }]}>✓ No daily AI cap</Text>
+              <Text style={[styles.countdownSub, { color: '#047857' }]}>
+                {status === 'active' ? `Renews ${renewsDate}` : 'Unlimited AI actions while your access lasts'}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.meterBox}>
+              <Text style={styles.meterTitle}>
+                {used !== null && limit !== null
+                  ? `${Math.max(0, (remaining ?? limit - used))} of ${limit} AI actions left today`
+                  : 'Your daily AI actions'}
+              </Text>
+              {used !== null && limit !== null && (
+                <View style={styles.meterTrack}>
+                  <View style={[styles.meterFill, { width: `${Math.min(100, Math.round((used / Math.max(1, limit)) * 100))}%` }]} />
+                </View>
+              )}
+              <Text style={styles.meterSub}>
+                {used !== null && limit !== null ? `Used ${used} of ${limit} · resets ${resetsInLabel(allowance)}` : 'Resets every day at midnight UTC'}
+              </Text>
             </View>
           )}
         </View>
 
-        {/* Plans */}
+        {/* Free vs Unlimited */}
         <View style={styles.plansBox}>
           <View style={styles.plansHead}>
-            <Text style={styles.plansHeadText}>Plans</Text>
+            <Text style={styles.plansHeadText}>Compare plans</Text>
           </View>
           <View style={styles.plansBody}>
             <View style={styles.planRow}>
               <View style={styles.flex1}>
-                <Text style={styles.planRowName}>Free Trial</Text>
-                <Text style={styles.planRowPrice}>7 days</Text>
-                <Text style={styles.planRowNote}>Includes all features</Text>
+                <Text style={styles.planRowName}>Free</Text>
+                <Text style={styles.planRowPrice}>$0</Text>
+                <Text style={styles.planRowNote}>{limit !== null ? `${limit} AI actions/day` : 'A daily AI allowance'}</Text>
               </View>
-              {!blocked && (status === 'trial' || status === 'beta') && (
+              {!paid && (
                 <View style={[styles.badge, { backgroundColor: '#DEF5B0' }]}>
                   <Text style={[styles.badgeText, { color: colors.navy }]}>Current</Text>
                 </View>
               )}
             </View>
+            <View style={{ gap: 4, marginTop: 8 }}>
+              <Text style={styles.featureLine}>✓ Full opportunity catalog &amp; search</Text>
+              <Text style={styles.featureLine}>✓ Quest Log tracking &amp; calendar sync</Text>
+              <Text style={styles.featureLine}>✓ A daily allowance of AI actions</Text>
+            </View>
             <View style={styles.planDivider} />
             <View style={styles.planRow}>
               <View style={styles.flex1}>
-                <Text style={styles.planRowName}>Pro Plan</Text>
+                <Text style={styles.planRowName}>Wingman Unlimited</Text>
                 <Text style={styles.planRowPrice}>
                   $9.99<Text style={styles.planRowPer}>/month</Text>
                 </Text>
-                <Text style={styles.planRowNote}>After trial ends</Text>
+                <Text style={styles.planRowNote}>No daily AI cap</Text>
               </View>
-              <PopButton label="Upgrade Now" small square onPress={upgrade} />
+              {paid ? (
+                <View style={[styles.badge, { backgroundColor: '#D1FAE5' }]}>
+                  <Text style={[styles.badgeText, { color: '#065F46' }]}>Current</Text>
+                </View>
+              ) : (
+                <PopButton label="Go Unlimited" small square onPress={upgrade} />
+              )}
             </View>
             <View style={{ gap: 4, marginTop: 8 }}>
-              <Text style={styles.featureLine}>✓ Access to all opportunities</Text>
-              <Text style={styles.featureLine}>✓ AI-powered recommendations</Text>
-              <Text style={styles.featureLine}>✓ Priority support</Text>
-              <Text style={styles.featureLine}>✓ Deadline reminders</Text>
+              <Text style={styles.featureLine}>✓ Everything in Free</Text>
+              <Text style={styles.featureLine}>✓ Unlimited profile chats &amp; match-finding</Text>
+              <Text style={styles.featureLine}>✓ Unlimited deadline re-checks &amp; resume imports</Text>
             </View>
             {!!upgradeStatus && <Text style={styles.promoStatus}>{upgradeStatus}</Text>}
           </View>
@@ -227,7 +229,7 @@ export default function Subscription() {
             <Text style={styles.plansHeadText}>Billing</Text>
           </View>
           <View style={styles.plansBody}>
-            <Text style={styles.billingLine}>You'll be billed $9.99/month after your trial ends.</Text>
+            <Text style={styles.billingLine}>Wingman Unlimited is $9.99/month, billed when you upgrade. Cancel anytime.</Text>
             <Text style={styles.billingLine}>💳 Payment method: Add during checkout</Text>
             <Text style={styles.billingLine}>📧 Receipts will be sent to your email</Text>
           </View>
@@ -244,6 +246,13 @@ const styles = StyleSheet.create({
   title: { fontFamily: fonts.display, fontSize: 24, color: colors.navy },
   subTitle: { fontFamily: fonts.bodyMed, fontSize: 14, color: colors.slate500 },
 
+  softNote: { backgroundColor: colors.amber50, borderWidth: 2, borderColor: '#FBBF24', borderRadius: radius.lg, padding: 16 },
+  softNoteText: { fontFamily: fonts.bodyMed, fontSize: 13.5, lineHeight: 21, color: '#92400E' },
+  meterBox: { backgroundColor: colors.slate50, borderRadius: radius.md, padding: 16, gap: 8 },
+  meterTitle: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.slate900 },
+  meterTrack: { height: 8, borderRadius: 999, backgroundColor: colors.slate200, overflow: 'hidden' },
+  meterFill: { height: 8, borderRadius: 999, backgroundColor: colors.orange },
+  meterSub: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500 },
   lapsedCard: { backgroundColor: '#FEF2F2', borderWidth: 2, borderColor: '#FCA5A5', borderRadius: radius.lg, padding: 20, gap: 8 },
   lapsedTitle: { fontFamily: fonts.display, fontSize: 20, color: '#991B1B' },
   lapsedBody: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: '#B91C1C' },

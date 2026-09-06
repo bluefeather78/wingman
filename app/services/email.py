@@ -44,6 +44,7 @@ import urllib.request
 from app.config import (
     RESEND_API_KEY, RESEND_URL, RESEND_USER_AGENT, EMAIL_FROM, EMAIL_REPLY_TO,
     EMAIL_APP_URL, EMAIL_SETUP_SQL, TRIAL_REMINDER_DAYS, JWT_SECRET,
+    FREE_TIER_DAILY_AI_ACTIONS,
 )
 from app.core import (
     _supabase_request_strict, _missing_table_error, _error_body, get_user_account,
@@ -143,9 +144,9 @@ def build_context(kind, record):
         "userid": (record or {}).get("userid") or "",
     }
     if kind == "welcome":
-        # Only stated when known: a hardcoded "7 days" is wrong for any account that
-        # redeemed a grant code before opening the email.
-        ctx["trial_days"] = state.get("days_left") if state.get("status") == "trial" else None
+        # Two-tier model: a new account lands on the Free plan with a daily AI-action
+        # allowance — no trial. The welcome email states that allowance.
+        ctx["free_actions"] = FREE_TIER_DAILY_AI_ACTIONS
     elif kind == "trial_ending":
         ctx["days_left"] = state.get("days_left")
         ctx["trial_ends_display"] = _safe_display_date(state.get("trial_ends_at"))

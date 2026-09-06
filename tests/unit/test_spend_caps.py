@@ -181,23 +181,33 @@ def test_a_non_positive_global_budget_disables_the_layer(monkeypatch):
 
 # ---------- how the AI proxies apply the two layers that reach them ----------
 
+def _allowance(over, **extra):
+    base = {"tier": "free", "unlimited": False, "over": over, "used": 3, "limit": 10,
+            "remaining": 7, "dollar_backstop_hit": False,
+            "reset_at": "2999-01-01T00:00:00+00:00", "reason": "no more today" if over else None}
+    base.update(extra)
+    return base
+
+
 def test_proxy_refuses_a_user_over_budget(monkeypatch):
     monkeypatch.setattr(ai.budget, "circuit_open", lambda: False)
-    monkeypatch.setattr(ai.budget, "over_user_budget", lambda uid: "no more today")
-    live, refused = ai._live_branch("alice", key_configured=True)
+    monkeypatch.setattr(ai.budget, "ai_allowance_state",
+                        lambda uid, feature=None: _allowance(True))
+    live, refused, allowance = ai._live_branch("alice", key_configured=True, cost_feature="ranking")
     assert live is False
     assert refused is not None and refused.status_code == 429
+    assert allowance["over"] is True
 
 
 def test_proxy_degrades_to_mock_when_the_circuit_is_open(monkeypatch):
     """Degrade, don't error: the mock branch already exists and is exercised offline every
     day, so it is a known-good reduced mode rather than a new failure path."""
     monkeypatch.setattr(ai.budget, "circuit_open", lambda: True)
-    monkeypatch.setattr(ai.budget, "over_user_budget",
-                        lambda uid: pytest.fail("per-user budget is moot once the app is "
-                                                "already degraded for everyone"))
-    live, refused = ai._live_branch("alice", key_configured=True)
-    assert live is False and refused is None
+    monkeypatch.setattr(ai.budget, "ai_allowance_state",
+                        lambda uid, feature=None: pytest.fail(
+                            "the allowance is moot once the app is already degraded for everyone"))
+    live, refused, allowance = ai._live_branch("alice", key_configured=True, cost_feature="ranking")
+    assert live is False and refused is None and allowance is None
 
 
 def test_the_circuit_does_not_relax_the_signed_out_401(monkeypatch):
@@ -211,14 +221,17 @@ def test_the_circuit_does_not_relax_the_signed_out_401(monkeypatch):
 
 def test_live_branch_passes_a_user_in_good_standing(monkeypatch):
     monkeypatch.setattr(ai.budget, "circuit_open", lambda: False)
-    monkeypatch.setattr(ai.budget, "over_user_budget", lambda uid: None)
-    assert ai._live_branch("alice", key_configured=True) == (True, None)
+    monkeypatch.setattr(ai.budget, "ai_allowance_state",
+                        lambda uid, feature=None: _allowance(False))
+    live, refused, allowance = ai._live_branch("alice", key_configured=True, cost_feature="ranking")
+    assert live is True and refused is None
+    assert allowance["over"] is False   # echoed on success so the client meter can tick
 
 
 def test_no_key_means_no_spend_checks_at_all(monkeypatch):
     monkeypatch.setattr(ai.budget, "circuit_open",
                         lambda: pytest.fail("nothing to spend without a key"))
-    assert ai._live_branch("alice", key_configured=False) == (False, None)
+    assert ai._live_branch("alice", key_configured=False, cost_feature="ranking") == (False, None, None)
 
 
 # ---------- the routes that were the exploit ----------
@@ -262,7 +275,9 @@ def test_the_deadline_route_charges_the_cooldown_only_for_a_real_bypass():
 
     src = inspect.getsource(opps.handle_deadline_check)
     assert "if fresh and force and not budget.forced_recheck_ok" in src
-    assert "budget.over_user_budget" in src
+    # The per-user check is now the two-tier allowance (which carries the dollar backstop),
+    # not the bare over_user_budget call it replaced.
+    assert "budget.ai_allowance_state" in src
     assert "budget.circuit_open" in src
 
 

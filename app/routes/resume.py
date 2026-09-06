@@ -10,12 +10,13 @@ from app.config import (RESUME_MAX_BODY_BYTES, USER_SUBMISSION_MAX_NAME,
                         USER_SUBMISSION_MAX_TEXT, USER_SUBMISSION_MAX_URL,
                         USER_SUBMISSION_MAX_LIST)
 from app.core import touch_user_activity
-from app.deps import (json_body, json_response, json_error, subscription_block_reason,
+from app.deps import (json_body, json_response, json_error, allowance_error,
                       require_subscription, capped_raw_body,
                       opaque_error)
 from app.auth import get_current_user, AuthedUser
 from app.auth.ratelimit import user_submission_limiter
 from app.services import resume as resume_service
+from app.services import budget
 from wingman.url_guard import url_block_reason
 
 router = APIRouter()
@@ -34,9 +35,13 @@ def handle_extract_from_resume(request: Request, raw: bytes = Depends(resume_raw
     # Identity is token-derived (was a query-string userid). Gate on subscription before
     # reading the file so a lapsed account can't make us parse a PDF or call Claude.
     resume_userid = user.id
-    reason = subscription_block_reason(resume_userid)
-    if reason:
-        return json_error(402, reason)
+    # MARQUEE M11: a resume import is one metered Free-tier action (and a paid Claude call), so
+    # the allowance is checked before we parse the PDF or call Claude. Paid users are unlimited;
+    # a Free user over the cap gets a structured 429. See MARQUEE_DECISIONS.md M11.
+    allowance = budget.ai_allowance_state(resume_userid, feature="resume_import")
+    if allowance["over"]:
+        touch_user_activity(resume_userid, "ai_limit_hit")
+        return allowance_error(allowance)
     touch_user_activity(resume_userid, "resume_import")
     content_type = request.headers.get("Content-Type", "")
     if "multipart/form-data" not in content_type:
@@ -80,11 +85,12 @@ def handle_extract_from_resume(request: Request, raw: bytes = Depends(resume_raw
 def handle_extract_from_linkedin(body: dict = Depends(json_body),
                                  user: AuthedUser = Depends(get_current_user)):
     """Extract profile-relevant information from LinkedIn profile (text paste only)."""
-    # Paid Claude call that writes into a profile, so it is token-gated and subscription-
-    # gated exactly like the resume path — identity comes from the token, not the body.
-    reason = subscription_block_reason(user.id)
-    if reason:
-        return json_error(402, reason)
+    # MARQUEE M11: same metered "resume" action + allowance gate as the resume path — identity
+    # comes from the token, not the body. Paid unlimited; Free bounded by the daily allowance.
+    allowance = budget.ai_allowance_state(user.id, feature="resume_import")
+    if allowance["over"]:
+        touch_user_activity(user.id, "ai_limit_hit")
+        return allowance_error(allowance)
     linkedin_text = body.get("linkedin_text", "").strip()
     if not linkedin_text:
         return json_error(400, "Please paste your LinkedIn profile text. LinkedIn blocks "

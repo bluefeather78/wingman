@@ -47,7 +47,9 @@ The beta is provided for testing, evaluation, and improvement of the Service. Du
 - the Service may become temporarily or permanently unavailable; and
 - we may discontinue or modify the beta at any time.
 
-The beta is currently provided free of charge. We may introduce paid features, subscriptions, or other pricing in the future. If we do so, we will provide appropriate notice before charging you for a paid service.
+**Plans and pricing.** Wingman offers a permanent **Free plan** and a paid **Wingman Unlimited** plan. The Free plan is available at no charge and includes access to the opportunity catalog, tracking and calendar features, and a **daily allowance of AI-powered actions** (such as profile chats, match-finding, deadline checks, and resume imports) that resets each day. When you reach the daily allowance, AI features pause until the allowance resets; the rest of the app continues to work, and nothing you have saved is affected. **Wingman Unlimited**, offered for $9.99 per month, removes the daily AI allowance. There is **no free trial**, and you are not required to enter a payment method to use the Free plan.
+
+Paid plans are billed monthly in advance. You may cancel at any time; cancellation takes effect at the end of the current paid period, after which your account returns to the Free plan. We may change the allowance, the plans, or the price, and will provide appropriate notice before any material change to pricing takes effect.
 
 You should not rely on Wingman as your sole source of information about an opportunity, deadline, eligibility requirement, or application.
 

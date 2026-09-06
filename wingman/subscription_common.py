@@ -135,16 +135,26 @@ def get_or_create_customer(userid, email, name=""):
 
 
 def create_checkout_session(customer_id, email, success_url, cancel_url, promo_code=None):
-    """Create a Stripe checkout session for subscription."""
+    """Create a Stripe checkout session for subscription.
+
+    Two-tier model: there is NO free trial, so an upgrade to Wingman Unlimited charges
+    immediately — no subscription_data[trial_period_days] on the ordinary path. The account
+    is already on the permanent Free plan; a delayed first charge would be giving Unlimited
+    away. The ONLY thing that now sets a Stripe trial is a redeemed `discount_months` promo,
+    which is a genuine free-months grant the student earned.
+    """
     data = {
         "customer": customer_id,
-        "payment_method_types[]": "card",
+        # payment_method_types is deliberately NOT sent: Stripe's Managed Payments (on by
+        # default on newer accounts) OWNS which methods are offered and REJECTS this parameter
+        # ("Unsupported parameter: payment_method_types"). Omitting it lets Stripe present the
+        # methods configured in the dashboard, and still works on older accounts (Stripe
+        # defaults to card there). Do not re-add it without disabling Managed Payments.
         "line_items[0][price]": PLAN_PRICE_ID,
         "line_items[0][quantity]": "1",
         "mode": "subscription",
         "success_url": success_url,
         "cancel_url": cancel_url,
-        "subscription_data[trial_period_days]": str(TRIAL_DAYS),
     }
 
     # Add promo code if provided and valid
@@ -152,9 +162,10 @@ def create_checkout_session(customer_id, email, success_url, cancel_url, promo_c
         promo_data, _ = validate_promo_code(promo_code)
         if promo_data:
             if "discount_months" in promo_data:
-                # For discount months, extend trial
+                # A redeemed free-months code delays the first charge by exactly that many
+                # months (via a Stripe trial). This is the only path that sets a trial now.
                 data["subscription_data[trial_period_days]"] = str(
-                    TRIAL_DAYS + (promo_data["discount_months"] * 30)
+                    promo_data["discount_months"] * 30
                 )
             elif "discount_percent" in promo_data:
                 # Would need a coupon in Stripe for percent-based discounts
@@ -170,11 +181,13 @@ def create_checkout_session(customer_id, email, success_url, cancel_url, promo_c
 
 
 def create_subscription_direct(customer_id, promo_code=None):
-    """Create a subscription directly (for API use, not checkout)."""
+    """Create a subscription directly (for API use, not checkout).
+
+    No trial (two-tier model): the subscription is charged on its first invoice.
+    """
     data = {
         "customer": customer_id,
         "items[0][price]": PLAN_PRICE_ID,
-        "trial_period_days": str(TRIAL_DAYS),
     }
 
     result, error = stripe_request("POST", "/subscriptions", data)

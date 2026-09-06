@@ -156,12 +156,13 @@ def test_digest_ships_html_and_a_real_text_part():
     assert "/api/email/unsubscribe" in text
 
 
-def test_no_placeholder_survives_into_a_rendered_digest():
+def test_no_placeholder_survives_into_a_rendered_digest(postal_address):
     rec = _tracker_record([("a", "Alpha", "A", 1, "deadline", False)])
     _, html, text = es.render_for("deadline_alert", rec)
     for blob in (html, text):
         assert "{{" not in blob
         assert "SET EMAIL_POSTAL_ADDRESS" not in blob
+        assert postal_address in blob
 
 
 def test_program_name_is_escaped():

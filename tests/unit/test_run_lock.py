@@ -83,6 +83,14 @@ def db(monkeypatch):
     monkeypatch.setattr(rl, "supabase_post", fake.post)
     monkeypatch.setattr(rl, "supabase_patch", fake.patch)
     monkeypatch.setattr(rl, "supabase_delete", fake.delete)
+    # guard_catalog_writes() does not take a url/key -- it reads them from the environment
+    # (via load_dotenv), so faking the four supabase_* calls above is NOT enough to put it on
+    # the DB backend. On a machine with no .env it found no creds, fell back to the FILE
+    # lock, and the "second agent is refused" guard tests then acquired a lock nobody was
+    # holding and passed through: green on a dev laptop, red in CI. Pin the creds so the
+    # backend is the same one the FakeDB is standing in for, everywhere.
+    monkeypatch.setenv("SUPABASE_URL", "http://db")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "svc")
     return fake
 
 

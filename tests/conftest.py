@@ -43,3 +43,25 @@ def _block_network(monkeypatch):
         )
 
     monkeypatch.setattr(socket.socket, "connect", _blocked)
+
+
+@pytest.fixture
+def postal_address(monkeypatch):
+    """A configured CAN-SPAM postal address, for the email-template tests.
+
+    `EMAIL_POSTAL_ADDRESS` defaults to the deliberately obvious `[SET EMAIL_POSTAL_ADDRESS
+    IN .env]` placeholder (app/config.py), so the "no placeholder reaches a rendered email"
+    tests were really asserting that whoever ran them had a .env — green on a dev laptop,
+    red in CI, which is what they did. What those tests are for is the TEMPLATE: that the
+    configured address is substituted into both the HTML and the text footer. So pin the
+    value here and let them assert that instead. Whether the real address is set in the
+    Render dashboard is a deploy check, not something a hermetic unit test can see.
+
+    Patched on app.services.email_templates, where the footer builders read it at call
+    time; the app.config constant is bound at import and is not what renders.
+    """
+    from app.services import email_templates
+
+    address = "Wingman, 1 Test Street, Testville CA 90000"
+    monkeypatch.setattr(email_templates, "EMAIL_POSTAL_ADDRESS", address)
+    return address

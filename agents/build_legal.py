@@ -43,13 +43,19 @@ NAV_LINKS = [
 
 def build_header(active):
     links = "\n".join(
-        '        <a class="navlink%s" href="%s">%s</a>'
+        '          <a class="navlink%s" href="%s">%s</a>'
+        % (" active" if key == active else "", href, label)
+        for label, href, key in NAV_LINKS
+    )
+    menu_links = "\n".join(
+        '        <a class="menu-link%s" href="%s">%s</a>'
         % (" active" if key == active else "", href, label)
         for label, href, key in NAV_LINKS
     )
     return f"""  <!-- Header pill -->
   <div style="width:100%;max-width:1100px;margin:0 auto;padding:16px 24px 0 24px;position:sticky;top:16px;z-index:50;">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;background:#1D4E89;border-radius:999px;padding:8px 16px;box-shadow:0 10px 25px -5px rgba(29,78,137,0.45);flex-wrap:wrap;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;background:#1D4E89;border-radius:999px;padding:8px 16px;box-shadow:0 10px 25px -5px rgba(29,78,137,0.45);position:relative;">
+      <input type="checkbox" id="nav-toggle" class="menu-toggle" aria-hidden="true" tabindex="-1">
       <a href="/" style="display:flex;align-items:center;gap:8px;">
         <svg width="30" height="30" viewBox="0 0 100 100">
           {LOGO_SVG}
@@ -59,12 +65,20 @@ def build_header(active):
           <span style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:9px;color:#fff;letter-spacing:0.5px;">BETA</span>
         </span>
       </a>
-      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+      <div style="display:flex;align-items:center;gap:18px;">
+        <div class="navlinks">
 {links}
+        </div>
         <a href="/login" style="display:flex;align-items:center;gap:6px;padding-right:8px;">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></circle><path d="M4 20c0-4 4-6 8-6s8 2 8 6" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
           <span style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:14px;color:#fff;opacity:0.9;">Sign In</span>
         </a>
+        <label for="nav-toggle" class="hamburger" aria-label="Open menu">
+          <span class="hb-bar"></span><span class="hb-bar"></span><span class="hb-bar"></span>
+        </label>
+      </div>
+      <div class="mobile-menu">
+{menu_links}
       </div>
     </div>
   </div>"""
@@ -82,6 +96,7 @@ FOOTER = f"""  <!-- Footer -->
       <a href="/terms.html" style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:12px;color:#64748B;">Terms</a>
       <a href="/privacy.html" style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:12px;color:#64748B;">Privacy</a>
     </div>
+    <span style="width:100%;font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:12px;line-height:18px;color:#94A3B8;">Highschool Wingman is a doing-business-as (DBA) name of Blufeather Labs LLC. &copy; 2026 Blufeather Labs LLC.</span>
   </div>"""
 
 PAGE = """<!DOCTYPE html>
@@ -101,6 +116,20 @@ PAGE = """<!DOCTYPE html>
   .navlink{{font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:13px;color:#B7D3E8;}}
   .navlink:hover{{color:#fff;}}
   .navlink.active{{color:#fff;}}
+  /* Mobile nav: a CSS-only hamburger (checkbox toggle, no JS) mirroring the app's
+     landing header. The secondary links collapse behind it below 768px. */
+  .navlinks{{display:flex;align-items:center;gap:18px;flex-wrap:wrap;}}
+  .menu-toggle{{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;}}
+  .hamburger{{display:none;flex-direction:column;gap:4px;cursor:pointer;padding:8px;margin-left:4px;}}
+  .hb-bar{{display:block;width:20px;height:2px;border-radius:1px;background:#fff;}}
+  .mobile-menu{{display:none;}}
+  .menu-link{{padding:11px 16px;font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:14px;color:#1D4E89;}}
+  .menu-link.active{{color:#F79256;}}
+  @media (max-width:767px){{
+    .navlinks{{display:none;}}
+    .hamburger{{display:flex;}}
+    .menu-toggle:checked ~ .mobile-menu{{display:flex;flex-direction:column;position:absolute;top:calc(100% + 8px);right:0;min-width:190px;background:#fff;border:2px solid #1D4E89;border-radius:14px;padding:6px 0;box-shadow:0 10px 24px rgba(15,23,42,0.2);z-index:60;}}
+  }}
   .legal-doc h1{{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:32px;line-height:40px;color:#1D4E89;margin:0 0 24px 0;}}
   .legal-doc h2{{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:22px;line-height:30px;color:#1D4E89;margin:32px 0 16px 0;}}
   .legal-doc h3{{font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:16px;line-height:24px;color:#1A2540;margin:24px 0 10px 0;}}
@@ -142,9 +171,17 @@ HARD_BREAK = chr(0xE000)  # a private-use codepoint, so it cannot collide with d
 
 
 def inline(text):
-    """Escape, then re-apply the inline markup we allow (bold, and two-space breaks)."""
+    """Escape, then re-apply the inline markup we allow (bold, links, two-space breaks)."""
     out = html.escape(text)
     out = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", out)
+    # `[label](href)` links. Escape already ran, so href/label are safe to inline; an
+    # http(s) link is opened in a new tab (external, so we don't navigate away from the
+    # policy) with rel=noopener. Kept deliberately simple — no titles, no nested markup.
+    def _link(m):
+        label, href = m.group(1), m.group(2)
+        ext = ' target="_blank" rel="noopener noreferrer"' if href.startswith("http") else ""
+        return f'<a href="{href}"{ext}>{label}</a>'
+    out = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", _link, out)
     # A markdown hard break (a line that ended in two spaces) arrives here as the
     # HARD_BREAK sentinel, because paragraph lines were joined before this ran.
     return out.replace(HARD_BREAK, "<br>").strip()

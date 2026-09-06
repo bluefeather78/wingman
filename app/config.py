@@ -352,7 +352,7 @@ CATALOG_VECTOR_CACHE_TTL = float(os.environ.get("CATALOG_VECTOR_CACHE_TTL", "") 
 # TERMS_VERSION is what gets recorded per account. It is the effective date printed at
 # the top of both documents — bump it whenever legal/*.md changes materially, so rows
 # accepted under the old text are distinguishable from rows accepted under the new.
-TERMS_VERSION = "2026-09-05"
+TERMS_VERSION = "2026-09-06"
 
 # ---------- Persistent user account database (Supabase-backed) ----------
 # Account records live in a Supabase `users` table rather than the old flat

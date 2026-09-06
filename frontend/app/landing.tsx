@@ -394,6 +394,9 @@ export default function Landing() {
               <Text style={styles.footerLink}>Privacy</Text>
             </Pressable>
           </View>
+          <Text style={styles.footerLegal}>
+            Highschool Wingman is a doing-business-as (DBA) name of Blufeather Labs LLC. © 2026 Blufeather Labs LLC.
+          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -515,4 +518,5 @@ const styles = StyleSheet.create({
   footerBrand: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate500 },
   footerLinks: { flexDirection: 'row', gap: 20 },
   footerLink: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate500 },
+  footerLegal: { width: '100%', fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 18, color: colors.muted },
 });

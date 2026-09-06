@@ -1,8 +1,8 @@
 # Wingman Privacy Policy
 
-**Effective Date:** September 5, 2026
+**Effective Date:** September 6, 2026
 
-This Privacy Policy explains how **Shama Bildikar**, the operator of Wingman ("Wingman," "we," "us," or "our"), collects, uses, processes, and protects information in connection with the Wingman beta.
+This Privacy Policy explains how **Blufeather Labs LLC**, doing business as "Highschool Wingman" and the operator of Wingman ("Wingman," "we," "us," or "our"), collects, uses, processes, and protects information in connection with the Wingman beta. Highschool Wingman is a trade name (DBA) of Blufeather Labs LLC.
 
 Wingman is designed to help high-school students discover and organize extracurricular activities, competitions, internships, programs, and other opportunities.
 
@@ -57,7 +57,8 @@ We may automatically collect certain technical and usage information when you us
 - approximate location derived from technical information;
 - pages or features accessed;
 - dates and times of access;
-- basic usage information; and
+- basic usage information;
+- event and interaction data — such as clicks, taps, scrolling, mouse movement, and navigation between pages — collected through analytics and session-replay tools; and
 - information collected through cookies or similar technologies.
 
 We do not intentionally collect precise geolocation information.
@@ -152,7 +153,9 @@ We cannot see whether you completed the organization's confirmation step, and we
 
 Wingman may use cookies, analytics tools, and similar technologies to understand how users interact with the Service, maintain functionality, improve performance, and diagnose problems.
 
-These technologies may include session-replay and heatmap tools, which record interactions such as page views, clicks, scrolling, and navigation so we can see how the Service is used and identify problems. These tools are configured to mask the content you type into fields.
+These technologies include session-replay, heatmap, and product-analytics tools that collect **event data** — a record of interactions such as page views, clicks, taps, scrolling, mouse movement, navigation between pages, and the approximate time and sequence of these actions — so we can see how the Service is used, reproduce problems, and improve the experience. We use this event data in aggregate and to diagnose specific issues; we do not use it to make automated decisions about you.
+
+Wingman uses **Microsoft Clarity**, a product-analytics and session-replay service provided by Microsoft Corporation, to capture this event data. Microsoft Clarity is configured to **mask the content you type into fields**, so the text you enter (such as profile answers, resume text, and passwords) is not recorded. Microsoft processes the data it collects in accordance with its own privacy terms; you can read more in the [Microsoft Privacy Statement](https://privacy.microsoft.com/privacystatement).
 
 The specific analytics and technology providers used by Wingman may change over time.
 
@@ -240,7 +243,8 @@ We may need to verify your identity or authority before completing certain reque
 
 Wingman is operated by:
 
-**Shama Bildikar**  
+**Blufeather Labs LLC**  
+doing business as "Highschool Wingman"  
 Washington, United States
 
 For privacy questions, requests, or concerns:

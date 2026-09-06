@@ -1,8 +1,8 @@
 # Wingman Beta Terms of Use
 
-**Effective Date:** September 5, 2026
+**Effective Date:** September 6, 2026
 
-These Beta Terms of Use ("Terms") govern your access to and use of Wingman ("Wingman," the "Service," "we," "us," or "our"), a beta product operated by **Shama Bildikar** ("Operator").
+These Beta Terms of Use ("Terms") govern your access to and use of Wingman ("Wingman," the "Service," "we," "us," or "our"), a beta product operated by **Blufeather Labs LLC**, doing business as "Highschool Wingman" ("Operator"). Highschool Wingman is a trade name (DBA) of Blufeather Labs LLC; references to "Wingman" or "Highschool Wingman" in these Terms refer to the Service operated by Blufeather Labs LLC.
 
 By creating an account, accessing, or using Wingman, you agree to these Terms. If you do not agree to these Terms, you may not use Wingman.
 
@@ -127,6 +127,8 @@ The Privacy Policy is incorporated into these Terms by reference.
 ## 10. Third-Party AI and Other Services
 
 Wingman may use third-party service providers, including artificial-intelligence providers such as Anthropic and Google, to operate certain features.
+
+Wingman also uses third-party analytics and product-improvement providers, including **Microsoft Clarity**, which collect event and usage data — such as page views, clicks, taps, scrolling, and navigation — to help us understand how the Service is used and to diagnose problems. How this event data is collected and used is described in our Privacy Policy.
 
 Information you provide may be processed by these providers as necessary to provide Wingman features.
 
@@ -297,7 +299,8 @@ If any provision is found to be unenforceable, the remaining provisions will rem
 
 Wingman is operated by:
 
-**Shama Bildikar**  
+**Blufeather Labs LLC**  
+doing business as "Highschool Wingman"  
 Washington, United States
 
 For questions regarding these Terms or Wingman:

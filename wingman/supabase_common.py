@@ -33,7 +33,34 @@ def load_dotenv(path=".env"):
                 os.environ[key] = value
 
 
-def supabase_get(supabase_url, table, params, key, page_size=PAGE_SIZE):
+def require_service_key():
+    """(SUPABASE_URL, SUPABASE_SERVICE_KEY) for a job that must SEE THE WHOLE TABLE. Exits if unset.
+
+    Never fall back to SUPABASE_ANON_KEY here. Under the anon key RLS returns only
+    `is_active=true` rows, so a read that is meant to cover the catalog silently comes back
+    without every queued, rejected or otherwise inactive row — and the failure is invisible: a
+    dedupe/known-URL set built that way looks complete, omits the whole review queue, and the
+    job then re-extracts (and pays for) pages that are already sitting in it. Any subsequent
+    insert fails on RLS anyway, so the fallback never bought a working run, only a misleading
+    one. agents/scrape_opportunities.py has always required the service key; this is that rule
+    made shared (audit finding 4.13).
+
+    Callers that legitimately only ever want ACTIVE rows (the public catalog read in `app/`)
+    do not use this — they pass the anon key deliberately.
+    """
+    load_dotenv()
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if not url or not key:
+        missing = " and ".join(n for n, v in (("SUPABASE_URL", url),
+                                              ("SUPABASE_SERVICE_KEY", key)) if not v)
+        raise SystemExit(
+            f"[ERROR] {missing} must be set in .env. This job reads inactive rows (the review "
+            f"queue), which the anon key cannot see — it is not interchangeable here.")
+    return url, key
+
+
+def supabase_get(supabase_url, table, params, key, page_size=PAGE_SIZE, order_by="id"):
     """Paginated GET against a Supabase/PostgREST table. `params` is a dict of
     query params, e.g. {"select": "id,url", "is_active": "eq.true"}.
 
@@ -42,7 +69,22 @@ def supabase_get(supabase_url, table, params, key, page_size=PAGE_SIZE):
     full 1000-row page can exceed Supabase's ~8s statement timeout and 500 with code 57014
     ("canceling statement due to statement timeout"). The total result is identical either way; a
     smaller page just fetches it in more, smaller requests. Never RAISE it above 1000 — PostgREST
-    caps a single response there regardless, so a larger value would silently under-read."""
+    caps a single response there regardless, so a larger value would silently under-read.
+
+    ORDER IS APPLIED HERE, NOT LEFT TO THE CALLER (audit finding 4.14). Offset pagination over an
+    UNORDERED query is not stable in Postgres: rows come back in heap order, and a row updated
+    mid-scan moves — so it can be returned twice or, worse, skipped entirely. Roughly 39 of the
+    45 `opportunities` reads in this repo passed no `order`, including the scraper's own dedupe
+    set, which pages a table the same run is concurrently PATCHing via apply_merge. A skipped row
+    there is a missed duplicate: the scraper re-inserts a program it already has.
+
+    So the default is `order_by="id"`, applied only when the caller has not set `order` itself.
+    Pass `order_by=` for a table keyed on something else (opportunity_signups is keyed on
+    `opportunity_id`), or `order_by=None` to opt out entirely — which is only correct for a read
+    that provably fits in one page.
+    """
+    if order_by and "order" not in params:
+        params = {**params, "order": order_by}
     query = urllib.parse.urlencode(params)
     rows = []
     offset = 0
@@ -121,3 +163,42 @@ def supabase_patch(supabase_url, table, params, body, key):
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         resp.read()
+
+
+def supabase_delete(supabase_url, table, params, key):
+    """DELETE rows matching `params` (dict of PostgREST filters). Raises on failure.
+
+    Deliberately requires filters: PostgREST would happily delete the whole table for an
+    empty filter set, and no caller here ever wants that.
+    """
+    if not params:
+        raise ValueError("supabase_delete needs a filter; refusing to delete a whole table")
+    query = urllib.parse.urlencode(params)
+    req = urllib.request.Request(
+        f"{supabase_url}/rest/v1/{table}?{query}",
+        method="DELETE",
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Prefer": "return=minimal",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        resp.read()
+
+
+def supabase_rpc(supabase_url, fn, payload, key, timeout=30):
+    """POST /rest/v1/rpc/<fn>. Returns the decoded body (often a list). Raises on failure."""
+    req = urllib.request.Request(
+        f"{supabase_url}/rest/v1/rpc/{fn}",
+        data=json.dumps(payload or {}).encode("utf-8"),
+        method="POST",
+        headers={
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read()
+    return json.loads(body) if body else None

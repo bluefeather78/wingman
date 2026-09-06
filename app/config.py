@@ -391,6 +391,10 @@ GOOGLE_TOKEN_TTL_SECONDS = 5 * 60
 # resulting tokens (see db/google_calendar_schema.sql) rather than discarding them like the
 # short-lived _google_session_tokens above — a sync can then run again later without
 # re-prompting, as long as the refresh token stays valid.
+# MARQUEE M7 (MARQUEE_DECISIONS.md): app-created calendars ONLY. This scope is what
+# guarantees Wingman can never read or write a student's own calendars — the guarantee is
+# the scope itself, not any check in our code. Broadening it, or adding a path that writes
+# to any other calendar, needs approval in chat first.
 GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.app.created"
 WINGMAN_CALENDAR_NAME = "Highschool Wingman"
 GOOGLE_CALENDAR_API_BASE = "https://www.googleapis.com/calendar/v3"

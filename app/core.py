@@ -146,49 +146,14 @@ def pseudonym(value):
     ).hexdigest()[:8]
 
 
-# ---------- Conversation logging (Supabase-backed, server-side only) ----------
-# Only actual profile-chat Q&A turns are persisted to the `conversations` table,
-# purely for backend visibility — nothing in the client changes or is even aware
-# this happens. Every other /api/messages call (ranking, web search, tracker
-# extraction, chat-starter generation, session summarization, ...) is a one-shot
-# completion with no real "student answered a question" moment, so it's skipped
-# entirely rather than logged with an empty response. Logging is fire-and-forget on a
-# background thread and swallows its own errors so a logging hiccup can never break the
-# actual API response the user is waiting on.
-#
-# THE SCHEMA IS NOW db/conversations_schema.sql, not this comment (S1-9).
-#
-# That is the finding, not a tidy-up: this table's only definition was the SQL pasted into
-# this comment, and that SQL had no `enable row level security` line — while every other
-# user table in the repo has one. It holds the most sensitive free text in the product, a
-# minor describing themselves in their own words, duplicated outside the RLS-protected
-# `users` row. Whether the LIVE table has RLS on is still not knowable from here; the
-# schema file says to confirm it in the Supabase dashboard, and that instruction is the
-# actual fix.
-#
-# client_ip is NOT written any more, and the schema file drops the column. There is no
-# session concept on the AI proxy routes, so it was only ever a weak correlation key, and
-# "which minor, from which address, said what" is not worth keeping for that.
-def extract_qa_pair(user_content):
-    """Pulls the most recent <bot question, student answer> pair out of a profile-chat
-    'CONVERSATION SO FAR' transcript (see profileChatNextQuestion in script.js) — the
-    only /api/messages call site where a real student answer is present in the prompt.
-    Returns (question, answer), or (None, None) if there's no student answer yet (e.g.
-    the very first question of a session, or any non-chat AI call)."""
-    m = re.search(r'CONVERSATION SO FAR:\s*(.*?)\s*Respond', user_content, re.S)
-    if not m:
-        return None, None
-    convo = m.group(1).strip()
-    if convo in ('', '(nothing yet)'):
-        return None, None
-    lines = [l for l in convo.split('\n') if l.strip()]
-    if not lines or not lines[-1].lower().startswith('student:'):
-        return None, None
-    answer = lines[-1].split(':', 1)[1].strip()
-    if not answer:
-        return None, None
-    question = lines[-2].split(':', 1)[1].strip() if len(lines) >= 2 and lines[-2].lower().startswith('you:') else None
-    return question, answer
+# ---------- Conversation logging: REMOVED ----------
+# Wingman no longer stores verbatim user conversations. The `conversations` table (which
+# persisted profile-chat <question, answer> turns) and the log_conversation /
+# log_conversation_async / extract_qa_pair helpers were deleted deliberately as a privacy
+# improvement: the transcript held the most sensitive free text in the product — a minor
+# describing themselves in their own words — and keeping it was not worth the exposure.
+# Drop the live table with db/drop_conversations.sql. Nothing writes conversation text
+# anywhere any more.
 
 
 # ---------- Interactive API spend ----------
@@ -629,48 +594,6 @@ def record_user_cost_async(userid, surface, feature, cost, input_tokens=0,
     left worth a thread — spawning one per paid call was itself part of the cost."""
     record_user_cost(userid, surface, feature, cost, input_tokens, output_tokens,
                      searches, model)
-
-
-def log_conversation(userid, mode, system_question, user_response):
-    """Persist one profile-chat <question, answer> turn. S1-9: no client_ip."""
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        return
-    try:
-        req = urllib.request.Request(
-            f"{SUPABASE_URL}/rest/v1/conversations",
-            data=json.dumps([{
-                "userid": userid,
-                "mode": mode,
-                "system_prompt": system_question,
-                "user_content": user_response,
-            }]).encode(),
-            method="POST",
-            headers={
-                "apikey": SUPABASE_SERVICE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-                "Content-Type": "application/json",
-                "Prefer": "return=minimal",
-            },
-        )
-        with pooled_urlopen(req, timeout=10) as resp:
-            resp.read()
-        print(f"[INFO] Logged conversation for user {pseudonym(userid)}")
-    except Exception as e:
-        print(f"[WARN] Failed to log conversation for user {pseudonym(userid)}: {e}")
-
-
-def log_conversation_async(userid, mode, system_prompt, user_content, response_text):
-    # system_prompt/response_text are unused now (kept in the signature so both call
-    # sites below don't need to change) — only a real <question, answer> pair from the
-    # transcript embedded in user_content gets logged.
-    question, answer = extract_qa_pair(user_content)
-    if not answer:
-        return
-    threading.Thread(
-        target=log_conversation,
-        args=(userid, mode, question, answer),
-        daemon=True,
-    ).start()
 
 
 def _invalidate_identity_for_write(query, data):
@@ -1456,8 +1379,8 @@ def touch_user_activity(userid, surface):
             entry["last_at"] = stamp
         _start_activity_flusher()
     except Exception as e:
-        # Activity logging must never be the reason a user's request fails. Same posture
-        # as log_conversation().
+        # Activity logging must never be the reason a user's request fails — best-effort,
+        # errors swallowed.
         print(f"[WARN] Could not buffer activity for user {pseudonym(userid)}: {e}")
 
 

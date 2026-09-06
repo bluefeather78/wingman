@@ -240,7 +240,11 @@ async def handle_snapshot_commit(request: Request):
     body = await read_json_body(request)
     file_name = (body.get("file") or "").strip()
     preview = bool(body.get("preview"))
-    result = core.commit_dryrun_snapshot(file_name, dry=preview)
+    # A patch snapshot older than dryrun_common.STALE_DAYS is refused by default: it replays
+    # values that were true when the run happened and would overwrite whatever has been
+    # learned since (audit 4.5). The console re-sends with allowStale after showing the age.
+    allow_stale = bool(body.get("allowStale"))
+    result = core.commit_dryrun_snapshot(file_name, dry=preview, allow_stale=allow_stale)
     return json_response(200 if result.get("ok") else 400, result, default=str)
 
 
@@ -438,6 +442,18 @@ async def handle_agents_run(request: Request):
             return json_error(
                 409, f"{name} is running and holds the shared Gemini web-search lock. "
                      f"Only one search-enabled agent can run at a time.")
+
+    # The catalog-insert lock (audit 4.2). Refuse here so the operator gets an explanation
+    # instead of a subprocess that starts, prints [REFUSED] and exits 2 into the log. The
+    # agent still takes the lock itself — this check cannot see a run launched from a
+    # terminal on another machine until it has actually written the lock row.
+    if core.AGENT_CONFIGS_SCHEMA[agent_name].get("script") in core.CATALOG_INSERT_SCRIPTS:
+        holder = core.catalog_lock_holder()
+        if holder:
+            return json_error(
+                409, f"Another catalog-writing run holds the insert lock: {holder}. "
+                     f"Two of them at once mint colliding opportunity ids, so only one can "
+                     f"run at a time.")
 
     config = body.get("config") or {}
     argv = core.build_agent_args(agent_name, config)

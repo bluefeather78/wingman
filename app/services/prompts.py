@@ -287,9 +287,10 @@ ENRICH_TOKEN_OVERHEAD = 600
 # The three "basics" fields and the never-guess rule, shared by both prompts that read them
 # so neither can drift into describing the same fields differently.
 PROFILE_BASICS_RULE = (
-    '"grade" (their school year, e.g. "11th grade"), "state" (US state or region they live '
-    'in, spelled out), "gender". Set a key to null if the student did not say it — never '
-    'guess, never infer from stereotypes, and never fill a value in just to avoid a null.')
+    '"grade" (their school year, e.g. "11th grade") and "state" (US state or region they '
+    'live in, spelled out). Set a key to null if the student did not say it — never guess, '
+    'never infer from stereotypes, and never fill a value in just to avoid a null. Do NOT '
+    'extract or return gender or any other demographic attribute.')
 
 
 def enrich_budget_for(tag_count):

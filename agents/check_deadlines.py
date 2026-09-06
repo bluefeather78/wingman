@@ -111,6 +111,7 @@ import urllib.request
 
 # Note: no apply_timing here — this script uses its own module-level throttle (set_min_delay
 # above), not gemini_common's, because check_one() is shared with server.py's interactive path.
+from wingman import agent_common
 from wingman.agent_common import add_agent_args, emit_preview, snapshot_stamp
 from wingman.gemini_common import extract_json
 # Costed with claude_common's rates, not gemini_common's: check_one() calls THIS module's
@@ -732,9 +733,15 @@ def _search_round(opp, api_key, focus, retry_on_silent, candidate_urls=None):
     notes, usage, sources, captured = "", {}, [], []
     attempts = 2 if retry_on_silent else 1
     for attempt in range(1, attempts + 1):
-        notes, usage, sources, captured = call_claude(
-            system, user_content, api_key, use_web_search=True, max_searches=MAX_SEARCHES,
-            return_captured=True, cache_system=True)
+        try:
+            notes, usage, sources, captured = call_claude(
+                system, user_content, api_key, use_web_search=True, max_searches=MAX_SEARCHES,
+                return_captured=True, cache_system=True)
+        except Exception as e:
+            # The docstring above has always claimed per-attempt banking; until Phase 3 `cost`
+            # was a local that died with the frame when the retry raised (audit 4.3). A
+            # web_search rung is the most expensive call in the pipeline to lose.
+            raise agent_common.bank_onto_exception(e, cost)
         cost += estimate_cost(usage)
         searches = (usage.get("server_tool_use") or {}).get("web_search_requests", 0)
         if searches or attempt == attempts:
@@ -813,8 +820,15 @@ def research_deadlines(opp, api_key, retry_on_silent=True, trusted_domains=None,
             # Rung 4 is deliberately OFF-site (trusted third-party listings); the own-site
             # sitemap candidates do not belong here.
             rung_candidates = None
-        notes, cost, searches, sources, attempts, captured = _search_round(
-            opp, api_key, focus, retry_on_silent, candidate_urls=rung_candidates)
+        try:
+            notes, cost, searches, sources, attempts, captured = _search_round(
+                opp, api_key, focus, retry_on_silent, candidate_urls=rung_candidates)
+        except Exception as e:
+            # Rungs 1-3 may already have run and been billed. Carry both this rung's banked
+            # cost and every earlier rung's out on the exception, so whichever caller catches
+            # it (main()'s loop, or the interactive endpoint's stale-fallback) can record the
+            # real spend rather than zero (audit 4.3).
+            raise agent_common.bank_onto_exception(e, total_cost + agent_common.banked_cost(e))
         total_cost += cost
         total_searches += searches
         total_attempts += attempts
@@ -1405,9 +1419,13 @@ def main():
                   + (f" [{row_unverified} unverified date(s)]" if row_unverified else ""))
         except urllib.error.HTTPError as e:
             errors += 1
+            # A web_search rung is the most expensive call in the pipeline; losing its cost
+            # because the retry timed out understated every run total (audit 4.3).
+            total_cost += agent_common.banked_cost(e)
             print(f"[ERROR] HTTP {e.code}")
         except Exception as e:
             errors += 1
+            total_cost += agent_common.banked_cost(e)
             print(f"[ERROR] {e}")
         # No explicit sleep here: this module's own call_claude() enforces --min-delay
         # between calls (see _enforce_rate_limit above). This comment previously claimed

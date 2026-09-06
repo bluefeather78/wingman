@@ -56,9 +56,13 @@ from wingman import page_text
 from wingman import url_dedupe
 from wingman import url_repair
 from wingman import url_validate
+from wingman import agent_common
 from wingman.agent_common import safe_console, snapshot_stamp
-from agents.scrape_opportunities import (build_row, next_id_generator, insert_rows, VALID_TYPES,
-                                  FLAG_BARE_DOMAIN, FLAG_LOW_VALUE, FLAG_OFFSITE, FLAG_NO_TYPE)
+# From the SHARED layer, not from the runnable agent: importing agents/scrape_opportunities.py
+# to borrow build_row dragged in its prompts, its argparse and its module state (CLAUDE.md's
+# agents/-runs vs wingman/-imports rule). Same functions, moved.
+from wingman.scrape_common import (build_row, next_id_generator, insert_rows, VALID_TYPES,
+                                   FLAG_BARE_DOMAIN, FLAG_LOW_VALUE, FLAG_OFFSITE, FLAG_NO_TYPE)
 from wingman import REPO_ROOT   # the repo root, defined once (see wingman/__init__.py)
 
 # At most this many grounding siblings are fetched while proving one name. The same cap
@@ -416,7 +420,13 @@ def harvest_names(hub_url, key, timeout=40, min_delay=5, cap=200):
             f"Return the JSON array of opportunity names now.")
     out, usage = call_gemini(_NAME_SYSTEM, user, key, use_web_search=False,
                              max_tokens=2000, timeout=timeout)
-    return parse_names(extract_json(out), cap=cap), text, estimate_cost(usage)
+    # Cost FIRST. This used to be one return expression, so extract_json ran before
+    # estimate_cost and a malformed answer discarded the bill along with the names (4.3).
+    cost = estimate_cost(usage)
+    try:
+        return parse_names(extract_json(out), cap=cap), text, cost
+    except Exception as e:
+        raise agent_common.bank_onto_exception(e, cost)
 
 
 FLAG_SELF_PROMOTED = ("resolved to the same site as the page that named it — may be that "
@@ -505,10 +515,9 @@ def main():
         print("[ERROR] Give --hubs or --hubs-file.")
         raise SystemExit(1)
 
-    from wingman.supabase_common import load_dotenv, supabase_get
-    load_dotenv()
-    supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    service_key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+    from wingman.supabase_common import require_service_key, supabase_get
+    # Service key REQUIRED: `existing` is the dedupe set and must include inactive rows (4.13).
+    supabase_url, service_key = require_service_key()
     gemini_key = os.environ.get("GEMINI_API_KEY")
     existing = supabase_get(supabase_url, "opportunities", {"select": "id,name,url"},
                             service_key) if supabase_url else []
@@ -548,7 +557,7 @@ def main():
     from wingman.supabase_common import supabase_insert_one, supabase_patch
     from agents import scrape_opportunities as so
     today = datetime.date.today().strftime("%Y%m%d")
-    mint = next_id_generator({r["id"] for r in (existing or [])})
+    mint = next_id_generator({r["id"] for r in (existing or [])}, supabase_url, service_key)
     run_row = supabase_insert_one(supabase_url, "agent_runs", {
         "agent": "name_harvester",
         "mode": "names" + ("-dryrun" if args.dry_run else ""),
@@ -677,4 +686,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # The catalog-insert lock (audit 4.2). This agent mints `ec<max+1>` ids from a
+    # snapshot taken at run start, so a second inserting agent running alongside it
+    # mints the SAME ids. Held here rather than inside main() so the one guard covers
+    # both a hand-run and the console subprocess. See wingman/run_lock.py.
+    from wingman.run_lock import guard_catalog_writes
+    guard_catalog_writes("name_harvester", main)

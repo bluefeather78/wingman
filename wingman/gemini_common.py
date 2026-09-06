@@ -161,6 +161,9 @@ from wingman import REPO_ROOT   # the repo root, defined once (see wingman/__ini
 #   2. the GEMINI_MIN_DELAY_SECS env var (how server.py passes a value into a subprocess
 #      without every script needing a new call signature)
 #   3. set_min_delay(), which the scripts' --min-delay flag calls
+# MARQUEE M6 (MARQUEE_DECISIONS.md): 5 seconds is a FLOOR, not a default. It is the fix for
+# this pipeline's repeated HTTP 429s against the shared googleSearch quota. --min-delay and
+# GEMINI_MIN_DELAY_SECS may RAISE it; nothing may lower the floor without approval.
 DEFAULT_MIN_DELAY_SECS = 5
 DEFAULT_TIMEOUT_SECS = 120
 

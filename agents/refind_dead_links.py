@@ -21,6 +21,7 @@ import datetime
 import os
 import urllib.parse
 
+from wingman import agent_common
 from wingman import url_dedupe
 from wingman import url_repair
 from wingman import url_validate
@@ -117,13 +118,10 @@ def main():
     ap.add_argument("--timeout", type=int, default=280)
     args = ap.parse_args()
 
-    from wingman.supabase_common import load_dotenv, supabase_get, supabase_patch, supabase_insert_one
-    load_dotenv()
-    supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    service_key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
-    if not supabase_url or not service_key:
-        print("[ERROR] SUPABASE_URL and a key must be set in .env.")
-        raise SystemExit(1)
+    from wingman.supabase_common import require_service_key, supabase_get, supabase_patch, supabase_insert_one
+    # Service key REQUIRED: the selection below is `is_active=eq.false` — the anon key returns
+    # nothing at all for it, so the job would silently do no work (4.13).
+    supabase_url, service_key = require_service_key()
 
     rows = supabase_get(supabase_url, "opportunities",
                         {"select": "id,name,org,url,quality_flags,moderation_reason,is_active",
@@ -145,13 +143,21 @@ def main():
         raise SystemExit(1)
 
     # PAID PATH — reached only on an explicit (approved) live run.
+    # research_seed and RESOLVE_SYSTEM are the scraper's own paid search path (M8 prompt,
+    # M9 call), so they stay in the agent. next_id_generator and build_row are shared.
     from agents import scrape_opportunities as so
+    from wingman import scrape_common as sc
     from wingman.gemini_common import set_min_delay
     set_min_delay(args.min_delay)
     today = datetime.date.today().strftime("%Y%m%d")
-    all_ids = {r["id"] for r in (supabase_get(supabase_url, "opportunities",
-                                              {"select": "id"}, service_key) or [])}
-    mint_id = so.next_id_generator(all_ids)
+    # The dedupe set is the WHOLE catalog, not just the inactive rows this agent selects from
+    # (audit 4.1). `rows` above is `is_active=eq.false`, so deduping against it never consulted
+    # a single live row: a URL re-found for a dead row that some OTHER row already sits at was
+    # inserted as a duplicate pending row, and the reviewer got two of the same program.
+    catalog = supabase_get(supabase_url, "opportunities",
+                           {"select": "id,name,url"}, service_key) or []
+    all_ids = {r["id"] for r in catalog}
+    mint_id = sc.next_id_generator(all_ids, supabase_url, service_key)
 
     class _A:  # minimal args shim for research_seed
         timeout = args.timeout
@@ -170,12 +176,15 @@ def main():
             new_url = best_refound_url(resolved, r.get("url") or "", name, org,
                                        url_validate.DEFAULT_TIMEOUT)
         except Exception as e:
+            # research_seed may already have paid for attempt 1 before the retry blew up
+            # (audit 4.3); without this the run's reported cost is short by that much.
+            cost += agent_common.banked_cost(e)
             print(f"  [WARN] {r['id']}: {str(e)[:120]}")
             new_url = None
         stamp = list(r.get("quality_flags") or []) + [f"{_REFIND_STAMP} {today}"]
         patch = {"quality_flags": stamp}
-        if new_url and not url_dedupe.find_duplicates(new_url, name, rows)[0]:
-            new_row = so.build_row({**r, "url": new_url}, next(mint_id),
+        if new_url and not url_dedupe.find_duplicates(new_url, name, catalog)[0]:
+            new_row = sc.build_row({**r, "url": new_url}, next(mint_id),
                                    f"refind-{today}", new_url, [])
             if new_row:
                 new_row["found_via"] = r.get("url")
@@ -189,4 +198,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # The catalog-insert lock (audit 4.2). This agent mints `ec<max+1>` ids from a
+    # snapshot taken at run start, so a second inserting agent running alongside it
+    # mints the SAME ids. Held here rather than inside main() so the one guard covers
+    # both a hand-run and the console subprocess. See wingman/run_lock.py.
+    from wingman.run_lock import guard_catalog_writes
+    guard_catalog_writes("dead_link_refinder", main)

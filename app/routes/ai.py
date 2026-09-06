@@ -34,7 +34,7 @@ from app.config import (
     AI_MAX_CONCURRENCY, AI_SHED_RETRY_AFTER_SECONDS,
 )
 from app.core import (
-    touch_user_activity, record_interactive_cost_async, log_conversation_async,
+    touch_user_activity, record_interactive_cost_async,
     record_api_error,
 )
 from app.deps import (json_response, json_error, subscription_block_reason, client_ip,
@@ -211,7 +211,6 @@ def _mock_response(system, user_content, userid):
     which the server now builds — so mock mode is unchanged by S1-1 and the app stays fully
     click-through-able with no API keys, exactly as CLAUDE.md requires."""
     text = generate_mock_text(system, user_content)
-    log_conversation_async(userid, "mock", system, user_content, text)
     return _envelope(text)
 
 
@@ -234,7 +233,6 @@ def _proxy_to_gemini(system, user_content, max_tokens, userid, cost_feature, all
     except Exception as e:
         _record_provider_failure("gemini", "/api/ai", 0, str(e))
         return _mark_logged(json_error(502, _PROVIDER_DEFAULT))
-    log_conversation_async(userid, "live", system, user_content, text)
     record_interactive_cost_async("interactive_gemini", usage, MESSAGES_MODEL,
                                   userid=userid, feature=cost_feature)
     return _envelope(text, allowance=allowance)
@@ -316,7 +314,6 @@ def _proxy_to_anthropic(feature, system, user_content, max_tokens, userid, cost_
             break
 
     text = _claude_text(data or {})
-    log_conversation_async(userid, "live", system, user_content, text)
     return _envelope(text, (data or {}).get("stop_reason"), allowance=allowance)
 
 

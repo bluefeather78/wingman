@@ -78,6 +78,7 @@ import time
 import urllib.error
 import urllib.parse
 
+from wingman import agent_common
 from wingman.agent_common import add_agent_args, apply_timing, emit_preview, snapshot_stamp
 from wingman.gemini_common import call_gemini, extract_json, estimate_cost
 from wingman import url_validate
@@ -231,9 +232,14 @@ def research_reviews(opp, api_key):
         # max_tokens 1200 and thinking_level "low" (call_gemini's default) are load-bearing:
         # at 700, gemini-3.6-flash's thinking tokens alone consumed ~673 and starved the
         # visible output. See wingman/gemini_common.py's FOURTH finding.
-        notes, usage, extra = call_gemini(system, user_content, api_key, use_web_search=True,
-                                          max_tokens=1200, max_searches=MAX_SEARCHES,
-                                          return_grounding=True)
+        try:
+            notes, usage, extra = call_gemini(system, user_content, api_key,
+                                              use_web_search=True, max_tokens=1200,
+                                              max_searches=MAX_SEARCHES, return_grounding=True)
+        except Exception as e:
+            # The docstring above has always claimed per-attempt banking; until Phase 3 the
+            # accumulator was a local that died with the frame when attempt 2 raised (4.3).
+            raise agent_common.bank_onto_exception(e, cost)
         cost += estimate_cost(usage)
         tool_use = usage.get("server_tool_use") or {}
         searches = tool_use.get("web_search_requests", 0)
@@ -260,7 +266,11 @@ def extract_review(notes, retrieved_urls, api_key):
                     f"Return the JSON object now.")
     text, usage = call_gemini(EXTRACT_SYSTEM, user_content, api_key, use_web_search=False,
                               max_tokens=1200)
-    return extract_json(text) or {}, estimate_cost(usage)
+    cost = estimate_cost(usage)   # before the parse — a bad answer must not erase the bill
+    try:
+        return extract_json(text) or {}, cost
+    except Exception as e:
+        raise agent_common.bank_onto_exception(e, cost)
 
 
 def check_one(opp, api_key):
@@ -425,9 +435,13 @@ def main():
                   + (" [changed]" if changed else ""))
         except urllib.error.HTTPError as e:
             errors += 1
+            # Recover money the failed check had already spent — see agent_common.banked_cost
+            # (audit 4.3). Without this the run total is low by exactly the failures' cost.
+            total_cost += agent_common.banked_cost(e)
             print(f"[ERROR] HTTP {e.code}")
         except Exception as e:
             errors += 1
+            total_cost += agent_common.banked_cost(e)
             print(f"[ERROR] {e}")
         # Rate limiting is now enforced at the API level in gemini_common.call_gemini()
         # (minimum 5 seconds between calls per Gemini's documented rate limit policy),

@@ -61,7 +61,8 @@ def main():
 
     # userid + password_hash only. There is no reason for this script to hold anybody's
     # email, name or app data in memory (S1-15's rule, applied here too).
-    rows = supabase_get(url, "users", {"select": "userid,password_hash"}, key) or []
+    rows = supabase_get(url, "users", {"select": "userid,password_hash"}, key,
+                        order_by="userid") or []
     legacy = [r for r in rows if is_legacy_hash(r.get("password_hash"))]
     if args.limit:
         legacy = legacy[:args.limit]

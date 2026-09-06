@@ -1836,8 +1836,12 @@ def _existing_opportunity_urls():
     urls = set()
     offset, page_size = 0, 1000
     while True:
+        # order: unordered offset pagination is not stable in Postgres — a row updated
+        # mid-scan can be returned twice or SKIPPED, and a skipped row here means a snapshot
+        # commit re-inserts a program that is already in the catalog (audit 4.14).
         page = _supabase_request("opportunities", params={
-            "select": "url", "limit": str(page_size), "offset": str(offset)}) or []
+            "select": "url", "order": "id",
+            "limit": str(page_size), "offset": str(offset)}) or []
         urls.update(dryrun_common.normalize_url(r.get("url")) for r in page if r.get("url"))
         if len(page) < page_size:
             break
@@ -1845,7 +1849,7 @@ def _existing_opportunity_urls():
     return urls
 
 
-def commit_dryrun_snapshot(file_name, dry=False):
+def commit_dryrun_snapshot(file_name, dry=False, allow_stale=False):
     """Apply a snapshot's pending writes. Free — no API call happens anywhere in here.
 
     A real commit is logged to agent_runs with a `-commit` mode suffix and cost_usd 0. That
@@ -1856,7 +1860,8 @@ def commit_dryrun_snapshot(file_name, dry=False):
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
     result = dryrun_common.commit_snapshot(
-        file_name, _commit_patch, _commit_insert, _existing_opportunity_urls, dry=dry)
+        file_name, _commit_patch, _commit_insert, _existing_opportunity_urls, dry=dry,
+        allow_stale=allow_stale)
     if dry or not result.get("ok") or not result.get("applied"):
         return result
 
@@ -3527,6 +3532,25 @@ def mark_agent_idle(agent_name):
 def is_agent_running(agent_name):
     with _agent_runs_lock:
         return _agent_runs.get(agent_name, {}).get("status") == "running"
+
+
+# The scripts that INSERT into `opportunities` and therefore contend for the catalog-insert
+# run lock (audit 4.2). Only `scraper` is a console card; the other three are hand-run, which
+# is exactly why the lock lives in the agents rather than only here — the console can refuse
+# what it launches itself, it cannot refuse what somebody types in another terminal.
+CATALOG_INSERT_SCRIPTS = ("agents/scrape_opportunities.py", "agents/mine_hub_pages.py",
+                          "agents/harvest_names.py", "agents/refind_dead_links.py")
+
+
+def catalog_lock_holder():
+    """Who currently holds the catalog-insert lock, or None.
+
+    Read-only and never raises — a status probe must not be the thing that stops a run. The
+    agent re-checks and takes the lock itself, so a race between this and the subprocess ends
+    in a clean [REFUSED] from the agent rather than a collision.
+    """
+    from wingman import run_lock
+    return run_lock.current_holder(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 
 def running_gemini_search_agent(exclude=None):

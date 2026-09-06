@@ -77,7 +77,8 @@ def test_load_policy_missing_creds_is_pending_everything():
 
 
 def test_load_policy_maps_rows(monkeypatch):
-    monkeypatch.setattr(ag, "supabase_get", lambda url, table, params, key: [
+    # **kw so the fake keeps mirroring supabase_get, which now takes order_by (audit 4.14).
+    monkeypatch.setattr(ag, "supabase_get", lambda url, table, params, key, **kw: [
         {"domain": "lumiere-education.com", "status": "trusted"},
         {"domain": "BAD.com", "status": "blocked"},
         {"domain": "ignored.com", "status": "weird-status"},  # invalid status -> dropped
@@ -105,7 +106,7 @@ def test_get_policy_caches(monkeypatch):
     ag.invalidate_policy_cache()
     calls = {"n": 0}
 
-    def counting(url, table, params, key):
+    def counting(url, table, params, key, **kw):
         calls["n"] += 1
         return [{"domain": "a.com", "status": "trusted"}]
 

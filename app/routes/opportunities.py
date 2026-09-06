@@ -23,6 +23,8 @@ from app.services import action_items as action_items_service
 from app.services import deadlines
 from app.services import budget
 from app.services.lanes import PaidLane
+# banked_cost recovers money a failed paid call already spent (audit 4.3).
+from wingman import agent_common
 # Imported, never re-declared: user_costs.model must name the model that was actually
 # billed. The Sonnet/Haiku drift this repo already paid for came from exactly that — a pin
 # copied into a second file and left behind when the first one moved.
@@ -307,9 +309,19 @@ def handle_deadline_check(opp_id: str, request: Request,
         print(f"[WARN] Deadline check failed for {opp_id}: {e}")
         record_api_error("GET", "/api/opportunities/{id}/deadline", 0,
                          "deadline_degraded", f"deadline check degraded to cached: {e}")
+        # Money the failed check had ALREADY spent (audit 4.3). check_one climbs up to four
+        # paid rungs and retries a silent one; a timeout on a later rung used to discard every
+        # earlier rung's cost, so this path recorded nothing at all in deadline_check_log and
+        # nothing against the user's daily budget. That is the exact shape that lets a user
+        # spend past their allowance: the failures were free as far as the ledger knew.
+        spent = agent_common.banked_cost(e)
         payload = deadlines.cached_deadline_payload(opp, "stale-fallback")
-        deadlines.log_deadline_check(opp_id, "stale-fallback", opp.get("status"), None, None,
-                                     opp.get("was_estimated"), f"Error: {str(e)[:100]}")
+        deadlines.log_deadline_check(opp_id, "stale-fallback", opp.get("status"), None,
+                                     spent or None, opp.get("was_estimated"),
+                                     f"Error: {str(e)[:100]}")
+        if spent:
+            record_user_cost_async(deadline_userid, "deadline_check", "deadline_check",
+                                   cost=spent, searches=0, model=DEADLINE_CHECK_MODEL)
         return json_response(200, payload)
     finally:
         # Released on the degrade path as well as the success one. The except above returns a

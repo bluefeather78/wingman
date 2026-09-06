@@ -134,7 +134,7 @@ def load_aggregator_policy(supabase_url, service_key):
         return AggregatorPolicy(present=False, error="Supabase not configured")
     try:
         rows = supabase_get(supabase_url.rstrip("/"), TABLE,
-                            {"select": "domain,status"}, service_key)
+                            {"select": "domain,status"}, service_key, order_by="domain")
     except urllib.error.HTTPError as e:
         body = ""
         try:

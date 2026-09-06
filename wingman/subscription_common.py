@@ -283,7 +283,7 @@ def load_promo_codes(force=False):
                             "description,is_active,expires_at,max_redemptions,"
                             "redemption_count"),
                  "is_active": "eq.true"},
-                key)
+                key, order_by="code")   # promo_codes is keyed on `code`, not `id` (4.14)
             codes = {str(r.get("code") or "").upper(): _promo_row_to_definition(r)
                      for r in (rows or []) if r.get("code")}
         except Exception as e:                                     # noqa: BLE001

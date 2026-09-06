@@ -152,6 +152,8 @@ We cannot see whether you completed the organization's confirmation step, and we
 
 Wingman may use cookies, analytics tools, and similar technologies to understand how users interact with the Service, maintain functionality, improve performance, and diagnose problems.
 
+These technologies may include session-replay and heatmap tools, which record interactions such as page views, clicks, scrolling, and navigation so we can see how the Service is used and identify problems. These tools are configured to mask the content you type into fields.
+
 The specific analytics and technology providers used by Wingman may change over time.
 
 We will update this Privacy Policy as necessary when our material data practices change.

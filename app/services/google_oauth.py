@@ -57,6 +57,13 @@ def _take_google_token(token):
     URL (browser history, a referrer header) can't be reused to resolve a session twice."""
     return handoff_store.take(KIND_SESSION, token)
 
+
+def _peek_google_token(token):
+    """Read the sign-in token WITHOUT consuming it. The resolve step (handle_google_session)
+    uses this so a PENDING signup's token survives for the consent POST (handle_google_finish),
+    which is what actually spends it. See handoff_store.peek."""
+    return handoff_store.peek(KIND_SESSION, token)
+
 # ---------- Calendar handoff nonces (S1-3, finding M3) ----------
 #
 # /api/auth/google/calendar/start is a top-level browser navigation, so it cannot carry an

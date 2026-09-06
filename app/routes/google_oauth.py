@@ -368,7 +368,12 @@ def handle_google_session(body: dict = Depends(json_body)):
     calendar flow. There is no GET form left; keeping one would keep the leak.
     """
     token = body.get("token") or ""
-    entry = g._take_google_token(token)
+    # PEEK, don't consume: a brand-new signup mints ONE token that BOTH this resolve step and
+    # the later /finish consent POST must read. Consuming here left finish with nothing and
+    # stranded every new Google account at "this sign-in link has expired" on a token minted
+    # seconds earlier. A pending token is spent by /finish; a login token (existing/linked
+    # account) has no second step, so it is consumed below — single-use preserved either way.
+    entry = g._peek_google_token(token)
     if not entry:
         return json_error(400, "This sign-in link has expired. Please try "
                                "signing in with Google again.")
@@ -380,6 +385,11 @@ def handle_google_session(body: dict = Depends(json_body)):
             "lastName": entry["last_name"],
             "email": entry["email"],
         })
+    # Existing/linked account: no consent step follows, so spend the token now. Consuming
+    # (not the peek above) is what keeps this login single-use against a replayed URL.
+    if not g._take_google_token(token):
+        return json_error(400, "This sign-in link has expired. Please try "
+                               "signing in with Google again.")
     try:
         record = get_user_account(entry["userid"])
     except Exception as e:

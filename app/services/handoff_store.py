@@ -189,7 +189,50 @@ def take(kind, token):
     # "until somebody tidies up".
     if _expired(row.get("expires_at")):
         return None
-    payload = row.get("payload")
+    return _decode_payload(row.get("payload"))
+
+
+def peek(kind, token):
+    """The payload under (kind, token) WITHOUT consuming it. None if unknown or expired.
+
+    Unlike take(), this leaves the nonce spendable. It exists for the Google sign-in resolve
+    step: a brand-new signup mints ONE token, and both the resolve (/session) and the consent
+    POST (/finish) must read it. If resolve consumed it, finish would find nothing and strand
+    every new account at "this sign-in link has expired" on a token minted seconds ago — while
+    finish still consumes it, so single-use is preserved (spent exactly once, at finish).
+    """
+    if not token:
+        return None
+    token_hash = _hash(token)
+    if not _db_on():
+        with _memory_lock:
+            entry = _memory.get((kind, token_hash))
+        if not entry or entry["expires_at"] < time.time():
+            return None
+        return dict(entry["payload"])
+    try:
+        rows = _supabase_request_strict(
+            TABLE, "GET",
+            params={"kind": f"eq.{kind}", "token_hash": f"eq.{token_hash}",
+                    "select": "payload,expires_at", "limit": "1"}) or []
+    except urllib.error.HTTPError as e:
+        if _missing_table_error(e):
+            _fall_back(f"HTTP {e.code}")
+            return peek(kind, token)
+        print(f"[WARN] auth_handoffs peek failed: {e}")
+        return None
+    except Exception as e:
+        print(f"[WARN] auth_handoffs peek failed: {e}")
+        return None
+    if not rows:
+        return None
+    row = rows[0]
+    if _expired(row.get("expires_at")):
+        return None
+    return _decode_payload(row.get("payload"))
+
+
+def _decode_payload(payload):
     if isinstance(payload, str):                 # PostgREST returns jsonb decoded; belt and braces
         try:
             payload = json.loads(payload)

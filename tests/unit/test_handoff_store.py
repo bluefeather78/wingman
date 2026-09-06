@@ -68,6 +68,11 @@ class _FakeDB:
                    params["token_hash"].split("eq.", 1)[-1])
             row = self.rows.pop(key, None)
             return [row] if row else []
+        if method == "GET":                                  # peek: read without removing
+            key = (params["kind"].split("eq.", 1)[-1],
+                   params["token_hash"].split("eq.", 1)[-1])
+            row = self.rows.get(key)
+            return [row] if row else []
         return []
 
 
@@ -116,6 +121,45 @@ def test_kinds_do_not_collide(backend, request):
     hs.put("login_redirect", "s", {"app_redirect": "wingman://"}, 60)
     assert hs.take("calendar_state", "s") == {"userid": "alice"}
     assert hs.take("login_redirect", "s") == {"app_redirect": "wingman://"}
+
+
+# ---------- peek: read without consuming (the Google new-signup resolve step) ----------
+
+@pytest.mark.parametrize("backend", ["memory", "db"])
+def test_peek_reads_without_consuming(backend, request):
+    """A brand-new Google signup mints ONE token that both /session (peek) and /finish (take)
+    must read. If peek consumed it, finish would find nothing and strand every new account at
+    'this sign-in link has expired' on a token minted seconds earlier."""
+    request.getfixturevalue(backend)
+    hs.put("google_session", "tok", {"kind": "pending", "email": "a@b.com"}, 60)
+    assert hs.peek("google_session", "tok") == {"kind": "pending", "email": "a@b.com"}
+    assert hs.peek("google_session", "tok") == {"kind": "pending", "email": "a@b.com"}
+    # ...and it is still spendable exactly once afterwards.
+    assert hs.take("google_session", "tok") == {"kind": "pending", "email": "a@b.com"}
+    assert hs.take("google_session", "tok") is None
+
+
+@pytest.mark.parametrize("backend", ["memory", "db"])
+def test_peek_refuses_unknown_empty_and_expired(backend, request):
+    request.getfixturevalue(backend)
+    assert hs.peek("google_session", "never-minted") is None
+    assert hs.peek("google_session", "") is None
+    assert hs.peek("google_session", None) is None
+    hs.put("google_session", "tok", {"kind": "pending"}, 60)
+    if backend == "memory":
+        hs._memory[("google_session", hs._hash("tok"))]["expires_at"] = time.time() - 1
+    else:
+        list(request.getfixturevalue("db").rows.values())[0]["expires_at"] = \
+            "2020-01-01T00:00:00+00:00"
+    assert hs.peek("google_session", "tok") is None
+
+
+def test_peek_does_not_mutate_the_stored_payload(memory):
+    """peek returns a copy, so a caller mutating the dict cannot corrupt the stored nonce."""
+    hs.put("google_session", "tok", {"kind": "pending", "email": "a@b.com"}, 60)
+    got = hs.peek("google_session", "tok")
+    got["email"] = "tampered"
+    assert hs.peek("google_session", "tok")["email"] == "a@b.com"
 
 
 def test_two_concurrent_spenders_and_only_one_wins(db):

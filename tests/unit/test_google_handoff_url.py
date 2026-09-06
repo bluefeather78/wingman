@@ -80,7 +80,13 @@ def test_session_is_a_post_with_the_token_in_the_body():
     assert "query_params" not in inspect.getsource(gr.handle_google_session)
 
 
-def test_a_valid_token_resolves_and_is_consumed(monkeypatch):
+def test_a_pending_token_resolves_and_survives_for_finish(monkeypatch):
+    """The new-signup flow mints ONE token that /session (resolve) and /finish (consent POST)
+    BOTH read. /session must NOT consume a pending token, or /finish finds nothing and every
+    new Google account dead-ends at 'this sign-in link has expired' — the bug this pins.
+
+    Single-use is not lost: it moves to /finish, which is what actually creates the account.
+    Re-resolving the same pending info (the user's own name/email) is harmless."""
     monkeypatch.setattr(hs, "SUPABASE_URL", "")   # pin the in-process backend
     hs._reset_for_tests()
     token = g._mint_google_token({"kind": "pending", "google_id": "gid",
@@ -88,8 +94,16 @@ def test_a_valid_token_resolves_and_is_consumed(monkeypatch):
     resp = gr.handle_google_session(body={"token": token})
     assert resp.status_code == 200
     assert json.loads(resp.body)["pending"] is True
-    # Single-use: a replayed URL out of history must not resolve twice.
-    assert gr.handle_google_session(body={"token": token}).status_code == 400
+    # Resolving again still works — /session peeks a pending token rather than spending it.
+    assert gr.handle_google_session(body={"token": token}).status_code == 200
+
+    # /finish reaches the token (a consent 400, NOT the expired 400) and consumes it.
+    r1 = gr.handle_google_finish(request=None, body={"token": token})
+    assert r1.status_code == 400
+    assert "expired" not in json.loads(r1.body)["error"].lower()
+    # Now it is spent: a replayed finish gets the expired message.
+    r2 = gr.handle_google_finish(request=None, body={"token": token})
+    assert "expired" in json.loads(r2.body)["error"].lower()
 
 
 def test_a_missing_or_unknown_token_is_refused(monkeypatch):

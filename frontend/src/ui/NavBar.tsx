@@ -29,16 +29,15 @@ function isActive(pathname: string, tabPath: string): boolean {
   return pathname === leaf || pathname.endsWith(leaf);
 }
 
-// updateSubscriptionUI()'s status line, ported.
-function subscriptionLabel(sub: { status?: string; days_left?: number } | undefined): string | null {
-  if (!sub?.status) return null;
-  const days = sub.days_left ?? 0;
-  if (sub.status === 'trial') return `Trial: ${days} days left`;
-  if (sub.status === 'beta') return `Beta access: ${days} day${days === 1 ? '' : 's'} left`;
-  if (sub.status === 'active') return 'Active: $9.99/month';
-  if (sub.status === 'canceled') return 'Canceled';
-  if (sub.status === 'past_due') return 'Payment failed';
-  return null;
+// The tier line (two-tier model): the trial is gone, so this labels the AI tier rather than a
+// countdown. Paid/comped is "Wingman Unlimited"; everything else is the metered "Free plan".
+function subscriptionLabel(
+  sub: { status?: string; in_paid_period?: boolean; ai_tier?: string } | undefined,
+): string | null {
+  if (!sub) return null;
+  const paid = sub.ai_tier === 'paid' || sub.in_paid_period === true;
+  if (paid) return sub.status === 'active' ? 'Wingman Unlimited' : 'Unlimited access';
+  return 'Free plan';
 }
 
 // `locked` = this account's trial/subscription has ended ((app)/_layout's paywall). The

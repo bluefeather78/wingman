@@ -866,6 +866,18 @@ tr.disabled-seed { opacity: .48; }
 
     <div class="card">
       <div class="card-head">
+        <h2>AI tiers</h2>
+        <div class="spacer"></div>
+        <div class="hint">Free vs Paid, and how close Free users are to the daily AI allowance.
+          Instrumentation only &mdash; nothing is enforced yet.</div>
+      </div>
+      <div class="card-body">
+        <div id="tiersBody"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
         <h2>Where accounts get to</h2>
         <div class="spacer"></div>
         <div class="hint" id="metricPanelHint"></div>
@@ -1763,7 +1775,7 @@ const S = {
   seeds: [], seedMode: 'national', seedSort: 'cost_per_approved', seedReady: false,
   queryRuns: null,
   userCosts: null, userCostSort: 'cost_usd', expandedUsers: new Set(), view: 'metrics',
-  metrics: null, metricPanel: 'funnel', metricSort: 'stage', expandedStage: null,
+  metrics: null, metricPanel: 'funnel', metricSort: 'stage', expandedStage: null, expandedTier: null,
   lastRefresh: null, seedYield: null, userPanel: 'provider',
   snapshots: [], pending: [], pendingSource: '', pendingClass: '', selectedPending: new Set(),
   linkQueue: [], selectedLinks: new Set(), linkSchemaReady: true,
@@ -3679,6 +3691,7 @@ function renderMetrics() {
     </div>`).join('');
 
   renderMetricChart();
+  renderTiers();
   renderFunnel();
   renderRetention();
   renderSubscriptions();
@@ -3800,6 +3813,105 @@ function renderFunnel() {
 function toggleStage(key) {
   S.expandedStage = S.expandedStage === key ? null : key;
   renderFunnel();
+}
+
+/* Fixed per tier, never positional — paid=accent, free=neutral. Same rule as STATUS_COLORS:
+   a positional palette would swap the two the moment one tier overtakes the other. */
+const TIER_COLORS = { paid: 'var(--accent)', free: 'var(--text-3)' };
+
+function renderTiers() {
+  const d = S.metrics;
+  const el = $('tiersBody');
+  const t = d && d.tiers;
+  if (!t) { el.innerHTML = '<div class="empty">Unavailable.</div>'; return; }
+  const map = metricUserMap();
+  const roster = ids => (ids || []).length
+    ? (ids || []).map(id => {
+        const u = map[id];
+        return `<span class="pill" style="margin:2px 4px 2px 0">${esc(userLabel(u))}${
+          u ? ` · ${esc(u.status)}` : ''}</span>`;
+      }).join('')
+    : '<span class="hint">No accounts here.</span>';
+
+  const total = (t.paid + t.free) || 1;
+  const cap = t.cap_hits || {};
+  const usage = t.usage || {};
+  const tiles = [
+    { key: 'paid', label: 'Paid (Unlimited)', value: `${t.paid}/${total}`,
+      sub: 'no daily AI cap', color: TIER_COLORS.paid, ids: t.paid_userids },
+    { key: 'free', label: 'Free (metered)', value: `${t.free}/${total}`,
+      sub: `${t.allowance} ${t.unit}/day · ${t.first_day_allowance} on day one`,
+      color: TIER_COLORS.free, ids: t.free_userids },
+    { key: 'cap', label: 'Hit the cap', value: cap.ready ? num(cap.count) : '—',
+      sub: cap.ready ? (cap.day ? `on ${cap.day}` : 'nobody yet')
+                     : `run ${esc(d.setup_sql.activity)}`,
+      color: 'var(--warn)', ids: cap.userids, muted: !cap.ready },
+  ];
+  const tilesHtml = tiles.map(k => {
+    const expandable = (k.ids || []).length > 0;
+    const open = S.expandedTier === k.key;
+    return `<div class="kpi" style="border-left:3px solid ${k.color};cursor:${
+        expandable ? 'pointer' : 'default'}"${
+        expandable ? ` onclick="toggleTier('${k.key}')"` : ''}>
+        <div class="label">${esc(k.label)}</div>
+        <div class="value"${k.muted ? ' style="color:var(--warn)"' : ''}>${k.value}</div>
+        <div class="delta">${esc(k.sub)}</div>
+      </div>`;
+  }).join('');
+
+  // The tuning readout: the anchor allowance next to what Free users actually use, so setting
+  // the number is a data decision (§12). Percentiles are over Free accounts that used AI on
+  // the latest spend day — a roster of zeros would drag the median to 0 and hide the heavy users.
+  let tuning;
+  if (!d.costs_ready) {
+    tuning = `<div class="hint">Per-user cost data unavailable — run the cost setup to measure usage.</div>`;
+  } else if (!usage.latest_day) {
+    tuning = `<div class="hint">No billed AI requests recorded in the window yet.</div>`;
+  } else {
+    tuning = `<div class="hint" style="line-height:1.6">
+        Allowance <strong>${t.allowance} ${esc(t.unit)}/day</strong>. Free users active on
+        ${esc(usage.latest_day)}: median <strong>${usage.median_requests ?? '—'}</strong>,
+        p90 <strong>${usage.p90_requests ?? '—'}</strong> ${esc(t.unit)}
+        (${usage.active_free} of ${t.free} free accounts used AI).
+        Set the cap near the median so typical use rarely hits it.</div>`;
+  }
+
+  // Allowance-usage histogram: how close Free users are to the cap on the latest spend day.
+  const buckets = usage.histogram || [];
+  const maxB = Math.max(1, ...buckets.map(b => b.count));
+  const histHtml = usage.latest_day ? `<div style="margin-top:14px">
+      ${buckets.map(b => {
+        const expandable = (b.userids || []).length > 0;
+        const open = S.expandedTier === 'b:' + b.label;
+        return `<div class="frow" style="cursor:${expandable ? 'pointer' : 'default'}"${
+            expandable ? ` onclick="toggleTier('b:${esc(b.label)}')"` : ''}>
+            <div class="fname" style="min-width:70px">${esc(b.label)}</div>
+            <div class="ftrack"><div class="ffill" style="width:${
+              (100 * b.count / maxB).toFixed(1)}%;background:${TIER_COLORS.free}"></div></div>
+            <div class="fcount">${b.count}</div>
+          </div>`;
+      }).join('')}
+      <div class="hint" style="margin-top:8px">Free accounts by share of the daily allowance used
+        on ${esc(usage.latest_day)}. Click a row to name them.</div>
+    </div>` : '';
+
+  // The roster for whatever tile or bucket is open.
+  let detailIds = null;
+  if (S.expandedTier === 'paid') detailIds = t.paid_userids;
+  else if (S.expandedTier === 'free') detailIds = t.free_userids;
+  else if (S.expandedTier === 'cap') detailIds = cap.userids;
+  else if ((S.expandedTier || '').startsWith('b:')) {
+    const b = buckets.find(x => 'b:' + x.label === S.expandedTier);
+    detailIds = b ? b.userids : null;
+  }
+  const detail = detailIds ? `<div class="fdetail" style="margin-top:12px">${roster(detailIds)}</div>` : '';
+
+  el.innerHTML = `<div class="kpis">${tilesHtml}</div>${tuning}${histHtml}${detail}`;
+}
+
+function toggleTier(key) {
+  S.expandedTier = S.expandedTier === key ? null : key;
+  renderTiers();
 }
 
 function renderRetention() {

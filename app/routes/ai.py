@@ -38,7 +38,7 @@ from app.core import (
     record_api_error,
 )
 from app.deps import (json_response, json_error, subscription_block_reason, client_ip,
-                      capped_raw_body, _ERROR_LOGGED_HEADER)
+                      capped_raw_body, allowance_error, _ERROR_LOGGED_HEADER)
 from app.auth import get_optional_user, AuthedUser
 from app.auth.ratelimit import ai_ip_limiter, ai_user_limiter
 from app.services.ai import generate_mock_text
@@ -185,16 +185,24 @@ def _record_provider_failure(provider, path, status, detail):
     record_api_error("POST", path, status or 502, kind, message=msg)
 
 
-def _envelope(text, stop_reason=None):
+def _envelope(text, stop_reason=None, allowance=None):
     """The response shape both providers and the mock branch answer in.
 
-    Unchanged from the old proxies on purpose: `content[0].text` plus `stop_reason` is what
-    cleanAiText() and the profile-synthesis retry already read, so moving the prompts
-    server-side did not also move the wire format.
+    `content[0].text` plus `stop_reason` is unchanged on purpose — cleanAiText() and the
+    profile-synthesis retry read it, so moving the prompts server-side did not move the wire
+    format. `meta.allowance` is ADDITIVE (TWO_TIER_AI_PLAN.md §4.2): a Free-tier meter snapshot
+    so the client counter ticks without a second request. Old clients ignore it; the
+    mock/circuit paths pass None (nothing was metered).
     """
     body = {"content": [{"type": "text", "text": text}]}
     if stop_reason:
         body["stop_reason"] = stop_reason
+    if allowance is not None:
+        body["meta"] = {"allowance": {
+            "tier": allowance.get("tier"), "unlimited": allowance.get("unlimited"),
+            "used": allowance.get("used"), "limit": allowance.get("limit"),
+            "remaining": allowance.get("remaining"), "reset_at": allowance.get("reset_at"),
+        }}
     return json_response(200, body)
 
 
@@ -206,7 +214,7 @@ def _mock_response(system, user_content, userid):
     return _envelope(text)
 
 
-def _proxy_to_gemini(system, user_content, max_tokens, userid, cost_feature):
+def _proxy_to_gemini(system, user_content, max_tokens, userid, cost_feature, allowance=None):
     try:
         text, usage = call_gemini(
             system, user_content, GEMINI_API_KEY,
@@ -227,7 +235,7 @@ def _proxy_to_gemini(system, user_content, max_tokens, userid, cost_feature):
         return _mark_logged(json_error(502, _PROVIDER_DEFAULT))
     record_interactive_cost_async("interactive_gemini", usage, MESSAGES_MODEL,
                                   userid=userid, feature=cost_feature)
-    return _envelope(text)
+    return _envelope(text, allowance=allowance)
 
 
 def _anthropic_call(system, user_content, max_tokens):
@@ -266,7 +274,8 @@ def _claude_text(data):
                       if b.get("type") == "text")
 
 
-def _proxy_to_anthropic(feature, system, user_content, max_tokens, userid, cost_feature):
+def _proxy_to_anthropic(feature, system, user_content, max_tokens, userid, cost_feature,
+                        allowance=None):
     """The Claude branch, including the profile-synthesis retry.
 
     The retry used to live in the CLIENT (call at 4000, call again at 8000 if the answer
@@ -305,7 +314,7 @@ def _proxy_to_anthropic(feature, system, user_content, max_tokens, userid, cost_
             break
 
     text = _claude_text(data or {})
-    return _envelope(text, (data or {}).get("stop_reason"))
+    return _envelope(text, (data or {}).get("stop_reason"), allowance=allowance)
 
 
 # MARQUEE M9: this is the auth gate in front of the two paid AI proxies. See S0-1 in
@@ -365,16 +374,26 @@ def _rate_limit_error(ip, userid):
 #
 # The circuit does NOT relax the 401: the key is still configured, so a signed-out caller is
 # still refused. Degrading is a spend decision, not an access decision.
-def _live_branch(userid, key_configured):
-    """(use_live_provider, error_response). error_response non-None means refuse outright."""
+# MARQUEE M11: the Free-tier daily AI allowance is enforced here, in front of the paid
+# provider call. ai_allowance_state resolves the tier + the action/dollar limits; a Free user
+# who is `over` is refused with a structured 429, and a successful call echoes the meter so the
+# client counter ticks. Paid users are unlimited. Enforcement of the ACTION cap is behind
+# FREE_TIER_AI_GATE_ENFORCED (observe mode until then); the dollar backstop and circuit breaker
+# always apply. See MARQUEE_DECISIONS.md M11 and app/services/budget.py.
+def _live_branch(userid, key_configured, cost_feature=None):
+    """(use_live_provider, error_response, allowance).
+
+    error_response non-None means refuse outright. `allowance` is the meter snapshot to echo on
+    a successful live call (None on the mock / circuit-open paths, where nothing was metered).
+    """
     if not key_configured:
-        return False, None
+        return False, None, None
     if budget.circuit_open():
-        return False, None
-    over = budget.over_user_budget(userid)
-    if over:
-        return False, json_error(429, over)
-    return True, None
+        return False, None, None
+    allowance = budget.ai_allowance_state(userid, feature=cost_feature)
+    if allowance["over"]:
+        return False, allowance_error(allowance), allowance
+    return True, None, allowance
 
 
 def _serve_ai(request, raw_body, user):
@@ -438,18 +457,21 @@ def _serve_ai(request, raw_body, user):
         print(f"[WARN] Could not build feature {name!r}: {type(e).__name__}")
         return json_error(400, "That request could not be built.")
 
-    live, refused = _live_branch(userid, key_configured)
+    cost_feature = feature.cost_feature or name
+    live, refused, allowance = _live_branch(userid, key_configured, cost_feature)
     if refused:
+        # A Free user has hit their daily allowance — record the cap-hit for the console's
+        # tier metrics (§3.3). Only fires here, where `over` first blocks a call.
+        touch_user_activity(userid, "ai_limit_hit")
         return refused
 
-    cost_feature = feature.cost_feature or name
     touch_user_activity(userid, "ai_claude" if feature.provider == "claude" else "ai_gemini")
     if not live:
         return _mock_response(system, user_content, userid)
     if feature.provider == "claude":
         return _proxy_to_anthropic(feature, system, user_content, max_tokens, userid,
-                                   cost_feature)
-    return _proxy_to_gemini(system, user_content, max_tokens, userid, cost_feature)
+                                   cost_feature, allowance)
+    return _proxy_to_gemini(system, user_content, max_tokens, userid, cost_feature, allowance)
 
 
 # MARQUEE M9: the async shell that bounds the paid lane (Phase 2 item 2, finding M5).

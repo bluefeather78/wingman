@@ -6,6 +6,7 @@ import { clearSession, clearTokens, loadSession, loadTokens, saveSession, saveTo
 import type {
   AiResponse,
   AiResult,
+  AllowanceSnapshot,
   GoogleFinishInput,
   GoogleSessionResult,
   LoginResponse,
@@ -66,6 +67,18 @@ const _userChangedListeners = new Set<(u: SessionUser | null) => void>();
 
 function notifyUserChanged(): void {
   for (const listener of _userChangedListeners) listener(_currentUser);
+}
+
+// The Free-tier daily AI allowance snapshot (two-tier model). Fired on a 429 (cap hit) and on
+// a successful /api/ai call's meta.allowance, so the client meter ticks without a reload — the
+// same broadcast pattern as notifyUserChanged. AuthContext turns it into React state.
+const _allowanceListeners = new Set<(a: AllowanceSnapshot) => void>();
+let _lastAllowance: AllowanceSnapshot | null = null;
+
+function notifyAllowance(a: AllowanceSnapshot | null | undefined): void {
+  if (!a || typeof a !== 'object') return;
+  _lastAllowance = a;
+  for (const listener of _allowanceListeners) listener(a);
 }
 
 // The subscription gate answers 402 from every route that IS the app (app/deps.py's
@@ -248,6 +261,17 @@ export class HttpError extends Error {
   }
 }
 
+// Parse an error body that may ALSO carry a two-tier allowance snapshot (a 429 cap hit). Read
+// once — a Response body can only be consumed a single time — and hand back both pieces.
+async function errorBody(res: Response): Promise<{ error?: string; allowance?: AllowanceSnapshot }> {
+  try {
+    const body = (await res.json()) as { error?: string; allowance?: AllowanceSnapshot };
+    return { error: body?.error, allowance: body?.allowance };
+  } catch {
+    return {};
+  }
+}
+
 // Parse the server's `{"error": "..."}` body (Phase 2 error shape) for a useful message.
 async function errorMessage(res: Response): Promise<string> {
   try {
@@ -389,7 +413,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // here once: flip the cached identity to has_access:false (which routes the user to the
   // paywall) and still throw, so the caller's own error path is unchanged.
   if (res.status === 402) markSubscriptionBlocked();
-  if (!res.ok) throw new HttpError(res.status, await errorMessage(res));
+  if (!res.ok) {
+    // A 429 from the two-tier gate carries an `allowance` block — broadcast it so the meter
+    // reflects the cap being hit — then still throw so the caller's error path is unchanged.
+    // Every other error (and a 429 from the rate limiter, which carries no allowance) just
+    // throws with its message.
+    const { error, allowance } = await errorBody(res);
+    notifyAllowance(allowance);
+    throw new HttpError(res.status, error ?? `API error ${res.status}`);
+  }
   return (await res.json()) as T;
 }
 
@@ -579,6 +611,12 @@ export const httpClient: ApiClient = {
     return () => _userChangedListeners.delete(listener);
   },
 
+  onAllowanceChanged(listener: (a: AllowanceSnapshot) => void): () => void {
+    _allowanceListeners.add(listener);
+    if (_lastAllowance) listener(_lastAllowance); // seed with the latest known snapshot
+    return () => _allowanceListeners.delete(listener);
+  },
+
   async saveLocation(location: string): Promise<void> {
     await request<{ ok: boolean }>('/api/account/location', {
       method: 'POST',
@@ -648,6 +686,8 @@ export const httpClient: ApiClient = {
       void saveSession(_currentUser);
       notifyUserChanged();
     }
+    // The status response seeds the allowance meter (used/limit/remaining) without a live AI call.
+    notifyAllowance((state as { allowance?: AllowanceSnapshot })?.allowance);
     return state;
   },
   async validatePromo(code: string): Promise<{ valid?: boolean; kind?: string; description?: string; error?: string }> {
@@ -762,6 +802,8 @@ export const httpClient: ApiClient = {
       method: 'POST',
       body: JSON.stringify({ feature, inputs }),
     });
+    // A successful call echoes the Free-tier meter so the client counter ticks down live.
+    notifyAllowance(data.meta?.allowance);
     // Mock mode returns no stop_reason; a missing one reads as a clean finish.
     return { text: cleanAiText(data), truncated: data.stop_reason === 'max_tokens' };
   },

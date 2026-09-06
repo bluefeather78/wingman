@@ -144,11 +144,12 @@ def test_every_users_write_goes_through_the_invalidating_choke_point():
 
 # ---------- the gate uses it ----------
 
-def test_the_subscription_gate_reads_through_the_cache():
+def test_the_subscription_gate_reads_no_account_at_all():
+    # Two-tier model: there is no app-access lockout, so subscription_block_reason short-
+    # circuits to None and reads NEITHER the wide account nor the narrow subscription. The
+    # important invariant that survives is that it must never fall back onto the wide read.
     import inspect
     src = inspect.getsource(deps.subscription_block_reason)
-    # Strip comments: the code explains WHY it is not get_user_account, and naming it in prose
-    # must not read as calling it.
     code = "\n".join(l.split("#")[0] for l in src.splitlines())
-    assert "get_user_subscription(" in code
     assert "get_user_account(" not in code, "the gate is back on the wide read"
+    assert "get_user_subscription(" not in code, "the gate no longer reads the subscription"

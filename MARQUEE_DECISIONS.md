@@ -172,6 +172,36 @@ updated in the same change to replicate it**, so the scorecard never drifts from
   *"don't change this."* Editing the harness to track a real production change is not just allowed,
   it is required; letting it fall behind is the violation.
 
+### M11 — Every paid AI call routes through the daily-allowance counter
+*Ratified 2026-09-05 by Shama.*
+
+The two-tier model (`docs/plans/TWO_TIER_AI_PLAN.md`) gives every Free account a **daily AI
+allowance** (metered in user *actions*). That cap only holds if **every** code path that makes a
+paid provider call is counted against it — a new AI-backed feature wired straight to a provider
+is a silent hole through which a Free user gets unmetered paid calls and the cap under-counts.
+This is the request-count sibling of **M9**: M9 guards *that a call is paid*; M11 guards *that a
+paid call is counted and gated*.
+
+- **The seam is the cost seam.** Every paid call already routes its cost through
+  `app.core.record_user_cost` (the AI proxies via `record_interactive_cost`, the deadline check
+  and action items directly). `record_user_cost` calls `budget.note_action`, and the gate reads
+  `budget.ai_allowance_state` before the call. So "counted against the allowance" reduces to
+  "costed", which M9 already requires. **A call that reaches a provider without reaching
+  `record_user_cost` is both an M9 and an M11 violation.**
+- **What this governs:** adding or moving any provider call; adding a new AI-backed route or
+  feature (it must gate on `ai_allowance_state` and be costed through `record_user_cost` with a
+  `cost_feature`); changing the `ACTION_CLASSES` map, the collapse window, the per-user allowance
+  numbers, or the `FREE_TIER_AI_GATE_ENFORCED` flag; changing which tier is unlimited.
+- **Protected sites** (each carries a `# MARQUEE M11:` sentinel): `app/services/budget.py`
+  (`ai_allowance_state`, `note_action`, `ACTION_CLASSES`), `app/core.py` `record_user_cost` (the
+  counting seam), `app/routes/ai.py` `_live_branch`, `app/routes/opportunities.py` (deadline +
+  action items), `app/routes/resume.py`. `app/config.py` holds the tunable numbers
+  (`FREE_TIER_DAILY_AI_ACTIONS`, `FIRST_DAY_AI_ACTIONS`, `FREE_TIER_ACTION_WINDOW_SECONDS`,
+  `FREE_TIER_AI_GATE_ENFORCED`).
+- **Not gated:** reading the allowance for display (the console meter, the client snapshot) is
+  read-only and free. Shipping with `FREE_TIER_AI_GATE_ENFORCED` off (observe mode) is the
+  intended first state, not a change to this entry.
+
 ---
 
 ## Proposed — awaiting Shama's ratification

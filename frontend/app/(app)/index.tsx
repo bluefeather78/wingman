@@ -41,6 +41,8 @@ import {
   type TaskStatus,
 } from '@/ui/components';
 import { colors, fonts, radius, space } from '@/ui/theme';
+import { isPaidTier, resetsInLabel } from '@/lib/tier';
+import type { AllowanceSnapshot } from '@/api/types';
 
 interface StoredProfile {
   synthesized?: string;
@@ -104,12 +106,53 @@ function TaskRow({ ai, onPress, onDelete }: {
   );
 }
 
+// The Free-tier upsell banner (two-tier model). Shown to every Free account; a value pitch,
+// not a nag — it names the specific AI things the daily allowance touches. Dismissible for
+// this visit (expo-router remounts the screen on the next visit, so it returns then). Hidden
+// entirely for Paid. Routes to Manage Plan, where the Upgrade button surfaces whatever the
+// (currently unconfigured) Stripe backend answers — so the CTA is "gated" until Stripe is live.
+function FreeUpsellBanner({ allowance, onUpgrade }: {
+  allowance: AllowanceSnapshot | null;
+  onUpgrade: () => void;
+}) {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+  const limit = typeof allowance?.limit === 'number' ? allowance.limit : null;
+  const remaining = typeof allowance?.remaining === 'number' ? allowance.remaining : null;
+  const low = remaining !== null && limit !== null && remaining <= Math.ceil(limit * 0.2);
+  return (
+    <View style={styles.upsell}>
+      <Pressable onPress={() => setDismissed(true)} style={styles.upsellClose} hitSlop={10}>
+        <Txt style={styles.upsellCloseTxt}>×</Txt>
+      </Pressable>
+      <View style={styles.upsellBody}>
+        <View style={{ flex: 1, minWidth: 220 }}>
+          <Txt style={styles.upsellTitle}>You&rsquo;re on the Free plan</Txt>
+          <Txt style={styles.upsellSub}>
+            {limit !== null
+              ? `${limit} AI actions a day — profile chats, match-finding, deadline checks.`
+              : 'Profile chats, match-finding and deadline checks are powered by AI.'}
+            {'  '}Wingman Unlimited removes the daily cap. $9.99/mo.
+          </Txt>
+          {remaining !== null && limit !== null ? (
+            <Txt style={[styles.upsellMeter, low && { color: colors.orange }]}>
+              {remaining} of {limit} AI actions left today · resets {resetsInLabel(allowance)}
+            </Txt>
+          ) : null}
+        </View>
+        <PopButton label="Go Unlimited" variant="primary" small onPress={onUpgrade}
+          style={styles.upsellBtn} />
+      </View>
+    </View>
+  );
+}
+
 // Home Base — ported from the live app's #page-home: welcome banner + DUE SOON badge,
 // profile teaser card, "What You're Chasing" (segmented progress + legend + CTA), and
 // "Your Next Moves" (task pills + task progress + the full tracked list).
 export default function Home() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, allowance } = useAuth();
   // Seed from whatever the client already has. This screen is remounted by expo-router on
   // every visit, so without it a tab switch back to Home Base showed a full-screen spinner
   // for a round trip it had already paid for once. The fetch below still runs and still
@@ -228,6 +271,11 @@ export default function Home() {
 
   return (
     <Screen>
+      {/* Free-tier upsell (hidden for Paid) */}
+      {!isPaidTier(user) ? (
+        <FreeUpsellBanner allowance={allowance} onUpgrade={() => router.push('/(app)/subscription')} />
+      ) : null}
+
       {/* Welcome banner */}
       <SoftCard style={styles.banner} hoverTint>
         <View style={styles.bannerLeft}>
@@ -510,6 +558,14 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
+  upsell: { backgroundColor: colors.navy, borderRadius: radius.lg, paddingVertical: space.lg, paddingHorizontal: space.lg, marginBottom: space.lg, position: 'relative' },
+  upsellBody: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md, flexWrap: 'wrap' },
+  upsellTitle: { fontFamily: fonts.bodyXBold, fontSize: 15, color: colors.cream },
+  upsellSub: { fontFamily: fonts.bodyMed, fontSize: 12.5, color: colors.cream, opacity: 0.85, marginTop: 3, lineHeight: 17 },
+  upsellMeter: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.mint, marginTop: 6 },
+  upsellBtn: { alignSelf: 'center' },
+  upsellClose: { position: 'absolute', top: 6, right: 10, zIndex: 2, padding: 4 },
+  upsellCloseTxt: { fontFamily: fonts.bodyBold, fontSize: 20, color: colors.cream, opacity: 0.7, lineHeight: 22 },
   banner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.lg, paddingVertical: space.xl, flexWrap: 'wrap' },
   bannerLeft: { flexDirection: 'row', alignItems: 'center', gap: space.md, flex: 1, flexWrap: 'wrap' },
   greeting: { color: colors.navy },

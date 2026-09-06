@@ -67,7 +67,8 @@ def test_the_two_call_sites_share_one_constant():
 
 
 def test_a_real_sign_in_still_succeeds(monkeypatch):
-    monkeypatch.setattr(account, "ensure_trial_started", lambda _k, r: r)
+    # ensure_trial_started was removed with the trial (two-tier model); login no longer
+    # touches the subscription on the way through.
     monkeypatch.setattr(account, "touch_user_activity", lambda *a: None)
     monkeypatch.setattr(account, "login_response", lambda r: {"ok": True})
     resp = _login("alice", monkeypatch,

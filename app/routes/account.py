@@ -9,7 +9,7 @@ from fastapi import APIRouter, Request, Depends
 from app.config import EMAIL_RE
 from app.core import (
     get_user_account, get_user_by_email, create_user, MissingUserColumns, DuplicateEmail,
-    _check_signup_consent, ensure_trial_started, touch_user_activity,
+    _check_signup_consent, touch_user_activity,
     update_password_hash, normalize_email, pseudonym,
 )
 from app.deps import (json_body, json_response, json_error, client_ip, login_response,
@@ -177,7 +177,6 @@ def handle_login(request: Request, body: dict = Depends(json_body)):
             print(f"[WARN] Could not upgrade password hash for user "
                   f"{pseudonym(key)}: {e}")
 
-    record = ensure_trial_started(key, record)
     touch_user_activity(key, "login")
     try:
         return json_response(200, login_response(record))

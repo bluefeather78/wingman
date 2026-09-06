@@ -537,16 +537,16 @@ export default function Profile() {
       {isSufficient ? (
         <LinearGradient colors={[colors.bannerFrom, colors.bannerTo]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.ctaBanner}>
           <View style={styles.flex1}>
-            <Text style={styles.ctaTitle}>Your story is ready to work for you.</Text>
-            <Text style={styles.ctaSub}>Head to Fresh Finds to see opportunities matched to what you just told us.</Text>
+            <Text style={styles.ctaTitle}>Your story's ready.</Text>
+            <Text style={styles.ctaSub}>See your matches in Fresh Finds.</Text>
           </View>
           <PopButton label="Find your matches" variant="primaryDeep" textStyle={styles.ctaBtnText} style={[styles.ctaBtn, dimStyle]} shadowColor={colors.ink} onPress={aiGuard(() => router.push('/(app)/finder'))} />
         </LinearGradient>
       ) : (
         <LinearGradient colors={[colors.bannerFrom, colors.bannerTo]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.ctaBanner}>
           <View style={styles.flex1}>
-            <Text style={styles.ctaTitle}>I don't have enough yet to match opportunities</Text>
-            <Text style={styles.ctaSub}>Help me help you by building your profile.</Text>
+            <Text style={styles.ctaTitle}>Not enough to match yet</Text>
+            <Text style={styles.ctaSub}>Build your profile to get matches.</Text>
           </View>
           <View style={styles.ctaBtnCol}>
             <PopButton label="Deepen your story" variant="primaryDeep" textStyle={styles.ctaBtnText} style={[styles.ctaBtn, dimStyle]} shadowColor={colors.ink} onPress={aiGuard(openDrawer)} />

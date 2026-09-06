@@ -1446,8 +1446,8 @@ export default function Finder() {
       {/* Deepen story banner */}
       <LinearGradient colors={[colors.bannerFrom, colors.bannerTo]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.deepenBanner}>
         <View style={styles.flex1}>
-          <Text style={styles.deepenTitle}>Want more matches like these?</Text>
-          <Text style={styles.deepenSub}>Deepen your story by adding more details.</Text>
+          <Text style={styles.deepenTitle}>Want more matches?</Text>
+          <Text style={styles.deepenSub}>Add more to your profile.</Text>
         </View>
         <View style={styles.deepenRight}>
           <Pressable style={[styles.deepenBtn, dimStyle]} onPress={aiGuard(() => router.push('/(app)/profile'))}>

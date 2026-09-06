@@ -119,8 +119,7 @@ function FreePanel({ onUpgrade }: { onUpgrade: () => void }) {
         <View style={{ flex: 1, minWidth: 220 }}>
           <Txt style={styles.freeTitle}>You&rsquo;re on the Free plan</Txt>
           <Txt style={styles.freeSub}>
-            Profile chats, match-finding and deadline checks are powered by AI.{'  '}
-            Wingman Unlimited removes the daily cap. $9.99/mo.
+            Wingman Unlimited lifts the daily AI cap — $9.99/mo.
           </Txt>
         </View>
         <PopButton label="Go Unlimited" variant="primary" small onPress={onUpgrade} style={styles.freeBtn} />

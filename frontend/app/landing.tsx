@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { backendUrl } from '@/api/httpClient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Logo, PopButton, PopCard, SoftCard, usePopInteraction } from '@/ui/components';
@@ -13,6 +13,15 @@ import { colors, fonts, LANDING_MAX_WIDTH, navShadow, popShadow, radius, space }
 // eagerly embed, so it only mounts once someone actually asks to see it (web: inline iframe;
 // native: hands off to the system browser, since there's no in-app webview dependency here).
 const WALKTHROUGH_URL = backendUrl('/walkthrough.html');
+
+// The secondary header links — shown inline on desktop, and behind the hamburger on mobile.
+const NAV_LINKS = [
+  { label: 'Pricing', path: '/pricing.html' },
+  { label: 'How we use AI', path: '/how-we-use-ai.html' },
+  { label: 'About', path: '/about.html' },
+  { label: 'Terms', path: '/terms.html' },
+  { label: 'Privacy', path: '/privacy.html' },
+];
 
 // The film's own player persists its playhead in localStorage under
 // 'animstage-v3:t', and this composition is authored to play exactly once
@@ -136,6 +145,7 @@ export default function Landing() {
   // static-page links and keep only Sign In, mirroring the app NavBar's compact mode.
   const { width } = useWindowDimensions();
   const compactNav = width < 768;
+  const [menuOpen, setMenuOpen] = useState(false);
   // 0 = poster showing. >0 = iframe mounted, keyed by this value so every play click forces
   // a fresh mount (fresh <iframe>) even if it was already playing. The remount alone does
   // NOT rewind — see clearWalkthroughPlayhead above for what actually gets it back to 0:00.
@@ -198,32 +208,48 @@ export default function Landing() {
               </View>
             </View>
             <View style={styles.navRow}>
-              {!compactNav && (
-                <>
-                  <Pressable onPress={() => Linking.openURL(backendUrl('/pricing.html'))}>
-                    <Text style={styles.navLink}>Pricing</Text>
-                  </Pressable>
-                  <Pressable onPress={() => Linking.openURL(backendUrl('/how-we-use-ai.html'))}>
-                    <Text style={styles.navLink}>How we use AI</Text>
-                  </Pressable>
-                  <Pressable onPress={() => Linking.openURL(backendUrl('/about.html'))}>
-                    <Text style={styles.navLink}>About</Text>
-                  </Pressable>
-                  <Pressable onPress={() => Linking.openURL(backendUrl('/terms.html'))}>
-                    <Text style={styles.navLink}>Terms</Text>
-                  </Pressable>
-                  <Pressable onPress={() => Linking.openURL(backendUrl('/privacy.html'))}>
-                    <Text style={styles.navLink}>Privacy</Text>
-                  </Pressable>
-                </>
-              )}
+              {!compactNav && NAV_LINKS.map((l) => (
+                <Pressable key={l.path} onPress={() => Linking.openURL(backendUrl(l.path))}>
+                  <Text style={styles.navLink}>{l.label}</Text>
+                </Pressable>
+              ))}
               <Pressable style={styles.signIn} onPress={() => router.push('/login')}>
                 <PersonIcon size={16} color={colors.white} />
                 <Text style={styles.signInText}>Sign In</Text>
               </Pressable>
+              {/* Mobile: the secondary links collapse behind a hamburger next to Sign In. */}
+              {compactNav && (
+                <Pressable
+                  style={styles.hamburger}
+                  onPress={() => setMenuOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open menu"
+                >
+                  <View style={styles.hbBar} />
+                  <View style={styles.hbBar} />
+                  <View style={styles.hbBar} />
+                </Pressable>
+              )}
             </View>
           </View>
         </View>
+
+        {/* Mobile nav menu (opened by the hamburger) — a small sheet under the header. */}
+        <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
+          <Pressable style={styles.menuScrim} onPress={() => setMenuOpen(false)}>
+            <View style={styles.menuSheet}>
+              {NAV_LINKS.map((l) => (
+                <Pressable
+                  key={l.path}
+                  style={styles.menuItem}
+                  onPress={() => { setMenuOpen(false); Linking.openURL(backendUrl(l.path)); }}
+                >
+                  <Text style={styles.menuItemText}>{l.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </Pressable>
+        </Modal>
 
         {/* Hero */}
         <View style={[styles.section, styles.hero]}>
@@ -415,6 +441,24 @@ const styles = StyleSheet.create({
   navLink: { fontFamily: fonts.bodyBold, fontSize: 13, color: colors.navLinkDim },
   signIn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: 8 },
   signInText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.white, opacity: 0.9 },
+  // Mobile hamburger + the sheet it opens.
+  hamburger: { paddingVertical: 8, paddingHorizontal: 8, gap: 4, justifyContent: 'center' },
+  hbBar: { width: 20, height: 2, borderRadius: 1, backgroundColor: colors.white },
+  menuScrim: { flex: 1, backgroundColor: 'rgba(15,23,42,0.35)', paddingTop: 84, paddingHorizontal: 16, alignItems: 'flex-end' },
+  menuSheet: {
+    backgroundColor: colors.white,
+    borderWidth: 2,
+    borderColor: colors.navy,
+    borderRadius: radius.lg,
+    paddingVertical: 6,
+    minWidth: 190,
+    shadowColor: colors.slate900,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 24,
+  },
+  menuItem: { paddingVertical: 11, paddingHorizontal: 16 },
+  menuItemText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.navy },
 
   hero: { alignItems: 'center', paddingTop: 80, paddingBottom: 64 },
   heroBadge: { backgroundColor: colors.yellow300, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 4 },

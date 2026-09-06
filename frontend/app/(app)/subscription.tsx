@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
 import { PopButton, Screen, SoftCard, usePopInteraction } from '@/ui/components';
@@ -38,6 +38,10 @@ export default function Subscription() {
   const [promo, setPromo] = useState('');
   const [promoStatus, setPromoStatus] = useState('');
   const [upgradeStatus, setUpgradeStatus] = useState('');
+  // Cancel flow — an overlay confirmation tile (mockup), not an inline action.
+  const [showCancel, setShowCancel] = useState(false);
+  const [canceling, setCanceling] = useState(false);
+  const [cancelStatus, setCancelStatus] = useState('');
   const promoBtnPop = usePopInteraction(3, colors.navy, 1);
 
   useEffect(() => {
@@ -88,6 +92,22 @@ export default function Subscription() {
     }
   }
 
+  async function cancelSubscription() {
+    setCanceling(true);
+    setCancelStatus('');
+    try {
+      await httpClient.subscriptionCancel();
+      setShowCancel(false);
+      httpClient.subscriptionStatus().then((s) => setSub(s as SubState)).catch(() => {});
+    } catch (e) {
+      // Stripe may be unconfigured (no subscription to cancel) — surface the backend's answer
+      // inside the tile rather than closing it on a silent failure.
+      setCancelStatus((e as Error).message || 'Could not cancel right now. Please try again.');
+    } finally {
+      setCanceling(false);
+    }
+  }
+
   async function upgrade() {
     setUpgradeStatus('Starting checkout…');
     try {
@@ -105,6 +125,7 @@ export default function Subscription() {
   }
 
   return (
+    <>
     <Screen>
       <SoftCard style={styles.card}>
         <View style={styles.headWrap}>
@@ -130,12 +151,26 @@ export default function Subscription() {
             </View>
           </View>
           {paid ? (
-            <View style={[styles.countdown, styles.activeInfo]}>
-              <Text style={[styles.countdownTitle, { color: '#065F46' }]}>✓ No daily AI cap</Text>
-              <Text style={[styles.countdownSub, { color: '#047857' }]}>
-                {status === 'active' ? `Renews ${renewsDate}` : 'Unlimited AI actions while your access lasts'}
-              </Text>
-            </View>
+            <>
+              <View style={[styles.countdown, styles.activeInfo]}>
+                <Text style={[styles.countdownTitle, { color: '#065F46' }]}>No daily AI cap</Text>
+                <Text style={[styles.countdownSub, { color: '#047857' }]}>
+                  {status === 'canceled'
+                    ? `Access ends ${renewsDate}`
+                    : status === 'active'
+                    ? `Renews ${renewsDate}`
+                    : 'Unlimited AI actions while your access lasts'}
+                </Text>
+              </View>
+              {/* Cancel is only offered on a live paying subscription. A comped/beta grant has
+                  nothing to cancel (it lapses on its own), and a canceled-but-still-in-period
+                  account has already cancelled. */}
+              {status === 'active' && (
+                <Pressable style={styles.cancelLinkWrap} onPress={() => { setCancelStatus(''); setShowCancel(true); }}>
+                  <Text style={styles.cancelLink}>Cancel subscription</Text>
+                </Pressable>
+              )}
+            </>
           ) : (
             <View style={styles.meterBox}>
               <Text style={styles.meterTitle}>
@@ -165,7 +200,7 @@ export default function Subscription() {
               <View style={styles.flex1}>
                 <Text style={styles.planRowName}>Free</Text>
                 <Text style={styles.planRowPrice}>$0</Text>
-                <Text style={styles.planRowNote}>{limit !== null ? `${limit} AI actions/day` : 'A daily AI allowance'}</Text>
+                <Text style={styles.planRowNote}>Available at no charge, for as long as you use Wingman</Text>
               </View>
               {!paid && (
                 <View style={[styles.badge, { backgroundColor: '#DEF5B0' }]}>
@@ -176,7 +211,7 @@ export default function Subscription() {
             <View style={{ gap: 4, marginTop: 8 }}>
               <Text style={styles.featureLine}>✓ Full opportunity catalog &amp; search</Text>
               <Text style={styles.featureLine}>✓ Quest Log tracking &amp; calendar sync</Text>
-              <Text style={styles.featureLine}>✓ A daily allowance of AI actions</Text>
+              <Text style={styles.featureLine}>✓ {limit ?? 10} AI actions a day, profile chats, match-finding, deadline checks</Text>
             </View>
             <View style={styles.planDivider} />
             <View style={styles.planRow}>
@@ -185,7 +220,7 @@ export default function Subscription() {
                 <Text style={styles.planRowPrice}>
                   $9.99<Text style={styles.planRowPer}>/month</Text>
                 </Text>
-                <Text style={styles.planRowNote}>No daily AI cap</Text>
+                <Text style={styles.planRowNote}>Billed monthly in advance. Cancel any time — you'll keep access through the end of the current period.</Text>
               </View>
               {paid ? (
                 <View style={[styles.badge, { backgroundColor: '#D1FAE5' }]}>
@@ -236,6 +271,29 @@ export default function Subscription() {
         </View>
       </SoftCard>
     </Screen>
+
+    {/* Cancel confirmation — an overlay tile (mockup: "What clicking Cancel subscription shows"). */}
+    <Modal visible={showCancel} transparent animationType="fade" onRequestClose={() => !canceling && setShowCancel(false)}>
+      <Pressable style={styles.modalScrim} onPress={() => !canceling && setShowCancel(false)}>
+        <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+          <Text style={styles.modalTitle}>Cancel Wingman Unlimited?</Text>
+          <Text style={styles.modalBody}>
+            You'll keep unlimited AI actions through the end of your current period
+            {sub?.subscription_end_at ? `, ${renewsDate}` : ''}. After that, your account returns to the Free plan and its daily AI allowance.
+          </Text>
+          {!!cancelStatus && <Text style={styles.cancelStatus}>{cancelStatus}</Text>}
+          <View style={styles.modalActions}>
+            <Pressable style={styles.modalDanger} onPress={cancelSubscription} disabled={canceling}>
+              <Text style={styles.modalDangerText}>{canceling ? 'Canceling…' : 'Yes, cancel subscription'}</Text>
+            </Pressable>
+            <Pressable style={styles.modalKeep} onPress={() => !canceling && setShowCancel(false)} disabled={canceling}>
+              <Text style={styles.modalKeepText}>Never mind, keep my plan</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+    </>
   );
 }
 
@@ -289,4 +347,30 @@ const styles = StyleSheet.create({
   promoBtnText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.white },
   promoStatus: { fontFamily: fonts.bodyMed, fontSize: 12, color: '#4338CA' },
   billingLine: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: colors.slate500 },
+
+  cancelLinkWrap: { alignSelf: 'flex-start' },
+  cancelLink: { fontFamily: fonts.bodyBold, fontSize: 13, color: '#DC2626', textDecorationLine: 'underline' },
+
+  // Cancel overlay tile.
+  modalScrim: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', alignItems: 'center', justifyContent: 'center', padding: 16 },
+  modalCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.lg,
+    width: '100%',
+    maxWidth: 420,
+    padding: 28,
+    gap: 16,
+    shadowColor: colors.slate900,
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.25,
+    shadowRadius: 50,
+  },
+  modalTitle: { fontFamily: fonts.display, fontSize: 20, color: colors.slate900 },
+  modalBody: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: colors.slate500 },
+  cancelStatus: { fontFamily: fonts.bodyBold, fontSize: 13, color: '#DC2626' },
+  modalActions: { gap: 10, marginTop: 4 },
+  modalDanger: { borderRadius: radius.pill, paddingVertical: 12, paddingHorizontal: 20, backgroundColor: '#DC2626', alignItems: 'center' },
+  modalDangerText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.white },
+  modalKeep: { borderRadius: radius.pill, paddingVertical: 12, paddingHorizontal: 20, backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, alignItems: 'center' },
+  modalKeepText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.slate900 },
 });

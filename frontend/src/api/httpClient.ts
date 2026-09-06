@@ -709,6 +709,9 @@ export const httpClient: ApiClient = {
     });
     return data.checkout_url ?? null;
   },
+  async subscriptionCancel(): Promise<{ ok?: boolean; message?: string; subscription_end_at?: string | null }> {
+    return request('/api/subscription/cancel', { method: 'POST', body: JSON.stringify({}) });
+  },
 
   // --- Stable since Phase 1 (soft/public; bearer attached if present, for attribution) ---
   async getOpportunities(): Promise<Opportunity[]> {

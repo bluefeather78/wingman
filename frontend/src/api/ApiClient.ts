@@ -161,6 +161,9 @@ export interface ApiClient {
   redeemPromo(code: string): Promise<Record<string, unknown>>;
   // Returns the Stripe checkout URL, or throws when payments aren't configured.
   subscriptionCheckout(promoCode: string): Promise<string | null>;
+  // Cancel at period end. Returns the backend's confirmation (or throws — e.g. when there is
+  // no active Stripe subscription to cancel).
+  subscriptionCancel(): Promise<{ ok?: boolean; message?: string; subscription_end_at?: string | null }>;
 
   // --- Behavioral event capture (P-A) ---
   // Fire-and-forget: record that the student did something. Batched per tick and POSTed to

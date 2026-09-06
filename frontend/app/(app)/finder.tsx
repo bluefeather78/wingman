@@ -29,6 +29,7 @@ import {
 import { extractJSON } from '@/lib/extractJSON';
 import { inferSubjects, preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
 import { markNewlyAdded } from '@/lib/newlyAdded';
+import { suggestStates } from '@/lib/usStates';
 import { buildMetaPills } from '@/lib/opportunityPills';
 import { awaitProfileWrites } from '@/lib/profileWrites';
 import {
@@ -1209,7 +1210,7 @@ export default function Finder() {
                 students in a specific city, district, or state. We won’t ask again.
               </Text>
               <View style={{ maxWidth: 360, marginTop: 8, alignSelf: 'stretch' }}>
-                <SoftInput
+                <StateAutocomplete
                   value={locationInput}
                   onChangeText={setLocationInput}
                   placeholder="e.g. Seattle, WA"
@@ -1403,7 +1404,7 @@ export default function Finder() {
             </View>
             <View style={styles.flex1}>
               <Text style={styles.fieldLabelMuted}>HOME STATE (OPTIONAL)</Text>
-              <SoftInput value={homeState} onChangeText={setHomeState} placeholder="e.g. Washington" />
+              <StateAutocomplete value={homeState} onChangeText={setHomeState} placeholder="e.g. Washington" />
             </View>
           </View>
 
@@ -1882,6 +1883,44 @@ function SoftInput({ value, onChangeText, placeholder }: { value: string; onChan
       placeholderTextColor={colors.muted}
       style={styles.softInput}
     />
+  );
+}
+// A SoftInput that suggests US states as the student types. The field stays free text (so
+// "Seattle, WA" is still valid on the location question), but a dropdown offers the 50 states
+// matching what they've typed; picking one fills in the full state name, replacing just the
+// last comma-separated chunk so any city prefix is kept.
+function StateAutocomplete({ value, onChangeText, placeholder }: { value: string; onChangeText: (t: string) => void; placeholder?: string }) {
+  const [focused, setFocused] = useState(false);
+  const suggestions = useMemo(() => (focused ? suggestStates(value) : []), [focused, value]);
+  function pick(state: string) {
+    const head = value.split(',').slice(0, -1).join(',');
+    onChangeText(head ? `${head.trimEnd()}, ${state}` : state);
+    setFocused(false);
+  }
+  return (
+    <View style={{ zIndex: 60 }}>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        onFocus={() => setFocused(true)}
+        // Delay the blur so a tap on a suggestion lands before the panel unmounts.
+        onBlur={() => setTimeout(() => setFocused(false), 120)}
+        placeholder={placeholder}
+        placeholderTextColor={colors.muted}
+        autoCapitalize="words"
+        autoCorrect={false}
+        style={styles.softInput}
+      />
+      {suggestions.length > 0 && (
+        <View style={[styles.facetPanel, styles.facetPanelLeft, { width: '100%' }]}>
+          {suggestions.map((state) => (
+            <Pressable key={state} style={styles.facetRow} onPress={() => pick(state)}>
+              <Text style={styles.facetRowText}>{state}</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
+    </View>
   );
 }
 function SoftSelect({ value, options, onChange }: { value: string; options: string[]; onChange: (v: string) => void }) {

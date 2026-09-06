@@ -1,8 +1,8 @@
 import { useRouter } from 'expo-router';
 import { useState, type ReactNode } from 'react';
-import { Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { backendUrl } from '@/api/httpClient';
+import { openBackendPage } from '@/ui/openPage';
 import { useAuth } from '@/auth/AuthContext';
 import { beginGoogleSignIn } from '@/auth/googleSignIn';
 import { Field, Logo, PopButton, Txt } from '@/ui/components';
@@ -144,9 +144,9 @@ export default function Login() {
                     label={
                       <>
                         I have read and agree to the{' '}
-                        <Text style={styles.legalLink} onPress={() => Linking.openURL(backendUrl('/terms.html'))}>Terms of Use</Text>
+                        <Text style={styles.legalLink} onPress={() => openBackendPage('/terms.html')}>Terms of Use</Text>
                         {' '}and the{' '}
-                        <Text style={styles.legalLink} onPress={() => Linking.openURL(backendUrl('/privacy.html'))}>Privacy Policy</Text>.
+                        <Text style={styles.legalLink} onPress={() => openBackendPage('/privacy.html')}>Privacy Policy</Text>.
                       </>
                     }
                   />

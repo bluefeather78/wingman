@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View, type GestureResponderEvent } from 'react-native';
-import { backendUrl } from '@/api/httpClient';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View, type GestureResponderEvent } from 'react-native';
+import { openBackendPage } from '@/ui/openPage';
 import { useAuth } from '@/auth/AuthContext';
 import { googleHandoffFromUrl } from '@/auth/googleSignIn';
 import { PopButton, PopCard, Screen, Txt } from '@/ui/components';
@@ -122,7 +122,7 @@ export default function GoogleAuth() {
   const openLink = (path: string) => (e: GestureResponderEvent) => {
     // Don't let the tap also toggle the row this link sits inside.
     e.stopPropagation();
-    Linking.openURL(backendUrl(path));
+    openBackendPage(path);
   };
 
   return (

@@ -2,7 +2,7 @@ import { usePathname, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { backendUrl } from '@/api/httpClient';
+import { openBackendPage } from './openPage';
 import { useAuth } from '@/auth/AuthContext';
 import { Logo, RightDrawer, usePopInteraction } from './components';
 import { CalendarIcon, HomeIcon, PersonIcon, SearchIcon, SettingsIcon } from './icons';
@@ -190,8 +190,8 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
                 <Text style={styles.boxTitle}>Legal</Text>
                 <Text style={styles.boxDesc}>The documents you agreed to when you signed up.</Text>
                 <View style={styles.btnRow}>
-                  <SmallBtn label="Terms of Use" onPress={() => Linking.openURL(backendUrl('/terms.html'))} />
-                  <SmallBtn label="Privacy Policy" onPress={() => Linking.openURL(backendUrl('/privacy.html'))} />
+                  <SmallBtn label="Terms of Use" onPress={() => openBackendPage('/terms.html')} />
+                  <SmallBtn label="Privacy Policy" onPress={() => openBackendPage('/privacy.html')} />
                 </View>
               </View>
 
@@ -212,7 +212,7 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
                 <Text style={styles.boxTitle}>About us</Text>
                 <Text style={styles.boxDesc}>Why we built Wingman.</Text>
                 <View style={styles.btnRow}>
-                  <SmallBtn label="Read our story" onPress={() => Linking.openURL(backendUrl('/about.html'))} />
+                  <SmallBtn label="Read our story" onPress={() => openBackendPage('/about.html')} />
                 </View>
               </View>
             </ScrollView>

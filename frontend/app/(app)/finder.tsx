@@ -1927,7 +1927,9 @@ const styles = StyleSheet.create({
   resultsForLabel: { fontFamily: fonts.bodyBold, fontSize: 11, letterSpacing: 0.5, color: colors.muted },
   resultsForTheme: { fontFamily: fonts.bodyBold, fontSize: 14, fontStyle: 'italic', color: colors.navy },
   themeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8, marginBottom: 4 },
-  themeChip: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate400, borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 8 },
+  // maxWidth caps a long chip at the row width so its label wraps inside the pill instead of
+  // running off the right edge on a phone (mobile audit).
+  themeChip: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate400, borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 8, flexShrink: 1, maxWidth: '100%' },
   themeChipOn: { backgroundColor: colors.lavender, borderColor: colors.slate900 },
   themeChipText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate500 },
   themeChipTextOn: { color: colors.slate900 },

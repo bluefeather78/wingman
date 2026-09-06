@@ -142,7 +142,7 @@ export default function Subscription() {
         {/* Status card */}
         <View style={styles.statusCard}>
           <View style={styles.statusRow}>
-            <View>
+            <View style={styles.statusRowLeft}>
               <Text style={styles.tinyLabel}>CURRENT PLAN</Text>
               <Text style={styles.planName}>{planName}</Text>
             </View>
@@ -317,7 +317,11 @@ const styles = StyleSheet.create({
   lapsedActions: { flexDirection: 'row', marginTop: 8 },
 
   statusCard: { borderWidth: 2, borderColor: colors.slate200, borderRadius: radius.lg, padding: 24, gap: 16 },
-  statusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  // Wrap the badge below the plan name on a narrow screen instead of clipping it; the left
+  // column shrinks so a long plan name ("Wingman Unlimited") wraps rather than pushing the
+  // badge off the right edge (mobile audit).
+  statusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' },
+  statusRowLeft: { flexShrink: 1, minWidth: 0 },
   tinyLabel: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate500, letterSpacing: 0.6, textTransform: 'uppercase' },
   planName: { fontFamily: fonts.display, fontSize: 24, color: colors.slate900, marginTop: 4 },
   badge: { borderRadius: radius.pill, paddingHorizontal: 16, paddingVertical: 8 },

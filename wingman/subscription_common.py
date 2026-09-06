@@ -145,7 +145,11 @@ def create_checkout_session(customer_id, email, success_url, cancel_url, promo_c
     """
     data = {
         "customer": customer_id,
-        "payment_method_types[]": "card",
+        # payment_method_types is deliberately NOT sent: Stripe's Managed Payments (on by
+        # default on newer accounts) OWNS which methods are offered and REJECTS this parameter
+        # ("Unsupported parameter: payment_method_types"). Omitting it lets Stripe present the
+        # methods configured in the dashboard, and still works on older accounts (Stripe
+        # defaults to card there). Do not re-add it without disabling Managed Payments.
         "line_items[0][price]": PLAN_PRICE_ID,
         "line_items[0][quantity]": "1",
         "mode": "subscription",

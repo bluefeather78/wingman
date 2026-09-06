@@ -199,6 +199,69 @@ def get_google_calendar_access_token(userid):
     return access_token
 
 
+def purge_google_calendar(userid, record=None):
+    """Best-effort: delete this user's dedicated Wingman calendar and revoke the Google
+    grant, for account deletion (DATA_DELETION_EXPORT_PLAN.md §3.1).
+
+    NEVER raises — a leftover calendar is a nuisance, not a billing or privacy-critical
+    failure, and the tokens become useless the moment the users row is deleted. Returns a
+    small status dict for the deletion report. Does NOT touch the DB columns: the whole row
+    is about to be deleted, so nulling them would be redundant.
+
+    The calendar.app.created scope (MARQUEE M7) permits deleting a calendar the app itself
+    created, so DELETE /calendars/{id} removes the whole "Highschool Wingman" calendar and
+    every event on it in one call.
+    """
+    if record is None:
+        record = select_user(
+            userid, "userid,google_calendar_id,google_calendar_refresh_token") or {}
+    calendar_id = record.get("google_calendar_id")
+    refresh_token = record.get("google_calendar_refresh_token")
+    if not calendar_id and not refresh_token:
+        return {"status": "none"}
+
+    result = {"status": "attempted", "calendar_deleted": False, "token_revoked": False}
+    try:
+        access_token = get_google_calendar_access_token(userid)
+    except Exception as e:                                     # noqa: BLE001
+        access_token = None
+        print(f"[delete] could not obtain Google token for calendar purge: {type(e).__name__}")
+
+    if access_token and calendar_id:
+        try:
+            del_req = urllib.request.Request(
+                f"{GOOGLE_CALENDAR_API_BASE}/calendars/{urllib.parse.quote(calendar_id)}",
+                method="DELETE",
+                headers={"Authorization": f"Bearer {access_token}"})
+            with urllib.request.urlopen(del_req, timeout=10):
+                result["calendar_deleted"] = True
+        except urllib.error.HTTPError as e:
+            # Already gone counts as deleted; anything else is logged and left.
+            result["calendar_deleted"] = e.code in (404, 410)
+            if e.code not in (404, 410):
+                print(f"[delete] calendar delete failed: HTTP {e.code}")
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[delete] calendar delete error: {type(e).__name__}")
+
+    if refresh_token:
+        try:
+            rev_req = urllib.request.Request(
+                GOOGLE_REVOKE_URL,
+                data=urllib.parse.urlencode({"token": refresh_token}).encode(),
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with urllib.request.urlopen(rev_req, timeout=10):
+                result["token_revoked"] = True
+        except urllib.error.HTTPError as e:
+            # Google answers 400 for an already-invalid/expired token — that is still revoked.
+            result["token_revoked"] = e.code == 400
+            if e.code != 400:
+                print(f"[delete] token revoke failed: HTTP {e.code}")
+        except Exception as e:                                 # noqa: BLE001
+            print(f"[delete] token revoke error: {type(e).__name__}")
+    return result
+
+
 def ensure_wingman_calendar(access_token, userid, record):
     """Returns the id of this user's dedicated "Highschool Wingman" calendar,
     creating it on first use. calendar.app.created only grants access to events on

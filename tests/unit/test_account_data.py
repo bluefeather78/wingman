@@ -184,3 +184,149 @@ def test_route_429_when_rate_limited(monkeypatch):
     assert resp.status_code == 429
     assert resp.headers["Retry-After"] == "42"
     assert called["assembled"] is False        # denied BEFORE assembling anything
+
+
+# ======================================================================================
+# P2 — deletion
+# ======================================================================================
+
+# ---------- erase_account: sequencing and the abort-on-billing rule ----------
+
+def _stub_erase(monkeypatch, row=FULL_ROW, stripe_now=(None, None), del_customer=(None, None),
+                google=None):
+    """Wire erase_account's dependencies. Records the ORDER things happen in so the sequencing
+    (Stripe -> Google -> anonymize -> satellites -> users row -> tombstone) can be asserted."""
+    order = []
+    monkeypatch.setattr(ad, "get_user", lambda uid: row)
+    # subscription_common / google_oauth are imported INSIDE erase_account, so patch them at
+    # their source modules.
+    import wingman.subscription_common as sc
+    import app.services.google_oauth as go
+    monkeypatch.setattr(sc, "cancel_subscription_now",
+                        lambda sid: (order.append(("stripe_cancel", sid)), stripe_now)[1])
+    monkeypatch.setattr(sc, "delete_customer",
+                        lambda cid: (order.append(("stripe_customer", cid)), del_customer)[1])
+    monkeypatch.setattr(go, "purge_google_calendar",
+                        lambda uid, rec: (order.append(("google", uid)),
+                                          google if google is not None else {"status": "none"})[1])
+    monkeypatch.setattr(ad, "anonymize_user_submissions",
+                        lambda uid: order.append(("anonymize", uid)) or True)
+    monkeypatch.setattr(ad, "delete_user_satellites",
+                        lambda uid: order.append(("satellites", uid)) or {"user_costs": True})
+    monkeypatch.setattr(ad, "delete_user",
+                        lambda uid: order.append(("delete_user", uid)) or True)
+    monkeypatch.setattr(ad, "record_account_deletion",
+                        lambda uid, **kw: order.append(("tombstone", uid, kw)))
+    return order
+
+
+def test_erase_account_runs_steps_in_order(monkeypatch):
+    order = _stub_erase(monkeypatch)
+    report = ad.erase_account("alice")
+    steps = [s[0] for s in order]
+    assert steps == ["stripe_cancel", "stripe_customer", "google", "anonymize",
+                     "satellites", "delete_user", "tombstone"]
+    assert report["account_deleted"] is True
+    # users row is deleted LAST, after everything that reads from it.
+    assert steps.index("delete_user") > steps.index("google")
+    assert steps.index("delete_user") > steps.index("satellites")
+
+
+def test_erase_aborts_when_live_subscription_cannot_cancel(monkeypatch):
+    """A real Stripe error MUST abort — never delete an account still being billed."""
+    order = _stub_erase(monkeypatch, stripe_now=(None, "card_declined: gateway error"))
+    with pytest.raises(ad.StripeCancelError):
+        ad.erase_account("alice")
+    # Nothing past the Stripe cancel ran — the row is untouched.
+    assert [s[0] for s in order] == ["stripe_cancel"]
+
+
+def test_erase_proceeds_when_stripe_unconfigured(monkeypatch):
+    """'not configured' means no live billing to stop — a no-op, not an abort."""
+    order = _stub_erase(monkeypatch, stripe_now=(None, "Stripe API key not configured"))
+    report = ad.erase_account("alice")
+    assert report["account_deleted"] is True
+    assert "delete_user" in [s[0] for s in order]
+
+
+def test_erase_none_for_missing_account(monkeypatch):
+    monkeypatch.setattr(ad, "get_user", lambda uid: None)
+    assert ad.erase_account("ghost") is None
+
+
+def test_erase_records_had_subscription_in_tombstone(monkeypatch):
+    order = _stub_erase(monkeypatch)          # FULL_ROW has a stripe_subscription_id
+    ad.erase_account("alice")
+    tomb = [s for s in order if s[0] == "tombstone"][0]
+    assert tomb[2]["had_subscription"] is True
+
+
+# ---------- the delete route: password re-auth ----------
+
+def _stub_delete_route(monkeypatch, record, erase=lambda uid: {"account_deleted": True}):
+    monkeypatch.setattr(route.account_delete_limiter, "allow", lambda k: True)
+    monkeypatch.setattr(route, "get_user_account", lambda uid: record)
+    monkeypatch.setattr(route, "erase_account", erase)
+    monkeypatch.setattr(route, "is_valid_client_hash", lambda h: bool(h))
+
+
+def test_delete_takes_no_userid_parameter():
+    """IDOR guarantee: the handler's identity is get_current_user; the body carries only the
+    re-auth password, never a userid to point at someone else."""
+    params = list(inspect.signature(route.handle_account_delete).parameters.values())
+    deps = {p.default.dependency for p in params if hasattr(p.default, "dependency")}
+    assert get_current_user in deps
+
+
+def test_delete_401_on_wrong_password(monkeypatch):
+    _stub_delete_route(monkeypatch, {"password_hash": "argon2$stored"})
+    monkeypatch.setattr(route, "verify_password", lambda stored, given: (False, False))
+    erased = {"called": False}
+    monkeypatch.setattr(route, "erase_account",
+                        lambda uid: erased.__setitem__("called", True))
+    resp = route.handle_account_delete(body={"passwordHash": "a" * 64},
+                                       user=AuthedUser(id="alice"))
+    assert resp.status_code == 401
+    assert erased["called"] is False           # never erased on a bad password
+
+
+def test_delete_succeeds_on_correct_password(monkeypatch):
+    _stub_delete_route(monkeypatch, {"password_hash": "argon2$stored"})
+    monkeypatch.setattr(route, "verify_password", lambda stored, given: (True, False))
+    resp = route.handle_account_delete(body={"passwordHash": "a" * 64},
+                                       user=AuthedUser(id="alice"))
+    assert resp.status_code == 200
+    assert json.loads(resp.body)["deleted"] is True
+
+
+def test_delete_google_only_account_defers_to_reauth(monkeypatch):
+    """No stored password -> a Google-linked account. Refuse rather than accept the session
+    alone; the frontend completes it via a fresh Google sign-in (P3)."""
+    _stub_delete_route(monkeypatch, {"password_hash": None})
+    resp = route.handle_account_delete(body={}, user=AuthedUser(id="alice"))
+    assert resp.status_code == 400
+    assert json.loads(resp.body)["reauth"] == "google_required"
+
+
+def test_delete_502_when_stripe_cancel_fails(monkeypatch):
+    _stub_delete_route(monkeypatch, {"password_hash": "argon2$stored"})
+    monkeypatch.setattr(route, "verify_password", lambda stored, given: (True, False))
+    def _boom(uid):
+        raise route.StripeCancelError("gateway down")
+    monkeypatch.setattr(route, "erase_account", _boom)
+    resp = route.handle_account_delete(body={"passwordHash": "a" * 64},
+                                       user=AuthedUser(id="alice"))
+    assert resp.status_code == 502
+    assert "nothing was deleted" in json.loads(resp.body)["error"].lower()
+
+
+def test_delete_429_denies_before_reauth(monkeypatch):
+    monkeypatch.setattr(route.account_delete_limiter, "allow", lambda k: False)
+    monkeypatch.setattr(route.account_delete_limiter, "retry_after", lambda k: 60)
+    looked_up = {"called": False}
+    monkeypatch.setattr(route, "get_user_account",
+                        lambda uid: looked_up.__setitem__("called", True))
+    resp = route.handle_account_delete(body={"passwordHash": "a" * 64},
+                                       user=AuthedUser(id="alice"))
+    assert resp.status_code == 429
+    assert looked_up["called"] is False        # rate-limited before any account read

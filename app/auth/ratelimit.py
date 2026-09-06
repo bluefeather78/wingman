@@ -99,6 +99,12 @@ ai_ip_limiter = RateLimiter(AI_RATE_LIMIT_PER_IP, AI_RATE_LIMIT_WINDOW_SECONDS)
 # route is always authenticated), same per-process caveat as every limiter here.
 account_export_limiter = RateLimiter(6, 60 * 60)
 
+# Account deletion, per ACCOUNT per 15 minutes (DATA_DELETION_EXPORT_PLAN.md §3.3). It runs
+# the erase AFTER a password re-auth, so this bucket mostly bounds WRONG-password attempts —
+# i.e. it is a second brute-force guard on the stored hash, layered under argon2. 5 is
+# generous for a real person confirming a delete and mistyping their password once or twice.
+account_delete_limiter = RateLimiter(5, 15 * 60)
+
 # Catalog submissions, per ACCOUNT per day (S1-4, finding M10). Keyed on the userid rather
 # than the address on purpose: the route is require_subscription'd now, so identity is
 # always known, and a school NAT would otherwise make one classroom share a bucket.

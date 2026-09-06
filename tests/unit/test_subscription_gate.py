@@ -118,11 +118,12 @@ UNGATED = {
     # account (we still record what they do) and never 402, so it uses get_optional_user,
     # not the subscription gate.
     ("POST", "/api/events"),
-    # Data export (DATA_DELETION_EXPORT_PLAN.md): a lapsed account must be able to take a
-    # copy of its own data — a paywall you can't export through is a data-hostage situation
-    # and the app stores reject it. Auth still required (get_current_user, hard 401), but no
-    # subscription gate. Deletion (P2) joins this list for the same reason.
+    # Data export + delete (DATA_DELETION_EXPORT_PLAN.md): a lapsed account must be able to
+    # take a copy of, and delete, its own data — a paywall you can't export or delete through
+    # is a data-hostage situation and the app stores reject it. Auth still required
+    # (get_current_user, hard 401), plus a password re-auth on delete, but no subscription gate.
     ("POST", "/api/account/export"),
+    ("POST", "/api/account/delete"),
     # Stripe calls this with a signature, not a bearer token — it must never require auth or
     # the subscription gate. Its events are what LIFT the block (write status='active'), so
     # gating it would make it unreachable exactly when it matters.

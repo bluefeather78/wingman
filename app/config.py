@@ -375,6 +375,9 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+# Revokes a granted OAuth token (access or refresh). Used only by account deletion, to hand
+# the Google grant back when a student erases their account (DATA_DELETION_EXPORT_PLAN.md §3.1).
+GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 GOOGLE_TOKEN_TTL_SECONDS = 5 * 60
 

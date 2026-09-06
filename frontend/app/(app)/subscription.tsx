@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
-import { PopButton, Screen, SoftCard, usePopInteraction } from '@/ui/components';
+import { AiActionsBar, PopButton, Screen, SoftCard, usePopInteraction } from '@/ui/components';
 import { colors, fonts, popShadow, radius } from '@/ui/theme';
 import { isPaidTier, resetsInLabel } from '@/lib/tier';
 import type { AllowanceSnapshot } from '@/api/types';
@@ -178,10 +178,11 @@ export default function Subscription() {
                   ? `${Math.max(0, (remaining ?? limit - used))} of ${limit} AI actions left today`
                   : 'Your daily AI actions'}
               </Text>
-              {used !== null && limit !== null && (
-                <View style={styles.meterTrack}>
-                  <View style={[styles.meterFill, { width: `${Math.min(100, Math.round((used / Math.max(1, limit)) * 100))}%` }]} />
-                </View>
+              {limit !== null && (
+                // Same segmented gauge as Home Base's meter (shared AiActionsBar): the bar
+                // EMPTIES as the student spends actions, rather than an orange fill that grew
+                // with usage. `remaining` falls back to limit-used when the snapshot omits it.
+                <AiActionsBar limit={limit} remaining={remaining ?? (used !== null ? limit - used : limit)} />
               )}
               <Text style={styles.meterSub}>
                 {used !== null && limit !== null ? `Used ${used} of ${limit} · resets ${resetsInLabel(allowance)}` : 'Resets every day at midnight UTC'}
@@ -308,8 +309,6 @@ const styles = StyleSheet.create({
   softNoteText: { fontFamily: fonts.bodyMed, fontSize: 13.5, lineHeight: 21, color: '#92400E' },
   meterBox: { backgroundColor: colors.slate50, borderRadius: radius.md, padding: 16, gap: 8 },
   meterTitle: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.slate900 },
-  meterTrack: { height: 8, borderRadius: 999, backgroundColor: colors.slate200, overflow: 'hidden' },
-  meterFill: { height: 8, borderRadius: 999, backgroundColor: colors.orange },
   meterSub: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500 },
   lapsedCard: { backgroundColor: '#FEF2F2', borderWidth: 2, borderColor: '#FCA5A5', borderRadius: radius.lg, padding: 20, gap: 8 },
   lapsedTitle: { fontFamily: fonts.display, fontSize: 20, color: '#991B1B' },

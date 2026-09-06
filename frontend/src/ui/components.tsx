@@ -491,6 +491,28 @@ export function LegendItem({ color, label }: { color: string; label: string }) {
   );
 }
 
+// The daily AI-actions gauge for the Free tier — a row of equal segments that EMPTY (fill →
+// slate) as the student spends actions, so the bar visibly ticks DOWN toward zero. Shared by
+// Home Base's meter card and Manage Plan so the two views cannot drift in either direction or
+// colour. Segments are capped at 20 so an unusually large limit can't render a comb of slivers;
+// the filled count scales to that cap. Colour tracks what's LEFT: teal normally, orange in the
+// last 20%, slate once spent. Callers pass real numbers — render it only when a limit is known.
+export function AiActionsBar({ limit, remaining }: { limit: number; remaining: number }) {
+  const rem = Math.max(0, remaining);
+  const safeLimit = Math.max(1, limit);
+  const low = rem <= Math.ceil(safeLimit * 0.2);
+  const fillColor = rem === 0 ? colors.slate400 : low ? colors.orange : colors.teal;
+  const segCount = Math.min(safeLimit, 20);
+  const filled = Math.round((rem / safeLimit) * segCount);
+  return (
+    <View style={styles.aiBar}>
+      {Array.from({ length: segCount }).map((_, i) => (
+        <View key={i} style={[styles.aiBarSeg, { backgroundColor: i < filled ? fillColor : colors.slate200 }]} />
+      ))}
+    </View>
+  );
+}
+
 // ---------- Circular icon button (.icon-btn: 30px, white, 2px navy border) ----------
 //
 // `label` is REQUIRED (Phase 5, frontend_report finding 20). This button's entire content is
@@ -726,6 +748,8 @@ const styles = StyleSheet.create({
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   legendDot: { width: 10, height: 10, borderRadius: 5 },
   legendText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.navy },
+  aiBar: { flexDirection: 'row', gap: 3 },
+  aiBarSeg: { flex: 1, height: 6, borderRadius: 3 },
 
   iconBtn: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.navy, alignItems: 'center', justifyContent: 'center' },
 

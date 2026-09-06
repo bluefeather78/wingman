@@ -28,6 +28,7 @@ import {
 } from '@/lib/status';
 import {
   ACTION_ITEM_STATUS_LABEL,
+  AiActionsBar,
   LegendItem,
   PopButton,
   ProgressTrack,
@@ -53,10 +54,16 @@ interface StoredProfile {
 // groups cannot drift in how a row actually renders — only the heading above them differs.
 // The per-row source chips were removed in the 2026-08-26 redesign: the group heading
 // already states the provenance, so the chip said the same thing twice per row.
-function TaskRow({ ai, onPress, onDelete }: {
+function TaskRow({ ai, onPress, onDelete, compact = false }: {
   ai: ActionItem;
   onPress: () => void;
   onDelete: () => void;
+  // Mobile (< 768px) stacks the row: the task text takes the full width on its own line and
+  // the status pill + delete ✕ sit right-aligned on the line below it — the "All Tasks
+  // Overlay (Mobile)" design. On a phone the side-by-side layout crushed the text against a
+  // fixed 120px control column, so the text wraps to two or three clipped words. Desktop
+  // keeps the original single-row layout untouched.
+  compact?: boolean;
 }) {
   const [delHovered, setDelHovered] = useState(false);
   // The trailing ↗ prefers the step's ACTION url. A verified task with no action url falls
@@ -65,44 +72,57 @@ function TaskRow({ ai, onPress, onDelete }: {
   // way back to its source.
   const tier = ai.origin === 'user' ? null : taskTrustTier(ai);
   const linkUrl = ai.url || (tier && tier !== 'generic' ? ai.sourceUrl : null) || null;
+  const text = (
+    <Text style={[styles.taskText, compact && styles.taskTextCompact, ai.state === 'completed' && styles.taskDone]}>
+      {ai.text}
+      {!!linkUrl && (
+        <Text style={styles.taskStepLink} onPress={() => Linking.openURL(linkUrl)}>
+          {'  ↗'}
+        </Text>
+      )}
+    </Text>
+  );
+  // Tapping cycles the state (not_started → in_progress → completed → not_started).
+  // The delete ✕ beside it is the P10 remove: for a catalog task it writes a per-user
+  // tombstone (the shared list regenerates, so a plain splice would come straight back),
+  // for the student's own task it deletes outright. Reversible via the Restore line under
+  // the list.
+  const controls = (
+    <>
+      <StatusPill
+        status={(ai.state as TaskStatus) in ACTION_ITEM_STATUS_LABEL ? (ai.state as TaskStatus) : 'not_started'}
+        kind="task"
+        onPress={onPress}
+      />
+      <Pressable
+        onPress={onDelete}
+        hitSlop={8}
+        onHoverIn={() => setDelHovered(true)}
+        onHoverOut={() => setDelHovered(false)}
+        accessibilityRole="button"
+        // The task text, not "delete": a list of tasks each announced as "delete" gives a
+        // screen reader user no way to tell which one they are about to remove
+        // (Phase 5, frontend_report finding 20).
+        accessibilityLabel={`Delete task: ${ai.text}`}
+      >
+        <Text style={[styles.taskDelete, delHovered && styles.taskDeleteHover]}>✕</Text>
+      </Pressable>
+    </>
+  );
+  // Mobile: text on its own line, controls right-aligned below it.
+  if (compact) {
+    return (
+      <View style={styles.taskRowStacked}>
+        {text}
+        <View style={styles.taskRowStackedRight}>{controls}</View>
+      </View>
+    );
+  }
+  // Desktop: text left, fixed-width control column right — keeps pills aligned down the card.
   return (
     <View style={styles.taskRow}>
-      <View style={styles.taskLeft}>
-        <Text style={[styles.taskText, ai.state === 'completed' && styles.taskDone]}>
-          {ai.text}
-          {!!linkUrl && (
-            <Text style={styles.taskStepLink} onPress={() => Linking.openURL(linkUrl)}>
-              {'  ↗'}
-            </Text>
-          )}
-        </Text>
-      </View>
-      {/* Tapping cycles the state (not_started → in_progress → completed → not_started).
-          The delete ✕ beside it is the P10 remove: for a catalog task it writes a per-user
-          tombstone (the shared list regenerates, so a plain splice would come straight
-          back), for the student's own task it deletes outright. Reversible via the Restore
-          line under the list. The fixed-width right column keeps the pills vertically
-          aligned across rows instead of ragged against each row's text length. */}
-      <View style={styles.taskRight}>
-        <StatusPill
-          status={(ai.state as TaskStatus) in ACTION_ITEM_STATUS_LABEL ? (ai.state as TaskStatus) : 'not_started'}
-          kind="task"
-          onPress={onPress}
-        />
-        <Pressable
-          onPress={onDelete}
-          hitSlop={8}
-          onHoverIn={() => setDelHovered(true)}
-          onHoverOut={() => setDelHovered(false)}
-          accessibilityRole="button"
-          // The task text, not "delete": a list of tasks each announced as "delete" gives a
-          // screen reader user no way to tell which one they are about to remove
-          // (Phase 5, frontend_report finding 20).
-          accessibilityLabel={`Delete task: ${ai.text}`}
-        >
-          <Text style={[styles.taskDelete, delHovered && styles.taskDeleteHover]}>✕</Text>
-        </Pressable>
-      </View>
+      <View style={styles.taskLeft}>{text}</View>
+      <View style={styles.taskRight}>{controls}</View>
     </View>
   );
 }
@@ -169,12 +189,6 @@ function AiActionsMeter({ allowance, paid }: { allowance: AllowanceSnapshot | nu
   }
   const limit = typeof allowance?.limit === 'number' ? allowance.limit : null;
   const remaining = typeof allowance?.remaining === 'number' ? Math.max(0, allowance.remaining) : null;
-  const low = remaining !== null && limit !== null && remaining <= Math.ceil(limit * 0.2);
-  const fillColor = remaining === 0 ? colors.slate400 : low ? colors.orange : colors.teal;
-  // Cap the drawn segments so an unusually large limit can't render a comb of slivers; the
-  // filled count is scaled to the cap so it stays proportional if the limit ever exceeds it.
-  const segCount = limit !== null ? Math.min(limit, 20) : 0;
-  const filled = limit ? Math.round(((remaining ?? 0) / limit) * segCount) : 0;
   return (
     <View style={styles.meterCard}>
       <Text style={styles.meterNum}>
@@ -182,11 +196,9 @@ function AiActionsMeter({ allowance, paid }: { allowance: AllowanceSnapshot | nu
         {limit !== null ? <Text style={styles.meterDenom}>{` / ${limit}`}</Text> : null}
       </Text>
       <Text style={styles.meterLabel}>AI actions left today</Text>
-      {segCount > 0 ? (
+      {limit !== null ? (
         <View style={styles.meterBar}>
-          {Array.from({ length: segCount }).map((_, i) => (
-            <View key={i} style={[styles.meterSeg, { backgroundColor: i < filled ? fillColor : colors.slate200 }]} />
-          ))}
+          <AiActionsBar limit={limit} remaining={remaining ?? 0} />
         </View>
       ) : null}
     </View>
@@ -477,13 +489,13 @@ export default function Home() {
 
       {/* "All Your Tasks" modal — ported from the live app's #todoModal. */}
       <Modal visible={tasksOpen} transparent animationType="fade" onRequestClose={() => setTasksOpen(false)}>
-        <Pressable style={styles.modalScrim} onPress={() => setTasksOpen(false)}>
-          <Pressable style={styles.modalPanel} onPress={(e) => e.stopPropagation()}>
-            <ScrollView contentContainerStyle={styles.modalScroll} showsVerticalScrollIndicator={false}>
+        <Pressable style={[styles.modalScrim, compact && styles.modalScrimCompact]} onPress={() => setTasksOpen(false)}>
+          <Pressable style={[styles.modalPanel, compact && styles.modalPanelCompact]} onPress={(e) => e.stopPropagation()}>
+            <ScrollView contentContainerStyle={[styles.modalScroll, compact && styles.modalScrollCompact]} showsVerticalScrollIndicator={false}>
               <View style={styles.modalHead}>
                 <View style={styles.flex1}>
-                  <Txt variant="h2" style={styles.cardTitle}>All Your Tasks</Txt>
-                  <Text style={styles.modalSub}>Everything you're tracking - manage it all in one place</Text>
+                  <Txt variant="h2" style={[styles.cardTitle, compact && styles.modalTitleCompact]}>All Your Tasks</Txt>
+                  <Text style={[styles.modalSub, compact && styles.modalSubCompact]}>Everything you're tracking - manage it all in one place</Text>
                 </View>
                 <Pressable
                   onPress={() => setTasksOpen(false)}
@@ -516,7 +528,7 @@ export default function Home() {
                   : 'From trusted guides';
                 const removedCount = (item.removedTasks ?? []).length;
                 return (
-                <View key={item.id} style={styles.taskCard}>
+                <View key={item.id} style={[styles.taskCard, compact && styles.taskCardCompact]}>
                   <View style={styles.taskCardHead}>
                     <View style={styles.flex1}>
                       {/* The name is the link to the program's own page — ported from the old
@@ -524,24 +536,24 @@ export default function Home() {
                           Underlined rather than bare: it was invisible as an affordance in RN. */}
                       {item.url ? (
                         <Text
-                          style={[styles.taskCardName, styles.taskCardNameLink]}
+                          style={[styles.taskCardName, compact && styles.taskCardNameCompact, styles.taskCardNameLink]}
                           numberOfLines={1}
                           onPress={() => Linking.openURL(item.url as string)}
                         >
                           {item.name}
                         </Text>
                       ) : (
-                        <Text style={styles.taskCardName} numberOfLines={1}>{item.name}</Text>
+                        <Text style={[styles.taskCardName, compact && styles.taskCardNameCompact]} numberOfLines={1}>{item.name}</Text>
                       )}
-                      {!!item.meta && <Text style={styles.taskCardMeta} numberOfLines={1}>{item.meta}</Text>}
+                      {!!item.meta && <Text style={[styles.taskCardMeta, compact && styles.taskCardMetaCompact]} numberOfLines={1}>{item.meta}</Text>}
                     </View>
                     <StatusPill status={computeProgressStatus(item)} />
                   </View>
-                  <Text style={styles.taskCardDate}>
+                  <Text style={[styles.taskCardDate, compact && styles.taskCardDateCompact]}>
                     {nextDate ? `${shortDate(nextDate)} · ${nextLabel}` : nextLabel}{item.wasEstimated ? ' (est.)' : ''}
                   </Text>
                   {allTasks.length ? (
-                    <View style={styles.taskRows}>
+                    <View style={[styles.taskRows, compact && styles.taskRowsCompact]}>
                       {/* Three groups, highest trust first, and the heading is the whole
                           point: a step we can point at a line of the program's OWN page
                           for, a step a trusted guide said (verified the same way, trusted
@@ -552,35 +564,35 @@ export default function Home() {
                           "(estimated)"/verified markers for exactly this reason. */}
                       {official.length > 0 && (
                         <>
-                          <Text style={styles.taskGroupLabel}>From the program's own page</Text>
+                          <Text style={[styles.taskGroupLabel, compact && styles.taskGroupLabelCompact]}>From the program's own page</Text>
                           {official.map((ai) => (
-                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} onDelete={() => deleteTask(item.id, ai.id)} />
+                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} onDelete={() => deleteTask(item.id, ai.id)} compact={compact} />
                           ))}
                         </>
                       )}
                       {trusted.length > 0 && (
                         <>
-                          <Text style={styles.taskGroupLabel}>{trustedHeading}</Text>
+                          <Text style={[styles.taskGroupLabel, compact && styles.taskGroupLabelCompact]}>{trustedHeading}</Text>
                           {trusted.map((ai) => (
-                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} onDelete={() => deleteTask(item.id, ai.id)} />
+                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} onDelete={() => deleteTask(item.id, ai.id)} compact={compact} />
                           ))}
                         </>
                       )}
                       {generic.length > 0 && (
                         <>
-                          <Text style={styles.taskGroupLabel}>
+                          <Text style={[styles.taskGroupLabel, compact && styles.taskGroupLabelCompact]}>
                             Typical steps — confirm on the site
                           </Text>
                           {generic.map((ai) => (
-                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} onDelete={() => deleteTask(item.id, ai.id)} />
+                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} onDelete={() => deleteTask(item.id, ai.id)} compact={compact} />
                           ))}
                         </>
                       )}
                       {userTasks.length > 0 && (
                         <>
-                          <Text style={styles.taskGroupLabel}>Your own tasks</Text>
+                          <Text style={[styles.taskGroupLabel, compact && styles.taskGroupLabelCompact]}>Your own tasks</Text>
                           {userTasks.map((ai) => (
-                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} onDelete={() => deleteTask(item.id, ai.id)} />
+                            <TaskRow key={ai.id} ai={ai} onPress={() => cycleActionItem(item.id, ai.id)} onDelete={() => deleteTask(item.id, ai.id)} compact={compact} />
                           ))}
                         </>
                       )}
@@ -649,8 +661,7 @@ const styles = StyleSheet.create({
   meterNum: { fontFamily: fonts.display, fontSize: 28, lineHeight: 32, color: colors.navy },
   meterDenom: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.slate400 },
   meterLabel: { fontFamily: fonts.bodyBold, fontSize: 11, letterSpacing: 0.4, textTransform: 'uppercase', color: colors.slate500 },
-  meterBar: { flexDirection: 'row', gap: 3, marginTop: 8 },
-  meterSeg: { flex: 1, height: 6, borderRadius: 3 },
+  meterBar: { marginTop: 8 },
 
   emptyProfile: {
     borderRadius: radius.xl,
@@ -730,4 +741,23 @@ const styles = StyleSheet.create({
   taskCardNameLink: { textDecorationLine: 'underline' },
   taskStepLink: { fontFamily: fonts.bodyBold, color: colors.indigo600 },
   taskNone: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate400, fontStyle: 'italic' },
+
+  // ---------- Mobile "All Tasks Overlay" (< 768px) — desktop keeps the styles above ----------
+  // Scrim hugs the phone edges (10px) and starts near the top; the panel is taller.
+  modalScrimCompact: { paddingTop: 32, paddingHorizontal: 10 },
+  modalPanelCompact: { maxHeight: '90%' },
+  // Tighter chrome so more of the list is visible on a short screen.
+  modalScrollCompact: { paddingHorizontal: 18, paddingVertical: 22, gap: 10 },
+  modalTitleCompact: { fontSize: 19, lineHeight: 26 },
+  modalSubCompact: { fontSize: 11.5, lineHeight: 15 },
+  taskCardCompact: { padding: 12, borderRadius: 14, gap: 3 },
+  taskCardNameCompact: { fontSize: 13.5, lineHeight: 18 },
+  taskCardMetaCompact: { fontSize: 11, lineHeight: 15 },
+  taskCardDateCompact: { fontSize: 11.5, lineHeight: 15, marginBottom: 3 },
+  taskRowsCompact: { paddingTop: 7, gap: 5 },
+  taskGroupLabelCompact: { fontSize: 9.5 },
+  // The stacked row: full-width text, then the status pill + ✕ right-aligned on the line below.
+  taskRowStacked: { flexDirection: 'column', gap: 4 },
+  taskRowStackedRight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
+  taskTextCompact: { fontSize: 11.5, lineHeight: 15 },
 });

@@ -6,7 +6,7 @@ import { backendUrl } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
 import { Logo, RightDrawer, usePopInteraction } from './components';
 import { CalendarIcon, HomeIcon, PersonIcon, SearchIcon, SettingsIcon } from './icons';
-import { colors, fonts, navShadow, popShadow, radius, space } from './theme';
+import { APP_MAX_WIDTH, colors, fonts, navShadow, popShadow, radius, space } from './theme';
 
 // The live app's floating pill navigation: sticky, centered in the max-w-4xl column with
 // 16px top inset, navy pill with a soft blue glow. Wordmark + BETA, four tabs (orange when
@@ -237,9 +237,7 @@ const styles = StyleSheet.create({
     zIndex: 50,
     ...(Platform.OS === 'web' ? ({ position: 'sticky', top: 0 } as object) : null),
   },
-  // Full-bleed: the nav pill spans the whole screen width (minus a small side gutter) rather
-  // than being capped to the centered content column.
-  column: { width: '100%', paddingHorizontal: space.lg, paddingTop: space.lg },
+  column: { width: '100%', maxWidth: APP_MAX_WIDTH, alignSelf: 'center', paddingHorizontal: space.lg, paddingTop: space.lg },
   bar: {
     flexDirection: 'row',
     alignItems: 'center',

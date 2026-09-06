@@ -2270,12 +2270,20 @@ def _queue_roundup_leads_async(ids):
             rows = supabase_get(SUPABASE_URL, "opportunities",
                                 {"select": "id,name,url,seed_id",
                                  "id": f"in.({','.join(ids)})"}, SUPABASE_SERVICE_KEY) or []
+            # require_db=True: this console-driven write goes to the shared table or nowhere.
+            # Never a local file — the same rule the console's read half now enforces.
             leads, _trace = discovered_leads.from_rejected_rows(
-                rows, known_keys=discovered_leads.lead_keys(discovered_leads.load_leads()),
+                rows,
+                known_keys=discovered_leads.lead_keys(discovered_leads.load_leads(require_db=True)),
                 confirmed=True)
-            n = discovered_leads.append_leads(leads)
+            n = discovered_leads.append_leads(leads, require_db=True)
             if n:
                 print(f"[leads] queued {n} round-up(s) from the review queue.")
+        except discovered_leads.LeadQueueUnavailable as e:
+            # Table not set up — do NOT write a file. The backfill sweep
+            # (python -m wingman.discovered_leads --from-rejects) picks these up once the
+            # table exists, so nothing is lost by skipping the live hook here.
+            print(f"[leads] table unavailable, not queuing to a local file: {str(e)[:160]}")
         except Exception as e:
             # Never surfaced to the operator: the rejection already succeeded, and a failure
             # here only means the page has to be picked up by the backfill sweep instead.
@@ -4537,7 +4545,7 @@ def get_seed_yield(seed_rows):
 
 
 def list_discovered_leads(limit=60):
-    """The discovery lead queue, for the console. FREE — reads a local file, never the model.
+    """The discovery lead queue, for the console. FREE — reads the shared Supabase table only.
 
     The queue had no surface at all: `discovered_leads.jsonl` is gitignored, the console WROTE to
     it (the round-up reject hook) and never showed it, so the only way to see 245 queued leads was
@@ -4552,8 +4560,14 @@ def list_discovered_leads(limit=60):
         from wingman import discovered_leads
     except Exception as e:                              # pragma: no cover - import guard
         return {"ok": False, "error": str(e)[:200], "leads": []}
+    # require_db=True: the console reads the SHARED table or nothing. It must never render a
+    # laptop-local file — a queue that silently diverges from the table is what stranded 235
+    # leads in the Phase 4 migration. A missing table degrades to a setup notice, exactly like
+    # every other migration-gated tab, instead of quietly showing file contents.
     try:
-        leads = discovered_leads.load_leads()
+        leads = discovered_leads.load_leads(require_db=True)
+    except discovered_leads.LeadQueueUnavailable as e:
+        return {"ok": False, "needs_setup": True, "error": str(e)[:200], "leads": []}
     except Exception as e:
         return {"ok": False, "error": str(e)[:200], "leads": []}
 
@@ -4580,16 +4594,25 @@ def list_discovered_leads(limit=60):
             queue.append({"url": l.get("url"), "kind": kind, "scope": scope,
                           "signal": l.get("signal"), "angle": l.get("angle"),
                           "seed_id": l.get("seed_id"), "first_seen": l.get("first_seen")})
-    # `backend` tells the operator whether this queue is the SHARED one or this laptop's copy
-    # (Phase 4). Without it there is no way to tell, from the console, whether the leads on
-    # screen are the ones another machine is also working through — and the whole point of
-    # db/discovered_leads_schema.sql is that they should be.
-    backend = discovered_leads.queue_backend()
-    return {"ok": True, "counts": counts, "leads": queue,
-            "truncated": max(0, counts["new"] - len(queue)),
-            "backend": backend,
-            "path": ("discovered_leads (Supabase)" if backend == "supabase"
-                     else os.path.basename(discovered_leads.LEADS_PATH))}
+    # The console read is strict (require_db=True), so a successful read is ALWAYS the shared
+    # table — there is no per-laptop file case left to report. What is still worth surfacing is
+    # the opposite hazard: leads stranded in a local file that this table-only view will never
+    # show. If the file on this machine holds any, name the count and the fix so an operator
+    # does not conclude the queue is empty when it is merely unreachable from here.
+    stranded = 0
+    try:
+        stranded = discovered_leads.file_lead_count()
+    except Exception:                                   # pragma: no cover - never fatal
+        stranded = 0
+    out = {"ok": True, "counts": counts, "leads": queue,
+           "truncated": max(0, counts["new"] - len(queue)),
+           "backend": "supabase", "path": "discovered_leads (Supabase)"}
+    if stranded:
+        out["stranded_file_leads"] = stranded
+        out["stranded_file_hint"] = (
+            f"{stranded} lead(s) sit in a local file this table-only view does not read. "
+            f"Import them: python -m wingman.discovered_leads --import-file --commit")
+    return out
 
 
 def list_recent_merges(limit=50):

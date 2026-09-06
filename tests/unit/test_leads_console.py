@@ -3,36 +3,46 @@ import ops.core as core
 
 
 class _Leads:
-    """A stand-in for the discovered_leads module, so no real queue file is read."""
+    """A stand-in for the discovered_leads module, so no real queue file is read.
+
+    The console reads the queue with require_db=True (table-only) as of the fix that stops it
+    ever operating on a laptop-local file, so this fake models both the strict read and the
+    "table missing" case that must degrade to a setup notice rather than showing file rows."""
     STATUS_NEW, STATUS_DONE, STATUS_NOT_A_LEAD = "new", "processed", "not-a-lead"
     KIND_HUB, KIND_NAMES = "hub", "names"
     SCOPE_SAME_DOMAIN, SCOPE_OFF_DOMAIN = "same-domain", "off-domain"
     LEADS_PATH = "/tmp/discovered_leads.jsonl"
 
-    def __init__(self, rows):
-        self._rows = rows
+    class LeadQueueUnavailable(RuntimeError):
+        pass
 
-    def load_leads(self):
+    def __init__(self, rows, unavailable=False, stranded=0):
+        self._rows = rows
+        self._unavailable = unavailable
+        self._stranded = stranded
+
+    def load_leads(self, path=None, require_db=False):
+        if require_db and self._unavailable:
+            raise self.LeadQueueUnavailable(
+                "the discovered_leads table is missing — run db/discovered_leads_schema.sql")
         return self._rows
 
     def lead_scope(self, lead):
         return lead.get("scope") or self.SCOPE_OFF_DOMAIN
 
-    def queue_backend(self):
-        # Phase 4: the console reports whether the queue is the shared table or this
-        # laptop's file, because an operator cannot otherwise tell whether the leads on
-        # screen are the ones another machine is also working through.
-        return "file"
+    def file_lead_count(self, path=None):
+        # Leads stranded in a local file the table-only console will not read.
+        return self._stranded
 
 
-def _install(monkeypatch, rows):
+def _install(monkeypatch, rows, unavailable=False, stranded=0):
     """ops.core does `from wingman import discovered_leads` inside the function, so BOTH the
     sys.modules entry and the attribute on the package have to be replaced: `from X import Y`
     resolves Y off the already-imported package object first and only falls back to
     sys.modules. Patching one of the two leaves the real module in play."""
     import sys
     import wingman
-    fake = _Leads(rows)
+    fake = _Leads(rows, unavailable=unavailable, stranded=stranded)
     monkeypatch.setitem(sys.modules, "wingman.discovered_leads", fake)
     monkeypatch.setattr(wingman, "discovered_leads", fake, raising=False)
 
@@ -63,11 +73,37 @@ def test_the_list_is_in_queue_order_not_sorted(monkeypatch):
     assert r["truncated"] == 2
 
 
-def test_the_backend_is_reported_so_the_operator_knows_whose_queue_this_is(monkeypatch):
+def test_the_console_is_table_only_and_says_so(monkeypatch):
+    """The strict read can only ever be the shared table now, so the console reports supabase
+    and never a per-laptop file path — the divergence that stranded 235 leads is gone."""
     _install(monkeypatch, [{"url": "https://x.edu/a", "kind": "hub", "status": "new"}])
     r = core.list_discovered_leads()
-    assert r["backend"] == "file"
-    assert "discovered_leads.jsonl" in r["path"]
+    assert r["ok"] is True
+    assert r["backend"] == "supabase"
+    assert "jsonl" not in r["path"]
+
+
+def test_a_missing_table_degrades_to_a_setup_notice_not_file_contents(monkeypatch):
+    """With the table absent the console must NOT fall back to the local file — it shows a
+    setup notice, the same way every other migration-gated tab does."""
+    _install(monkeypatch, [{"url": "https://x.edu/a", "kind": "hub", "status": "new"}],
+             unavailable=True)
+    r = core.list_discovered_leads()
+    assert r["ok"] is False
+    assert r["needs_setup"] is True
+    assert "discovered_leads_schema.sql" in r["error"]
+    assert r["leads"] == []
+
+
+def test_leads_stranded_in_a_local_file_are_flagged_with_the_import_command(monkeypatch):
+    """A non-empty local file this table-only view cannot read is surfaced, not hidden, so an
+    operator does not read an empty table as an empty queue."""
+    _install(monkeypatch, [{"url": "https://x.edu/a", "kind": "hub", "status": "new"}],
+             stranded=17)
+    r = core.list_discovered_leads()
+    assert r["ok"] is True
+    assert r["stranded_file_leads"] == 17
+    assert "--import-file" in r["stranded_file_hint"]
 
 
 def test_a_lead_with_no_status_counts_as_waiting(monkeypatch):

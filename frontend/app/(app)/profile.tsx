@@ -29,6 +29,7 @@ import {
   type ChatMessage,
 } from '@/lib/profileChat';
 import { MiniBadge, PopButton, RightDrawer, Screen, SoftCard, Txt, usePopInteraction, VibeField } from '@/ui/components';
+import { useAiGate } from '@/ui/AiLimitBanner';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 import { useAuth } from '@/auth/AuthContext';
 import { isPaidTier } from '@/lib/tier';
@@ -87,6 +88,9 @@ export default function Profile() {
   const router = useRouter();
   const { user, allowance } = useAuth();
   const paidTier = isPaidTier(user);
+  // Free-tier AI gate: greys the chat ("Deepen your story"), Regenerate, Tidy it up, and the
+  // resume/LinkedIn import (all spend an AI action) and re-shows the banner on tap when spent.
+  const { reached: aiBlocked, guard: aiGuard, dimStyle } = useAiGate();
   const [profile, setProfile] = useState<StoredProfile>({ synthesized: '', updatedAt: null, chatRounds: 0 });
   const [basics, setBasics] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
@@ -547,7 +551,7 @@ export default function Profile() {
             <Text style={styles.ctaSub}>Help me help you by building your profile.</Text>
           </View>
           <View style={styles.ctaBtnCol}>
-            <PopButton label="Deepen your story" variant="primaryDeep" textStyle={styles.ctaBtnText} style={styles.ctaBtn} shadowColor={colors.ink} onPress={openDrawer} />
+            <PopButton label="Deepen your story" variant="primaryDeep" textStyle={styles.ctaBtnText} style={[styles.ctaBtn, dimStyle]} shadowColor={colors.ink} onPress={aiGuard(openDrawer)} />
             <Pressable onPress={() => router.push('/(app)/finder')}>
               <Text style={styles.ctaSecondaryLink}>or browse opportunities</Text>
             </Pressable>
@@ -576,11 +580,11 @@ export default function Profile() {
             )}
           </View>
           <View style={styles.headBtns}>
-            <PopButton label="📄 Quick add from resume / LinkedIn" variant="ink" small textStyle={styles.hBtnText} shadowColor={colors.ink} onPress={() => setImportOpen(true)} />
+            <PopButton label="📄 Quick add from resume / LinkedIn" variant="ink" small textStyle={styles.hBtnText} shadowColor={colors.ink} style={dimStyle} onPress={aiGuard(() => setImportOpen(true))} />
             {/* With no profile yet there is nothing to deepen — the card's own "Start
                 chatting" button is the CTA, so both "deepen" affordances stay hidden. */}
             {hasProfile && (
-              <PopButton label="Deepen your story" small textStyle={styles.hBtnText} shadowColor={colors.ink} style={styles.deepenBtn} onPress={openDrawer} />
+              <PopButton label="Deepen your story" small textStyle={styles.hBtnText} shadowColor={colors.ink} style={[styles.deepenBtn, dimStyle]} onPress={aiGuard(openDrawer)} />
             )}
           </View>
         </View>
@@ -663,21 +667,21 @@ export default function Profile() {
                 <Text style={styles.truncatedText}>
                   The end of your profile was trimmed by an earlier save. Tidying up finishes or removes the incomplete bit — it won't change anything else, and it won't make anything up.
                 </Text>
-                <PopButton label={busy === 'tidying' ? 'Tidying…' : 'Tidy it up'} variant="ink" small loading={busy === 'tidying'} shadowColor={colors.ink} onPress={tidyUp} style={styles.selfStart} />
+                <PopButton label={busy === 'tidying' ? 'Tidying…' : 'Tidy it up'} variant="ink" small loading={busy === 'tidying'} shadowColor={colors.ink} onPress={aiGuard(tidyUp)} style={[styles.selfStart, dimStyle]} />
               </View>
             )}
           </View>
         ) : (
           <View style={{ gap: space.lg }}>
             <Text style={styles.emptyState}>Nothing here yet — chat with the bot to build your profile.</Text>
-            <PopButton label="Start chatting" style={styles.selfStart} shadowColor={colors.ink} onPress={openDrawer} />
+            <PopButton label="Start chatting" style={[styles.selfStart, dimStyle]} shadowColor={colors.ink} onPress={aiGuard(openDrawer)} />
           </View>
         )}
 
         <View style={styles.footRow}>
           {hasProfile && (
-            <Pressable onPress={openDrawer}>
-              <Text style={styles.footLink}>or deepen your story</Text>
+            <Pressable onPress={aiGuard(openDrawer)}>
+              <Text style={[styles.footLink, dimStyle]}>or deepen your story</Text>
             </Pressable>
           )}
           {hasProfile && (
@@ -731,14 +735,14 @@ export default function Profile() {
               <>
                 <View style={styles.starterHead}>
                   <Text style={styles.starterHeadText}>Pick a place to start:</Text>
-                  <Pressable onPress={() => !startersLoading && loadStarters(true)} disabled={startersLoading}>
+                  <Pressable onPress={aiGuard(() => !startersLoading && loadStarters(true))} disabled={startersLoading}>
                     <Text style={[styles.regenLink, startersLoading && styles.regenDisabled]}>
                       {startersLoading ? 'Regenerating…' : '🔄 Regenerate'}
                     </Text>
                   </Pressable>
                 </View>
                 {starters.map((q, i) => (
-                  <Pressable key={i} style={[styles.starterBtn, startersLoading && styles.regenDisabled]} onPress={() => !startersLoading && pickStarter(q)}>
+                  <Pressable key={i} style={[styles.starterBtn, startersLoading && styles.regenDisabled]} onPress={aiGuard(() => !startersLoading && pickStarter(q))}>
                     <Text style={styles.bubbleText}>{q}</Text>
                   </Pressable>
                 ))}
@@ -762,7 +766,7 @@ export default function Profile() {
               placeholderTextColor={colors.slate400}
               value={draft}
               onChangeText={setDraft}
-              onSubmitEditing={send}
+              onSubmitEditing={aiGuard(send)}
             />
             {!!SpeechRecognitionCtor && (
               <Pressable
@@ -776,7 +780,7 @@ export default function Profile() {
                 <Text style={styles.voiceBtnText}>{listening ? '⏺' : '🎤'}</Text>
               </Pressable>
             )}
-            <Pressable onPress={send} {...sendBtnPop.handlers} style={[styles.sendBtn, sendBtnPop.shadowStyle]}>
+            <Pressable onPress={aiGuard(send)} {...sendBtnPop.handlers} style={[styles.sendBtn, sendBtnPop.shadowStyle, dimStyle]}>
               <Text style={styles.sendText}>Send</Text>
             </Pressable>
           </View>
@@ -817,7 +821,7 @@ export default function Profile() {
                 </Pressable>
                 {!!resumeStatus && <Text style={styles.importStatus}>{resumeStatus}</Text>}
                 {!!resumeFile && (
-                  <Pressable {...resumeSubmitPop.handlers} style={[styles.importSubmit, resumeSubmitPop.shadowStyle]} onPress={submitResume}>
+                  <Pressable {...resumeSubmitPop.handlers} style={[styles.importSubmit, resumeSubmitPop.shadowStyle, dimStyle]} onPress={aiGuard(submitResume)}>
                     <Text style={styles.importSubmitText}>Extract from Resume</Text>
                   </Pressable>
                 )}
@@ -835,7 +839,7 @@ export default function Profile() {
                   placeholder="Paste your LinkedIn profile content here..."
                   placeholderTextColor={colors.slate400}
                 />
-                <Pressable {...linkedinSubmitPop.handlers} style={[styles.importSubmit, linkedinSubmitPop.shadowStyle]} onPress={submitLinkedIn}>
+                <Pressable {...linkedinSubmitPop.handlers} style={[styles.importSubmit, linkedinSubmitPop.shadowStyle, dimStyle]} onPress={aiGuard(submitLinkedIn)}>
                   <Text style={styles.importSubmitText}>Extract from LinkedIn Text</Text>
                 </Pressable>
                 {!!linkedinStatus && <Text style={styles.importStatus}>{linkedinStatus}</Text>}

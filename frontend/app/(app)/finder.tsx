@@ -42,6 +42,8 @@ import {
   type TrackerInfo,
 } from '@/lib/tracker';
 import { MiniBadge, PopButton, ReviewBadge, Screen, SoftCard, Txt, usePopInteraction } from '@/ui/components';
+import { useAiGate } from '@/ui/AiLimitBanner';
+import { reopenAiLimitBanner } from '@/lib/aiLimit';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
 interface Result {
@@ -155,6 +157,9 @@ function tagKeywordMatch(opp: Opportunity, tag: string): boolean {
 export default function Finder() {
   const router = useRouter();
   const { user } = useAuth();
+  // The Free-tier AI gate. `aiBlocked` greys AI controls; `aiGuard` wraps a press so a tap while
+  // out of quota re-shows the banner instead of running the (server-refused) action.
+  const { reached: aiBlocked, guard: aiGuard, dimStyle } = useAiGate();
   const [opps, setOpps] = useState<Opportunity[] | null>(null);
   const [oppsError, setOppsError] = useState<string | null>(null);
   const [oppsLoading, setOppsLoading] = useState(true);
@@ -612,6 +617,8 @@ export default function Finder() {
   // surfaces the reason rather than blanking the grid.
   async function rerunThemeMatch() {
     if (!profileReady) return;
+    // Out of AI actions: don't fire a match the server would refuse; surface the banner instead.
+    if (aiBlocked) { reopenAiLimitBanner(); return; }
     setThemeMatching(true);
     try {
       const gradeNum = await resolveGradeNum();
@@ -1181,8 +1188,8 @@ export default function Finder() {
               <Text style={[styles.heroSub, styles.heroSubItalic]}>Based on everything in your profile.</Text>
               <View style={styles.heroActions}>
                 <PopButton label="View my matches →" onPress={() => setStage('results')} />
-                <Pressable onPress={() => { sessionSearch = null; void suggestForMe(); }}>
-                  <Text style={styles.link}>Search again</Text>
+                <Pressable onPress={aiGuard(() => { sessionSearch = null; void suggestForMe(); })}>
+                  <Text style={[styles.link, dimStyle]}>Search again</Text>
                 </Pressable>
               </View>
             </>
@@ -1285,9 +1292,9 @@ export default function Finder() {
               />
               <PopButton
                 label="Find my matches →"
-                onPress={() => startSuggestFlow()}
+                onPress={aiGuard(() => startSuggestFlow())}
                 disabled={!selectedThemes.size && !exploreText.trim()}
-                style={styles.selfStart}
+                style={[styles.selfStart, dimStyle]}
               />
             </>
           )}
@@ -1415,8 +1422,8 @@ export default function Finder() {
               square
               loading={searching}
               disabled={!opps || !description.trim()}
-              onPress={() => search(description, kind, buildPrefs())}
-              style={styles.findBtn}
+              onPress={aiGuard(() => search(description, kind, buildPrefs()))}
+              style={[styles.findBtn, dimStyle]}
               textStyle={styles.findBtnText}
             />
           </View>
@@ -1751,7 +1758,8 @@ export default function Finder() {
             label={addProgress ? `Fetching details (${addProgress.done}/${addProgress.total})…` : adding ? 'Adding…' : 'Add to my tracker →'}
             loading={adding}
             disabled={!selected.size}
-            onPress={addSelectedToTracker}
+            onPress={aiGuard(addSelectedToTracker)}
+            style={dimStyle}
           />
         </View>
       )}

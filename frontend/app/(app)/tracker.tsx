@@ -73,6 +73,7 @@ function sortEntries(entries: { item: TrackerItem; bucket: Bucket }[], newIds?: 
   });
 }
 import { IconBtn, PopButton, RightDrawer, Screen, SoftCard, Txt } from '@/ui/components';
+import { useAiGate } from '@/ui/AiLimitBanner';
 import { CalendarIcon, CalendarSyncIcon, ListIcon, RefreshIcon, SearchIcon } from '@/ui/icons';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 import { CalendarCard } from '@/ui/tracker/CalendarCard';
@@ -83,6 +84,9 @@ import { ListCard } from '@/ui/tracker/ListCard';
 // the swimlane month-card calendar, and the list view with pop cards + Saved for Later.
 export default function Tracker() {
   const router = useRouter();
+  // Free-tier AI gate: greys the deadline "Check for updates" and the catalog "Add" (both spend
+  // an AI action) and re-shows the banner on tap when out of quota.
+  const { reached: aiBlocked, guard: aiGuard, dimStyle } = useAiGate();
   const [data, setData] = useState<TrackerData | null>(null);
   const [saved, setSaved] = useState<SavedState>({});
   const [error, setError] = useState<string | null>(null);
@@ -497,13 +501,15 @@ export default function Tracker() {
       <View style={styles.topRow}>
         <View style={styles.topLeft}>
           <Text style={styles.lastChecked}>{lastCheckedLabel}</Text>
-          <IconBtn
-            onPress={checkForUpdates}
-            disabled={refreshing}
-            label={refreshing ? 'Checking for updates' : 'Check all tracked opportunities for updates'}
-          >
-            <RefreshIcon size={14} color={refreshing ? colors.slate400 : colors.indigo600} />
-          </IconBtn>
+          <View style={dimStyle}>
+            <IconBtn
+              onPress={aiGuard(checkForUpdates)}
+              disabled={refreshing}
+              label={refreshing ? 'Checking for updates' : 'Check all tracked opportunities for updates'}
+            >
+              <RefreshIcon size={14} color={refreshing || aiBlocked ? colors.slate400 : colors.indigo600} />
+            </IconBtn>
+          </View>
         </View>
         <View style={styles.topRight}>
           {syncState !== 'idle' && (
@@ -711,7 +717,8 @@ export default function Tracker() {
               }
               loading={adding}
               disabled={!selectedResults.size || adding}
-              onPress={addSelected}
+              onPress={aiGuard(addSelected)}
+              style={dimStyle}
             />
           </View>
         </>

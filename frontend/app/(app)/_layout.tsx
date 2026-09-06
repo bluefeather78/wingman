@@ -1,6 +1,7 @@
 import { Redirect, Slot, usePathname } from 'expo-router';
 import { View } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
+import { AiLimitBanner } from '@/ui/AiLimitBanner';
 import { NavBar } from '@/ui/NavBar';
 import { colors } from '@/ui/theme';
 
@@ -30,6 +31,9 @@ export default function AppLayout() {
   }
   return (
     <View style={{ flex: 1, backgroundColor: colors.cream }}>
+      {/* Out-of-AI-actions header (Free tier, spent allowance). Above the nav so it shows on
+          every tab; renders nothing for paid/comped accounts or anyone with actions left. */}
+      {!blocked && <AiLimitBanner />}
       <NavBar locked={blocked} />
       <Slot />
     </View>

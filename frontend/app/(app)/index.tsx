@@ -41,6 +41,8 @@ import {
 } from '@/ui/components';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 import { isPaidTier } from '@/lib/tier';
+import { reopenAiLimitBanner } from '@/lib/aiLimit';
+import { useAiGate } from '@/ui/AiLimitBanner';
 import type { AllowanceSnapshot } from '@/api/types';
 
 interface StoredProfile {
@@ -174,6 +176,9 @@ function AiActionsMeter({ allowance, paid }: { allowance: AllowanceSnapshot | nu
 export default function Home() {
   const router = useRouter();
   const { user, allowance } = useAuth();
+  // Free-tier AI gate: greys the "View & deepen it" CTA (deepening is an AI action) and
+  // re-shows the AI-limit banner on tap when out of quota.
+  const { reached: aiBlocked, dimStyle } = useAiGate();
   // Seed from whatever the client already has. This screen is remounted by expo-router on
   // every visit, so without it a tab switch back to Home Base showed a full-screen spinner
   // for a round trip it had already paid for once. The fetch below still runs and still
@@ -318,7 +323,14 @@ export default function Home() {
         <SoftCard style={{ gap: space.lg }} hoverTint onPress={goProfile}>
           <View style={styles.rowBetween}>
             <Txt variant="h2" style={styles.cardTitle}>Your Story So Far</Txt>
-            <PopButton label="View & deepen it →" small onPress={(e) => { stop(e); goProfile(); }} />
+            <PopButton
+              label="View & deepen it →"
+              small
+              style={dimStyle}
+              // Always stop propagation so the card's own onPress doesn't also fire; then
+              // either re-show the AI-limit banner (out of quota) or open the profile.
+              onPress={(e) => { stop(e); if (aiBlocked) { reopenAiLimitBanner(); return; } goProfile(); }}
+            />
           </View>
           <Txt style={styles.teaserText} numberOfLines={3}>{profile}</Txt>
         </SoftCard>

@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useReducer, useRef } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useAuth } from '@/auth/AuthContext';
 import {
   aiLimitReached,
@@ -38,14 +38,38 @@ export function AiLimitBanner() {
     wasReached.current = reached;
   }, [reached]);
 
-  if (!reached || isAiLimitBannerDismissed()) return null;
+  const visible = reached && !isAiLimitBannerDismissed();
+
+  // Roll-in: every time the banner appears — the first time the allowance hits zero, or when a
+  // greyed AI control is tapped after a dismiss — it slides down from above its slot and fades
+  // in. useLayoutEffect resets the value before paint, so there's no flash of the shown bar.
+  const anim = useRef(new Animated.Value(0)).current;
+  const [barH, setBarH] = useState(120);
+  useLayoutEffect(() => {
+    if (!visible) return;
+    anim.setValue(0);
+    const run = Animated.timing(anim, {
+      toValue: 1,
+      duration: 320,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    });
+    run.start();
+    return () => run.stop();
+  }, [visible, anim]);
+
+  if (!visible) return null;
 
   const limit = typeof allowance?.limit === 'number' && allowance.limit > 0 ? allowance.limit : DEFAULT_LIMIT;
   const remaining = typeof allowance?.remaining === 'number' ? Math.max(0, allowance.remaining) : 0;
   const segs = Array.from({ length: limit });
+  const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [-barH, 0] });
 
   return (
-    <View style={styles.bar}>
+    <Animated.View
+      onLayout={(e) => setBarH(e.nativeEvent.layout.height)}
+      style={[styles.bar, { opacity: anim, transform: [{ translateY }] }]}
+    >
       <View style={styles.inner}>
         <Pressable style={styles.close} onPress={dismissAiLimitBanner} hitSlop={10} accessibilityLabel="Dismiss">
           <Text style={styles.closeText}>✕</Text>
@@ -82,7 +106,7 @@ export function AiLimitBanner() {
           </Pressable>
         </View>
       </View>
-    </View>
+    </Animated.View>
   );
 }
 

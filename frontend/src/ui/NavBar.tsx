@@ -6,7 +6,7 @@ import { backendUrl } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
 import { Logo, RightDrawer, usePopInteraction } from './components';
 import { CalendarIcon, HomeIcon, PersonIcon, SearchIcon, SettingsIcon } from './icons';
-import { APP_MAX_WIDTH, colors, fonts, navShadow, popShadow, radius, space } from './theme';
+import { colors, fonts, navShadow, popShadow, radius, space } from './theme';
 
 // The live app's floating pill navigation: sticky, centered in the max-w-4xl column with
 // 16px top inset, navy pill with a soft blue glow. Wordmark + BETA, four tabs (orange when
@@ -165,7 +165,7 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
 
               {/* Subscription */}
               <View style={styles.subBox}>
-                <Text style={styles.subTitle}>📋 Subscription</Text>
+                <Text style={styles.subTitle}>Subscription</Text>
                 {!!subLabel && <Text style={styles.subStatus}>{subLabel}</Text>}
                 <SmallBtn
                   label="Manage Plan"
@@ -201,7 +201,7 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
                 <Text style={styles.boxDesc}>Found a bug, or have feedback? We'd love to hear it.</Text>
                 <View style={styles.btnRow}>
                   <SmallBtn
-                    label="✉️ Email us"
+                    label="Email us"
                     onPress={() => Linking.openURL('mailto:contactus@highschoolwingman.com?subject=Highschool%20Wingman%20Feedback')}
                   />
                 </View>
@@ -237,7 +237,9 @@ const styles = StyleSheet.create({
     zIndex: 50,
     ...(Platform.OS === 'web' ? ({ position: 'sticky', top: 0 } as object) : null),
   },
-  column: { width: '100%', maxWidth: APP_MAX_WIDTH, alignSelf: 'center', paddingHorizontal: space.lg, paddingTop: space.lg },
+  // Full-bleed: the nav pill spans the whole screen width (minus a small side gutter) rather
+  // than being capped to the centered content column.
+  column: { width: '100%', paddingHorizontal: space.lg, paddingTop: space.lg },
   bar: {
     flexDirection: 'row',
     alignItems: 'center',

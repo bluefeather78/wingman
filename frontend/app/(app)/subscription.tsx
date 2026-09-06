@@ -265,8 +265,8 @@ export default function Subscription() {
           </View>
           <View style={styles.plansBody}>
             <Text style={styles.billingLine}>Wingman Unlimited is $9.99/month, billed when you upgrade. Cancel anytime.</Text>
-            <Text style={styles.billingLine}>💳 Payment method: Add during checkout</Text>
-            <Text style={styles.billingLine}>📧 Receipts will be sent to your email</Text>
+            <Text style={styles.billingLine}>Payment method: Add during checkout</Text>
+            <Text style={styles.billingLine}>Receipts will be sent to your email</Text>
           </View>
         </View>
       </SoftCard>

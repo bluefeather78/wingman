@@ -1187,7 +1187,7 @@ export default function Finder() {
                   so, and offer the re-run explicitly rather than doing it unasked. */}
               <Text style={[styles.heroSub, styles.heroSubItalic]}>Based on everything in your profile.</Text>
               <View style={styles.heroActions}>
-                <PopButton label="View my matches →" onPress={() => setStage('results')} />
+                <PopButton label="View my matches" onPress={() => setStage('results')} />
                 <Pressable onPress={aiGuard(() => { sessionSearch = null; void suggestForMe(); })}>
                   <Text style={[styles.link, dimStyle]}>Search again</Text>
                 </Pressable>
@@ -1213,7 +1213,7 @@ export default function Finder() {
               </View>
               <View style={styles.heroActions}>
                 <PopButton
-                  label={savingLocation ? 'Saving…' : 'Continue →'}
+                  label={savingLocation ? 'Saving…' : 'Continue'}
                   loading={savingLocation}
                   disabled={!locationInput.trim() || savingLocation}
                   onPress={() => void submitLocationAndSearch()}
@@ -1243,7 +1243,7 @@ export default function Finder() {
               </View>
               <View style={styles.heroActions}>
                 <PopButton
-                  label={savingGrade ? 'Saving…' : 'Continue →'}
+                  label={savingGrade ? 'Saving…' : 'Continue'}
                   loading={savingGrade}
                   disabled={!gradeInput.trim() || savingGrade}
                   onPress={() => void submitGradeAndSearch()}
@@ -1291,7 +1291,7 @@ export default function Finder() {
                 placeholder="e.g. marine biology, game design, journalism…"
               />
               <PopButton
-                label="Find my matches →"
+                label="Find my matches"
                 onPress={aiGuard(() => startSuggestFlow())}
                 disabled={!selectedThemes.size && !exploreText.trim()}
                 style={[styles.selfStart, dimStyle]}
@@ -1326,7 +1326,7 @@ export default function Finder() {
               ))}
             </View>
             <Pressable style={styles.quizCta} onPress={() => { setQuizBranch(null); setStage('quiz'); }}>
-              <Text style={styles.quizCtaText}>Not sure? Take a quick quiz →</Text>
+              <Text style={styles.quizCtaText}>Not sure? Take a quick quiz</Text>
             </Pressable>
           </SoftCard>
         )}
@@ -1649,7 +1649,7 @@ export default function Finder() {
               <View style={styles.badgeRow}>
                 <MiniBadge label={cat} bg={colors.violet200} fg={colors.violet900} />
                 {tier === 'strong' ? (
-                  <MiniBadge label="⭐ Strong Fit" bg={colors.yellow300} fg={colors.slate900} />
+                  <MiniBadge label="Strong Fit" bg={colors.yellow300} fg={colors.slate900} />
                 ) : (
                   <MiniBadge label="Worth a look" bg={colors.slate100} fg={colors.slate900} />
                 )}
@@ -1662,7 +1662,7 @@ export default function Finder() {
               </View>
               {isTracked ? (
                 <Pressable style={styles.trackedTag} onPress={() => router.push('/(app)/tracker')}>
-                  <Text style={styles.trackedTagText}>📌 In Quest Log. Make edits there.</Text>
+                  <Text style={styles.trackedTagText}>In Quest Log. Make edits there.</Text>
                 </Pressable>
               ) : (
                 <Pressable
@@ -1680,7 +1680,7 @@ export default function Finder() {
                   ]}
                   onPress={() => toggleSelect(opp.id)}
                 >
-                  <Text style={styles.saveBtnText}>{isSelected ? '⭐ Saved Match' : '⭐ Save Match'}</Text>
+                  <Text style={styles.saveBtnText}>{isSelected ? 'Saved Match' : 'Save Match'}</Text>
                 </Pressable>
               )}
             </View>
@@ -1755,7 +1755,7 @@ export default function Finder() {
         <View style={styles.selectionBar}>
           <Text style={styles.selectionCount}>{selected.size} selected</Text>
           <PopButton
-            label={addProgress ? `Fetching details (${addProgress.done}/${addProgress.total})…` : adding ? 'Adding…' : 'Add to my tracker →'}
+            label={addProgress ? `Fetching details (${addProgress.done}/${addProgress.total})…` : adding ? 'Adding…' : 'Add to my tracker'}
             loading={adding}
             disabled={!selected.size}
             onPress={aiGuard(addSelectedToTracker)}

@@ -571,7 +571,7 @@ export default function Profile() {
                 is no longer repeated here. */}
           </View>
           <View style={styles.headBtns}>
-            <PopButton label="📄 Quick add from resume / LinkedIn" variant="ink" small textStyle={styles.hBtnText} shadowColor={colors.ink} style={dimStyle} onPress={aiGuard(() => setImportOpen(true))} />
+            <PopButton label="Quick add from resume / LinkedIn" variant="ink" small textStyle={styles.hBtnText} shadowColor={colors.ink} style={dimStyle} onPress={aiGuard(() => setImportOpen(true))} />
             {/* With no profile yet there is nothing to deepen — the card's own "Start
                 chatting" button is the CTA, so both "deepen" affordances stay hidden. */}
             {hasProfile && (
@@ -678,7 +678,7 @@ export default function Profile() {
           {hasProfile && (
             <Pressable onPress={clearProfile}>
               <Text style={[styles.clearLink, clearArmed && styles.clearLinkArmed]}>
-                {clearArmed ? 'Click again to confirm' : '🗑️ Clear profile'}
+                {clearArmed ? 'Click again to confirm' : 'Clear profile'}
               </Text>
             </Pressable>
           )}
@@ -728,7 +728,7 @@ export default function Profile() {
                   <Text style={styles.starterHeadText}>Pick a place to start:</Text>
                   <Pressable onPress={aiGuard(() => !startersLoading && loadStarters(true))} disabled={startersLoading}>
                     <Text style={[styles.regenLink, startersLoading && styles.regenDisabled]}>
-                      {startersLoading ? 'Regenerating…' : '🔄 Regenerate'}
+                      {startersLoading ? 'Regenerating…' : 'Regenerate'}
                     </Text>
                   </Pressable>
                 </View>
@@ -798,10 +798,10 @@ export default function Profile() {
             </Text>
             <View style={styles.importTabs}>
               <Pressable onPress={() => setImportTab('resume')}>
-                <Text style={[styles.importTab, importTab === 'resume' && styles.importTabActive]}>📄 Upload Resume</Text>
+                <Text style={[styles.importTab, importTab === 'resume' && styles.importTabActive]}>Upload Resume</Text>
               </Pressable>
               <Pressable onPress={() => setImportTab('linkedin')}>
-                <Text style={[styles.importTab, importTab === 'linkedin' && styles.importTabActive]}>🔗 LinkedIn Profile</Text>
+                <Text style={[styles.importTab, importTab === 'linkedin' && styles.importTabActive]}>LinkedIn Profile</Text>
               </Pressable>
             </View>
             {importTab === 'resume' ? (

@@ -324,7 +324,7 @@ export default function Home() {
           <View style={styles.rowBetween}>
             <Txt variant="h2" style={styles.cardTitle}>Your Story So Far</Txt>
             <PopButton
-              label="View & deepen it →"
+              label="View & deepen it"
               small
               style={dimStyle}
               // Always stop propagation so the card's own onPress doesn't also fire; then

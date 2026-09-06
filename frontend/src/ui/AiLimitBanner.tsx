@@ -120,8 +120,6 @@ const styles = StyleSheet.create({
   },
   inner: {
     width: '100%',
-    maxWidth: 1120,
-    alignSelf: 'center',
     paddingVertical: 14,
     paddingHorizontal: 24,
     flexDirection: 'row',

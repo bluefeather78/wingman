@@ -1209,7 +1209,7 @@ export default function Finder() {
                 We use this once to hide opportunities you can’t apply to — some are open only to
                 students in a specific city, district, or state. We won’t ask again.
               </Text>
-              <View style={{ maxWidth: 360, marginTop: 8, alignSelf: 'stretch' }}>
+              <View style={{ maxWidth: 360, marginTop: 8, alignSelf: 'stretch', position: 'relative', zIndex: 30 }}>
                 <StateAutocomplete
                   value={locationInput}
                   onChangeText={setLocationInput}
@@ -1239,7 +1239,7 @@ export default function Finder() {
                 We use this once to hide opportunities you’re not eligible for — many are open only
                 to a specific grade range. We won’t ask again.
               </Text>
-              <View style={{ maxWidth: 360, marginTop: 8, alignSelf: 'stretch' }}>
+              <View style={{ maxWidth: 360, marginTop: 8, alignSelf: 'stretch', position: 'relative', zIndex: 30 }}>
                 <SoftSelect
                   value={gradeInput || 'Select your grade'}
                   options={['Middle School', '9th grade', '10th grade', '11th grade', '12th grade']}
@@ -1397,7 +1397,9 @@ export default function Finder() {
             <Text style={styles.charCount}>{description.length} characters - aim for at least 200</Text>
           </View>
 
-          <View style={styles.formRow}>
+          {/* Elevated above the rows that follow so grade's / home-state's open dropdown
+              renders in front of them rather than behind. */}
+          <View style={[styles.formRow, { position: 'relative', zIndex: 30 }]}>
             <View style={styles.flex1}>
               <Text style={styles.fieldLabelMuted}>GRADE LEVEL (OPTIONAL)</Text>
               <SoftSelect value={grade || 'Prefer not to say'} options={['Prefer not to say', 'Middle School', '9th grade', '10th grade', '11th grade', '12th grade']} onChange={(v) => setGrade(v === 'Prefer not to say' ? '' : v)} />
@@ -1898,7 +1900,10 @@ function StateAutocomplete({ value, onChangeText, placeholder }: { value: string
     setFocused(false);
   }
   return (
-    <View style={{ zIndex: 60 }}>
+    // position:relative + a high zIndex so the absolute panel (and this field) out-rank the
+    // form rows / hero buttons that come after it in the tree — otherwise they paint over the
+    // list on web. When closed the elevation is harmless; when open it lifts the whole field.
+    <View style={{ position: 'relative', zIndex: focused && suggestions.length > 0 ? 200 : 1 }}>
       <TextInput
         value={value}
         onChangeText={onChangeText}
@@ -1926,7 +1931,9 @@ function StateAutocomplete({ value, onChangeText, placeholder }: { value: string
 function SoftSelect({ value, options, onChange }: { value: string; options: string[]; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false);
   return (
-    <View>
+    // Same overlay fix as StateAutocomplete: lift the whole control above later siblings while
+    // the panel is open so the options render in front of the form rows / buttons below it.
+    <View style={{ position: 'relative', zIndex: open ? 200 : 1 }}>
       <Pressable style={styles.softInput} onPress={() => setOpen(!open)}>
         <Text style={styles.softSelectText}>{value}  ▾</Text>
       </Pressable>

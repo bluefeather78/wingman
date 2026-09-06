@@ -13,8 +13,10 @@ import { colors, fonts, radius, softShadow, space } from '@/ui/theme';
 const MIN_PASSWORD_LENGTH = 8;
 
 // Login / Register — ported from the live app's #page-login: centered card-soft (max-w-sm),
-// favicon + Wingman + BETA, tagline, beta notice, back-to-home, Google row (with the
-// live app's COMING SOON treatment) above the form, then the form and the register link.
+// favicon + Wingman + BETA, tagline, beta notice, back-to-home, Google row above the form,
+// then the form and the register link. The Google button was styled "COMING SOON" (grayed
+// out) while the flow was being built; it is live now, so it carries the active card look
+// (white fill, slate900 ink border, full-strength text and "G").
 export default function Login() {
   const router = useRouter();
   const { login, register } = useAuth();
@@ -207,13 +209,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     borderWidth: 2,
-    borderColor: '#CBD5E1',
+    borderColor: colors.slate900,
     borderRadius: radius.md,
     padding: 12,
-    backgroundColor: colors.slate100,
+    backgroundColor: colors.white,
   },
-  googleText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.slate400 },
-  gWrap: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center', opacity: 0.5 },
+  googleText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.slate900 },
+  gWrap: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center' },
   gText: { fontFamily: fonts.bodyXBold, fontSize: 13, color: '#4285F4' },
   orRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   rule: { flex: 1, height: 1, backgroundColor: colors.slate200 },

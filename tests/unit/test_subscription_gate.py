@@ -19,8 +19,8 @@ from fastapi import HTTPException
 
 import app.deps as deps
 from app.auth import AuthedUser
-from app.routes import (account, auth, email, events, google_oauth, mailing_list,
-                        opportunities, resume, subscription, user_data)
+from app.routes import (account, account_data, auth, email, events, google_oauth,
+                        mailing_list, opportunities, resume, subscription, user_data)
 
 
 def _iso(delta_days):
@@ -118,6 +118,11 @@ UNGATED = {
     # account (we still record what they do) and never 402, so it uses get_optional_user,
     # not the subscription gate.
     ("POST", "/api/events"),
+    # Data export (DATA_DELETION_EXPORT_PLAN.md): a lapsed account must be able to take a
+    # copy of its own data — a paywall you can't export through is a data-hostage situation
+    # and the app stores reject it. Auth still required (get_current_user, hard 401), but no
+    # subscription gate. Deletion (P2) joins this list for the same reason.
+    ("POST", "/api/account/export"),
     # Stripe calls this with a signature, not a bearer token — it must never require auth or
     # the subscription gate. Its events are what LIFT the block (write status='active'), so
     # gating it would make it unreachable exactly when it matters.
@@ -129,8 +134,8 @@ GATE_DEPENDENCIES = {deps.require_subscription, deps.optional_subscribed_user}
 
 # Walk the routers themselves rather than app.main's FastAPI instance: recent FastAPI
 # defers include_router into a wrapper, so app.routes does not list the real APIRoutes.
-_ROUTE_MODULES = (account, auth, email, events, google_oauth, mailing_list, opportunities,
-                  resume, subscription, user_data)
+_ROUTE_MODULES = (account, account_data, auth, email, events, google_oauth, mailing_list,
+                  opportunities, resume, subscription, user_data)
 
 
 def _endpoint(method, path):

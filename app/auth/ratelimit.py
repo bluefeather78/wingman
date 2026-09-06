@@ -92,6 +92,13 @@ register_email_limiter = RateLimiter(3, 60 * 60)
 ai_user_limiter = RateLimiter(AI_RATE_LIMIT_PER_USER, AI_RATE_LIMIT_WINDOW_SECONDS)
 ai_ip_limiter = RateLimiter(AI_RATE_LIMIT_PER_IP, AI_RATE_LIMIT_WINDOW_SECONDS)
 
+# Data export, per ACCOUNT per hour (DATA_DELETION_EXPORT_PLAN.md §1). Assembling an export
+# reads the whole users row plus every satellite table for one account, so it is heavier than
+# an ordinary request and worth bounding — a few per hour is plenty for a real person saving a
+# copy of their data, and the ceiling blunts a script hammering it. Keyed on the userid (the
+# route is always authenticated), same per-process caveat as every limiter here.
+account_export_limiter = RateLimiter(6, 60 * 60)
+
 # Catalog submissions, per ACCOUNT per day (S1-4, finding M10). Keyed on the userid rather
 # than the address on purpose: the route is require_subscription'd now, so identity is
 # always known, and a school NAT would otherwise make one classroom share a bucket.

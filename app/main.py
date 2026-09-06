@@ -22,7 +22,7 @@ from app.config import GEMINI_API_KEY, ANTHROPIC_API_KEY
 from wingman import gemini_common
 from app.core import record_api_error
 from app.routes import (
-    ai, opportunities, account, user_data, google_oauth, mailing_list,
+    ai, opportunities, account, account_data, user_data, google_oauth, mailing_list,
     subscription, resume, auth, email, events, matching,
 )
 
@@ -308,8 +308,8 @@ async def http_exception_as_error(request: Request, exc: StarletteHTTPException)
 
 
 # ---------------- Public API routers ----------------
-for module in (ai, opportunities, account, user_data, google_oauth, mailing_list,
-               subscription, resume, auth, email, events, matching):
+for module in (ai, opportunities, account, account_data, user_data, google_oauth,
+               mailing_list, subscription, resume, auth, email, events, matching):
     app.include_router(module.router)
 
 

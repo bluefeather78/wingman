@@ -1446,7 +1446,7 @@ export default function Finder() {
           <Text style={styles.deepenSub}>Deepen your story by adding more details.</Text>
         </View>
         <View style={styles.deepenRight}>
-          <Pressable style={styles.deepenBtn} onPress={() => router.push('/(app)/profile')}>
+          <Pressable style={[styles.deepenBtn, dimStyle]} onPress={aiGuard(() => router.push('/(app)/profile'))}>
             <Text style={styles.deepenBtnText}>Deepen your story</Text>
           </Pressable>
           <Pressable onPress={() => { setStage('home'); setBrowseOpen(true); }}>

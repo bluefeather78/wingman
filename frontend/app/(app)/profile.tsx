@@ -540,7 +540,7 @@ export default function Profile() {
             <Text style={styles.ctaTitle}>Your story is ready to work for you.</Text>
             <Text style={styles.ctaSub}>Head to Fresh Finds to see opportunities matched to what you just told us.</Text>
           </View>
-          <PopButton label="Find your matches" variant="primaryDeep" textStyle={styles.ctaBtnText} style={styles.ctaBtn} shadowColor={colors.ink} onPress={() => router.push('/(app)/finder')} />
+          <PopButton label="Find your matches" variant="primaryDeep" textStyle={styles.ctaBtnText} style={[styles.ctaBtn, dimStyle]} shadowColor={colors.ink} onPress={aiGuard(() => router.push('/(app)/finder'))} />
         </LinearGradient>
       ) : (
         <LinearGradient colors={[colors.bannerFrom, colors.bannerTo]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.ctaBanner}>

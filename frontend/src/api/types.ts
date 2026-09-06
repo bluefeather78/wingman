@@ -46,6 +46,9 @@ export interface AiResult {
 export interface SubscriptionState {
   status?: string; // free | beta | active | canceled | past_due | (legacy) trial
   days_left?: number;
+  // When a paid plan ends. For a `canceled` account still inside its paid period this is the
+  // date it reverts to Free (cancel-at-period-end); the home page counts down to it.
+  subscription_end_at?: string | null;
   has_access?: boolean;
   // Two-tier model: `in_paid_period` is true for a live paid/comped subscription and drives
   // the AI tier. `ai_tier` is the derived label the UI shows. has_access is always true now

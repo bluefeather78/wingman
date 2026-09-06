@@ -9,6 +9,21 @@ export function isPaidTier(user: SessionUser | null | undefined): boolean {
   return sub?.ai_tier === 'paid' || sub?.in_paid_period === true;
 }
 
+// A subscription that has been cancelled but is still inside the period the student paid
+// for (cancel-at-period-end — see cancel_subscription / subscription_state on the server).
+// The account is still Paid until `subscription_end_at`, so it reverts to Free only then,
+// not the moment Cancel was clicked. Returns the days left and the end date so the home
+// page can show a "your plan ends in X days" upsell; null for every other account.
+export function subscriptionEnding(
+  user: SessionUser | null | undefined,
+): { days: number; endAt?: string } | null {
+  const sub = user?.subscription;
+  if (sub?.status !== 'canceled' || sub?.in_paid_period !== true) return null;
+  const days = typeof sub?.days_left === 'number' ? Math.max(0, sub.days_left) : 0;
+  const endAt = typeof sub?.subscription_end_at === 'string' ? sub.subscription_end_at : undefined;
+  return { days, endAt };
+}
+
 export function tierName(user: SessionUser | null | undefined): string {
   return isPaidTier(user) ? 'Wingman Unlimited' : 'Free plan';
 }

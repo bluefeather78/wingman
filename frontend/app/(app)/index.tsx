@@ -40,7 +40,7 @@ import {
   type TaskStatus,
 } from '@/ui/components';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
-import { isPaidTier } from '@/lib/tier';
+import { isPaidTier, subscriptionEnding } from '@/lib/tier';
 import { reopenAiLimitBanner } from '@/lib/aiLimit';
 import { useAiGate } from '@/ui/AiLimitBanner';
 import type { AllowanceSnapshot } from '@/api/types';
@@ -123,6 +123,30 @@ function FreePanel({ onUpgrade }: { onUpgrade: () => void }) {
           </Txt>
         </View>
         <PopButton label="Go Unlimited" variant="primary" small onPress={onUpgrade} style={styles.freeBtn} />
+      </View>
+    </View>
+  );
+}
+
+// The "your plan is ending" strip inside the top card. Shown only for a cancelled account
+// still inside the period it paid for (cancel-at-period-end): the account keeps Unlimited
+// until `subscription_end_at`, so this counts down the days and offers a one-tap resubscribe
+// upsell. It replaces the Free-plan strip for this window — a cancelled account is still Paid,
+// so FreePanel is hidden anyway; when the period runs out the server flips it to Free and the
+// ordinary FreePanel takes over.
+function EndingPanel({ days, onResubscribe }: { days: number; onResubscribe: () => void }) {
+  const when = days <= 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
+  return (
+    <View style={styles.endingPanel}>
+      <View style={styles.freeBody}>
+        <View style={{ flex: 1, minWidth: 220 }}>
+          <Txt style={styles.endingTitle}>Your plan ends {when}</Txt>
+          <Txt style={styles.freeSub}>
+            After that you&rsquo;ll drop to the Free plan&rsquo;s daily AI cap. Resubscribe to keep
+            Wingman Unlimited — $9.99/mo.
+          </Txt>
+        </View>
+        <PopButton label="Resubscribe" variant="primary" small onPress={onResubscribe} style={styles.freeBtn} />
       </View>
     </View>
   );
@@ -305,6 +329,8 @@ export default function Home() {
   }
 
   const paid = isPaidTier(user);
+  // A cancelled-but-still-paid account: show the ending countdown instead of the Free strip.
+  const ending = subscriptionEnding(user);
 
   return (
     <Screen>
@@ -315,10 +341,19 @@ export default function Home() {
         <Text style={styles.greetingText}>
           Hey <Text style={styles.greetingAccent}>{user?.firstName || 'there'}</Text>, ready?
         </Text>
-        {!paid ? <FreePanel onUpgrade={() => router.push('/(app)/subscription')} /> : null}
-        <View style={styles.statRow}>
-          <AiActionsMeter allowance={allowance} paid={paid} />
-        </View>
+        {ending ? (
+          <EndingPanel days={ending.days} onResubscribe={() => router.push('/(app)/subscription')} />
+        ) : !paid ? (
+          <FreePanel onUpgrade={() => router.push('/(app)/subscription')} />
+        ) : null}
+        {/* The daily AI-actions meter is a Free-tier affordance — it counts down a cap that
+            paid/Unlimited accounts don't have. Showing an "Unlimited" card to them is noise,
+            so the meter is Free-only. */}
+        {!paid ? (
+          <View style={styles.statRow}>
+            <AiActionsMeter allowance={allowance} paid={paid} />
+          </View>
+        ) : null}
       </View>
 
       {/* Profile teaser */}
@@ -603,6 +638,11 @@ const styles = StyleSheet.create({
   freeTitle: { fontFamily: fonts.bodyXBold, fontSize: 15, color: colors.cream },
   freeSub: { fontFamily: fonts.bodyMed, fontSize: 12.5, color: colors.cream, opacity: 0.85, marginTop: 3, lineHeight: 17 },
   freeBtn: { alignSelf: 'center' },
+
+  // "Plan ending" strip — same navy card as the Free strip but the countdown title is orange
+  // so the winding-down state reads as a distinct, more urgent thing than the standing upsell.
+  endingPanel: { backgroundColor: colors.navy, borderRadius: radius.lg, padding: space.lg, borderWidth: 2, borderColor: colors.orange },
+  endingTitle: { fontFamily: fonts.bodyXBold, fontSize: 15, color: colors.orange },
 
   // AI-actions meter card (one of the stat-row cards): white, 2px navy border, 16px radius.
   meterCard: { flex: 1, minWidth: 170, backgroundColor: colors.card, borderWidth: 2, borderColor: colors.navy, borderRadius: radius.lg, padding: space.lg },

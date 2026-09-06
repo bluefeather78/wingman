@@ -1466,9 +1466,7 @@ export default function Finder() {
       {resultsTheme && results.length > 0 && (
         <View style={styles.resultsForRow}>
           <Text style={styles.resultsForLabel}>SHOWING MATCHES FOR</Text>
-          <View style={styles.resultsForPill}>
-            <Text style={styles.resultsForPillText}>{resultsTheme}</Text>
-          </View>
+          <Text style={styles.resultsForTheme}>{resultsTheme}</Text>
         </View>
       )}
 
@@ -1915,10 +1913,11 @@ const styles = StyleSheet.create({
   // First-screen theme picker chips (PR4). Selected = filled lavender; unselected = outlined.
   exploreLabel: { fontFamily: fonts.bodyBold, fontSize: 13, color: colors.inkSoft, marginTop: 14, marginBottom: 6 },
   facetExploreLabel: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.inkSoft, marginTop: 10, marginBottom: 6 },
-  resultsForRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 },
+  // Read as a status line, not a control (mockup): the label, then the theme as plain italic
+  // navy text — no pill, which read like a tappable filter it isn't.
+  resultsForRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6, flexWrap: 'wrap', marginBottom: 12 },
   resultsForLabel: { fontFamily: fonts.bodyBold, fontSize: 11, letterSpacing: 0.5, color: colors.muted },
-  resultsForPill: { backgroundColor: colors.lavender, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 5 },
-  resultsForPillText: { fontFamily: fonts.bodyBold, fontSize: 13, color: colors.slate900 },
+  resultsForTheme: { fontFamily: fonts.bodyBold, fontSize: 14, fontStyle: 'italic', color: colors.navy },
   themeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8, marginBottom: 4 },
   themeChip: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate400, borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 8 },
   themeChipOn: { backgroundColor: colors.lavender, borderColor: colors.slate900 },

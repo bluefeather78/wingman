@@ -40,6 +40,16 @@ function subscriptionLabel(
   return 'Free plan';
 }
 
+// The header plan tag beside the avatar (shown on every tab). Deliberately ONLY renders for
+// free-tier accounts: paid/comped users get no text — the header stays clean, and an
+// unlimited plan doesn't need advertising. Returns null when we can't tell yet (an older
+// cached session leaves `subscription` undefined) so we never flash "Free plan" at a paying
+// user before their status loads.
+function isFreeTier(sub: { in_paid_period?: boolean; ai_tier?: string } | undefined): boolean {
+  if (!sub) return false;
+  return !(sub.ai_tier === 'paid' || sub.in_paid_period === true);
+}
+
 // `locked` = this account's trial/subscription has ended ((app)/_layout's paywall). The
 // tabs are hidden rather than disabled: they would each bounce straight back to Manage
 // Plan, and a row of buttons that silently refuse to navigate reads as the app being
@@ -70,6 +80,7 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
   }
 
   const subLabel = subscriptionLabel(user?.subscription);
+  const showFreeTag = isFreeTier(user?.subscription);
 
   return (
     <SafeAreaView edges={['top']} style={styles.safe}>
@@ -102,16 +113,25 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
             })}
           </View>
 
-          <Pressable
-            style={styles.avatar}
-            onPress={() => setDrawerOpen(true)}
-            accessibilityRole="button"
-            // An emoji is announced by its own name ("bust in silhouette"), which says nothing
-            // about what the button does (Phase 5, finding 20).
-            accessibilityLabel="Open your account menu"
-          >
-            <Text style={styles.avatarEmoji}>👤</Text>
-          </Pressable>
+          <View style={styles.rightGroup}>
+            {/* Plan tag — free tier only, and hidden on the compact (phone) pill where the
+                width budget is already tight. Paid users see no text at all. */}
+            {showFreeTag && !compact && (
+              <View style={styles.planTag}>
+                <Text style={styles.planTagText}>Free plan</Text>
+              </View>
+            )}
+            <Pressable
+              style={styles.avatar}
+              onPress={() => setDrawerOpen(true)}
+              accessibilityRole="button"
+              // An emoji is announced by its own name ("bust in silhouette"), which says nothing
+              // about what the button does (Phase 5, finding 20).
+              accessibilityLabel="Open your account menu"
+            >
+              <Text style={styles.avatarEmoji}>👤</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
 
@@ -242,6 +262,10 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: colors.orange },
   tabText: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 20, color: '#B7D3E8' },
   tabTextActive: { color: colors.white },
+  rightGroup: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 },
+  // Light-lime plan pill (mockup #ECFCCB / #1A2540). Free tier only.
+  planTag: { backgroundColor: '#ECFCCB', borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 5 },
+  planTagText: { fontFamily: fonts.bodyXBold, fontSize: 10, lineHeight: 14, letterSpacing: 0.5, color: '#1A2540', textTransform: 'uppercase' },
   avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.teal, alignItems: 'center', justifyContent: 'center' },
   avatarEmoji: { fontSize: 16, color: colors.white },
 

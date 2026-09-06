@@ -11,6 +11,7 @@ export const colors = {
   card: '#FFFFFF',
   lavender: '#EEF0FB', // finder inputs / view-tabs container
   navy: '#1D4E89', // brand navy: borders, nav bar, pop shadow, primary text
+  navLinkDim: '#B7D3E8', // dimmed header nav links on the navy pill (landing/marketing)
   navyDeep: '#0E1830',
   ink: '#1A2540', // navy-text headings
   inkSoft: '#4A6685',

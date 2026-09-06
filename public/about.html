@@ -5,80 +5,141 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>About Us - Wingman</title>
 <link rel="icon" href="favicon.svg">
-<script src="https://cdn.tailwindcss.com"></script>
-<link rel="stylesheet" href="styles.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0;background:#FBF8F3;font-family:'Plus Jakarta Sans',system-ui,sans-serif;}
+  a{text-decoration:none;}
+  .navlink{font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:13px;color:#B7D3E8;}
+  .navlink:hover{color:#fff;}
+  .navlink.active{color:#fff;}
+</style>
 </head>
-<body class="text-slate-900 bg-white">
-<div class="max-w-3xl mx-auto px-5 py-10">
-  <div class="flex items-center justify-between gap-4 mb-8 pb-6 border-b-2 border-slate-200">
-    <a href="/" class="flex items-center gap-2 no-underline text-slate-900">
-      <img src="favicon.svg" alt="" class="w-10 h-10 rounded-xl">
-      <span class="font-heading font-extrabold text-xl">Wingman</span>
-    </a>
+<body>
+
+<div style="min-height:100vh;background:#FBF8F3;overflow-x:hidden;">
+
+  <!-- Header pill -->
+  <div style="width:100%;max-width:1100px;margin:0 auto;padding:16px 24px 0 24px;position:sticky;top:16px;z-index:50;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;background:#1D4E89;border-radius:999px;padding:8px 16px;box-shadow:0 10px 25px -5px rgba(29,78,137,0.45);flex-wrap:wrap;">
+      <a href="/" style="display:flex;align-items:center;gap:8px;">
+        <svg width="30" height="30" viewBox="0 0 100 100">
+          <circle cx="71" cy="32" r="13" fill="#FACC15" opacity="0.35"></circle>
+          <rect x="24" y="60" width="10" height="16" rx="2" fill="#F97316"></rect>
+          <rect x="38" y="52" width="10" height="24" rx="2" fill="#F97316"></rect>
+          <rect x="52" y="44" width="10" height="32" rx="2" fill="#F97316"></rect>
+          <rect x="66" y="36" width="10" height="40" rx="2" fill="#F97316"></rect>
+          <circle cx="71" cy="32" r="6.5" fill="#FACC15"></circle>
+        </svg>
+        <span style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:16px;color:#fff;">Wingman</span>
+        <span style="background:#F79256;border-radius:999px;padding:3px 9px;">
+          <span style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:9px;color:#fff;letter-spacing:0.5px;">BETA</span>
+        </span>
+      </a>
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <a class="navlink" href="/pricing.html">Pricing</a>
+        <a class="navlink" href="/how-we-use-ai.html">How we use AI</a>
+        <a class="navlink active" href="/about.html">About</a>
+        <a class="navlink" href="/terms.html">Terms</a>
+        <a class="navlink" href="/privacy.html">Privacy</a>
+        <a href="/login" style="display:flex;align-items:center;gap:6px;padding-right:8px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></circle><path d="M4 20c0-4 4-6 8-6s8 2 8 6" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+          <span style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:14px;color:#fff;opacity:0.9;">Sign In</span>
+        </a>
+      </div>
+    </div>
   </div>
-  <article class="legal-doc">
-    <h1 class="font-heading font-extrabold text-3xl mb-6 mt-0">Why We Built Wingman</h1>
 
-    <p class="text-slate-700 leading-relaxed mb-4">Wingman started with a spreadsheet, and a nagging fear of missing something.</p>
+  <!-- Article -->
+  <div style="width:100%;max-width:1100px;margin:0 auto;padding:56px 24px 80px 24px;">
+    <div style="background:#fff;border-radius:22px;padding:48px;box-shadow:0 2px 18px rgba(15,23,42,0.06);">
 
-    <p class="text-slate-700 leading-relaxed mb-4">When my son was in high school, I started looking for summer programs that would help him explore his interests and make the most of the few summers he had before college. What I quickly discovered was that finding the <strong>right</strong> opportunities was surprisingly difficult.</p>
+      <span style="display:block;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:32px;line-height:40px;color:#1D4E89;margin-bottom:24px;">Why We Built Wingman</span>
 
-    <p class="text-slate-700 leading-relaxed mb-4">Programs often opened applications months before summer. Websites weren't always updated until close to the deadline. And there was no easy way to know which opportunities were actually a good fit for him: his interests, goals, schedule, and budget.</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">Wingman started with a spreadsheet, and a nagging fear of missing something.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">So I built an Excel sheet.</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">When my son was in high school, I started looking for summer programs that would help him explore his interests and make the most of the few summers he had before college. What I quickly discovered was that finding the <strong>right</strong> opportunities was surprisingly difficult.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">I tracked programs, checked websites, watched for applications to open, and tried to keep up with deadlines. And no matter how carefully I kept track, there was always that nagging question:</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">Programs often opened applications months before summer. Websites weren't always updated until close to the deadline. And there was no easy way to know which opportunities were actually a good fit for him: his interests, goals, schedule, and budget.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4 italic font-semibold">What if I missed something?</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">So I built an Excel sheet.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-6">That experience made me realize there were really three problems to solve: <strong>finding what fits, finding what's worth it, and knowing when to act.</strong></p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">I tracked programs, checked websites, watched for applications to open, and tried to keep up with deadlines. And no matter how carefully I kept track, there was always that nagging question:</p>
 
-    <h2 class="font-heading font-bold text-2xl mb-4 mt-8">Find What Fits</h2>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-style:italic;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">What if I missed something?</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">There are thousands of programs, internships, research opportunities, competitions, volunteer experiences, and other ways for students to spend their time. But a giant database isn't particularly useful if students have to sift through all of it themselves.</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 32px 0;">That experience made me realize there were really three problems to solve: <strong>finding what fits, finding what's worth it, and knowing when to act.</strong></p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">Wingman is built around the student, not the search box. We build a picture of what a student cares about and use it to surface opportunities that are relevant to <em>them</em>, rather than asking them to endlessly search for themselves.</p>
+      <span style="display:block;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:22px;line-height:30px;color:#1D4E89;margin:32px 0 16px 0;">Find What Fits</span>
 
-    <p class="text-slate-700 leading-relaxed mb-6">And we're investing heavily in the database behind that experience. We're continually expanding beyond the obvious, well-known programs to find opportunities that students might otherwise never encounter.</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">There are thousands of programs, internships, research opportunities, competitions, volunteer experiences, and other ways for students to spend their time. But a giant database isn't particularly useful if students have to sift through all of it themselves.</p>
 
-    <h2 class="font-heading font-bold text-2xl mb-4 mt-8">Go Beyond the Usual</h2>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">Wingman is built around the student, not the search box. We build a picture of what a student cares about and use it to surface opportunities that are relevant to <em>them</em>, rather than asking them to endlessly search for themselves.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">Some of the most valuable opportunities aren't hiding on the first page of Google.</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 32px 0;">And we're investing heavily in the database behind that experience. We're continually expanding beyond the obvious, well-known programs to find opportunities that students might otherwise never encounter.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">A research program at a major university might be easy to find. A prestigious summer program might already be on every college-admissions list. But what about the local museum looking for student volunteers? A small research lab? A community organization? A local business looking for a student interested in a particular field?</p>
+      <span style="display:block;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:22px;line-height:30px;color:#1D4E89;margin:32px 0 16px 0;">Go Beyond the Usual</span>
 
-    <p class="text-slate-700 leading-relaxed mb-4">Or even something as simple as a local farmers market looking for a student to help with operations, marketing, or community outreach.</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">Some of the most valuable opportunities aren't hiding on the first page of Google.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">Those opportunities may not look like traditional "high school opportunities," and they often aren't collected in the big databases. But they can be exactly the kind of experience that helps a student explore an interest, build relationships, and discover something they genuinely enjoy.</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">A research program at a major university might be easy to find. A prestigious summer program might already be on every college-admissions list. But what about the local museum looking for student volunteers? A small research lab? A community organization? A local business looking for a student interested in a particular field?</p>
 
-    <p class="text-slate-700 leading-relaxed mb-6">That's why we're deliberately working to make Wingman's database <strong>broader and more local</strong>, not just bigger. We want to surface opportunities that are hyperlocal, overlooked, and relevant, not simply the ones that are already famous.</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">Or even something as simple as a local farmers market looking for a student to help with operations, marketing, or community outreach.</p>
 
-    <h2 class="font-heading font-bold text-2xl mb-4 mt-8">Know What's Worth Your Time</h2>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">Those opportunities may not look like traditional "high school opportunities," and they often aren't collected in the big databases. But they can be exactly the kind of experience that helps a student explore an interest, build relationships, and discover something they genuinely enjoy.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">Finding an opportunity is only half the problem. How do you know whether it's actually good?</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 32px 0;">That's why we're deliberately working to make Wingman's database <strong>broader and more local</strong>, not just bigger. We want to surface opportunities that are hyperlocal, overlooked, and relevant, not simply the ones that are already famous.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-6">We're working to give students more context than a program's own marketing page can provide. We look at signals from the broader community and try to give students a sense of <strong>what other people think about an opportunity</strong>, so they can make a more informed decision about whether it's worth their time and money.</p>
+      <span style="display:block;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:22px;line-height:30px;color:#1D4E89;margin:32px 0 16px 0;">Know What's Worth Your Time</span>
 
-    <h2 class="font-heading font-bold text-2xl mb-4 mt-8">And Don't Miss the Deadline</h2>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">Finding an opportunity is only half the problem. How do you know whether it's actually good?</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">Then there's the clock.</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 32px 0;">We're working to give students more context than a program's own marketing page can provide. We look at signals from the broader community and try to give students a sense of <strong>what other people think about an opportunity</strong>, so they can make a more informed decision about whether it's worth their time and money.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">High school is a remarkably short window: four years and three summers. Applications open and close constantly, often months before students are even thinking about their next summer.</p>
+      <span style="display:block;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:22px;line-height:30px;color:#1D4E89;margin:32px 0 16px 0;">And Don't Miss the Deadline</span>
 
-    <p class="text-slate-700 leading-relaxed mb-6">Wingman keeps the deadlines in view, helping students know <strong>what's coming up and when they need to act.</strong></p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">Then there's the clock.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">Because we don't think students need another database to search.</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">High school is a remarkably short window: four years and three summers. Applications open and close constantly, often months before students are even thinking about their next summer.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">They need a wingman that can say:</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 32px 0;">Wingman keeps the deadlines in view, helping students know <strong>what's coming up and when they need to act.</strong></p>
 
-    <p class="text-slate-700 leading-relaxed mb-6 italic font-semibold">"Here are the opportunities that fit you. Here's what other people think about them. And here's when you need to act."</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">Because we don't think students need another database to search.</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">Wingman started as something I built for my own sons. I'm opening it up to other families because I believe this process shouldn't require endless Google searches, spreadsheets, bookmarks, and calendar reminders.</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">They need a wingman that can say:</p>
 
-    <p class="text-slate-700 leading-relaxed mb-4">There are only so many summers. Only so many chances to try something new.</p>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-style:italic;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 32px 0;">"Here are the opportunities that fit you. Here's what other people think about them. And here's when you need to act."</p>
 
-    <p class="text-slate-700 leading-relaxed mb-0"><strong>Wingman helps students find what fits, discover what they didn't know existed, and make sure they don't miss their chance to go after it.</strong></p>
-  </article>
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">Wingman started as something I built for my own sons. I'm opening it up to other families because I believe this process shouldn't require endless Google searches, spreadsheets, bookmarks, and calendar reminders.</p>
+
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:16px;line-height:27px;color:#1A2540;margin:0 0 16px 0;">There are only so many summers. Only so many chances to try something new.</p>
+
+      <p style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:16px;line-height:27px;color:#1A2540;margin:0;">Wingman helps students find what fits, discover what they didn't know existed, and make sure they don't miss their chance to go after it.</p>
+
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="width:100%;max-width:1100px;margin:0 auto;padding:32px 24px 32px 24px;border-top:1px solid #E2E8F0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <a href="/" style="display:flex;align-items:center;gap:8px;">
+      <svg width="20" height="20" viewBox="0 0 100 100">
+        <circle cx="71" cy="32" r="13" fill="#FACC15" opacity="0.35"></circle>
+        <rect x="24" y="60" width="10" height="16" rx="2" fill="#F97316"></rect>
+        <rect x="38" y="52" width="10" height="24" rx="2" fill="#F97316"></rect>
+        <rect x="52" y="44" width="10" height="32" rx="2" fill="#F97316"></rect>
+        <rect x="66" y="36" width="10" height="40" rx="2" fill="#F97316"></rect>
+        <circle cx="71" cy="32" r="6.5" fill="#FACC15"></circle>
+      </svg>
+      <span style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:12px;color:#64748B;">Wingman</span>
+    </a>
+    <div style="display:flex;gap:20px;">
+      <a href="/terms.html" style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:12px;color:#64748B;">Terms</a>
+      <a href="/privacy.html" style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:12px;color:#64748B;">Privacy</a>
+    </div>
+  </div>
+
 </div>
+
 </body>
 </html>

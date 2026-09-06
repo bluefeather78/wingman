@@ -192,10 +192,27 @@ export default function Landing() {
                 <Text style={styles.brandBetaText}>BETA</Text>
               </View>
             </View>
-            <Pressable style={styles.signIn} onPress={() => router.push('/login')}>
-              <PersonIcon size={16} color={colors.white} />
-              <Text style={styles.signInText}>Sign In</Text>
-            </Pressable>
+            <View style={styles.navRow}>
+              <Pressable onPress={() => Linking.openURL(backendUrl('/pricing.html'))}>
+                <Text style={styles.navLink}>Pricing</Text>
+              </Pressable>
+              <Pressable onPress={() => Linking.openURL(backendUrl('/how-we-use-ai.html'))}>
+                <Text style={styles.navLink}>How we use AI</Text>
+              </Pressable>
+              <Pressable onPress={() => Linking.openURL(backendUrl('/about.html'))}>
+                <Text style={styles.navLink}>About</Text>
+              </Pressable>
+              <Pressable onPress={() => Linking.openURL(backendUrl('/terms.html'))}>
+                <Text style={styles.navLink}>Terms</Text>
+              </Pressable>
+              <Pressable onPress={() => Linking.openURL(backendUrl('/privacy.html'))}>
+                <Text style={styles.navLink}>Privacy</Text>
+              </Pressable>
+              <Pressable style={styles.signIn} onPress={() => router.push('/login')}>
+                <PersonIcon size={16} color={colors.white} />
+                <Text style={styles.signInText}>Sign In</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
 
@@ -327,27 +344,6 @@ export default function Landing() {
           </LinearGradient>
         </View>
 
-        {/* Founder story */}
-        <View style={styles.section}>
-          <SoftCard style={styles.founderCard}>
-            <Text style={styles.founderTitle}>Why We Built Wingman</Text>
-            <Text style={styles.founderBody}>
-              Wingman started with a spreadsheet, and a nagging fear of missing something. When my son was in high
-              school, I started looking for summer programs that would help him explore his interests. What I quickly
-              discovered was that finding the right opportunities was surprisingly difficult.
-            </Text>
-            <Text style={[styles.founderBody, styles.founderItalic]}>What if I missed something?</Text>
-            <Text style={styles.founderBody}>
-              Wingman started as something I built for my own sons. I'm opening it up to other families because I
-              believe this process shouldn't require endless Google searches, spreadsheets, bookmarks, and calendar
-              reminders.
-            </Text>
-            <Pressable onPress={() => Linking.openURL(backendUrl('/about.html'))}>
-              <Text style={styles.founderLink}>Read our full story →</Text>
-            </Pressable>
-          </SoftCard>
-        </View>
-
         {/* Footer */}
         <View style={[styles.section, styles.footer]}>
           <View style={styles.footerLeft}>
@@ -406,6 +402,8 @@ const styles = StyleSheet.create({
   brandWord: { fontFamily: fonts.display, fontSize: 16, color: colors.white },
   brandBeta: { backgroundColor: colors.orange, borderRadius: radius.pill, paddingHorizontal: 9, paddingVertical: 3 },
   brandBetaText: { fontFamily: fonts.bodyXBold, fontSize: 9, color: colors.white, letterSpacing: 0.5 },
+  navRow: { flexDirection: 'row', alignItems: 'center', gap: 18, flexWrap: 'wrap' },
+  navLink: { fontFamily: fonts.bodyBold, fontSize: 13, color: colors.navLinkDim },
   signIn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: 8 },
   signInText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.white, opacity: 0.9 },
 
@@ -457,12 +455,6 @@ const styles = StyleSheet.create({
   darkCtaTitle: { fontFamily: fonts.display, fontSize: 24, color: colors.white, marginBottom: 8, textAlign: 'center' },
   darkCtaSub: { fontFamily: fonts.bodyMed, fontSize: 15, color: colors.grayLighter, marginBottom: 24, textAlign: 'center' },
   darkCtaBtn: { paddingHorizontal: 32, paddingVertical: 14 },
-
-  founderCard: { padding: 40, gap: 12 },
-  founderTitle: { fontFamily: fonts.display, fontSize: 20, color: colors.navy },
-  founderBody: { fontFamily: fonts.bodyMed, fontSize: 15, lineHeight: 24, color: colors.ink },
-  founderItalic: { fontStyle: 'italic', fontFamily: fonts.bodyBold },
-  founderLink: { fontFamily: fonts.bodyXBold, fontSize: 14, color: colors.purple },
 
   footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: colors.slate200, paddingTop: 32, paddingBottom: 32, flexWrap: 'wrap', gap: 12 },
   footerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },

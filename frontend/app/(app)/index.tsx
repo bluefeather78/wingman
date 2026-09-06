@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import {
   addUserTask,
@@ -179,6 +179,10 @@ export default function Home() {
   // Free-tier AI gate: greys the "View & deepen it" CTA (deepening is an AI action) and
   // re-shows the AI-limit banner on tap when out of quota.
   const { reached: aiBlocked, dimStyle } = useAiGate();
+  // On phones, status-pill rows scroll horizontally on one line instead of wrapping onto
+  // two (and clipping). Desktop keeps them inline in the card header.
+  const { width: winW } = useWindowDimensions();
+  const compact = winW > 0 && winW < 768;
   // Seed from whatever the client already has. This screen is remounted by expo-router on
   // every visit, so without it a tab switch back to Home Base showed a full-screen spinner
   // for a round trip it had already paid for once. The fetch below still runs and still
@@ -390,12 +394,21 @@ export default function Home() {
       <SoftCard style={{ gap: space.lg }} hoverTint onPress={upcoming.length ? () => setTasksOpen(true) : undefined}>
         <View style={styles.rowBetween}>
           <Txt variant="h2" style={styles.cardTitle}>Your Next Moves</Txt>
-          <View style={styles.pillRow}>
+          {!compact && (
+            <View style={styles.pillRow}>
+              {(['not_started', 'in_progress', 'completed'] as TaskStatus[]).map((k) => (
+                <StatusPill key={k} status={k} kind="task" label={`${taskCounts[k]} ${ACTION_ITEM_STATUS_LABEL[k]}`} />
+              ))}
+            </View>
+          )}
+        </View>
+        {compact && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillScroll}>
             {(['not_started', 'in_progress', 'completed'] as TaskStatus[]).map((k) => (
               <StatusPill key={k} status={k} kind="task" label={`${taskCounts[k]} ${ACTION_ITEM_STATUS_LABEL[k]}`} />
             ))}
-          </View>
-        </View>
+          </ScrollView>
+        )}
         <ProgressTrack segments={taskSegments} />
         {upcoming.length === 0 ? (
           <Txt variant="small" style={styles.emptyState}>Nothing tracked yet — you're all caught up.</Txt>
@@ -633,6 +646,9 @@ const styles = StyleSheet.create({
   // width and its flexWrap never engaged — the fourth pill ("Not Needed") ran off the right
   // edge on a phone. Letting it shrink to the line width makes the pills wrap instead.
   pillRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', flexShrink: 1, minWidth: 0, justifyContent: 'flex-end' },
+  // Mobile: the status pills sit on one horizontally-scrolling line (contentContainerStyle of
+  // a horizontal ScrollView) instead of wrapping onto two.
+  pillScroll: { gap: 8, paddingRight: 4, paddingVertical: 2 },
   todoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.slate100 },
   todoName: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.navy },
   todoMeta: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.inkSoft },

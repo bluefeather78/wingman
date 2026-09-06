@@ -34,7 +34,9 @@ def test_render_h1():
     out = bl.render("# Title")
     assert "<h1" in out
     assert ">Title</h1>" in out
-    assert bl.H_CLASSES[1] in out
+    # Headings render as plain tags now (styled via the page's own CSS), not with inline
+    # class strings — the legal pages were redesigned to the pill-nav layout.
+    assert "<h1>Title</h1>" in out
 
 
 def test_render_h2_h3():
@@ -60,13 +62,13 @@ def test_render_bullets_with_leading_whitespace():
 
 def test_render_paragraph_joins_lines():
     out = bl.render("line one\nline two")
-    assert '<p class=' in out
+    assert '<p>' in out
     assert "line one line two" in out
 
 
 def test_render_blank_line_separates_paragraphs():
     out = bl.render("para one\n\npara two")
-    assert out.count("<p ") == 2
+    assert out.count("<p>") == 2
 
 
 # --------------------------------------------------------------------------- render rules

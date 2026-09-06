@@ -21,7 +21,9 @@ Two rules the tests pin, because getting either wrong is the whole risk of the f
 """
 import datetime
 
-from app.core import get_user, _supabase_request, pseudonym
+from app.core import (get_user, _supabase_request, pseudonym, delete_user,
+                      delete_user_satellites, anonymize_user_submissions,
+                      record_account_deletion)
 
 # The ONLY `users` columns that reach the export. Personal, non-secret. Anything not on this
 # list — password_hash, token_version, refresh_jtis, google_calendar_access_token /
@@ -149,3 +151,73 @@ def assemble_export(userid):
 
     print(f"[export] assembled data export for {pseudonym(uid)}")
     return export
+
+
+# ---------- Deletion (DATA_DELETION_EXPORT_PLAN.md, P2) ----------
+
+class StripeCancelError(Exception):
+    """Cancelling a LIVE Stripe subscription failed, so the delete is aborted and NOTHING is
+    removed — we never erase an account that is still being billed (§3.2). The caller turns
+    this into an error the student can retry, with their data intact."""
+
+
+def erase_account(userid):
+    """Hard-delete everything for one account, in the order §3.2 requires. Returns a per-step
+    report dict, or None if there is no such account.
+
+    Sequencing is the safety property: read the row first (for the Stripe/Google ids), cancel
+    billing BEFORE deleting anything, and delete the users row LAST because every other step
+    reads from it. A live subscription that cannot be cancelled raises StripeCancelError with
+    the row still intact; everything downstream of billing is best-effort (a leftover calendar
+    or an orphaned satellite row is not a reason to leave the account undeleted).
+    """
+    # Imported here, not at module top: subscription_common pulls in the Stripe/Supabase
+    # plumbing and google_oauth pulls in the OAuth config, neither of which the export path
+    # (the hot, always-imported half of this module) needs.
+    from wingman.subscription_common import cancel_subscription_now, delete_customer
+    from app.services.google_oauth import purge_google_calendar
+
+    uid = (str(userid) or "").strip().lower()
+    if not uid:
+        return None
+    row = get_user(uid)
+    if not row:
+        return None
+
+    report = {"userid": uid}
+    sub_id = row.get("stripe_subscription_id")
+    cust_id = row.get("stripe_customer_id")
+    had_subscription = bool(sub_id)
+
+    # 1. Stripe FIRST, and cancelling a live subscription MUST succeed. "not configured" means
+    #    Stripe isn't set up here, so there is no live billing to stop — not a reason to abort.
+    if sub_id:
+        _, error = cancel_subscription_now(sub_id)
+        if error and "not configured" not in error.lower():
+            raise StripeCancelError(error)
+        report["stripe_subscription_cancelled"] = not error
+    if cust_id:
+        _, cust_err = delete_customer(cust_id)
+        report["stripe_customer_deleted"] = not cust_err       # best-effort; Stripe keeps records
+
+    # 2. Google Calendar — best-effort (a leftover calendar is a nuisance, not billing).
+    try:
+        report["google"] = purge_google_calendar(uid, row)
+    except Exception as e:                                     # noqa: BLE001
+        report["google"] = {"status": "error", "error": type(e).__name__}
+
+    # 3. Anonymize submitted opportunities (keep the catalog row — DECISION #3).
+    report["submissions_anonymized"] = anonymize_user_submissions(uid)
+
+    # 4. Satellite rows.
+    report["satellites"] = delete_user_satellites(uid)
+
+    # 5. The users row LAST — everything above read from it.
+    report["account_deleted"] = delete_user(uid)
+
+    # 6. PII-free tombstone, best-effort.
+    record_account_deletion(uid, had_subscription=had_subscription,
+                            notes="self-serve account deletion")
+
+    print(f"[delete] erased account {pseudonym(uid)}")
+    return report

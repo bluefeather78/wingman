@@ -1177,7 +1177,7 @@ export default function Finder() {
               <Text style={[styles.heroSub, styles.heroSubItalic]}>
                 Every match here gets better once we know you. Takes 2 minutes — add a few things and your matches will show up right here.
               </Text>
-              <PopButton label="Build my profile" onPress={() => router.push('/(app)/profile')} style={styles.selfStart} />
+              <PopButton label="Build my profile" onPress={() => router.push({ pathname: '/(app)/profile', params: { chat: '1' } })} style={styles.selfStart} />
             </>
           ) : !profileReady ? (
             <>

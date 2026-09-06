@@ -737,6 +737,8 @@ def _users_request(method, query="", data=None, prefer=None):
         headers["Prefer"] = "return=minimal"
     elif method == "PATCH":
         headers["Prefer"] = "return=minimal"
+    elif method == "DELETE":
+        headers["Prefer"] = "return=minimal"
     if method != "GET":
         # Phase 2 item 3: the identity cache is busted HERE, at the one PostgREST choke point
         # every users write goes through, rather than at each of the ~14 call sites. A new
@@ -1120,6 +1122,105 @@ def update_password_hash(userid, password_hash):
     query = "?" + urllib.parse.urlencode({"userid": f"eq.{userid}"})
     _users_request("PATCH", query, data={"password_hash": password_hash})
     return True
+
+
+# ---------- Account deletion (DATA_DELETION_EXPORT_PLAN.md, P2) ----------
+# The DB half of the self-serve hard delete. The orchestration (Stripe, Google, ordering,
+# abort-if-billing) lives in app/services/account_data.erase_account; these are the raw
+# Supabase writes it composes, kept here beside the other users writers so a delete cannot
+# forget to go through the choke point that busts the identity cache.
+
+# Satellite tables keyed by userid. opportunities is NOT here: it is keyed by submitted_by
+# and the row is KEPT (anonymized), not deleted (DATA_DELETION_EXPORT_PLAN.md §3.1, DECISION
+# #3). Keep this in step with the export side's source map (services/account_data.py).
+_USER_SATELLITE_TABLES = ("user_costs", "user_activity", "user_events", "email_sends",
+                          "mailing_list_subscriptions")
+
+
+def delete_user(userid):
+    """DELETE the users row — the authoritative, last step of an account delete.
+
+    Every column goes with it: the `data` blob, password_hash, tokens, Stripe ids and the
+    Google Calendar tokens. _users_request busts the identity cache for this userid (it
+    parses the userid=eq. filter), so any signed token for the account stops resolving at
+    once. A nonexistent userid is a no-op DELETE that PostgREST still reports as success;
+    the caller has already confirmed the row exists. Returns True on a completed request.
+    """
+    uid = (str(userid) or "").strip().lower()
+    if not uid:
+        return False
+    query = "?" + urllib.parse.urlencode({"userid": f"eq.{uid}"})
+    _users_request("DELETE", query)
+    return True
+
+
+def delete_user_satellites(userid):
+    """DELETE every per-user row across the satellite tables. Returns {table: ok_bool}.
+
+    Best-effort per table: a missing/un-migrated table counts as ok (there is nothing to
+    delete — the same missing-table tolerance the export side uses, §0.1), and any other
+    failure is logged but does NOT abort the delete. The users row is what makes the account
+    gone; a stray satellite row keyed to a now-deleted userid is orphaned telemetry, not a
+    live account.
+    """
+    uid = (str(userid) or "").strip().lower()
+    result = {}
+    for table in _USER_SATELLITE_TABLES:
+        try:
+            _supabase_request_strict(table, method="DELETE",
+                                     params={"userid": f"eq.{uid}"},
+                                     extra_headers={"Prefer": "return=minimal"})
+            result[table] = True
+        except Exception as e:                                 # noqa: BLE001
+            if _missing_table_error(e):
+                result[table] = True
+            else:
+                result[table] = False
+                print(f"[delete] satellite delete failed for {table}/"
+                      f"{pseudonym(uid)}: {type(e).__name__}")
+    return result
+
+
+def anonymize_user_submissions(userid):
+    """Null out submitted_by on opportunities this user submitted (DECISION #3: keep the
+    catalog row, remove the personal link). Best-effort; True on success or a no-op table."""
+    uid = (str(userid) or "").strip().lower()
+    try:
+        _supabase_request_strict("opportunities", method="PATCH",
+                                 params={"submitted_by": f"eq.{uid}"},
+                                 data={"submitted_by": None},
+                                 extra_headers={"Prefer": "return=minimal"})
+        return True
+    except Exception as e:                                     # noqa: BLE001
+        if _missing_table_error(e):
+            return True
+        print(f"[delete] could not anonymize submissions for {pseudonym(uid)}: "
+              f"{type(e).__name__}")
+        return False
+
+
+def record_account_deletion(userid, had_subscription=False, notes=""):
+    """Write a PII-FREE tombstone: sha256(userid) + when + whether they had a subscription.
+
+    Proof-of-deletion for our own audit and to answer "did you delete my account on date X".
+    Stores NO email, name, or raw userid — the hash cannot be used to reconstruct who had an
+    account (DATA_DELETION_EXPORT_PLAN.md §3.4). Best-effort: a missing table
+    (db/account_deletions_schema.sql not run) is a no-op, never a reason to fail a delete
+    that already happened.
+    """
+    uid = (str(userid) or "").strip().lower()
+    if not uid:
+        return
+    userid_hash = hashlib.sha256(uid.encode("utf-8")).hexdigest()
+    try:
+        _supabase_request_strict("account_deletions", method="POST",
+                                 data=[{"userid_hash": userid_hash,
+                                        "had_subscription": bool(had_subscription),
+                                        "notes": (notes or "")[:500]}],
+                                 extra_headers={"Prefer": "return=minimal"})
+    except Exception as e:                                     # noqa: BLE001
+        if not _missing_table_error(e):
+            print(f"[delete] could not write deletion tombstone: {type(e).__name__}")
 
 
 # ---------- Writing into users.data (Phase 4, perf_report finding 10 / security L9) ----------

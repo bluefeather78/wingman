@@ -398,7 +398,7 @@ export default function Home() {
                 Every match in the Finder gets better once we know you. Takes 2 minutes — go build it now.
               </Txt>
             </View>
-            <PopButton label="Build my profile" variant="secondary" onPress={(e) => { stop(e); goProfile(); }} />
+            <PopButton label="Build my profile" variant="secondary" onPress={(e) => { stop(e); router.push({ pathname: '/(app)/profile', params: { chat: '1' } }); }} />
           </LinearGradient>
         </Pressable>
       )}

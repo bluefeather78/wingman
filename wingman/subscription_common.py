@@ -219,6 +219,30 @@ def cancel_subscription(subscription_id):
     return result, None
 
 
+def cancel_subscription_now(subscription_id):
+    """Cancel IMMEDIATELY, for account deletion — NOT cancel-at-period-end.
+
+    A student deleting their account is leaving now, so there is no paid-through period to
+    preserve and the subscription must actually stop billing. DELETE /subscriptions/{id} is
+    Stripe's immediate cancel. Returns (result, error) like the other helpers; `error` is a
+    string on failure, including "Stripe API key not configured" when Stripe is absent — the
+    delete orchestrator treats that "not configured" case as "nothing to cancel", not a
+    reason to abort (DATA_DELETION_EXPORT_PLAN.md §3.2).
+    """
+    return stripe_request("DELETE", f"/subscriptions/{subscription_id}")
+
+
+def delete_customer(customer_id):
+    """Delete the Stripe customer object, for account deletion.
+
+    Stripe still retains the invoice/tax records it is legally required to keep — this
+    removes the customer PROFILE, not the billing history (the Privacy policy says so).
+    Best-effort in the delete flow: a failure here does not abort a delete, since a live
+    subscription (the thing that must not survive) was already cancelled above.
+    """
+    return stripe_request("DELETE", f"/customers/{customer_id}")
+
+
 def get_customer_subscriptions(customer_id):
     """Get all subscriptions for a customer."""
     result, error = stripe_request("GET", "/subscriptions", params={

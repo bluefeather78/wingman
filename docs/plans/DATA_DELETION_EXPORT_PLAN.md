@@ -297,8 +297,19 @@ Edit the **markdown** (never the generated `.html`), then `python -m agents.buil
    Tests: `tests/unit/test_account_data.py` (12) + gate wiring in `test_subscription_gate.py`.
    All green; 0 new failures vs. the tree's pre-existing environmental baseline.
 2. **P1 — Export frontend.** Drawer/Manage-Plan button, blob download (web first).
-3. **P2 — Delete backend + tests.** `erase_account`, DELETE in `_users_request`, Stripe-now +
-   Google-calendar-delete + revoke helpers, re-auth check, tombstone, sequencing/abort policy.
+3. **P2 — Delete backend + tests. ✅ DONE 2026-09-06.** `erase_account` (services/account_data.py,
+   sequencing + abort-on-billing), DELETE in `_users_request` + `delete_user` /
+   `delete_user_satellites` / `anonymize_user_submissions` / `record_account_deletion` (core.py),
+   `cancel_subscription_now` + `delete_customer` (subscription_common.py), `purge_google_calendar` +
+   `GOOGLE_REVOKE_URL` (google_oauth.py / config.py), `POST /api/account/delete` with **password
+   re-auth** (routes/account_data.py, `account_delete_limiter`), tombstone
+   `db/account_deletions_schema.sql`. 11 new tests. All green; full suite unchanged.
+   - **Known deferral:** a **Google-only** account (no `password_hash`) gets `400
+     {reauth:"google_required"}` — the backend refuses to accept the session alone rather than
+     weaken the guard; the fresh-Google-handoff re-auth is wired in P3 (frontend). Password
+     accounts delete end-to-end today.
+   - **DDL:** `db/account_deletions_schema.sql` must be run in Supabase (until then the tombstone
+     is a silent no-op — delete still works, just leaves no audit row).
 4. **P3 — Delete frontend.** Danger-zone flow with re-auth + double confirm.
 5. **P4 — Legal.** privacy.md/terms.md edits, `build_legal`, `TERMS_VERSION` bump. *(Its own commit;
    it's a consent-affecting change.)*

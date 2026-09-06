@@ -146,6 +146,18 @@ export default function Landing() {
   const { width } = useWindowDimensions();
   const compactNav = width < 768;
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // Open a static marketing/legal page. On web, navigate the SAME tab — Linking.openURL maps to
+  // window.open(_blank), which mobile browsers popup-block, so taps did nothing. Native still
+  // hands off to the system browser.
+  const openNav = (path: string) => {
+    const url = backendUrl(path);
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.location.assign(url);
+    } else {
+      Linking.openURL(url);
+    }
+  };
   // 0 = poster showing. >0 = iframe mounted, keyed by this value so every play click forces
   // a fresh mount (fresh <iframe>) even if it was already playing. The remount alone does
   // NOT rewind — see clearWalkthroughPlayhead above for what actually gets it back to 0:00.
@@ -209,7 +221,7 @@ export default function Landing() {
             </View>
             <View style={styles.navRow}>
               {!compactNav && NAV_LINKS.map((l) => (
-                <Pressable key={l.path} onPress={() => Linking.openURL(backendUrl(l.path))}>
+                <Pressable key={l.path} onPress={() => openNav(l.path)}>
                   <Text style={styles.navLink}>{l.label}</Text>
                 </Pressable>
               ))}
@@ -242,7 +254,7 @@ export default function Landing() {
                 <Pressable
                   key={l.path}
                   style={styles.menuItem}
-                  onPress={() => { setMenuOpen(false); Linking.openURL(backendUrl(l.path)); }}
+                  onPress={() => { setMenuOpen(false); openNav(l.path); }}
                 >
                   <Text style={styles.menuItemText}>{l.label}</Text>
                 </Pressable>

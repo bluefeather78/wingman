@@ -1,6 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Switch, View } from 'react-native';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { ActivityIndicator, Linking, StyleSheet, Switch, Text, View } from 'react-native';
+import { backendUrl } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
 import { googleHandoffFromUrl } from '@/auth/googleSignIn';
 import { PopButton, PopCard, Screen, Txt } from '@/ui/components';
@@ -130,7 +131,14 @@ export default function GoogleAuth() {
           onValueChange={setParentalConsent}
         />
         <ConsentRow
-          label="I accept the Terms and Privacy Policy"
+          label={
+            <>
+              I accept the{' '}
+              <Text style={styles.legalLink} onPress={() => Linking.openURL(backendUrl('/terms.html'))}>Terms</Text>
+              {' '}and{' '}
+              <Text style={styles.legalLink} onPress={() => Linking.openURL(backendUrl('/privacy.html'))}>Privacy Policy</Text>
+            </>
+          }
           value={acceptedTerms}
           onValueChange={setAcceptedTerms}
         />
@@ -141,7 +149,7 @@ export default function GoogleAuth() {
   );
 }
 
-function ConsentRow({ label, value, onValueChange }: { label: string; value: boolean; onValueChange: (v: boolean) => void }) {
+function ConsentRow({ label, value, onValueChange }: { label: ReactNode; value: boolean; onValueChange: (v: boolean) => void }) {
   return (
     <View style={styles.row}>
       <Switch value={value} onValueChange={onValueChange} trackColor={{ true: colors.purple, false: colors.hairline }} thumbColor={colors.white} />
@@ -157,5 +165,6 @@ const styles = StyleSheet.create({
   head: { gap: space.xs, marginBottom: space.xs },
   row: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   rowLabel: { flex: 1 },
+  legalLink: { fontFamily: fonts.bodyBold, color: colors.purple, textDecorationLine: 'underline' },
   error: { color: colors.red, fontFamily: fonts.bodyBold },
 });

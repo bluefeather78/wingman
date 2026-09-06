@@ -1,7 +1,8 @@
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { useState, type ReactNode } from 'react';
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { backendUrl } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
 import { beginGoogleSignIn } from '@/auth/googleSignIn';
 import { Field, Logo, PopButton, Txt } from '@/ui/components';
@@ -137,7 +138,18 @@ export default function Login() {
                       onValueChange={setParentalConsent}
                     />
                   )}
-                  <ConsentRow label="I have read and agree to the Terms of Use and the Privacy Policy." value={acceptedTerms} onValueChange={setAcceptedTerms} />
+                  <ConsentRow
+                    value={acceptedTerms}
+                    onValueChange={setAcceptedTerms}
+                    label={
+                      <>
+                        I have read and agree to the{' '}
+                        <Text style={styles.legalLink} onPress={() => Linking.openURL(backendUrl('/terms.html'))}>Terms of Use</Text>
+                        {' '}and the{' '}
+                        <Text style={styles.legalLink} onPress={() => Linking.openURL(backendUrl('/privacy.html'))}>Privacy Policy</Text>.
+                      </>
+                    }
+                  />
                 </View>
                 <Text style={styles.trialNote}>
                   Every account is <Text style={styles.bold}>free to start</Text>, with a daily allowance of AI actions. No card required.
@@ -178,7 +190,7 @@ function GoogleG() {
   );
 }
 
-function ConsentRow({ label, value, onValueChange }: { label: string; value: boolean; onValueChange: (v: boolean) => void }) {
+function ConsentRow({ label, value, onValueChange }: { label: ReactNode; value: boolean; onValueChange: (v: boolean) => void }) {
   return (
     <Pressable style={styles.consentRow} onPress={() => onValueChange(!value)}>
       <Switch value={value} onValueChange={onValueChange} trackColor={{ true: colors.indigo600, false: colors.slate200 }} thumbColor={colors.white} style={styles.switch} />
@@ -228,6 +240,7 @@ const styles = StyleSheet.create({
   consentRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   switch: Platform.OS === 'web' ? ({ transform: [{ scale: 0.8 }] } as object) : {},
   consentText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 17, color: colors.slate900, flex: 1 },
+  legalLink: { fontFamily: fonts.bodyBold, color: colors.indigo600, textDecorationLine: 'underline' },
   trialNote: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500, textAlign: 'center' },
   bold: { fontFamily: fonts.bodyBold },
 

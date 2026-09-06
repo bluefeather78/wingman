@@ -355,8 +355,12 @@ export default function Landing() {
             <Text style={styles.footerBrand}>Wingman</Text>
           </View>
           <View style={styles.footerLinks}>
-            <Text style={styles.footerLink}>Terms</Text>
-            <Text style={styles.footerLink}>Privacy</Text>
+            <Pressable onPress={() => Linking.openURL(backendUrl('/terms.html'))}>
+              <Text style={styles.footerLink}>Terms</Text>
+            </Pressable>
+            <Pressable onPress={() => Linking.openURL(backendUrl('/privacy.html'))}>
+              <Text style={styles.footerLink}>Privacy</Text>
+            </Pressable>
           </View>
         </View>
       </ScrollView>

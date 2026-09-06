@@ -255,6 +255,96 @@ def test_no_credentials_means_the_file_without_a_missing_table_warning(no_db, tm
     assert "discovered_leads table unavailable" not in capsys.readouterr().out
 
 
+# ---------- require_db: the console never touches a file ----------
+
+def test_require_db_reads_and_writes_the_table(db):
+    """The strict path the console uses is an ordinary table read/write when the table is there."""
+    assert dl.append_leads([_lead("https://a.edu/p")], require_db=True) == 1
+    assert [l["url"] for l in dl.load_leads(require_db=True)] == ["https://a.edu/p"]
+    assert dl.mark_processed(["https://a.edu/p"], require_db=True) == 1
+    assert dl.pending(dl.KIND_HUB, require_db=True) == []
+
+
+def test_require_db_raises_with_no_credentials_instead_of_using_a_file(no_db, tmp_path,
+                                                                       monkeypatch):
+    """This is the whole point: with no table the console must fail loudly, never write the
+    laptop-local file that stranded 235 leads in the Phase 4 migration."""
+    monkeypatch.setattr(dl, "LEADS_PATH", str(tmp_path / "discovered_leads.jsonl"))
+    with pytest.raises(dl.LeadQueueUnavailable):
+        dl.load_leads(require_db=True)
+    with pytest.raises(dl.LeadQueueUnavailable):
+        dl.append_leads([_lead("https://a.edu/p")], require_db=True)
+    assert not os.path.exists(str(tmp_path / "discovered_leads.jsonl")), \
+        "a strict write leaked to the local file"
+
+
+def test_require_db_raises_on_a_missing_table_and_never_falls_back(monkeypatch, tmp_path):
+    """A missing table is LeadQueueUnavailable, not a silent fall-through to the file — and it
+    must not latch the process into file mode either."""
+    import urllib.error
+    import io as _io
+    from wingman import supabase_common
+
+    def missing(*a, **k):
+        raise urllib.error.HTTPError(
+            "https://x", 404, "err", {},
+            _io.BytesIO(json.dumps({"code": "PGRST205"}).encode()))
+    monkeypatch.setattr(dl, "_creds", lambda: ("https://example.supabase.co", "k"))
+    monkeypatch.setattr(supabase_common, "supabase_get", missing)
+    monkeypatch.setattr(dl, "LEADS_PATH", str(tmp_path / "discovered_leads.jsonl"))
+    dl._reset_for_tests()
+    try:
+        with pytest.raises(dl.LeadQueueUnavailable):
+            dl.load_leads(require_db=True)
+        assert not os.path.exists(str(tmp_path / "discovered_leads.jsonl"))
+    finally:
+        dl._reset_for_tests()
+
+
+def test_require_db_refuses_an_explicit_path(db, leadfile):
+    """require_db is for the shared table; pairing it with a path is a contradiction, not a file
+    write — so it raises rather than quietly doing one or the other."""
+    with pytest.raises(dl.LeadQueueUnavailable):
+        dl.load_leads(leadfile, require_db=True)
+
+
+# ---------- the file -> table importer (closes the Phase 4 orphaning gap) ----------
+
+def test_import_file_to_table_copies_leads_and_preserves_status(db, leadfile):
+    dl.append_leads([_lead("https://a.edu/p"), _lead("https://b.edu/p")], leadfile)
+    dl.mark_processed(["https://a.edu/p"], leadfile)          # one processed in the file
+    result = dl.import_file_to_table(leadfile)
+    assert result == {"file": 2, "written": 2, "skipped": 0, "dry_run": False}
+    by_url = {l["url"]: l for l in dl.load_leads(require_db=True)}
+    assert by_url["https://a.edu/p"]["status"] == dl.STATUS_DONE
+    assert by_url["https://b.edu/p"]["status"] == dl.STATUS_NEW
+
+
+def test_import_file_to_table_is_safe_to_run_twice(db, leadfile):
+    dl.append_leads([_lead("https://a.edu/p")], leadfile)
+    assert dl.import_file_to_table(leadfile)["written"] == 1
+    again = dl.import_file_to_table(leadfile)
+    assert again["written"] == 0 and again["skipped"] == 1
+
+
+def test_import_file_dry_run_writes_nothing(db, leadfile):
+    dl.append_leads([_lead("https://a.edu/p")], leadfile)
+    result = dl.import_file_to_table(leadfile, dry_run=True)
+    assert result["would_write"] == 1 and result["written"] == 0 and result["dry_run"] is True
+    assert dl.load_leads(require_db=True) == [], "a dry run must not touch the table"
+
+
+def test_import_file_with_no_file_is_a_noop(db, tmp_path):
+    result = dl.import_file_to_table(str(tmp_path / "absent.jsonl"))
+    assert result["file"] == 0 and result["written"] == 0
+
+
+def test_import_file_requires_the_table(no_db, leadfile):
+    dl.append_leads([_lead("https://a.edu/p")], leadfile)
+    with pytest.raises(dl.LeadQueueUnavailable):
+        dl.import_file_to_table(leadfile)
+
+
 def test_the_schema_and_the_module_agree_on_the_status_strings():
     """Two backends spelling 'processed' differently would mean a queue half-read from each,
     re-paying for the overlap."""

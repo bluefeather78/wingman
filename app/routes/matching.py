@@ -64,12 +64,10 @@ def handle_match(body: dict = Depends(json_body),
     touch_user_activity(userid, "match")
 
     # MARQUEE M9 (S0-5, finding H4). /api/match is a few cents a call and was unbounded.
-    # Budget reached -> refuse this user; circuit open -> everyone falls through to the
-    # mock/offline branch below, which is already an honest degraded list rather than a
-    # broken screen. The prewarm path embeds (a paid call too), so it is behind both.
-    over = budget.over_user_budget(userid)
-    if over:
-        return json_error(429, over)
+    # circuit open -> everyone falls through to the mock/offline branch below, which is already
+    # an honest degraded list rather than a broken screen. The prewarm path embeds (a paid call
+    # too), so it is behind the breaker as well. (The per-user dollar backstop that used to
+    # refuse here was removed — a Free account is metered in actions/day, not dollars.)
     live = bool(GEMINI_API_KEY) and not budget.circuit_open()
 
     if body.get("prewarm"):

@@ -199,9 +199,9 @@ def handle_deadline_check(opp_id: str, request: Request,
 
     # MARQUEE M11: the Free-tier daily AI allowance, in front of the paid Claude check. A
     # deadline "Check for updates" tap fans out across the whole Quest Log, so it counts as ONE
-    # action (the "deadline" class collapses same-window calls). ai_allowance_state also carries
-    # the dollar backstop, so it replaces the old over_user_budget check here. Paid users are
-    # unlimited. See MARQUEE_DECISIONS.md M11 and app/services/budget.py.
+    # action (the "deadline" class collapses same-window calls). Paid users are unlimited; the
+    # global circuit breaker below is the only remaining spend guard. See MARQUEE_DECISIONS.md
+    # M11 and app/services/budget.py.
     allowance = budget.ai_allowance_state(deadline_userid, feature="deadline_check")
     if allowance["over"]:
         touch_user_activity(deadline_userid, "ai_limit_hit")

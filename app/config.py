@@ -253,28 +253,24 @@ USER_SUBMISSION_MAX_LIST = int(os.environ.get("USER_SUBMISSION_MAX_LIST", "") or
 # 7-day cache unconditionally and each verified check measures ~$0.07, so ~$90 per pass over
 # 1,300 rows, repeatable. /api/match is a few cents a call, also unbounded.
 #
-# Three independent layers, all needed — see app/services/budget.py. A value <= 0 disables
-# that layer, which is the operator's off switch.
+# Two spend guards remain — see app/services/budget.py. A value <= 0 disables that layer,
+# which is the operator's off switch. (A per-user daily DOLLAR ceiling used to be layer 1; it
+# was removed — a Free account's usage limit is now metered in ACTIONS/day, below.)
 #
-# 1. Per-user daily budget. $0.50 is a deliberately conservative placeholder, NOT a measured
-#    number: SECURITY_HARDENING_PLAN.md asks for ~5x the median daily per-user spend read off
-#    the console's Cost per user tab. Tune USER_DAILY_BUDGET_USD once that figure is known.
-USER_DAILY_BUDGET_USD = float(os.environ.get("USER_DAILY_BUDGET_USD", "") or 0.50)
-# Userids that bypass the per-user cap entirely — the operator override the plan asks for, for
-# demos and for a support case where someone legitimately needs more. Comma-separated.
+# Userids that get the unlimited (Paid) AI tier regardless of subscription — the operator
+# override for demos and support cases. Comma-separated. Read by budget.ai_allowance_state.
 BUDGET_EXEMPT_USERIDS = frozenset(
     u.strip().lower() for u in (os.environ.get("BUDGET_EXEMPT_USERIDS") or "").split(",")
     if u.strip()
 )
-# 2. Per-user, per-row cooldown on a FORCED deadline re-check. The budget alone still allows a
-#    fast burn, because the cache bypass is the amplifier — this caps how often any one row can
-#    be forced past its 7-day cache by one student.
+# 1. Per-user, per-row cooldown on a FORCED deadline re-check. The cache bypass is the burst
+#    amplifier — this caps how often any one row can be forced past its 7-day cache by one
+#    student.
 FORCED_RECHECK_WINDOW_SECONDS = int(os.environ.get("FORCED_RECHECK_WINDOW_SECONDS", "") or 3600)
 FORCED_RECHECK_MAX_PER_WINDOW = int(os.environ.get("FORCED_RECHECK_MAX_PER_WINDOW", "") or 1)
-# 3. Global daily circuit breaker. Above this, every paid branch degrades to its existing
+# 2. Global daily circuit breaker. Above this, every paid branch degrades to its existing
 #    cached/mock path — which turns a billing incident into a degraded app, the correct
-#    failure direction. One H4 pass was ~$90, so this trips well inside a single pass; it
-#    also sits far above 50 users each spending their whole per-user allowance.
+#    failure direction. One H4 pass was ~$90, so this trips well inside a single pass.
 GLOBAL_DAILY_BUDGET_USD = float(os.environ.get("GLOBAL_DAILY_BUDGET_USD", "") or 25.0)
 # How long a spend total read out of user_costs is trusted before it is re-read. The AI
 # limiter (30/min/user) bounds how far a user can overshoot inside one window.
@@ -301,8 +297,8 @@ FREE_TIER_ACTION_WINDOW_SECONDS = int(os.environ.get("FREE_TIER_ACTION_WINDOW_SE
 # The kill-switch on ENFORCEMENT of the action allowance (MARQUEE M11). Off by default so the
 # gate ships in OBSERVE mode first (TWO_TIER_AI_PLAN.md §13 step 4): the allowance is computed
 # and reported to the client and the console, but a Free user is never actually blocked by the
-# action count until this is turned on. The dollar backstop and the global circuit breaker are
-# unaffected by this flag — they always apply. Set FREE_TIER_AI_GATE_ENFORCED=1 to enforce.
+# action count until this is turned on. The global circuit breaker is unaffected by this flag
+# — it always applies. Set FREE_TIER_AI_GATE_ENFORCED=1 to enforce.
 FREE_TIER_AI_GATE_ENFORCED = (os.environ.get("FREE_TIER_AI_GATE_ENFORCED", "") or "").strip().lower() \
     in ("1", "true", "yes", "on")
 

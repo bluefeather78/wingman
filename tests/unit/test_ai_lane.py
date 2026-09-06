@@ -170,7 +170,7 @@ def test_the_async_shell_does_no_blocking_work():
     strictly worse bug than the one item 2 fixes. The blocking calls all live in _serve_ai;
     this asserts none of their names have crept across the seam."""
     src = inspect.getsource(ai.handle_ai)
-    for blocking in ("subscription_block_reason", "over_user_budget", "circuit_open",
+    for blocking in ("subscription_block_reason", "ai_allowance_state", "circuit_open",
                      "touch_user_activity", "call_gemini", "_anthropic_call",
                      "urlopen", "prompts.build", "limiter.allow"):
         assert blocking not in src, f"{blocking} must stay behind to_thread.run_sync"

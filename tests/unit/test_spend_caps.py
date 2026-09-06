@@ -1,15 +1,16 @@
-"""Unit tests for the three spend layers — S0-5 in SECURITY_HARDENING_PLAN.md, finding H4.
+"""Unit tests for the spend guards — S0-5 in SECURITY_HARDENING_PLAN.md, finding H4.
 
 The hole these close: everything in this repo RECORDED spend and nothing read it back to
-refuse a call. One 7-day trial account (which costs $0) could loop
+refuse a call. One account could loop
 GET /api/opportunities/<id>/deadline?refresh=1 across the catalog — refresh=1 bypassed the
 7-day cache unconditionally at ~$0.07 a verified check, i.e. ~$90 per pass over 1,300 rows,
 repeatable.
 
-The three layers are tested separately because each covers a hole the others do not, and
-they FAIL DIFFERENTLY on purpose: the per-user budget refuses that user (429), the circuit
-breaker degrades the request for everyone (a working-but-dumber app is the right failure
-direction for a billing incident).
+The per-user DOLLAR ceiling that used to be layer 1 was removed — a Free account is metered
+in actions/day (see test_ai_allowance.py) now, not dollars. What remains is the forced-recheck
+cooldown and the global circuit breaker; they FAIL DIFFERENTLY on purpose — the cooldown
+refuses one row for one user, the breaker degrades the request for everyone (a working-but-
+dumber app is the right failure direction for a billing incident).
 """
 import pytest
 
@@ -33,50 +34,7 @@ def _spend(monkeypatch, total):
     monkeypatch.setattr(budget, "_sum_cost", lambda params: total)
 
 
-# ---------- layer 1: the per-user daily budget ----------
-
-def test_under_the_budget_is_not_blocked(monkeypatch):
-    _spend(monkeypatch, 0.10)
-    monkeypatch.setattr(budget, "USER_DAILY_BUDGET_USD", 0.50)
-    assert budget.over_user_budget("alice") is None
-
-
-def test_at_or_over_the_budget_returns_a_message(monkeypatch):
-    _spend(monkeypatch, 0.50)
-    monkeypatch.setattr(budget, "USER_DAILY_BUDGET_USD", 0.50)
-    msg = budget.over_user_budget("alice")
-    assert msg and "allowance" in msg.lower()
-    # The overwhelming majority of anyone who sees this is a student who used the app hard,
-    # not an attacker — and their data is untouched, which is the first thing they will fear.
-    assert "stays put" in msg
-
-
-def test_an_exempt_userid_bypasses_the_budget(monkeypatch):
-    """The operator override the plan asks for: demos, and support cases where someone
-    legitimately needs more."""
-    _spend(monkeypatch, 99.0)
-    monkeypatch.setattr(budget, "USER_DAILY_BUDGET_USD", 0.50)
-    monkeypatch.setattr(budget, "BUDGET_EXEMPT_USERIDS", frozenset({"alice"}))
-    assert budget.over_user_budget("alice") is None
-    assert budget.over_user_budget("bob") is not None
-
-
-def test_a_non_positive_budget_disables_the_layer(monkeypatch):
-    _spend(monkeypatch, 99.0)
-    monkeypatch.setattr(budget, "USER_DAILY_BUDGET_USD", 0.0)
-    assert budget.over_user_budget("alice") is None
-
-
-def test_an_unreadable_spend_total_fails_open(monkeypatch):
-    """Same choice subscription_block_reason already makes: a Supabase blip must not lock out
-    every paying user. It does mean the caps bound spend rather than enforcing access — the
-    access control is S0-1's gate."""
-    _spend(monkeypatch, None)
-    monkeypatch.setattr(budget, "USER_DAILY_BUDGET_USD", 0.50)
-    assert budget.over_user_budget("alice") is None
-
-
-# ---------- the cache, and why note_spend exists ----------
+# ---------- the global-spend cache, and why note_spend exists ----------
 
 def test_the_total_is_read_once_per_window(monkeypatch):
     calls = []
@@ -86,22 +44,14 @@ def test_the_total_is_read_once_per_window(monkeypatch):
         return 0.10
 
     monkeypatch.setattr(budget, "_sum_cost", counting)
-    assert budget.user_spend_today("alice") == 0.10
-    assert budget.user_spend_today("alice") == 0.10
+    assert budget.global_spend_today() == 0.10
+    assert budget.global_spend_today() == 0.10
     assert len(calls) == 1
 
 
-def test_note_spend_makes_a_burst_see_its_own_spending(monkeypatch):
-    """Without this, everything spent inside one TTL window is invisible to the check that is
-    supposed to stop it — the exact shape of a burst attack."""
-    monkeypatch.setattr(budget, "_sum_cost", lambda params: 0.40)
-    monkeypatch.setattr(budget, "USER_DAILY_BUDGET_USD", 0.50)
-    assert budget.over_user_budget("alice") is None
-    budget.note_spend("alice", 0.15)
-    assert budget.over_user_budget("alice") is not None
-
-
-def test_note_spend_also_advances_the_global_total(monkeypatch):
+def test_note_spend_advances_the_global_total(monkeypatch):
+    """Without this, everything spent inside one TTL window is invisible to the circuit
+    breaker that is supposed to trip on it — the exact shape of a burst incident."""
     monkeypatch.setattr(budget, "_sum_cost", lambda params: 1.0)
     monkeypatch.setattr(budget, "GLOBAL_DAILY_BUDGET_USD", 2.0)
     assert budget.circuit_open() is False
@@ -111,20 +61,20 @@ def test_note_spend_also_advances_the_global_total(monkeypatch):
 
 def test_a_stale_day_is_re_read_rather_than_carried_over(monkeypatch):
     """The first call after UTC midnight must not carry yesterday's total into a fresh
-    budget — the entry stores the day it was read for."""
+    window — the entry stores the day it was read for."""
     monkeypatch.setattr(budget, "_sum_cost", lambda params: 0.0)
-    budget.user_spend_today("alice")
-    total, read_at, _day = budget._cache["alice"]
-    budget._cache["alice"] = (9.99, read_at, "1999-01-01")
-    assert budget.user_spend_today("alice") == 0.0
+    budget.global_spend_today()
+    total, read_at, _day = budget._cache["*"]
+    budget._cache["*"] = (9.99, read_at, "1999-01-01")
+    assert budget.global_spend_today() == 0.0
 
 
 def test_note_spend_ignores_junk():
-    budget._cache["alice"] = (1.0, 0.0, budget._today())
+    budget._cache["*"] = (1.0, 0.0, budget._today())
     budget.note_spend("alice", None)
     budget.note_spend("alice", "not a number")
     budget.note_spend("alice", -5)
-    assert budget._cache["alice"][0] == 1.0
+    assert budget._cache["*"][0] == 1.0
 
 
 # ---------- layer 2: the forced-recheck cooldown ----------
@@ -183,7 +133,7 @@ def test_a_non_positive_global_budget_disables_the_layer(monkeypatch):
 
 def _allowance(over, **extra):
     base = {"tier": "free", "unlimited": False, "over": over, "used": 3, "limit": 10,
-            "remaining": 7, "dollar_backstop_hit": False,
+            "remaining": 7,
             "reset_at": "2999-01-01T00:00:00+00:00", "reason": "no more today" if over else None}
     base.update(extra)
     return base
@@ -275,10 +225,11 @@ def test_the_deadline_route_charges_the_cooldown_only_for_a_real_bypass():
 
     src = inspect.getsource(opps.handle_deadline_check)
     assert "if fresh and force and not budget.forced_recheck_ok" in src
-    # The per-user check is now the two-tier allowance (which carries the dollar backstop),
-    # not the bare over_user_budget call it replaced.
+    # The per-user check is the two-tier action allowance; the global circuit breaker still
+    # degrades the route. The per-user dollar backstop was removed.
     assert "budget.ai_allowance_state" in src
     assert "budget.circuit_open" in src
+    assert "over_user_budget" not in src
 
 
 def test_recording_a_cost_advances_the_budget_counters(monkeypatch):

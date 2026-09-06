@@ -1,8 +1,8 @@
 """Unit tests for the two-tier AI allowance engine (MARQUEE M11) in app.services.budget:
 action classing + collapse, user_actions_today, and ai_allowance_state.
 
-No Supabase: get_user_subscription and over_user_budget are monkeypatched on the budget
-module. The action ledger is process-global, so it is cleared per test.
+No Supabase: get_user_subscription is monkeypatched on the budget module. The action ledger
+is process-global, so it is cleared per test.
 """
 import datetime
 
@@ -20,9 +20,8 @@ def _iso(delta_days):
 def _clean(monkeypatch):
     with budget._action_lock:
         budget._action_ledger.clear()
-    # Default: no dollar backstop, a plain Free account, enforcement ON (tests that want
-    # observe mode flip it off explicitly).
-    monkeypatch.setattr(budget, "over_user_budget", lambda uid: None)
+    # Default: a plain Free account, enforcement ON (tests that want observe mode flip it off
+    # explicitly).
     monkeypatch.setattr(budget, "get_user_subscription",
                         lambda uid: {"subscription_status": "free", "created_at": _iso(-10)})
     monkeypatch.setattr(budget, "FREE_TIER_AI_GATE_ENFORCED", True)
@@ -125,12 +124,14 @@ def test_continuing_an_existing_action_is_not_over(monkeypatch):
     assert st["over"] is False
 
 
-def test_dollar_backstop_blocks_regardless_of_enforcement(monkeypatch):
-    monkeypatch.setattr(budget, "FREE_TIER_AI_GATE_ENFORCED", False)   # action cap off
-    monkeypatch.setattr(budget, "over_user_budget", lambda uid: "spent your $ allowance")
-    st = budget.ai_allowance_state("alice", feature="profile_chat")
-    assert st["over"] is True and st["dollar_backstop_hit"] is True
-    assert st["reason"] == "spent your $ allowance"
+def test_observe_mode_off_never_blocks_even_at_the_limit(monkeypatch):
+    # With the per-user dollar backstop removed, the ONLY per-user gate is the action count,
+    # and it is inert in observe mode — a Free user at the limit is reported, never blocked.
+    monkeypatch.setattr(budget, "FREE_TIER_AI_GATE_ENFORCED", False)
+    monkeypatch.setattr(budget, "FREE_TIER_DAILY_AI_ACTIONS", 1)
+    budget.note_action("alice", "tracker_extract")   # used == 1 == limit
+    st = budget.ai_allowance_state("alice", feature="tracker_extract")
+    assert st["over"] is False and st["reason"] is None
 
 
 def test_first_day_gets_the_boosted_limit(monkeypatch):
@@ -153,8 +154,9 @@ def test_reset_at_is_next_utc_midnight():
     assert reset > datetime.datetime.now(datetime.timezone.utc)
 
 
-def test_no_feature_only_applies_the_dollar_backstop(monkeypatch):
-    # action_items passes feature=None: the action count is never consulted, only the $ cap.
+def test_no_feature_is_never_over(monkeypatch):
+    # action_items passes feature=None: with no feature there is no new action to gate on, and
+    # the dollar backstop is gone, so such a call is never blocked (it is still costed).
     monkeypatch.setattr(budget, "FREE_TIER_DAILY_AI_ACTIONS", 1)
     budget.note_action("alice", "tracker_extract")   # used == 1 == limit
     st = budget.ai_allowance_state("alice", feature=None)

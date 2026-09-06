@@ -74,7 +74,7 @@ def test_calls_cache_separate_from_cost_cache(monkeypatch):
     monkeypatch.setattr(budget, "_supabase_request",
                         lambda table, params: [{"calls": 9, "cost_usd": 1.23}])
     assert budget.user_requests_today("grace") == 9
-    assert budget.user_spend_today("grace") == 1.23
+    assert budget.global_spend_today() == 1.23
 
 
 def test_sum_calls_paginates(monkeypatch):

@@ -90,7 +90,6 @@ def _stub_deadline_route(monkeypatch, *, fresh, check=None):
     monkeypatch.setattr(opps.deadlines, "cached_deadline_payload",
                         lambda opp, src: {"source": src})
     monkeypatch.setattr(opps.deadlines, "log_deadline_check", lambda *a, **k: None)
-    monkeypatch.setattr(opps.budget, "over_user_budget", lambda _u: None)
     monkeypatch.setattr(opps.budget, "circuit_open", lambda: False)
     monkeypatch.setattr(opps.budget, "forced_recheck_ok", lambda *a: True)
     if check is not None:

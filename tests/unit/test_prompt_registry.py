@@ -155,11 +155,10 @@ class _Live:
         monkeypatch.setattr(ai, "subscription_block_reason", lambda _u: None)
         monkeypatch.setattr(ai, "touch_user_activity", lambda *a: None)
         monkeypatch.setattr(ai.budget, "circuit_open", lambda: False)
-        monkeypatch.setattr(ai.budget, "over_user_budget", lambda _u: None)
         # Two-tier allowance: a Free user well under the cap, so the live branch proceeds.
         monkeypatch.setattr(ai.budget, "ai_allowance_state", lambda uid, feature=None: {
             "tier": "free", "unlimited": False, "over": False, "used": 0, "limit": 10,
-            "remaining": 10, "dollar_backstop_hit": False,
+            "remaining": 10,
             "reset_at": "2999-01-01T00:00:00+00:00", "reason": None})
 
 

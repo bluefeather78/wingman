@@ -375,11 +375,11 @@ def _rate_limit_error(ip, userid):
 # The circuit does NOT relax the 401: the key is still configured, so a signed-out caller is
 # still refused. Degrading is a spend decision, not an access decision.
 # MARQUEE M11: the Free-tier daily AI allowance is enforced here, in front of the paid
-# provider call. ai_allowance_state resolves the tier + the action/dollar limits; a Free user
-# who is `over` is refused with a structured 429, and a successful call echoes the meter so the
-# client counter ticks. Paid users are unlimited. Enforcement of the ACTION cap is behind
-# FREE_TIER_AI_GATE_ENFORCED (observe mode until then); the dollar backstop and circuit breaker
-# always apply. See MARQUEE_DECISIONS.md M11 and app/services/budget.py.
+# provider call. ai_allowance_state resolves the tier + the action limit; a Free user who is
+# `over` is refused with a structured 429, and a successful call echoes the meter so the client
+# counter ticks. Paid users are unlimited. Enforcement of the ACTION cap is behind
+# FREE_TIER_AI_GATE_ENFORCED (observe mode until then); the global circuit breaker always
+# applies. See MARQUEE_DECISIONS.md M11 and app/services/budget.py.
 def _live_branch(userid, key_configured, cost_feature=None):
     """(use_live_provider, error_response, allowance).
 

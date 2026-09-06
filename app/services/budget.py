@@ -1,46 +1,43 @@
-"""Spend caps — the three layers that make the app refuse a paid call (S0-5, finding H4).
+"""Spend caps — the two layers that make the app refuse or degrade a paid call (S0-5, H4).
 
 Everything else in this repo RECORDS spend: agent_runs rolls up what the app spent,
 user_costs decomposes it per user and feature, deadline_check_log logs each check. Nothing
-read any of it back to refuse anything. So one 7-day trial account — which costs $0 — could
-loop GET /api/opportunities/<id>/deadline?refresh=1 across the catalog: refresh=1 bypassed
-the 7-day cache unconditionally and each verified check measures ~$0.07, i.e. ~$90 per pass
-over 1,300 rows, repeatable. /api/match is a few cents a call, also unbounded.
+read any of it back to refuse anything. So one account could loop
+GET /api/opportunities/<id>/deadline?refresh=1 across the catalog: refresh=1 bypassed the
+7-day cache unconditionally and each verified check measures ~$0.07, i.e. ~$90 per pass over
+1,300 rows, repeatable. /api/match is a few cents a call, also unbounded.
 
-Three independent layers, because each covers a hole the others do not:
+The per-user DOLLAR ceiling that used to sit here (over_user_budget / USER_DAILY_BUDGET_USD)
+was REMOVED — a Free account is metered in ACTIONS/day now (ai_allowance_state below), which
+is the user-facing usage limit. What remains are the two spend guards that are NOT about one
+user's usage:
 
-  1. over_user_budget()   — a per-user daily ceiling. Bounds what one account can spend.
-  2. forced_recheck_ok()  — a per-user, per-row cooldown on the refresh=1 cache bypass.
-                            The budget alone still allows a fast burn; the bypass is the
-                            amplifier, so it gets its own limit.
-  3. circuit_open()       — a global daily ceiling. Above it every paid branch degrades to
+  1. forced_recheck_ok()  — a per-user, per-row cooldown on the refresh=1 cache bypass. The
+                            bypass is the burst amplifier, so it keeps its own limit.
+  2. circuit_open()       — a global daily ceiling. Above it every paid branch degrades to
                             its existing cached/mock path, turning a billing incident into a
                             degraded app rather than an invoice.
 
-Layers 1 and 3 read user_costs, which is the complete ledger for interactive spend: every
-paid branch in app/ routes its cost through record_user_cost (the AI proxies and /api/match
-via record_interactive_cost, the deadline check and action items via record_user_cost_async).
+circuit_open() reads user_costs, the complete ledger for interactive spend: every paid branch
+in app/ routes its cost through record_user_cost (the AI proxies and /api/match via
+record_interactive_cost, the deadline check and action items via record_user_cost_async).
 
-FAILING OPEN IS DELIBERATE. If Supabase cannot be read the caps do not apply, exactly as
-subscription_block_reason already chooses: a database blip must not lock out or degrade
-every paying user. It does mean the caps are not a defence against an attacker who can break
-the read — they are a spend bound, not an access control. The access control is S0-1's gate.
-
-The reads are cached for BUDGET_CACHE_TTL_SECONDS and bumped in-process by note_spend() as
-costs are recorded, so a burst inside one window still sees its own spending. How far a user
-can overshoot inside a window is bounded by the AI rate limiter (S0-2).
+FAILING OPEN IS DELIBERATE. If Supabase cannot be read the global breaker does not trip,
+exactly as subscription_block_reason already chooses: a database blip must not degrade every
+paying user. The global total is cached for BUDGET_CACHE_TTL_SECONDS and bumped in-process by
+note_spend() as costs are recorded, so a burst inside one window still counts toward it.
 """
 import datetime
 import threading
 import time
 
-from app.config import (USER_DAILY_BUDGET_USD, GLOBAL_DAILY_BUDGET_USD,
+from app.config import (GLOBAL_DAILY_BUDGET_USD,
                         BUDGET_EXEMPT_USERIDS, BUDGET_CACHE_TTL_SECONDS,
                         FORCED_RECHECK_WINDOW_SECONDS, FORCED_RECHECK_MAX_PER_WINDOW,
                         FREE_TIER_DAILY_AI_ACTIONS, FIRST_DAY_AI_ACTIONS,
                         FREE_TIER_ACTION_WINDOW_SECONDS, FREE_TIER_AI_GATE_ENFORCED,
                         SUPABASE_URL, SUPABASE_SERVICE_KEY)
-from app.core import _supabase_request, pseudonym, get_user_subscription, ai_tier
+from app.core import _supabase_request, get_user_subscription, ai_tier
 from app.auth.ratelimit import RateLimiter
 
 # One forced re-check per (user, opportunity) per window. RateLimiter is exactly this shape
@@ -152,8 +149,8 @@ def _cached_calls(key, params):
 def user_requests_today(userid):
     """This user's billed AI request count today, or None if it could not be read.
 
-    The request-count sibling of user_spend_today() and the source of the Free-tier daily
-    allowance figure. Read-only for now (§13 step 1); the tier-aware gate reads it in step 4.
+    The per-user request-count read that backs the Free-tier daily allowance figure shown on
+    the console. (The action ledger, not this, is what the gate actually meters against.)
     """
     userid = (userid or "").strip().lower()
     if not userid:
@@ -182,10 +179,12 @@ def _cached_total(key, params):
 
 
 def note_spend(userid, cost):
-    """Add a just-recorded cost to the cached totals, so a burst inside one TTL window sees
-    its own spending instead of re-reading a stale figure up to a minute old.
+    """Add a just-recorded cost to the cached GLOBAL total, so a burst inside one TTL window
+    counts toward the circuit breaker instead of re-reading a stale figure up to a minute old.
 
-    Called from record_user_cost's background thread — never on the request path.
+    Called from record_user_cost's background thread — never on the request path. `userid` is
+    accepted (and ignored) so the record_user_cost call site does not have to change; there is
+    no per-user dollar total any more, only the global one under the "*" key.
     """
     try:
         cost = float(cost or 0)
@@ -194,47 +193,15 @@ def note_spend(userid, cost):
     if cost <= 0:
         return
     day = _today()
-    keys = ["*"]
-    if userid:
-        keys.append(str(userid).strip().lower())
     with _lock:
-        for key in keys:
-            entry = _cache.get(key)
-            if entry and entry[2] == day:
-                _cache[key] = (round(entry[0] + cost, 6), entry[1], day)
-
-
-def user_spend_today(userid):
-    """This user's attributed spend today in USD, or None if it could not be read."""
-    userid = (userid or "").strip().lower()
-    if not userid:
-        return None
-    return _cached_total(userid, {"userid": f"eq.{userid}"})
+        entry = _cache.get("*")
+        if entry and entry[2] == day:
+            _cache["*"] = (round(entry[0] + cost, 6), entry[1], day)
 
 
 def global_spend_today():
     """Every user's attributed spend today in USD, or None if it could not be read."""
     return _cached_total("*", {})
-
-
-def over_user_budget(userid):
-    """The message to show this user if they have spent their daily allowance, else None.
-
-    Wording is deliberately not an accusation: the overwhelming majority of anyone who ever
-    sees this will be a student who used the app hard, not an attacker.
-    """
-    if USER_DAILY_BUDGET_USD <= 0:                      # layer disabled by the operator
-        return None
-    userid = (userid or "").strip().lower()
-    if not userid or userid in BUDGET_EXEMPT_USERIDS:   # the operator override
-        return None
-    spent = user_spend_today(userid)
-    if spent is None or spent < USER_DAILY_BUDGET_USD:
-        return None
-    print(f"[WARN] Daily budget reached for user {pseudonym(userid)}: ${spent:.4f} of "
-          f"${USER_DAILY_BUDGET_USD:.2f}")
-    return ("You've used up today's AI allowance. It resets at midnight UTC — "
-            "everything already saved to your profile and Quest Log stays put.")
 
 
 def circuit_open():
@@ -398,10 +365,11 @@ def ai_allowance_state(userid, feature=None, now=None):
     Both a GATE (`over` means refuse) and a REPORT (`used`/`limit`/`remaining` render the
     client's meter, even on a successful call). Paid tier is unlimited and reads no counters.
 
-    Free tier is `over` if EITHER trips: the ACTION allowance (only when a call would start a
-    NEW action beyond the day's limit, and only while FREE_TIER_AI_GATE_ENFORCED is on) OR the
-    dollar backstop (always on — the pre-existing S0-5 per-user ceiling). Fail-open throughout:
-    the action ledger reads 0 rather than None, and the dollar backstop already fails open.
+    Free tier is `over` only when the ACTION allowance trips: a call would start a NEW action
+    beyond the day's limit, and FREE_TIER_AI_GATE_ENFORCED is on. Fail-open throughout: the
+    action ledger reads 0 rather than None. (The per-user dollar backstop that used to also
+    gate here was removed — the global circuit breaker is the only remaining spend guard, and
+    it degrades the whole app rather than blocking one user, so it is not consulted here.)
     """
     userid = (userid or "").strip().lower()
     reset_at = _utc_reset_iso(now)
@@ -417,21 +385,17 @@ def ai_allowance_state(userid, feature=None, now=None):
     if tier == "paid":
         return {"tier": "paid", "unlimited": True, "over": False,
                 "used": None, "limit": None, "remaining": None,
-                "dollar_backstop_hit": False, "reset_at": reset_at, "reason": None}
+                "reset_at": reset_at, "reason": None}
 
     limit = FIRST_DAY_AI_ACTIONS if _created_today(record, now) else FREE_TIER_DAILY_AI_ACTIONS
     used = user_actions_today(userid)
     new_action = _is_new_action(userid, feature, now) if feature else False
-    action_over = FREE_TIER_AI_GATE_ENFORCED and new_action and used >= limit
-    dollar_msg = over_user_budget(userid)                          # None or the $ message
-    over = bool(action_over or dollar_msg)
+    over = bool(FREE_TIER_AI_GATE_ENFORCED and new_action and used >= limit)
     reason = None
-    if action_over:
+    if over:
         reason = ("You've used today's AI actions. They reset at midnight UTC — everything "
                   "you've saved to your profile and Quest Log stays put. Upgrade to Wingman "
                   "Unlimited for no daily cap.")
-    elif dollar_msg:
-        reason = dollar_msg
     return {"tier": "free", "unlimited": False, "over": over,
             "used": used, "limit": limit, "remaining": max(0, limit - used),
-            "dollar_backstop_hit": bool(dollar_msg), "reset_at": reset_at, "reason": reason}
+            "reset_at": reset_at, "reason": reason}

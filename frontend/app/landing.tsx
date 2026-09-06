@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { backendUrl } from '@/api/httpClient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Logo, PopButton, PopCard, SoftCard, usePopInteraction } from '@/ui/components';
@@ -131,6 +131,11 @@ function WalkthroughFrame({ frameKey }: { frameKey: number }) {
 // gradient CTA banner, the founder story card, and the footer.
 export default function Landing() {
   const router = useRouter();
+  // The header pill can't fit the brand + five text links + Sign In on a phone — the links
+  // (and, worse, Sign In) run off the right edge. Below the breakpoint, drop the secondary
+  // static-page links and keep only Sign In, mirroring the app NavBar's compact mode.
+  const { width } = useWindowDimensions();
+  const compactNav = width < 768;
   // 0 = poster showing. >0 = iframe mounted, keyed by this value so every play click forces
   // a fresh mount (fresh <iframe>) even if it was already playing. The remount alone does
   // NOT rewind — see clearWalkthroughPlayhead above for what actually gets it back to 0:00.
@@ -193,21 +198,25 @@ export default function Landing() {
               </View>
             </View>
             <View style={styles.navRow}>
-              <Pressable onPress={() => Linking.openURL(backendUrl('/pricing.html'))}>
-                <Text style={styles.navLink}>Pricing</Text>
-              </Pressable>
-              <Pressable onPress={() => Linking.openURL(backendUrl('/how-we-use-ai.html'))}>
-                <Text style={styles.navLink}>How we use AI</Text>
-              </Pressable>
-              <Pressable onPress={() => Linking.openURL(backendUrl('/about.html'))}>
-                <Text style={styles.navLink}>About</Text>
-              </Pressable>
-              <Pressable onPress={() => Linking.openURL(backendUrl('/terms.html'))}>
-                <Text style={styles.navLink}>Terms</Text>
-              </Pressable>
-              <Pressable onPress={() => Linking.openURL(backendUrl('/privacy.html'))}>
-                <Text style={styles.navLink}>Privacy</Text>
-              </Pressable>
+              {!compactNav && (
+                <>
+                  <Pressable onPress={() => Linking.openURL(backendUrl('/pricing.html'))}>
+                    <Text style={styles.navLink}>Pricing</Text>
+                  </Pressable>
+                  <Pressable onPress={() => Linking.openURL(backendUrl('/how-we-use-ai.html'))}>
+                    <Text style={styles.navLink}>How we use AI</Text>
+                  </Pressable>
+                  <Pressable onPress={() => Linking.openURL(backendUrl('/about.html'))}>
+                    <Text style={styles.navLink}>About</Text>
+                  </Pressable>
+                  <Pressable onPress={() => Linking.openURL(backendUrl('/terms.html'))}>
+                    <Text style={styles.navLink}>Terms</Text>
+                  </Pressable>
+                  <Pressable onPress={() => Linking.openURL(backendUrl('/privacy.html'))}>
+                    <Text style={styles.navLink}>Privacy</Text>
+                  </Pressable>
+                </>
+              )}
               <Pressable style={styles.signIn} onPress={() => router.push('/login')}>
                 <PersonIcon size={16} color={colors.white} />
                 <Text style={styles.signInText}>Sign In</Text>

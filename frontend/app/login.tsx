@@ -159,7 +159,7 @@ export default function Login() {
 
             {!isRegister && (
               <>
-                <Field label="User ID" value={userid} onChangeText={setUserid} autoCapitalize="none" placeholder="e.g. sid2028" />
+                <Field label="User ID" value={userid} onChangeText={setUserid} autoCapitalize="none" placeholder="wingman2028" />
                 <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="••••••••" />
               </>
             )}

@@ -29,7 +29,6 @@ import {
 import {
   ACTION_ITEM_STATUS_LABEL,
   LegendItem,
-  Logo,
   PopButton,
   ProgressTrack,
   PROGRESS_STATUS_LABEL,
@@ -40,8 +39,8 @@ import {
   type OppStatus,
   type TaskStatus,
 } from '@/ui/components';
-import { colors, fonts, radius, space } from '@/ui/theme';
-import { isPaidTier, resetsInLabel } from '@/lib/tier';
+import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
+import { isPaidTier } from '@/lib/tier';
 import type { AllowanceSnapshot } from '@/api/types';
 
 interface StoredProfile {
@@ -106,43 +105,65 @@ function TaskRow({ ai, onPress, onDelete }: {
   );
 }
 
-// The Free-tier upsell banner (two-tier model). Shown to every Free account; a value pitch,
-// not a nag — it names the specific AI things the daily allowance touches. Dismissible for
-// this visit (expo-router remounts the screen on the next visit, so it returns then). Hidden
-// entirely for Paid. Routes to Manage Plan, where the Upgrade button surfaces whatever the
-// (currently unconfigured) Stripe backend answers — so the CTA is "gated" until Stripe is live.
-function FreeUpsellBanner({ allowance, onUpgrade }: {
-  allowance: AllowanceSnapshot | null;
-  onUpgrade: () => void;
-}) {
-  const [dismissed, setDismissed] = useState(false);
-  if (dismissed) return null;
-  const limit = typeof allowance?.limit === 'number' ? allowance.limit : null;
-  const remaining = typeof allowance?.remaining === 'number' ? allowance.remaining : null;
-  const low = remaining !== null && limit !== null && remaining <= Math.ceil(limit * 0.2);
+// The Free-plan line inside the combined top card (two-tier model). A compact restatement of
+// what the daily allowance touches plus the upgrade path — shown to every Free account, hidden
+// for Paid. No longer a dismissible standalone banner: it's a nested strip now, so it stays put
+// like the mockup. Routes to Manage Plan, where Upgrade surfaces whatever the (currently
+// unconfigured) Stripe backend answers.
+function FreePanel({ onUpgrade }: { onUpgrade: () => void }) {
   return (
-    <View style={styles.upsell}>
-      <Pressable onPress={() => setDismissed(true)} style={styles.upsellClose} hitSlop={10}>
-        <Txt style={styles.upsellCloseTxt}>×</Txt>
-      </Pressable>
-      <View style={styles.upsellBody}>
+    <View style={styles.freePanel}>
+      <View style={styles.freeBody}>
         <View style={{ flex: 1, minWidth: 220 }}>
-          <Txt style={styles.upsellTitle}>You&rsquo;re on the Free plan</Txt>
-          <Txt style={styles.upsellSub}>
-            {limit !== null
-              ? `${limit} AI actions a day — profile chats, match-finding, deadline checks.`
-              : 'Profile chats, match-finding and deadline checks are powered by AI.'}
-            {'  '}Wingman Unlimited removes the daily cap. $9.99/mo.
+          <Txt style={styles.freeTitle}>You&rsquo;re on the Free plan</Txt>
+          <Txt style={styles.freeSub}>
+            Profile chats, match-finding and deadline checks are powered by AI.{'  '}
+            Wingman Unlimited removes the daily cap. $9.99/mo.
           </Txt>
-          {remaining !== null && limit !== null ? (
-            <Txt style={[styles.upsellMeter, low && { color: colors.orange }]}>
-              {remaining} of {limit} AI actions left today · resets {resetsInLabel(allowance)}
-            </Txt>
-          ) : null}
         </View>
-        <PopButton label="Go Unlimited" variant="primary" small onPress={onUpgrade}
-          style={styles.upsellBtn} />
+        <PopButton label="Go Unlimited" variant="primary" small onPress={onUpgrade} style={styles.freeBtn} />
       </View>
+    </View>
+  );
+}
+
+// The daily AI-actions meter (two-tier model). Reads the allowance snapshot broadcast by the
+// ApiClient — seeded by subscriptionStatus() on focus and re-broadcast on every successful
+// /api/ai call and every 429 (cap hit) — so it ticks DOWN as the student spends actions,
+// without a reload. Paid accounts have no cap, so it reads "Unlimited" with no bar. When the
+// snapshot has no numbers yet (mock mode, or before the seed lands) it degrades to a dash
+// rather than inventing a count.
+function AiActionsMeter({ allowance, paid }: { allowance: AllowanceSnapshot | null; paid: boolean }) {
+  if (paid || allowance?.unlimited) {
+    return (
+      <View style={styles.meterCard}>
+        <Text style={styles.meterNum}>Unlimited</Text>
+        <Text style={styles.meterLabel}>AI actions</Text>
+      </View>
+    );
+  }
+  const limit = typeof allowance?.limit === 'number' ? allowance.limit : null;
+  const remaining = typeof allowance?.remaining === 'number' ? Math.max(0, allowance.remaining) : null;
+  const low = remaining !== null && limit !== null && remaining <= Math.ceil(limit * 0.2);
+  const fillColor = remaining === 0 ? colors.slate400 : low ? colors.orange : colors.teal;
+  // Cap the drawn segments so an unusually large limit can't render a comb of slivers; the
+  // filled count is scaled to the cap so it stays proportional if the limit ever exceeds it.
+  const segCount = limit !== null ? Math.min(limit, 20) : 0;
+  const filled = limit ? Math.round(((remaining ?? 0) / limit) * segCount) : 0;
+  return (
+    <View style={styles.meterCard}>
+      <Text style={styles.meterNum}>
+        {remaining ?? '—'}
+        {limit !== null ? <Text style={styles.meterDenom}>{` / ${limit}`}</Text> : null}
+      </Text>
+      <Text style={styles.meterLabel}>AI actions left today</Text>
+      {segCount > 0 ? (
+        <View style={styles.meterBar}>
+          {Array.from({ length: segCount }).map((_, i) => (
+            <View key={i} style={[styles.meterSeg, { backgroundColor: i < filled ? fillColor : colors.slate200 }]} />
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -231,6 +252,12 @@ export default function Home() {
           if (alive && r.updated && r.data) setData(r.data);
         })
         .catch(() => null);
+      // Seed the AI-actions meter (two-tier allowance) without a live AI call — a plain,
+      // unpaid status read that broadcasts the allowance snapshot into AuthContext. Without
+      // this the meter reads "—" on a fresh visit until the student's first AI action; with
+      // it the empty state shows the full daily count. Fire-and-forget: a failure just leaves
+      // the meter on whatever snapshot it already had.
+      httpClient.subscriptionStatus().catch(() => null);
       return () => {
         alive = false;
       };
@@ -269,36 +296,22 @@ export default function Home() {
     );
   }
 
+  const paid = isPaidTier(user);
+
   return (
     <Screen>
-      {/* Free-tier upsell (hidden for Paid) */}
-      {!isPaidTier(user) ? (
-        <FreeUpsellBanner allowance={allowance} onUpgrade={() => router.push('/(app)/subscription')} />
-      ) : null}
-
-      {/* Welcome banner */}
-      <SoftCard style={styles.banner} hoverTint>
-        <View style={styles.bannerLeft}>
-          <Logo size={32} />
-          <Txt variant="h1" style={styles.greeting}>
-            Hey <Txt variant="h1" style={{ color: colors.orange }}>{user?.firstName || 'there'}</Txt>, ready?
-          </Txt>
+      {/* Combined welcome + plan + AI-actions container — one bordered pop-card holding the
+          greeting, the Free-plan strip (Free only) and the daily AI-actions meter. Replaces
+          the separate welcome banner and standalone upsell banner. */}
+      <View style={[styles.topCard, popShadow(4)]}>
+        <Text style={styles.greetingText}>
+          Hey <Text style={styles.greetingAccent}>{user?.firstName || 'there'}</Text>, ready?
+        </Text>
+        {!paid ? <FreePanel onUpgrade={() => router.push('/(app)/subscription')} /> : null}
+        <View style={styles.statRow}>
+          <AiActionsMeter allowance={allowance} paid={paid} />
         </View>
-        <View style={styles.statPills}>
-          <View style={styles.statPill}>
-            <Txt style={styles.statNum}>{stats.total}</Txt>
-            <Txt style={styles.statLabel}>Quests being tracked</Txt>
-          </View>
-          <View style={styles.statPill}>
-            <Txt style={styles.statNum}>{taskCounts.not_started}</Txt>
-            <Txt style={styles.statLabel}>Tasks not started yet</Txt>
-          </View>
-          <View style={styles.statPill}>
-            <Txt style={styles.statNum}>{taskCounts.in_progress}</Txt>
-            <Txt style={styles.statLabel}>Tasks in progress</Txt>
-          </View>
-        </View>
-      </SoftCard>
+      </View>
 
       {/* Profile teaser */}
       {profile ? (
@@ -358,7 +371,7 @@ export default function Home() {
           <>
             <ProgressTrack segments={[]} />
             <Txt variant="small" style={styles.emptyState}>Nothing here yet.</Txt>
-            <PopButton label="Find your first opportunity to track" onPress={(e) => { stop(e); router.push('/(app)/finder'); }} style={styles.selfStart} />
+            <PopButton label="Find your first match" variant="secondary" onPress={(e) => { stop(e); router.push('/(app)/finder'); }} style={styles.selfEnd} />
           </>
         )}
       </SoftCard>
@@ -558,21 +571,27 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
-  upsell: { backgroundColor: colors.navy, borderRadius: radius.lg, paddingVertical: space.lg, paddingHorizontal: space.lg, marginBottom: space.lg, position: 'relative' },
-  upsellBody: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md, flexWrap: 'wrap' },
-  upsellTitle: { fontFamily: fonts.bodyXBold, fontSize: 15, color: colors.cream },
-  upsellSub: { fontFamily: fonts.bodyMed, fontSize: 12.5, color: colors.cream, opacity: 0.85, marginTop: 3, lineHeight: 17 },
-  upsellMeter: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.mint, marginTop: 6 },
-  upsellBtn: { alignSelf: 'center' },
-  upsellClose: { position: 'absolute', top: 6, right: 10, zIndex: 2, padding: 4 },
-  upsellCloseTxt: { fontFamily: fonts.bodyBold, fontSize: 20, color: colors.cream, opacity: 0.7, lineHeight: 22 },
-  banner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.lg, paddingVertical: space.xl, flexWrap: 'wrap' },
-  bannerLeft: { flexDirection: 'row', alignItems: 'center', gap: space.md, flex: 1, flexWrap: 'wrap' },
-  greeting: { color: colors.navy },
-  statPills: { flexDirection: 'row', gap: 10, flexWrap: 'wrap', flexShrink: 1, minWidth: 0 },
-  statPill: { backgroundColor: colors.navy, borderRadius: radius.lg, paddingHorizontal: 14, paddingVertical: 8, alignItems: 'center', justifyContent: 'center', minWidth: 96 },
-  statNum: { fontFamily: fonts.display, fontSize: 18, lineHeight: 18, color: colors.white },
-  statLabel: { fontFamily: fonts.bodyBold, fontSize: 8.5, lineHeight: 12, color: colors.orange, letterSpacing: 0.4, marginTop: 3, textTransform: 'uppercase', textAlign: 'center', maxWidth: 84 },
+  // Combined welcome + plan + AI-meter container: white, 3px navy border, 22px radius, 4px pop
+  // shadow (applied inline via popShadow(4)).
+  topCard: { backgroundColor: colors.card, borderWidth: 3, borderColor: colors.navy, borderRadius: radius.xl, padding: space.xl, gap: space.lg },
+  greetingText: { fontFamily: fonts.display, fontSize: 24, lineHeight: 32, color: colors.navy },
+  greetingAccent: { color: colors.orange },
+  statRow: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
+
+  // Free-plan strip nested inside the top card.
+  freePanel: { backgroundColor: colors.navy, borderRadius: radius.lg, padding: space.lg },
+  freeBody: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md, flexWrap: 'wrap' },
+  freeTitle: { fontFamily: fonts.bodyXBold, fontSize: 15, color: colors.cream },
+  freeSub: { fontFamily: fonts.bodyMed, fontSize: 12.5, color: colors.cream, opacity: 0.85, marginTop: 3, lineHeight: 17 },
+  freeBtn: { alignSelf: 'center' },
+
+  // AI-actions meter card (one of the stat-row cards): white, 2px navy border, 16px radius.
+  meterCard: { flex: 1, minWidth: 170, backgroundColor: colors.card, borderWidth: 2, borderColor: colors.navy, borderRadius: radius.lg, padding: space.lg },
+  meterNum: { fontFamily: fonts.display, fontSize: 28, lineHeight: 32, color: colors.navy },
+  meterDenom: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.slate400 },
+  meterLabel: { fontFamily: fonts.bodyBold, fontSize: 11, letterSpacing: 0.4, textTransform: 'uppercase', color: colors.slate500 },
+  meterBar: { flexDirection: 'row', gap: 3, marginTop: 8 },
+  meterSeg: { flex: 1, height: 6, borderRadius: 3 },
 
   emptyProfile: {
     borderRadius: radius.xl,
@@ -594,10 +613,13 @@ const styles = StyleSheet.create({
   cardTitle: { color: colors.slate900 },
   teaserText: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 21, color: colors.inkSoft },
 
-  trackedPill: { backgroundColor: colors.navy, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6 },
-  trackedText: { fontFamily: fonts.bodyBold, fontSize: 12, lineHeight: 16, color: colors.white },
+  // "N tracked" count pill — peach fill + navy border + brown text, matching the redesign's
+  // status-pill family (the same palette as the task-status pills below it).
+  trackedPill: { backgroundColor: colors.peach, borderWidth: 2, borderColor: colors.navy, borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 3 },
+  trackedText: { fontFamily: fonts.bodyXBold, fontSize: 10, lineHeight: 14, letterSpacing: 0.2, textTransform: 'uppercase', color: colors.statusPastFg },
   legend: { flexDirection: 'row', gap: space.lg, flexWrap: 'wrap' },
   selfStart: { alignSelf: 'flex-start' },
+  selfEnd: { alignSelf: 'flex-end' },
   freshFindsText: { fontSize: 12, lineHeight: 16, color: colors.navy },
   freshFindsBtn: { paddingVertical: 8 },
   emptyState: { color: '#9AA9B8', fontStyle: 'italic', fontSize: 13 },

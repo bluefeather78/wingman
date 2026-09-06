@@ -326,8 +326,16 @@ Edit the **markdown** (never the generated `.html`), then `python -m agents.buil
      one remaining piece; password accounts delete end-to-end today.
    - **Not browser-verified:** `tsc` + backend tests pass, but no live Metro run — a concurrent
      session's dev server is active in this checkout and a second watcher would disrupt it.
-5. **P4 — Legal.** privacy.md/terms.md edits, `build_legal`, `TERMS_VERSION` bump. *(Its own commit;
-   it's a consent-affecting change.)*
+5. **P4 — Legal. ✅ DONE 2026-09-06.** privacy.md §9/§10/§14 (self-serve deletion mechanism +
+   export/portability + retention exceptions) and terms.md §7/§18 (delete-your-account right,
+   permanence, no-refund) rewritten; `public/*.html` rebuilt via `agents/build_legal`.
+   - **`TERMS_VERSION` NOT bumped — flagged for a human call.** It already equals today's date
+     (`2026-09-06`, set earlier today for the Blufeather DBA change) and the effective date is
+     hand-written "September 6, 2026" in the markdown, so a pure date bump can't distinguish
+     pre-edit from post-edit same-day acceptances. The change only *expands* user rights (adds
+     self-serve deletion/export), so re-consent isn't clearly required — but if strict
+     distinguishability is wanted, advance BOTH the config `TERMS_VERSION` and the md effective
+     date (e.g. to 2026-09-07) together.
 6. **P5 — Play/App Store.** Add the web deletion-request URL to the Play listing; confirm in-app
    deletion satisfies Apple 5.1.1(v).
 

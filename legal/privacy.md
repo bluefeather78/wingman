@@ -193,17 +193,17 @@ Uploaded resume and profile files are not retained after they have been processe
 
 Information derived from those files may remain in a user's Wingman profile unless deleted or otherwise removed in accordance with our retention practices.
 
+You can delete your account and its associated information at any time (see Section 10). After deletion, we retain only information we are required or permitted to keep by law — such as billing and tax records held by our payment processor, and a minimal, non-identifying record that a deletion occurred.
+
 ## 10. Deletion
 
-Users may stop using Wingman at any time.
+You can delete your account, and everything associated with it, at any time from within Wingman: go to **Manage Plan → Your data → Delete my account**. You will be asked to confirm your password before the deletion proceeds.
 
-If you would like to request deletion of your account or personal information, contact:
+Deleting your account permanently removes your profile, your tracked and saved opportunities, your account details, and the other information associated with your account. This cannot be undone. If you have a paid subscription, it is cancelled as part of the deletion.
 
-**contactus@highschoolwingman.com**
+Some information may be retained where required by law or necessary to protect security — for example, our payment processor retains billing and tax records it is legally required to keep, and we keep a minimal, non-identifying record that a deletion occurred. We do not retain your name, email, profile, or other personal information after deletion except as described here.
 
-We will evaluate and respond to deletion requests in accordance with applicable law and our ability to verify the request.
-
-Some information may need to be retained where required by law, necessary to protect security, or otherwise permitted by applicable law.
+You may also request deletion by contacting **contactus@highschoolwingman.com**. We will evaluate and respond to such requests in accordance with applicable law and our ability to verify the request.
 
 ## 11. Security
 
@@ -233,7 +233,9 @@ The updated Privacy Policy will become effective on the date indicated at the be
 
 Depending on the information involved and applicable law, you may have rights concerning your personal information, including rights to request access to, correction of, or deletion of certain information.
 
-To make a request, contact:
+You can **download a copy of the information Wingman holds about your account** at any time from **Manage Plan → Your data → Download my data**, and you can **delete your account** as described in Section 10.
+
+To make other requests, contact:
 
 **contactus@highschoolwingman.com**
 

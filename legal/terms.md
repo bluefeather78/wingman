@@ -108,6 +108,8 @@ You agree to:
 
 You are responsible for activity occurring through your account, except to the extent that applicable law provides otherwise.
 
+You may delete your account at any time from within Wingman (see Section 18). You may also download a copy of the information associated with your account, as described in our **Privacy Policy**.
+
 ## 8. Information You Provide
 
 Wingman allows users to provide information about themselves, including information relating to their interests, activities, goals, education, location, and other aspects of their student profile.
@@ -269,7 +271,7 @@ We may suspend or terminate your access to Wingman at any time, including if we 
 
 Because Wingman is a beta product, we may also discontinue individual features or the beta program itself at any time.
 
-You may stop using Wingman at any time.
+You may stop using Wingman at any time, and you may delete your account and its associated information at any time from within Wingman (**Manage Plan → Your data → Delete my account**). Deleting your account is permanent and, if you have a paid subscription, cancels it; you will not receive a refund for the current billing period except where required by law. Certain records may be retained as described in our **Privacy Policy**.
 
 Sections that by their nature should survive termination, including provisions concerning intellectual property, disclaimers, limitations of liability, indemnification, and dispute resolution, will survive termination.
 

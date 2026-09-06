@@ -296,7 +296,10 @@ Edit the **markdown** (never the generated `.html`), then `python -m agents.buil
    new `account_export_limiter`, returns a JSON attachment), registered in `app/main.py`.
    Tests: `tests/unit/test_account_data.py` (12) + gate wiring in `test_subscription_gate.py`.
    All green; 0 new failures vs. the tree's pre-existing environmental baseline.
-2. **P1 — Export frontend.** Drawer/Manage-Plan button, blob download (web first).
+2. **P1 — Export frontend. ✅ DONE 2026-09-06.** `exportData()` on `ApiClient`/`httpClient`
+   (authed POST → `res.blob()`, manual 401-refresh, no 402 gate), and a **"Your data"** card on
+   Manage Plan (`subscription.tsx`) with a **Download my data** button (web blob download;
+   native points to the website — DECISION #5). `tsc` clean.
 3. **P2 — Delete backend + tests. ✅ DONE 2026-09-06.** `erase_account` (services/account_data.py,
    sequencing + abort-on-billing), DELETE in `_users_request` + `delete_user` /
    `delete_user_satellites` / `anonymize_user_submissions` / `record_account_deletion` (core.py),
@@ -310,7 +313,19 @@ Edit the **markdown** (never the generated `.html`), then `python -m agents.buil
      accounts delete end-to-end today.
    - **DDL:** `db/account_deletions_schema.sql` must be run in Supabase (until then the tombstone
      is a silent no-op — delete still works, just leaves no audit row).
-4. **P3 — Delete frontend.** Danger-zone flow with re-auth + double confirm.
+4. **P3 — Delete frontend. ✅ DONE (password path) 2026-09-06.** `deleteAccount(password)` on
+   `ApiClient`/`httpClient` (SHA-256 like login, manual 401-refresh, `forgetSession()` on success),
+   and a **danger-zone** delete flow on Manage Plan: a confirmation modal with a **password
+   re-auth field** + a typed **DELETE** confirmation, both required to enable the delete button;
+   on success it routes to `/landing`. Backend refinement: a failed re-auth now answers **403**
+   (not 401) so the client's refresh-on-401 never misfires and logs the student out over a typo.
+   `tsc` clean; the 403 change is covered by the updated P2 test.
+   - **Still open (Google-only path):** a Google-linked account gets the backend's `400
+     {reauth:"google_required"}`, which the modal surfaces as a message — it does NOT yet
+     complete deletion. The fresh-Google-handoff re-auth (new OAuth-callback plumbing) is the
+     one remaining piece; password accounts delete end-to-end today.
+   - **Not browser-verified:** `tsc` + backend tests pass, but no live Metro run — a concurrent
+     session's dev server is active in this checkout and a second watcher would disrupt it.
 5. **P4 — Legal.** privacy.md/terms.md edits, `build_legal`, `TERMS_VERSION` bump. *(Its own commit;
    it's a consent-affecting change.)*
 6. **P5 — Play/App Store.** Add the web deletion-request URL to the Play listing; confirm in-app

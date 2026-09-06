@@ -278,7 +278,9 @@ def test_delete_takes_no_userid_parameter():
     assert get_current_user in deps
 
 
-def test_delete_401_on_wrong_password(monkeypatch):
+def test_delete_403_on_wrong_password(monkeypatch):
+    # 403, not 401: 401 means "not authenticated" and the client refreshes+retries on it, which
+    # would loop and then log the student out over a typo. A failed re-auth is 403.
     _stub_delete_route(monkeypatch, {"password_hash": "argon2$stored"})
     monkeypatch.setattr(route, "verify_password", lambda stored, given: (False, False))
     erased = {"called": False}
@@ -286,7 +288,7 @@ def test_delete_401_on_wrong_password(monkeypatch):
                         lambda uid: erased.__setitem__("called", True))
     resp = route.handle_account_delete(body={"passwordHash": "a" * 64},
                                        user=AuthedUser(id="alice"))
-    assert resp.status_code == 401
+    assert resp.status_code == 403
     assert erased["called"] is False           # never erased on a bad password
 
 

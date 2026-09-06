@@ -155,6 +155,19 @@ export interface ApiClient {
   // resolved. The Quest Log tracks the item under that id so it can use the same shared,
   // cached deadline check catalog opportunities use. Still never rejects.
   submitUserOpportunity(payload: UserOpportunitySubmission): Promise<string | null>;
+  // --- Data rights (DATA_DELETION_EXPORT_PLAN.md) ---
+  // Download everything Wingman holds about this account as one JSON file (P0). Resolves to
+  // the file Blob; the caller triggers the browser download. Rejects with HttpError on
+  // failure (429 rate limit, 404 gone). Identity is the token's — no userid parameter.
+  exportData(): Promise<Blob>;
+  // Permanently delete the account after a PASSWORD re-auth (P3). Pass the raw password; it
+  // is SHA-256 hashed client-side like login. Resolves on success (the local session is
+  // dropped, so onSessionLost fires and the router bounces to /login). Rejects with HttpError:
+  // 403 = wrong password; 400 with reauth 'google_required' = a Google-only account that must
+  // confirm via Google instead (see error message); 502 = a live subscription could not be
+  // cancelled, so NOTHING was deleted and the caller can retry.
+  deleteAccount(password: string): Promise<void>;
+
   // Subscription status + promo flow (payments themselves stay deferred).
   subscriptionStatus(): Promise<Record<string, unknown>>;
   validatePromo(code: string): Promise<{ valid?: boolean; kind?: string; description?: string; error?: string }>;

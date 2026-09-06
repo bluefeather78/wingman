@@ -713,6 +713,39 @@ export const httpClient: ApiClient = {
     return request('/api/subscription/cancel', { method: 'POST', body: JSON.stringify({}) });
   },
 
+  // --- Data rights (DATA_DELETION_EXPORT_PLAN.md) ---
+  // Not request(): the response is a file, not JSON (request() does res.json()). Same manual
+  // 401-refresh-once dance extractFromResume uses, then res.blob(). The 402 gate does not
+  // apply — export/delete must stay reachable to a lapsed account (a paywall you can't export
+  // or delete through is a data hostage), which is why the routes are get_current_user only.
+  async exportData(): Promise<Blob> {
+    const doPost = () => rawFetch('/api/account/export', { method: 'POST', body: '{}' });
+    let res = await doPost();
+    if (res.status === 401 && (await refreshOnce()) === 'ok') res = await doPost();
+    if (!res.ok) {
+      const { error } = await errorBody(res);
+      throw new HttpError(res.status, error ?? `Could not export your data (${res.status}).`);
+    }
+    return res.blob();
+  },
+
+  async deleteAccount(password: string): Promise<void> {
+    const passwordHash = await sha256Hex(password);
+    const body = JSON.stringify({ passwordHash });
+    const doPost = () => rawFetch('/api/account/delete', { method: 'POST', body });
+    // A 401 here is a genuinely expired ACCESS token (refresh + retry). A wrong password
+    // answers 403, deliberately, so it never enters this refresh path (see the route).
+    let res = await doPost();
+    if (res.status === 401 && (await refreshOnce()) === 'ok') res = await doPost();
+    if (!res.ok) {
+      const { error } = await errorBody(res);
+      throw new HttpError(res.status, error ?? `Could not delete your account (${res.status}).`);
+    }
+    // Success — the row is gone and every token for it now fails server-side. Drop the local
+    // session so onSessionLost fires and the router leaves the app.
+    await forgetSession();
+  },
+
   // --- Stable since Phase 1 (soft/public; bearer attached if present, for attribution) ---
   async getOpportunities(): Promise<Opportunity[]> {
     const data = await request<Opportunity[] | { opportunities?: Opportunity[] }>(

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { httpClient } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
 import { AiActionsBar, PopButton, Screen, SoftCard, usePopInteraction } from '@/ui/components';
@@ -34,6 +35,7 @@ function fmtDate(iso: string | null | undefined): string {
 // tier to Unlimited immediately rather than on the next sign-in.
 export default function Subscription() {
   const { user, allowance: liveAllowance } = useAuth();
+  const router = useRouter();
   const [sub, setSub] = useState<SubState | null>((user?.subscription as SubState) ?? null);
   const [promo, setPromo] = useState('');
   const [promoStatus, setPromoStatus] = useState('');
@@ -42,6 +44,14 @@ export default function Subscription() {
   const [showCancel, setShowCancel] = useState(false);
   const [canceling, setCanceling] = useState(false);
   const [cancelStatus, setCancelStatus] = useState('');
+  // Data rights (DATA_DELETION_EXPORT_PLAN.md): export + delete.
+  const [exportStatus, setExportStatus] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteConfirm, setDeleteConfirm] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteStatus, setDeleteStatus] = useState('');
   const promoBtnPop = usePopInteraction(3, colors.navy, 1);
 
   useEffect(() => {
@@ -105,6 +115,57 @@ export default function Subscription() {
       setCancelStatus((e as Error).message || 'Could not cancel right now. Please try again.');
     } finally {
       setCanceling(false);
+    }
+  }
+
+  async function downloadData() {
+    // Web-first (DECISION #5): the browser blob download. Native has no `document`, so it
+    // points the student at the website rather than failing silently.
+    if (Platform.OS !== 'web' || typeof document === 'undefined') {
+      setExportStatus('Open Wingman in a web browser to download your data.');
+      return;
+    }
+    setExporting(true);
+    setExportStatus('Preparing your file…');
+    try {
+      const blob = await httpClient.exportData();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `wingman-my-data-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setExportStatus('✓ Your data has been downloaded.');
+    } catch (e) {
+      setExportStatus((e as Error).message || 'Could not export your data. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function openDelete() {
+    setDeletePassword('');
+    setDeleteConfirm('');
+    setDeleteStatus('');
+    setShowDelete(true);
+  }
+
+  async function deleteAccount() {
+    setDeleting(true);
+    setDeleteStatus('');
+    try {
+      await httpClient.deleteAccount(deletePassword);
+      // Success: the session is already dropped inside deleteAccount(). Leave the app.
+      setShowDelete(false);
+      router.replace('/landing');
+    } catch (e) {
+      // 403 wrong password, 400 google_required, 502 stripe — all surface their message in
+      // the tile rather than closing it. Nothing was deleted on any of these.
+      setDeleteStatus((e as Error).message || 'Could not delete your account. Please try again.');
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -270,6 +331,38 @@ export default function Subscription() {
             <Text style={styles.billingLine}>Receipts will be sent to your email</Text>
           </View>
         </View>
+
+        {/* Your data — export + delete (DATA_DELETION_EXPORT_PLAN.md). */}
+        <View style={styles.plansBox}>
+          <View style={styles.plansHead}>
+            <Text style={styles.plansHeadText}>Your data</Text>
+          </View>
+          <View style={styles.plansBody}>
+            <Text style={styles.dataLine}>
+              Download a copy of everything Wingman has stored about your account — your
+              profile, your Quest Log, and your account details — as a single file.
+            </Text>
+            <Pressable
+              style={[styles.dataBtn, exporting && styles.dataBtnDisabled]}
+              onPress={downloadData}
+              disabled={exporting}
+            >
+              <Text style={styles.dataBtnText}>{exporting ? 'Preparing…' : 'Download my data'}</Text>
+            </Pressable>
+            {!!exportStatus && <Text style={styles.dataStatus}>{exportStatus}</Text>}
+
+            <View style={styles.dataDivider} />
+
+            <Text style={styles.dangerHead}>Delete my account</Text>
+            <Text style={styles.dataLine}>
+              Permanently delete your account and everything Wingman holds about you. This
+              cannot be undone{paid ? ', and it cancels your subscription' : ''}.
+            </Text>
+            <Pressable style={styles.deleteLinkWrap} onPress={openDelete}>
+              <Text style={styles.deleteLink}>Delete my account…</Text>
+            </Pressable>
+          </View>
+        </View>
       </SoftCard>
     </Screen>
 
@@ -289,6 +382,54 @@ export default function Subscription() {
             </Pressable>
             <Pressable style={styles.modalKeep} onPress={() => !canceling && setShowCancel(false)} disabled={canceling}>
               <Text style={styles.modalKeepText}>Never mind, keep my plan</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+
+    {/* Delete-account confirmation — password re-auth + a typed DELETE confirmation. */}
+    <Modal visible={showDelete} transparent animationType="fade" onRequestClose={() => !deleting && setShowDelete(false)}>
+      <Pressable style={styles.modalScrim} onPress={() => !deleting && setShowDelete(false)}>
+        <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+          <Text style={styles.modalTitle}>Delete your account?</Text>
+          <Text style={styles.modalBody}>
+            This permanently removes your profile, your Quest Log, your saved opportunities and
+            your account details. It cannot be undone{paid ? ', and it cancels your subscription' : ''}.
+          </Text>
+          <Text style={styles.deleteFieldLabel}>Confirm your password</Text>
+          <TextInput
+            style={styles.deleteInput}
+            value={deletePassword}
+            onChangeText={setDeletePassword}
+            placeholder="Your password"
+            placeholderTextColor={colors.slate500}
+            secureTextEntry
+            autoCapitalize="none"
+            editable={!deleting}
+          />
+          <Text style={styles.deleteFieldLabel}>Type DELETE to confirm</Text>
+          <TextInput
+            style={styles.deleteInput}
+            value={deleteConfirm}
+            onChangeText={setDeleteConfirm}
+            placeholder="DELETE"
+            placeholderTextColor={colors.slate500}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            editable={!deleting}
+          />
+          {!!deleteStatus && <Text style={styles.cancelStatus}>{deleteStatus}</Text>}
+          <View style={styles.modalActions}>
+            <Pressable
+              style={[styles.modalDanger, (deleting || !deletePassword || deleteConfirm.trim() !== 'DELETE') && styles.dataBtnDisabled]}
+              onPress={deleteAccount}
+              disabled={deleting || !deletePassword || deleteConfirm.trim() !== 'DELETE'}
+            >
+              <Text style={styles.modalDangerText}>{deleting ? 'Deleting…' : 'Permanently delete my account'}</Text>
+            </Pressable>
+            <Pressable style={styles.modalKeep} onPress={() => !deleting && setShowDelete(false)} disabled={deleting}>
+              <Text style={styles.modalKeepText}>Never mind, keep my account</Text>
             </Pressable>
           </View>
         </Pressable>
@@ -353,6 +494,19 @@ const styles = StyleSheet.create({
 
   cancelLinkWrap: { alignSelf: 'flex-start' },
   cancelLink: { fontFamily: fonts.bodyBold, fontSize: 13, color: '#DC2626', textDecorationLine: 'underline' },
+
+  // Your data (export + delete).
+  dataLine: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: colors.slate500 },
+  dataBtn: { alignSelf: 'flex-start', backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.pill, paddingVertical: 10, paddingHorizontal: 20, marginTop: 4 },
+  dataBtnDisabled: { opacity: 0.5 },
+  dataBtnText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.slate900 },
+  dataStatus: { fontFamily: fonts.bodyMed, fontSize: 13, color: colors.slate500 },
+  dataDivider: { height: 2, backgroundColor: colors.slate200, marginVertical: 8 },
+  dangerHead: { fontFamily: fonts.bodyBold, fontSize: 15, color: '#991B1B' },
+  deleteLinkWrap: { alignSelf: 'flex-start', marginTop: 2 },
+  deleteLink: { fontFamily: fonts.bodyBold, fontSize: 13, color: '#DC2626', textDecorationLine: 'underline' },
+  deleteFieldLabel: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate500, letterSpacing: 0.4, textTransform: 'uppercase' },
+  deleteInput: { borderWidth: 2, borderColor: colors.slate200, borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 10, fontFamily: fonts.bodyMed, fontSize: 14, color: colors.slate900, backgroundColor: colors.white },
 
   // Cancel overlay tile.
   modalScrim: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', alignItems: 'center', justifyContent: 'center', padding: 16 },

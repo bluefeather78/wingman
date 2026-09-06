@@ -99,12 +99,17 @@ def handle_account_delete(body: dict = Depends(json_body),
             "error": "This account signs in with Google. Please confirm with Google to "
                      "delete it.",
             "reauth": "google_required"})
+    # A failed re-auth answers 403, NOT 401. 401 is reserved for "not authenticated" (an
+    # expired/absent access token, raised by get_current_user) — and the client refreshes and
+    # retries on a 401. A wrong password returned as 401 would send the client into a
+    # refresh-and-retry loop and then log the student out over a typo; 403 ("authenticated,
+    # but this action is refused") is the honest, non-looping answer.
     password_hash = body.get("passwordHash") or ""
     if not is_valid_client_hash(password_hash):
-        return json_error(401, "Incorrect password.")
+        return json_error(403, "Incorrect password.")
     ok, _needs_upgrade = verify_password(stored_hash, password_hash)
     if not ok:
-        return json_error(401, "Incorrect password.")
+        return json_error(403, "Incorrect password.")
 
     # Re-auth passed — erase. StripeCancelError means a live subscription could not be
     # cancelled, so NOTHING was deleted and the student can retry with their data intact.

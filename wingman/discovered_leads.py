@@ -818,7 +818,12 @@ def main():
     ap.add_argument("--list", action="store_true", help="FREE: show the queued leads.")
     ap.add_argument("--kind", choices=[KIND_NAMES, KIND_HUB], help="Only this kind.")
     ap.add_argument("--all", action="store_true", help="Include already-processed leads.")
-    ap.add_argument("--path", default=LEADS_PATH)
+    ap.add_argument("--path", default=None,
+                    help="Operate on a specific local FILE instead of the shared queue. Omitted "
+                         "(the default) means the shared Supabase table when it is configured, "
+                         "falling back to the local file only when there is no table — so an "
+                         "ordinary run writes where the console reads, never a laptop-only file. "
+                         "Pass a path only when you genuinely mean one file (e.g. walk_up_hubs).")
     ap.add_argument("--from-rejects", action="store_true",
                     help="FREE: queue the rows you rejected AS ROUND-UPS. This is the catch-up "
                          "for rows rejected before the live hook existed — new ones are queued "
@@ -830,20 +835,22 @@ def main():
     ap.add_argument("--limit", type=int, help="Max rejected rows to classify.")
     ap.add_argument("--commit", action="store_true", help="Write the leads (default: preview).")
     ap.add_argument("--import-file", action="store_true",
-                    help="One-shot: copy leads from the LOCAL file (--path) into the shared "
-                         "Supabase table. Closes the Phase 4 gap where creating the table left "
-                         "the file's leads stranded. Preview by default; add --commit to write. "
-                         "Deduped by url_key, safe to re-run, never deletes the file.")
+                    help="One-shot: copy leads from the local file (discovered_leads.jsonl, or "
+                         "--path) into the shared Supabase table. Closes the Phase 4 gap where "
+                         "creating the table left the file's leads stranded. Preview by default; "
+                         "add --commit to write. Deduped by url_key, safe to re-run, never "
+                         "deletes the file.")
     args = ap.parse_args()
 
     if args.import_file:
+        src = args.path or LEADS_PATH        # the file to read; --path is optional here
         try:
-            result = import_file_to_table(args.path, dry_run=not args.commit)
+            result = import_file_to_table(src, dry_run=not args.commit)
         except LeadQueueUnavailable as e:
             print(f"[ERROR] {e}")
             return
         if result["file"] == 0:
-            print(f"[OK] The local file ({args.path}) holds no leads — nothing to import.")
+            print(f"[OK] The local file ({src}) holds no leads — nothing to import.")
         elif result["dry_run"]:
             print(f"[PREVIEW] {result['file']} lead(s) in the file; {result['would_write']} "
                   f"would be written to the table, {result['skipped']} already there. "
@@ -851,7 +858,7 @@ def main():
         else:
             print(f"[OK] Imported {result['written']} lead(s) into the table "
                   f"({result['skipped']} already present). The file was NOT deleted — verify "
-                  f"the table looks right, then remove {args.path} by hand.")
+                  f"the table looks right, then remove {src} by hand.")
         return
 
     if args.from_rejects:
@@ -874,10 +881,12 @@ def main():
         if nos:
             print(f"    ({nos} page(s) judged not a round-up — remembered, never re-fetched)")
         real = [l for l in leads if l["status"] == STATUS_NEW]
+        where = queue_backend() if args.path is None else os.path.basename(args.path)
         if args.commit:
             n = append_leads(leads, args.path)
-            print(f"[OK] Wrote {n} row(s) ({len(real)} lead(s), {len(leads) - len(real)} "
-                  f"remembered as not-a-round-up). Queue: {summarize(load_leads(args.path))}")
+            print(f"[OK] Wrote {n} row(s) to {where} ({len(real)} lead(s), "
+                  f"{len(leads) - len(real)} remembered as not-a-round-up). "
+                  f"Queue: {summarize(load_leads(args.path))}")
         else:
             print("")
             print(f"[PREVIEW] {len(real)} lead(s) would be queued, and "
@@ -886,14 +895,15 @@ def main():
         return
 
     leads = load_leads(args.path)
+    where = queue_backend() if args.path is None else args.path
     if not leads:
-        print(f"[OK] No leads yet ({args.path} does not exist or is empty). Leads are captured "
-              f"by agents/scrape_opportunities.py as a free side-effect of a search run.")
+        print(f"[OK] No leads yet (queue: {where}). Leads are captured by "
+              f"agents/scrape_opportunities.py as a free side-effect of a search run.")
         return
     shown = leads_to_show(leads, show_all=args.all, kind=args.kind)
     counts = summarize(leads)
     nos = sum(1 for l in leads if l.get("status") == STATUS_NOT_A_LEAD)
-    print(f"[OK] {len(leads)} lead(s) on file; unprocessed by kind: "
+    print(f"[OK] {len(leads)} lead(s) in {where}; unprocessed by kind: "
           + (", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "none")
           + (f"; {nos} remembered NO(s)" if nos else ""))
     for lead in shown:

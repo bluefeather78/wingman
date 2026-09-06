@@ -28,11 +28,10 @@ import {
   profileChatTranscript,
   type ChatMessage,
 } from '@/lib/profileChat';
-import { MiniBadge, PopButton, RightDrawer, Screen, SoftCard, Txt, usePopInteraction, VibeField } from '@/ui/components';
+import { PopButton, RightDrawer, Screen, SoftCard, Txt, usePopInteraction, VibeField } from '@/ui/components';
 import { useAiGate } from '@/ui/AiLimitBanner';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 import { useAuth } from '@/auth/AuthContext';
-import { isPaidTier } from '@/lib/tier';
 
 // ONE call for every model-backed feature (S1-1): the provider, the prompt and the token
 // budget are all properties of the server-side feature id now, so there is nothing to pick
@@ -86,8 +85,7 @@ function splitProfile(text: string) {
 // right-hand "Deepen your story" chat drawer (starters + regenerate, mic, spoken questions).
 export default function Profile() {
   const router = useRouter();
-  const { user, allowance } = useAuth();
-  const paidTier = isPaidTier(user);
+  const { user } = useAuth();
   // Free-tier AI gate: greys the chat ("Deepen your story"), Regenerate, Tidy it up, and the
   // resume/LinkedIn import (all spend an AI action) and re-shows the banner on tap when spent.
   const { reached: aiBlocked, guard: aiGuard, dimStyle } = useAiGate();
@@ -569,15 +567,8 @@ export default function Profile() {
                 <Text style={[styles.updatedText, isStale && styles.updatedStaleText]}>{updatedLabel}</Text>
               </View>
             )}
-            {/* Two-tier: the AI tier + today's allowance. Paid shows a plain Unlimited badge. */}
-            {paidTier ? (
-              <MiniBadge label="Wingman Unlimited" bg={colors.navy} fg={colors.cream} />
-            ) : (
-              <MiniBadge label="Free plan" bg={colors.lime100} fg={colors.ink} />
-            )}
-            {!paidTier && typeof allowance?.used === 'number' && typeof allowance?.limit === 'number' && (
-              <Text style={styles.actionsUsed}>{allowance.used} of {allowance.limit} AI actions used today</Text>
-            )}
+            {/* The plan/allowance readout lives in the header tag + AI-limit banner now, so it
+                is no longer repeated here. */}
           </View>
           <View style={styles.headBtns}>
             <PopButton label="📄 Quick add from resume / LinkedIn" variant="ink" small textStyle={styles.hBtnText} shadowColor={colors.ink} style={dimStyle} onPress={aiGuard(() => setImportOpen(true))} />
@@ -868,7 +859,6 @@ const styles = StyleSheet.create({
   mainCard: { padding: 28, gap: 20 },
   headRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: space.lg, flexWrap: 'wrap' },
   titleWrap: { flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
-  actionsUsed: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500 },
   updatedPill: { backgroundColor: colors.lime100, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 6 },
   updatedText: { fontFamily: fonts.bodyBold, fontSize: 12, lineHeight: 16, color: colors.lime700 },
   updatedStale: { backgroundColor: '#FFE4E6' },

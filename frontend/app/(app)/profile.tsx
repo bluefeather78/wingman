@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
@@ -85,6 +85,11 @@ function splitProfile(text: string) {
 // right-hand "Deepen your story" chat drawer (starters + regenerate, mic, spoken questions).
 export default function Profile() {
   const router = useRouter();
+  // Deep-link from the empty-state "Build my profile" CTAs (Home Base, Fresh Finds): landing
+  // here with ?chat=1 opens the "Deepen your story" drawer straight away instead of leaving
+  // the student to find it.
+  const { chat: chatParam } = useLocalSearchParams<{ chat?: string }>();
+  const autoChatOpened = useRef(false);
   const { user } = useAuth();
   // Free-tier AI gate: greys the chat ("Deepen your story"), Regenerate, Tidy it up, and the
   // resume/LinkedIn import (all spend an AI action) and re-shows the banner on tap when spent.
@@ -173,6 +178,17 @@ export default function Profile() {
   useEffect(() => () => {
     if (clearArmTimer.current) clearTimeout(clearArmTimer.current);
   }, []);
+
+  // Open the chat drawer once, after the profile has loaded, when arriving via ?chat=1. Runs
+  // through the AI gate like the on-screen buttons, so a free-tier student who's out of AI
+  // actions gets the banner rather than a silently non-working drawer.
+  useEffect(() => {
+    if (chatParam && !loading && !autoChatOpened.current) {
+      autoChatOpened.current = true;
+      aiGuard(openDrawer)();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatParam, loading]);
 
   async function persist(next: StoredProfile) {
     setProfile(next);

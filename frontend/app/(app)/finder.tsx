@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
 import { addTrackerItemChecked, flattenItems, loadTrackerData } from '@/api/trackerStore';
@@ -160,6 +160,10 @@ export default function Finder() {
   // The Free-tier AI gate. `aiBlocked` greys AI controls; `aiGuard` wraps a press so a tap while
   // out of quota re-shows the banner instead of running the (server-refused) action.
   const { reached: aiBlocked, guard: aiGuard, dimStyle } = useAiGate();
+  // On phones the filter toggles scroll horizontally on one line and the open facet panel
+  // drops full-width below the row (an absolute panel would be clipped by the scroller).
+  const { width: winW } = useWindowDimensions();
+  const compact = winW > 0 && winW < 768;
   const [opps, setOpps] = useState<Opportunity[] | null>(null);
   const [oppsError, setOppsError] = useState<string | null>(null);
   const [oppsLoading, setOppsLoading] = useState(true);
@@ -1477,7 +1481,79 @@ export default function Finder() {
         </View>
       )}
 
-      {/* Filter row */}
+      {/* Filter row — mobile: scrolling toggles + a full-width panel below (see compact block). */}
+      {compact && (
+        <View style={styles.filterZone}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScrollContent}>
+            <Text style={styles.filterLabel}>FILTER:</Text>
+            {profileTags.length > 0 && (
+              <Pressable
+                style={[styles.filterToggle, openFacet === 'profile' && styles.filterToggleOn]}
+                onPress={() => setOpenFacet(openFacet === 'profile' ? null : 'profile')}
+              >
+                <Text style={styles.filterToggleText}>▾ Themes</Text>
+              </Pressable>
+            )}
+            <Pressable style={[styles.filterToggle, untrackedOnly && styles.filterToggleOn]} onPress={() => setUntrackedOnly(!untrackedOnly)}>
+              <Text style={styles.filterToggleText}>{untrackedOnly ? '☑' : '☐'} Only untracked</Text>
+            </Pressable>
+            {FILTER_FIELDS.map((f) => {
+              const raw = [...new Set(sortedResults.map((r) => facetValue(r.opp, f.key)))];
+              const values = [...raw.filter((v) => v !== BLANK_FACET).sort(), ...(raw.includes(BLANK_FACET) ? [BLANK_FACET] : [])];
+              if (values.length < 2) return null;
+              const active = filters[f.key].size;
+              return (
+                <Pressable
+                  key={f.key}
+                  style={[styles.filterToggle, openFacet === f.key && styles.filterToggleOn]}
+                  onPress={() => setOpenFacet(openFacet === f.key ? null : f.key)}
+                >
+                  <Text style={styles.filterToggleText}>▾ {f.label}{active ? ` (${active})` : ''}</Text>
+                </Pressable>
+              );
+            })}
+            {activeFilterCount > 0 && (
+              <Pressable style={styles.clearFilters} onPress={clearAllFilters}>
+                <Text style={styles.clearFiltersText}>✕ Clear filters ({activeFilterCount})</Text>
+              </Pressable>
+            )}
+          </ScrollView>
+          {/* The open facet's panel, full-width below the scrolling toggles. */}
+          {openFacet === 'profile' && (
+            <View style={styles.mobilePanel}>
+              <Text style={styles.facetHint}>Changing this finds new matches.</Text>
+              <ScrollView style={styles.facetScroll} nestedScrollEnabled>
+                {profileTags.map((t) => (
+                  <Pressable key={t.tag} style={styles.facetRow} onPress={() => toggleTheme(t.tag)}>
+                    <Text style={styles.facetRowText}>{selectedThemes.has(t.tag) ? '●' : '○'} {t.tag}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+              <Text style={styles.facetExploreLabel}>Or explore something new</Text>
+              <SoftInput value={exploreText} onChangeText={onFacetExploreChange} placeholder="Type a new direction…" />
+            </View>
+          )}
+          {FILTER_FIELDS.map((f) => {
+            if (openFacet !== f.key) return null;
+            const raw = [...new Set(sortedResults.map((r) => facetValue(r.opp, f.key)))];
+            const values = [...raw.filter((v) => v !== BLANK_FACET).sort(), ...(raw.includes(BLANK_FACET) ? [BLANK_FACET] : [])];
+            return (
+              <View key={f.key} style={styles.mobilePanel}>
+                {values.map((v) => (
+                  <Pressable key={v} style={styles.facetRow} onPress={() => toggleFilter(f.key, v)}>
+                    <Text style={styles.facetRowText}>
+                      {filters[f.key].has(v) ? '☑' : '☐'} {v === BLANK_FACET ? BLANK_FACET_LABEL : v}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            );
+          })}
+        </View>
+      )}
+
+      {/* Filter row — desktop: wrapping toggles with panels anchored under each. */}
+      {!compact && (
       <View style={styles.filterBar}>
         <Text style={styles.filterLabel}>FILTER:</Text>
         {profileTags.length > 0 && (
@@ -1575,6 +1651,7 @@ export default function Finder() {
           </Pressable>
         )}
       </View>
+      )}
       {!!note && <Text style={styles.note}>{note}</Text>}
       {/* A theme-facet recall is in flight — hold the grid and its empty states back so a
           brief in-between frame never reads as "no matches". */}
@@ -1894,6 +1971,11 @@ const styles = StyleSheet.create({
   deepenAlt: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.grayLighter, textDecorationLine: 'underline' },
 
   filterBar: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', zIndex: 20 },
+  // Mobile filter: a horizontally-scrolling toggle row, and the open facet panel as a
+  // full-width block below it. zIndex keeps both above the click-outside backdrop (zIndex 10).
+  filterZone: { zIndex: 20 },
+  filterScrollContent: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingRight: 8 },
+  mobilePanel: { marginTop: 8, backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.lg, padding: 12, gap: 2, zIndex: 20 },
   filterLabel: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.muted, letterSpacing: 0.6 },
   filterToggle: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 8 },
   filterToggleHovered: { transform: [{ translateX: -1 }, { translateY: -1 }] },

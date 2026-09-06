@@ -625,7 +625,10 @@ const styles = StyleSheet.create({
   clickable: { cursor: 'pointer' },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 64 },
   onDarkSoft: { color: 'rgba(255,255,255,0.9)', maxWidth: 448 },
-  flex1: { flex: 1, minWidth: 200 },
+  // minWidth:0 (not 200) so this column actually shrinks — otherwise the status pill beside it
+  // (e.g. "HAPPENING NOW") was pushed off the right edge on a phone. The name truncates
+  // (numberOfLines) instead. RN-web defaults flex items to min-width:auto, hence the explicit 0.
+  flex1: { flex: 1, minWidth: 0 },
 
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.sm, flexWrap: 'wrap' },
   // Card h2s inherit the body's text-slate-900, NOT the navy from styles.css — the

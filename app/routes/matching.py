@@ -18,7 +18,7 @@ from app.core import touch_user_activity, record_interactive_cost_async
 from app.deps import (json_body, json_response, json_error, require_subscription,
                       opaque_error, DB_UNAVAILABLE)
 from app.auth import AuthedUser
-from app.services.opportunities import fetch_opportunities_with_vectors
+from app.services.opportunities import fetch_opportunities, fetch_opportunities_with_vectors
 from app.services.embeddings import embed_student_themes
 from app.services.recall_query import recall_pool, attach_display, student_embed_texts
 from app.services.pool_eligibility import gate_pool_eligibility, ELIGIBILITY_ONLY_SYSTEM
@@ -136,4 +136,79 @@ def handle_match(body: dict = Depends(json_body),
         "results": results, "pool_size": len(gate["pool"]),
         "excluded_ineligible": gate["excluded"], "embed_cost_usd": embed_cost,
         "checked": gate["checked"],
+    })
+
+
+@router.post("/api/match/eligibility")
+def handle_match_eligibility(body: dict = Depends(json_body),
+                             user: AuthedUser = Depends(require_subscription)):
+    """Eligibility-gate an already-chosen candidate set — the finder's form/quiz path.
+
+    The theme path gets its eligibility gate inside /api/match, but the form/quiz path builds
+    its candidate pool entirely client-side (preFilter + rankCandidates) and never touches that
+    route, so its results were ungated for citizenship/geography/prerequisite restrictions
+    (grade IS filtered there, in preFilter). This runs the SAME `gate_pool_eligibility` over the
+    candidate ids the client chose, so both search paths drop the same verified-ineligible rows.
+
+    Body: {candidate_ids:[str], grade, location:{state,...}, funnel_answers:{citizenship?,gender?}}.
+    Returns: {excluded_ineligible:[ids], checked, called}. The client keeps every row NOT named
+    in `excluded_ineligible`, so a mock/offline response, the open circuit breaker, or a parse
+    failure all leave the list untouched (the gate can only ever make it more inclusive).
+
+    MARQUEE M9: a new code path that makes a paid model call (the M8 ELIGIBILITY_ONLY_SYSTEM
+    prompt, unchanged). Costed and gated exactly like /api/match — behind require_subscription,
+    the global spend circuit breaker, and the mock/offline fallback; NOT metered as a separate
+    Free-tier AI action (the search already spent one on ranking), matching /api/match.
+    """
+    userid = user.id
+    touch_user_activity(userid, "match")
+
+    ids = [str(i) for i in (body.get("candidate_ids") or []) if i is not None]
+    if not ids:
+        return json_response(200, {"excluded_ineligible": [], "checked": 0, "called": False})
+
+    # No key or the breaker is open: gate nothing rather than 402/500 — an honest degrade that
+    # keeps the (grade-filtered) form results showing, same posture as /api/match's mock branch.
+    live = bool(GEMINI_API_KEY) and not budget.circuit_open()
+    if not live:
+        return json_response(200, {"excluded_ineligible": [], "checked": 0, "called": False})
+
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        return json_error(500, "SUPABASE_URL/SUPABASE_ANON_KEY not configured.")
+    try:
+        # The gate reads only text fields (name/org/summary/eligibility), so the vector-free
+        # catalog cache is enough — no need to pay the ~20MB embeddings read here.
+        rows = fetch_opportunities()
+    except Exception as e:
+        return opaque_error(502, DB_UNAVAILABLE, e, op="matching.elig.db")
+
+    by_id = {r.get("id"): r for r in rows}
+    # Preserve the client's order; silently drop ids not in the catalog (inactive/stale).
+    pool = [by_id[i] for i in ids if i in by_id]
+    if not pool:
+        return json_response(200, {"excluded_ineligible": [], "checked": 0, "called": False})
+
+    student = _student_from_body(body)
+    elig_usage: dict = {}
+
+    def _gate(system, user_content):
+        text, usage = call_gemini(system, user_content, GEMINI_API_KEY,
+                                  use_web_search=False, max_tokens=ELIGIBILITY_MAX_TOKENS,
+                                  model=MESSAGES_MODEL)
+        elig_usage.clear()
+        elig_usage.update(usage)
+        return text
+
+    try:
+        gate = gate_pool_eligibility(pool, student, _gate, extract_json)
+    except Exception as e:
+        return opaque_error(502, "We could not check eligibility just now. Please try again.",
+                            e, op="matching.elig.run")
+
+    if elig_usage:
+        record_interactive_cost_async("interactive_gemini", elig_usage, MESSAGES_MODEL,
+                                      userid=userid, feature="match_eligibility")
+    return json_response(200, {
+        "excluded_ineligible": gate["excluded"], "checked": gate["checked"],
+        "called": gate["called"],
     })

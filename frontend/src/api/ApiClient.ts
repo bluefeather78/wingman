@@ -6,6 +6,8 @@ import type {
   GoogleSessionResult,
   MatchRequest,
   MatchResponse,
+  MatchEligibilityRequest,
+  MatchEligibilityResponse,
   Opportunity,
   RegisterInput,
   SessionUser,
@@ -93,6 +95,7 @@ export interface ApiClient {
   // Goes through the authed request() path (bearer + refresh + the 402 gate), NOT the
   // callGemini proxy — it is a first-class gated route, not a model passthrough.
   match(blob: MatchRequest): Promise<MatchResponse>;
+  matchEligibility(blob: MatchEligibilityRequest): Promise<MatchEligibilityResponse>;
   // The ONE model call (S1-1, finding C1.2). It replaced callGemini / callClaude /
   // callClaudeDetailed, which each posted a client-composed `system` string — so every
   // prompt shipped in the web bundle and any account holder could send one of their own.

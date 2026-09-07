@@ -619,6 +619,31 @@ export default function Finder() {
     return { mapped: vouched.length ? vouched : mapped, note: resp.note ?? null };
   }
 
+  // Form/quiz path eligibility gate. The theme path is gated inside /api/match; this path
+  // builds its pool client-side (preFilter + rankCandidates) and never touches that route, so
+  // citizenship/geography/prerequisite restrictions were never applied here (grade already is,
+  // in preFilter). Run the SAME server gate over the chosen candidates and drop the ones that
+  // verify as ineligible. Reuses buildMatchBlob's location precedence (form field, then the
+  // once-captured location). Never blanks the grid: any failure or degraded response keeps the
+  // ungated list, exactly as the server gate keeps everyone on a parse/model failure.
+  async function gateFormEligibility(list: Result[], gradeNum: number | null): Promise<Result[]> {
+    if (!list.length) return list;
+    try {
+      const loc = homeState.trim() || knownLocation();
+      const resp = await httpClient.matchEligibility({
+        candidate_ids: list.map((r) => r.opp.id),
+        grade: gradeNum,
+        ...(loc ? { location: { state: loc } } : {}),
+      });
+      const drop = new Set(resp.excluded_ineligible || []);
+      if (!drop.size) return list;
+      return list.filter((r) => !drop.has(r.opp.id));
+    } catch (e) {
+      console.warn('eligibility gate unavailable, showing ungated matches:', (e as Error).message);
+      return list;
+    }
+  }
+
   // The theme facet's fresh recall. Runs the debounced re-POST against the current picks,
   // shows a grid loading state, and replaces the pool. A failure keeps the existing list and
   // surfaces the reason rather than blanking the grid.
@@ -751,19 +776,27 @@ export default function Finder() {
           .map((r) => (byId.get(r.id) ? { opp: byId.get(r.id) as Opportunity, reason: r.reason, tier: r.tier } : null))
           .filter((x): x is Result => x !== null);
         if (!mapped.length) throw new Error('AI ranking returned no usable matches');
-        setResults(mapped);
-        setNote(widenNote);
-        rememberSearch(mapped, widenNote, k);
+        const gated = await gateFormEligibility(mapped, gradeNum);
+        // If the gate removed everything the ranker chose, say why rather than showing a bare
+        // "No matches this time" — the rows existed, the student just isn't eligible for them.
+        const gatedNote = gated.length === 0
+          ? [widenNote, 'The closest matches all had eligibility requirements you don’t meet — try another type or direction.']
+              .filter(Boolean).join(' ')
+          : widenNote;
+        setResults(gated);
+        setNote(gatedNote);
+        rememberSearch(gated, gatedNote, k);
       } catch (err) {
         console.error('AI ranking unavailable, falling back to keyword order:', (err as Error).message);
         const fallback = pool.slice(0, 12).map((opp) => ({ opp, reason: '', tier: 'look' as const }));
+        const gatedFallback = await gateFormEligibility(fallback, gradeNum);
         // Both facts matter and neither may hide the other: the ranking is degraded AND the
         // type filter may have been dropped.
         const fallbackNote = [widenNote, 'Showing keyword matches — AI ranking is unavailable right now.']
           .filter(Boolean).join(' ');
         setNote(fallbackNote);
-        setResults(fallback);
-        rememberSearch(fallback, fallbackNote, k);
+        setResults(gatedFallback);
+        rememberSearch(gatedFallback, fallbackNote, k);
       }
       setSelected(new Set());
       setVisibleCount(10);

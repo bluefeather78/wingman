@@ -174,6 +174,22 @@ def _sync(events, monkeypatch, requests=None):
     return gr.handle_calendar_sync(body={"events": events}, user=_User())
 
 
+def test_a_revoked_token_returns_the_reconnect_marker(monkeypatch):
+    """A present-but-revoked Google refresh token (invalid_grant) raises out of
+    get_google_calendar_access_token, and the sync must answer 502 with the stable
+    machine-readable code "calendar_reconnect" — that is what the client branches on to
+    route the user back through Google's consent page instead of a dead-end error. The
+    human `error` string is NOT the contract (it carries a volatile "(ref …)" suffix)."""
+    def _raise(_u):
+        raise urllib.error.HTTPError("https://oauth2.googleapis.com/token", 400,
+                                     "Bad Request", {}, None)
+    monkeypatch.setattr(gr.g, "get_google_calendar_access_token", _raise)
+    resp = gr.handle_calendar_sync(body={"events": [{"id": "a", "title": "T",
+                                                     "dateISO": "2026-11-01"}]}, user=_User())
+    assert resp.status_code == 502
+    assert json.loads(resp.body)["code"] == "calendar_reconnect"
+
+
 def test_a_malformed_date_no_longer_kills_the_whole_sync(monkeypatch):
     """`year, month, day = date_iso.split("-")` raised out of the loop and 500'd
     everything. Tracker dates come from a model extraction, so malformed is a normal

@@ -888,9 +888,14 @@ def handle_calendar_sync(body: dict = Depends(json_body),
     try:
         access_token = g.get_google_calendar_access_token(userid)
     except Exception as e:
+        # `code` lets the client route this to the reconnect flow (open Google's consent
+        # page) instead of a dead-end error. The stored refresh token is present but Google
+        # rejected it (revoked/expired => invalid_grant), so the sync path returns 502 here,
+        # NOT the 409 "not connected" that the client already handles — without this marker a
+        # revoked token trapped the user on an unrecoverable message. See tracker.tsx.
         return opaque_error(502, "We could not refresh your Google Calendar access. "
                                   "Reconnect Google Calendar and try again.",
-                            e, op="google.calendar_token")
+                            e, op="google.calendar_token", code="calendar_reconnect")
     if not access_token:
         return json_error(409, "Google Calendar is not connected for this "
                                "account. Connect it first.")

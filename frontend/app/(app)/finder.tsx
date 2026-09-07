@@ -27,7 +27,7 @@ import {
   facetValue, type FilterKey,
 } from '@/lib/finderSearch';
 import { extractJSON } from '@/lib/extractJSON';
-import { inferSubjects, preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
+import { preFilter, rankCandidates, type RankedPick } from '@/lib/ranking';
 import { markNewlyAdded } from '@/lib/newlyAdded';
 import { suggestStates } from '@/lib/usStates';
 import { buildMetaPills } from '@/lib/opportunityPills';
@@ -703,18 +703,15 @@ export default function Finder() {
     const cfg = k ? KIND_CONFIG[k] : null;
     const strict = !!cfg?.strictType;
     try {
-      // Subjects + grade come from the profile's stored filter values, recomputed only when
-      // the profile itself meaningfully changes — this was an unconditional Gemini call on
-      // every search, which both cost money per search and let the same profile produce
-      // different subjects (and so different results) each time.
-      let subjectHints: string[] = [];
+      // The profile-inferred grade, recomputed only when the profile itself meaningfully
+      // changes (a free local parse; subjects used to ride here too but were dropped — the
+      // reranker does the real ordering and the semantic path never used them).
       let profileGrade: number | null = null;
       try {
         const fv = await getProfileFilterValues(profileStore, modelCalls, profileRecord.current);
-        subjectHints = fv.subjects;
         profileGrade = fv.grade;
       } catch {
-        /* best effort — no hints just means keyword-only scoring */
+        /* best effort — no grade just means no grade filter */
       }
       // The form's dropdown wins when set; then the grade the student explicitly gave us via
       // the one-time question (stored on the profile record); then whatever grade-level
@@ -727,8 +724,8 @@ export default function Finder() {
       // student's selected themes to /api/match: the server embeds them, recalls the top rows
       // by cosine, drops verified-ineligible ones, and returns the whole scored pool. The grid,
       // pool facets and add-to-tracker are unchanged — only how the pool is produced. The
-      // non-suggest (form/quiz) path below keeps preFilter/rankCandidates. subjectHints is now
-      // unused here (embeddings supersede it) but still feeds the form path.
+      // non-suggest (form/quiz) path below keeps preFilter/rankCandidates (keyword + grade,
+      // then the LLM reranker).
       if (!k) {
         const { mapped, note: matchNote } = await callMatchMapped(themeTagsFor(selectedThemes), gradeNum);
         setResults(mapped);
@@ -741,7 +738,7 @@ export default function Finder() {
       }
 
       const { pool, typeMatches, widened, strictEmpty } = preFilter(
-        opps, desc, subjectHints, cfg?.dbTypes ?? null, strict, gradeNum,
+        opps, desc, cfg?.dbTypes ?? null, strict, gradeNum,
       );
       // A strict kind with nothing of its type in the catalog. Say so and stop BEFORE the
       // paid ranking call — there is nothing here to rank, and widening would have handed

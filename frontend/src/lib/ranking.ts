@@ -1,6 +1,5 @@
 import type { Opportunity } from '@/api/types';
 import { callFeatureJSON, type FeatureCall } from './aiJson';
-import { VALID_SUBJECTS } from './constants';
 import { isGradeEligible } from './grade';
 
 // The candidate-ranking chain, ported from script.js. Model access is injected as a
@@ -56,13 +55,11 @@ export const TYPE_FILTER_MIN_POOL = 15;
 export function preFilter(
   opportunities: Opportunity[],
   description: string,
-  subjectHints: string[] | null,
   typeFilter: string[] | null,
   strict: boolean,
   studentGrade: number | null,
 ): PreFilterResult {
   const tokens = [...new Set(tokenize(description).filter((t) => !STOPWORDS.has(t) && t.length >= 3))];
-  const subjSet = new Set((subjectHints || []).map((s) => s.toLowerCase()));
   const typeSet = typeFilter && typeFilter.length ? new Set(typeFilter) : null;
 
   let base = opportunities;
@@ -91,11 +88,7 @@ export function preFilter(
     base = base.filter((o) => isGradeEligible(o, studentGrade));
   }
 
-  const scored = base.map((opp) => {
-    let score = keywordScore(tokens, opp);
-    if ((opp.subject_tags || []).some((t) => subjSet.has((t || '').toLowerCase()))) score += 3;
-    return { opp, score };
-  });
+  const scored = base.map((opp) => ({ opp, score: keywordScore(tokens, opp) }));
   scored.sort((a, b) => b.score - a.score);
   const withScore = scored.filter((s) => s.score > 0);
   // Capped at 100: rankCandidates keeps only the best 10-12, and a smaller payload
@@ -104,22 +97,13 @@ export function preFilter(
   return { pool, typeMatches, widened, strictEmpty: false };
 }
 
-// ---------- Model-backed steps ----------
+// ---------- Model-backed step ----------
 //
-// The prompts these used to carry moved to app/services/prompts.py in S1-1. What stays here
-// is what is genuinely client-side: which subjects are valid (the answer is filtered against
-// the same list the prompt names — a test asserts the two agree), and the compaction of the
-// candidate rows, which decides how much of the catalog leaves this device.
-export async function inferSubjects(
-  callFeature: FeatureCall,
-  description: string,
-): Promise<string[]> {
-  const arr = await callFeatureJSON<unknown>(callFeature, 'infer_subjects', { description });
-  return Array.isArray(arr)
-    ? (arr.filter((s): s is string => typeof s === 'string' && (VALID_SUBJECTS as readonly string[]).includes(s)))
-    : [];
-}
-
+// The prompt this used to carry moved to app/services/prompts.py in S1-1. What stays here is
+// the compaction of the candidate rows, which decides how much of the catalog leaves this
+// device. (inferSubjects was removed 2026-09-07: its only consumer was preFilter's subject-tag
+// boost above, which the LLM reranker below re-orders anyway — a paid Gemini call per profile
+// change for a +3 tiebreak on the legacy form path. The semantic /api/match path never used it.)
 export interface RankedPick {
   id: string;
   reason: string;

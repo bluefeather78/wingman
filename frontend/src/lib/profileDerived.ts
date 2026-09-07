@@ -1,7 +1,6 @@
 import type { FeatureCall } from './aiJson';
 import { countProfileWords } from './profile';
 import { parseGradeFromText } from './grade';
-import { inferSubjects } from './ranking';
 import { extractTagsAndBasics, type EnrichedTag, type ProfileExtract } from './profileTags';
 import { starterQuestionPoolFromAI } from './profileChat';
 import { onSessionReset } from './sessionScope';
@@ -38,7 +37,6 @@ export interface SlotRecord {
 }
 
 export interface FilterValuesSlot extends SlotRecord {
-  subjects: string[];
   grade: number | null;
 }
 export interface FilterTagsSlot extends SlotRecord {
@@ -79,9 +77,9 @@ export interface ProfileStore {
 
 interface SlotConfig {
   // Is the stored record actually filled in? Note the freshness check below keys on
-  // `computedAt`, NOT on array length: an empty result is a legitimate answer (inferSubjects
-  // drops anything outside VALID_SUBJECTS; a thin profile may yield no tags), and treating
-  // it as "not computed yet" would re-pay for that same empty answer on every load.
+  // `computedAt`, NOT on a value being truthy: an empty/null result is a legitimate answer (a
+  // thin profile may yield no tags, and `grade` is legitimately null when the prose names no
+  // grade), and treating it as "not computed yet" would re-pay for that same answer on every load.
   isFilled: (rec: SlotRecord) => boolean;
   compute: (calls: ModelCalls, text: string) => Promise<SlotRecord>;
 }
@@ -121,15 +119,15 @@ function tagsAndBasics(calls: ModelCalls, text: string): Promise<ProfileExtract>
 }
 
 const SLOTS: Record<SlotName, SlotConfig> = {
-  // Deliberately its own call, and the only Gemini slot that is. This is the one derived
-  // value on the search critical path — preFilter cannot narrow the catalog without it —
-  // whereas the merged pass above is the slowest answer of the set because it carries every
-  // tag. Folding this in would make a cold-cache search block on tag enrichment it never
-  // reads, to save one call on a path the student is waiting on.
+  // Grade only, and FREE — `parseGradeFromText` is a local regex, no model call. (It used to
+  // also carry `subjects` from a paid inferSubjects call, removed 2026-09-07: subjects fed only
+  // preFilter's +3 subject boost on the legacy form path, which the reranker re-orders anyway,
+  // and the semantic /api/match path never read it.) Kept as its own slot so the free grade
+  // parse is memoized like the others and search flows read it through one accessor.
   filterValues: {
-    isFilled: (r) => Array.isArray((r as FilterValuesSlot).subjects),
-    async compute(calls, text) {
-      return { subjects: await inferSubjects(calls, text), grade: parseGradeFromText(text) };
+    isFilled: (r) => r != null && 'grade' in (r as Record<string, unknown>),
+    async compute(_calls, text) {
+      return { grade: parseGradeFromText(text) };
     },
   },
   filterTags: {
@@ -245,14 +243,14 @@ export async function getProfileDerived(
   return promise;
 }
 
-// The one way search flows should read subjects + grade.
+// The one way search flows should read the profile-inferred grade.
 export async function getProfileFilterValues(
   store: ProfileStore,
   calls: ModelCalls,
   record?: ProfileRecord | null,
-): Promise<{ subjects: string[]; grade: number | null }> {
+): Promise<{ grade: number | null }> {
   const rec = (await getProfileDerived(store, calls, 'filterValues', record)) as FilterValuesSlot;
-  return { subjects: rec.subjects || [], grade: rec.grade ?? null };
+  return { grade: rec.grade ?? null };
 }
 
 // Synchronous read of a stored slot, for callers that must not block (the results filter bar

@@ -27,7 +27,7 @@ STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
 # Trial and pricing configuration
 TRIAL_DAYS = 7
-PLAN_PRICE_CENTS = 999  # $9.99/month
+PLAN_PRICE_CENTS = 499  # $4.99/month
 PLAN_PRICE_ID = os.environ.get("STRIPE_PRICE_ID", "price_test_subscription")  # Set in .env for real deployments
 
 # The BUILT-IN promo table — the fallback, not the source of record any more.

@@ -165,7 +165,7 @@ Installed uvicorn 0.52 defaults to `proxy_headers=True` and `forwarded_allow_ips
 
 `record_user_cost` / `record_interactive_cost` (`app/core.py:195-277`, `431-533`) only *record* — nothing reads the total back to refuse a call.
 
-**Exploit.** One $9.99 trial account (or a 7-day free trial that costs nothing) loops `GET /api/opportunities/<id>/deadline?refresh=1` across the catalog: 1,300 rows × $0.07 ≈ $90 per pass, repeatable. `/api/match` at a few cents per call is unbounded too. The only throttle is the process-wide Gemini sleep (M5), which is a denial-of-service, not a budget.
+**Exploit.** One $4.99 trial account (or a 7-day free trial that costs nothing) loops `GET /api/opportunities/<id>/deadline?refresh=1` across the catalog: 1,300 rows × $0.07 ≈ $90 per pass, repeatable. `/api/match` at a few cents per call is unbounded too. The only throttle is the process-wide Gemini sleep (M5), which is a denial-of-service, not a budget.
 
 **Fix.** A per-user daily budget enforced before each paid branch (deadline check, action items, match, proxies), backed by the existing `user_costs` rollup; a per-user cooldown on `refresh=1` per opportunity (e.g. one forced re-check per row per hour); and a global daily circuit breaker on total spend that flips the paid branches to cached/mock.
 

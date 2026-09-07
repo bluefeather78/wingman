@@ -125,8 +125,8 @@ number on the page.
 | At-risk | trial ending within 48h **and** funnel stage below 5 — the email list | OK |
 | Churn | `status='canceled'`, and how many still have access | OK |
 | Promo redemptions | unnest `promo_codes_used`, count per code, split grant vs checkout | OK |
-| MRR | `count(status='active') * $9.99` | OK |
-| Gross margin per user | `$9.99 - user_costs.cost_usd` — **already computed** as `margin_usd` | OK |
+| MRR | `count(status='active') * $4.99` | OK |
+| Gross margin per user | `$4.99 - user_costs.cost_usd` — **already computed** as `margin_usd` | OK |
 | Cost per activated user | window AI spend / users at stage 5+ | OK |
 
 **Conversion's denominator is accounts whose trial has *expired*, never all accounts.**
@@ -255,7 +255,7 @@ one column means scrolling past two to reach the one you want.
 |                                                    [ 7d ][ 30d ][ 90d ][All] |
 +------------------------------------------------------------------------------+
 |  ACCOUNTS      WAU          ACTIVATED      PAYING       MRR      ENDING <48h |
-|     15          6            5 (33%)        1/4         $9.99        2       |
+|     15          6            5 (33%)        1/4         $4.99        2       |
 |  +3 this wk   40% of all    20+ word       trials      1 active   ! 1 with   |
 |               accounts       profile       ended                    no prof. |
 +------------------------------------------------------------------------------+
@@ -363,7 +363,7 @@ Response sketch:
   "signups_by_day": [ { "day": "2026-08-20", "count": 2 } ],
   "activity_by_day": [ { "day": "2026-08-20", "dau": 3 } ],
   "cohorts":  [ { "cohort": "2026-08-11", "n": 6, "d1": 4, "d3": 3, "d7": null } ],
-  "subscriptions": { "by_status": {}, "mrr_usd": 9.99,
+  "subscriptions": { "by_status": {}, "mrr_usd": 4.99,
                      "conversion": { "converted": 1, "eligible": 4 },
                      "ending_soon": [], "promos": [] },
   "users": [ { "userid": "...", "stage": 5, "tracked": 3, "profile_words": 84,

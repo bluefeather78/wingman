@@ -1,6 +1,6 @@
 # Wingman Privacy Policy
 
-**Effective Date:** September 6, 2026
+**Effective Date:** September 7, 2026
 
 This Privacy Policy explains how **Blufeather Labs LLC**, doing business as "Highschool Wingman" and the operator of Wingman ("Wingman," "we," "us," or "our"), collects, uses, processes, and protects information in connection with the Wingman beta. Highschool Wingman is a trade name (DBA) of Blufeather Labs LLC.
 

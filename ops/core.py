@@ -425,7 +425,7 @@ def get_agent_history(agent=None, limit=50, days=None):
 from wingman import dryrun_common
 
 USER_COSTS_SETUP_SQL = "db/user_costs_schema.sql"
-PLAN_PRICE_USD = 9.99  # mirrors subscription_common.PLAN_PRICE_CENTS
+PLAN_PRICE_USD = 4.99  # mirrors subscription_common.PLAN_PRICE_CENTS
 
 
 # One label, one bucket, for every row whose `model` is the empty string. Those rows are

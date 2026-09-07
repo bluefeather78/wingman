@@ -81,7 +81,7 @@ export function AiLimitBanner() {
 
         <View style={styles.right}>
           <Pressable style={styles.cta} onPress={() => { trackEvent('plan_ai_limit_cta_click'); router.push('/(app)/subscription' as never); }}>
-            <Text style={styles.ctaText}>Go Unlimited, $9.99/mo</Text>
+            <Text style={styles.ctaText}>Go Unlimited, $4.99/mo</Text>
           </Pressable>
           <Pressable onPress={() => { trackEvent('plan_ai_limit_dismissed'); dismissAiLimitBanner(); }} hitSlop={10} accessibilityLabel="Dismiss">
             <Text style={styles.closeText}>✕</Text>

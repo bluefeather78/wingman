@@ -386,7 +386,7 @@ once and writes both, so the two can't drift.
   which matters more here — the response carries names, emails and plan status) backs the
   console's **Cost per user** tab: attributed vs unattributed, spend by provider, by model
   (with each model's feature split), by feature, and a per-user table showing cost against
-  the $9.99 plan price.
+  the $4.99 plan price.
   - The table is seeded from the **`users` table**, not from `user_costs`. Built from the
     cost rows alone it was a spend ledger wearing a roster's name: an account with no
     billed call has no rows at all, so 9 of 15 accounts — every recent signup among them —

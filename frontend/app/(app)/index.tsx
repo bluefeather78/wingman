@@ -140,7 +140,7 @@ function FreePanel({ onUpgrade }: { onUpgrade: () => void }) {
         <View style={{ flex: 1, minWidth: 220 }}>
           <Txt style={styles.freeTitle}>You&rsquo;re on the Free plan</Txt>
           <Txt style={styles.freeSub}>
-            Wingman Unlimited lifts the daily AI cap — $9.99/mo.
+            Wingman Unlimited lifts the daily AI cap — $4.99/mo.
           </Txt>
         </View>
         <PopButton label="Go Unlimited" variant="primary" small onPress={onUpgrade} style={styles.freeBtn} />
@@ -164,7 +164,7 @@ function EndingPanel({ days, onResubscribe }: { days: number; onResubscribe: () 
           <Txt style={styles.endingTitle}>Your plan ends {when}</Txt>
           <Txt style={styles.freeSub}>
             After that you&rsquo;ll drop to the Free plan&rsquo;s daily AI cap. Resubscribe to keep
-            Wingman Unlimited — $9.99/mo.
+            Wingman Unlimited — $4.99/mo.
           </Txt>
         </View>
         <PopButton label="Resubscribe" variant="primary" small onPress={onResubscribe} style={styles.freeBtn} />

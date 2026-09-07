@@ -55,7 +55,7 @@ In the Stripe Dashboard:
 3. Description: "Monthly subscription for Wingman"
 4. Pricing:
    - Billing period: Monthly
-   - Amount: $9.99
+   - Amount: $4.99
    - Recurring: Yes
 5. Copy the **Price ID** (starts with `price_`)
 
@@ -307,7 +307,7 @@ text are indistinguishable from rows accepted under new text.
 **Known conflict to resolve before charging anyone:** Terms §3 says "The beta is currently
 provided free of charge. We may introduce paid features, subscriptions, or other pricing in
 the future. If we do so, we will provide appropriate notice before charging you." That is a
-promise the $9.99 plan contradicts as written. Either update §3 (and re-run
+promise the $4.99 plan contradicts as written. Either update §3 (and re-run
 `agents/build_legal.py`, and bump `TERMS_VERSION`) or treat the notice requirement as binding
 before the first charge.
 

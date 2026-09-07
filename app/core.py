@@ -342,7 +342,7 @@ def record_interactive_cost_async(surface, usage, model=None, userid=None, featu
 
 # ---------- Per-user cost attribution ----------
 # Everything above answers "what did the app spend?". This answers "who spent it, and on
-# what?" — the question the $9.99/month subscription makes load-bearing, since a user
+# what?" — the question the $4.99/month subscription makes load-bearing, since a user
 # whose AI usage costs more than their plan is a loss per head that no aggregate figure
 # can reveal.
 #

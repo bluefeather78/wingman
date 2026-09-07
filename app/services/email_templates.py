@@ -471,7 +471,7 @@ def _trial_ending(ctx, unsubscribe_url):
             body=("Keep your matches, your tracked deadlines, and everything you&rsquo;ve "
                   f"built in Wingman by subscribing before your trial ends{dated}."),
             cta_url=f"{app}/subscription", cta_label="Keep my plan →", cta_width=260,
-            subnote="$9.99/month after your trial &mdash; cancel anytime."),
+            subnote="$4.99/month after your trial &mdash; cancel anytime."),
         _gap(32),
         _section("Don&rsquo;t lose what you&rsquo;ve built"),
         _cards([
@@ -484,7 +484,7 @@ def _trial_ending(ctx, unsubscribe_url):
         ]),
         _gap(32),
         _banner("Less than a Netflix subscription",
-                "$9.99/month keeps your matches, deadlines, and profile all in one place.",
+                "$4.99/month keeps your matches, deadlines, and profile all in one place.",
                 f"{app}/subscription", "Subscribe now"),
     ])
 
@@ -492,7 +492,7 @@ def _trial_ending(ctx, unsubscribe_url):
         f"Your trial wraps up {when}, {name}"
         + (f" ({ends_on})" if ends_on else "") + ".\n\n"
         "Keep your matches, your tracked deadlines, and everything you've built in Wingman\n"
-        "by subscribing before your trial ends. $9.99/month — cancel anytime.\n\n"
+        "by subscribing before your trial ends. $4.99/month — cancel anytime.\n\n"
         f"Keep my plan: {app}/subscription\n\n"
         "DON'T LOSE WHAT YOU'VE BUILT\n\n"
         "  Fresh Finds — your matches stop updating once the trial ends.\n"
@@ -531,7 +531,7 @@ def _goodbye(ctx, unsubscribe_url):
             body=(access + "Your profile, saved matches, and tracked deadlines are still "
                   "here whenever you&rsquo;re ready to come back."),
             cta_url=f"{app}/subscription", cta_label="Come back →", cta_width=220,
-            subnote="$9.99/month, cancel anytime."),
+            subnote="$4.99/month, cancel anytime."),
         _gap(32),
         # The feedback card, kept from the source. A reply actually reaches somebody:
         # EMAIL_REPLY_TO defaults to the same address this mailto uses.
@@ -571,7 +571,7 @@ def _goodbye(ctx, unsubscribe_url):
            "already paid for.\n\n")
         + "Your profile, saved matches, and tracked deadlines are still here whenever you're\n"
           "ready to come back.\n\n"
-        f"Come back: {app}/subscription  ($9.99/month, cancel anytime)\n\n"
+        f"Come back: {app}/subscription  ($4.99/month, cancel anytime)\n\n"
         "GOT A MINUTE?\n"
         "We're a small team building this for students and families. If there's something\n"
         "that would've made Wingman worth keeping, we'd love to hear it — just reply, or\n"

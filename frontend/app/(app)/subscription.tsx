@@ -338,7 +338,7 @@ export default function Subscription() {
               <View style={styles.flex1}>
                 <Text style={styles.planRowName}>Wingman Unlimited</Text>
                 <Text style={styles.planRowPrice}>
-                  $9.99<Text style={styles.planRowPer}>/month</Text>
+                  $4.99<Text style={styles.planRowPer}>/month</Text>
                 </Text>
                 <Text style={styles.planRowNote}>Billed monthly in advance. Cancel any time — you'll keep access through the end of the current period.</Text>
               </View>
@@ -384,7 +384,7 @@ export default function Subscription() {
             <Text style={styles.plansHeadText}>Billing</Text>
           </View>
           <View style={styles.plansBody}>
-            <Text style={styles.billingLine}>Wingman Unlimited is $9.99/month, billed when you upgrade. Cancel anytime.</Text>
+            <Text style={styles.billingLine}>Wingman Unlimited is $4.99/month, billed when you upgrade. Cancel anytime.</Text>
             <Text style={styles.billingLine}>Payment method: Add during checkout</Text>
             <Text style={styles.billingLine}>Receipts will be sent to your email</Text>
           </View>

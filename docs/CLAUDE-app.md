@@ -75,7 +75,7 @@ plus five POST endpoints:
 ## Subscription, trial, and signup consent
 
 **Subscription, trial, and signup consent.** Every account starts a **7-day free trial**
-that converts to a **$9.99/month** Stripe plan. `wingman/subscription_common.py` talks to Stripe
+that converts to a **$4.99/month** Stripe plan. `wingman/subscription_common.py` talks to Stripe
 over raw HTTP (no SDK, matching the stdlib-only philosophy) and holds the `PROMO_CODES`
 dict; four POST endpoints (`/api/subscription/status|checkout|cancel|validate-promo`) sit
 in `server.py`.
@@ -169,7 +169,7 @@ in `server.py`.
 - **The legal documents are generated.** `legal/terms.md` and `legal/privacy.md` are the
   source of record; `public/terms.html` / `public/privacy.html` are built from them by
   **`agents/build_legal.py`** and must not be hand-edited — re-run it after any edit under
-  `legal/`. Note Terms §3 still states the beta is free of charge, which the $9.99 plan
+  `legal/`. Note Terms §3 still states the beta is free of charge, which the $4.99 plan
   contradicts.
 - Stripe is **not configured**: `STRIPE_API_KEY`/`STRIPE_PRICE_ID` are absent from `.env`,
   so `/api/subscription/checkout` errors and the subscription screen's Upgrade button

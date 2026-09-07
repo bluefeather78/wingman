@@ -17,7 +17,7 @@
 >   actions-used, Manage Plan Free-vs-Unlimited dashboard, NavBar tier label, 429-with-allowance
 >   handling in httpClient → AuthContext, trial copy removed from login/landing. tsc clean.
 > - **Step 6 — legal + email (partly done):** Terms §3 rewritten (permanent Free plan + daily AI
->   allowance + $9.99 Unlimited, no trial; the "beta is free" contradiction fixed), effective date
+>   allowance + $4.99 Unlimited, no trial; the "beta is free" contradiction fixed), effective date
 >   + `TERMS_VERSION` bumped to 2026-09-05, `public/*.html` regenerated; the **welcome email** is
 >   reframed to the Free plan. **Still open:** (a) configure Stripe (`STRIPE_API_KEY` /
 >   `STRIPE_PRICE_ID` — secrets) before promoting the upsell; (b) repurpose the now-dormant
@@ -456,7 +456,7 @@ The console has five top-level views (`showView()`); this adds to two and possib
     mid-session and the chart reads backwards.
 - **Cost-per-user view:** add a **tier column / filter** to the per-user table (it's already
   seeded from the `users` roster, so every account appears even at $0 spend). Lets you answer
-  "which Paid users cost more than $9.99" (the loss-per-head question that tab exists for) and
+  "which Paid users cost more than $4.99" (the loss-per-head question that tab exists for) and
   "which Free users are pinned at the cap" separately.
 - **A tuning readout:** show the current `FREE_TIER_DAILY_AI_REQUESTS` and the measured
   **median/p90 requests-per-active-Free-user** right next to it, so setting the allowance is a
@@ -480,7 +480,7 @@ A persistent but dismissible **banner on Home Base** (`frontend/app/(app)/index.
 
 - **Content:** the concrete deltas, e.g. *"You're on the Free plan — 15 AI actions a day.
   Wingman Unlimited: unlimited profile chats, unlimited match-finding, unlimited deadline
-  re-checks. $9.99/mo."* Name the *specific* AI things they do most (profile chat, Fresh Finds
+  re-checks. $4.99/mo."* Name the *specific* AI things they do most (profile chat, Fresh Finds
   matching, deadline checks), because those are what the cap actually touches — a generic
   "upgrade for more" converts far worse than "the thing you just did, without limits."
 - **Behavior:** dismissible for the session, but returns on a later visit (a Free user is a
@@ -508,7 +508,7 @@ All driven by the `meta.allowance` block the API now returns:
    - **when it resets** (render `reset_at` as a live "resets in 6h", not just "midnight UTC" —
      a countdown is far less frustrating than a bare timezone),
    - **what still works** (browse, track, calendar, everything non-AI — see §9),
-   - **the upgrade CTA** ("Go unlimited — $9.99/mo").
+   - **the upgrade CTA** ("Go unlimited — $4.99/mo").
    - Reuse the existing `reason` string as the fallback text.
 4. **Paid confirmation.** After upgrade, a lightweight "You're on Wingman Unlimited — no daily
    AI cap" once, then the meter simply never appears again.

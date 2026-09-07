@@ -9,7 +9,7 @@
 
 A complete end-to-end subscription/payment system has been added to the Wingman app with:
 - **7-day free trial** for all new accounts
-- **$9.99/month** Pro plan after trial
+- **$4.99/month** Pro plan after trial
 - **Promo code support** (1 free month, discounts)
 - **Stripe integration** for secure payments
 - **Subscription management page** with trial countdown and plan info

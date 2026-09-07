@@ -4,7 +4,7 @@
 
 A complete, production-ready subscription system with:
 - ✅ **7-day free trial** - All new users automatically get a trial
-- ✅ **$9.99/month Pro Plan** - Paid subscription via Stripe
+- ✅ **$4.99/month Pro Plan** - Paid subscription via Stripe
 - ✅ **Promo Codes** - Support for promotional codes (1 free month included)
 - ✅ **Subscription Management Page** - Users can manage their plan
 - ✅ **Trial Countdown** - Visual indicator of days remaining
@@ -16,7 +16,7 @@ A complete, production-ready subscription system with:
 
 1. Go to https://stripe.com and create a free account
 2. In Dashboard → Products, create a new product called "Wingman Pro"
-3. Set up monthly pricing at $9.99
+3. Set up monthly pricing at $4.99
 4. Copy your **Price ID** (looks like `price_...`)
 
 ### Step 2: Configure Environment
@@ -139,7 +139,7 @@ PROMO_CODES = {
 ## UI Components Added
 
 ### Account Panel
-- Shows "Trial: X days left" or "Active: $9.99/month"
+- Shows "Trial: X days left" or "Active: $4.99/month"
 - "Manage Plan" button links to subscription page
 
 ### Subscription Page

@@ -100,6 +100,19 @@ services:
       # unauthenticated; must match the EMAIL_CRON_SECRET GitHub Actions secret.
       - key: EMAIL_CRON_SECRET
         sync: false
+      # ---- Stripe (subscriptions) ----
+      # Values live only in the Render dashboard (sync: false keeps them out of git). Without
+      # STRIPE_API_KEY / STRIPE_PRICE_ID the checkout endpoint errors and the Upgrade button
+      # surfaces that answer rather than redirecting; trial, gating and promo flows work
+      # regardless. STRIPE_PRICE_ID is the Stripe Price object the plan bills against — the
+      # source of truth for the amount charged (the repo's PLAN_PRICE_CENTS is display only).
+      # STRIPE_WEBHOOK_SECRET verifies incoming Stripe webhook signatures.
+      - key: STRIPE_API_KEY
+        sync: false
+      - key: STRIPE_PRICE_ID
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
 
   # ---------------- Static Site: the Expo (React Native Web) frontend ----------------
   # Phase 3: same monorepo, second Render service. Builds the Expo web export and serves the

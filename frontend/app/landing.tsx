@@ -6,7 +6,7 @@ import { backendUrl } from '@/api/httpClient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Logo, PopButton, PopCard, SoftCard, usePopInteraction } from '@/ui/components';
 import { openBackendPage } from '@/ui/openPage';
-import { ContractIcon, ExpandIcon, PersonIcon, PlayIcon } from '@/ui/icons';
+import { ContractIcon, ExpandIcon, LockIcon, PersonIcon, PlayIcon } from '@/ui/icons';
 import { colors, fonts, LANDING_MAX_WIDTH, navShadow, popShadow, radius, space } from '@/ui/theme';
 
 // Self-contained bundle (its own React runtime + fonts), same shape as the retired SPA's
@@ -271,7 +271,28 @@ export default function Landing() {
               <Text style={styles.ctaSecondaryText}>See how it works</Text>
             </Pressable>
           </View>
-          <Text style={styles.trialNote}>Free to start. No card required.</Text>
+          <Text style={styles.trialNote}>Free forever, with AI limits. No card required.</Text>
+        </View>
+
+        {/* Data / privacy reassurance card */}
+        <View style={styles.section}>
+          <SoftCard style={styles.privacyCard}>
+            <View style={styles.privacyIconTile}>
+              <LockIcon size={24} color={colors.navy} />
+            </View>
+            <View style={styles.privacyBody}>
+              <Text style={styles.privacyTitle}>Your data stays yours</Text>
+              <Text style={styles.privacyLead}>
+                We don't sell or share personal information. Everything Wingman knows about you is yours to look at — and
+                yours to delete — whenever you want.
+              </Text>
+              <View style={styles.privacyBullets}>
+                <Bullet color={colors.indigo} text="No personal information is ever sold or shared" />
+                <Bullet color={colors.indigo} text="Peek into exactly what we have on you, any time" />
+                <Bullet color={colors.indigo} text="Delete your data whenever you want, no questions asked" />
+              </View>
+            </View>
+          </SoftCard>
         </View>
 
         {/* Audience cards */}
@@ -484,6 +505,14 @@ const styles = StyleSheet.create({
   ctaSecondary: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, paddingHorizontal: 32, paddingVertical: 16 },
   ctaSecondaryText: { fontFamily: fonts.bodyXBold, fontSize: 15, color: colors.slate900 },
   trialNote: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500, marginTop: 16 },
+
+  // "Your data stays yours" reassurance card: icon tile + copy, wrapping on narrow screens.
+  privacyCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 20, flexWrap: 'wrap', padding: 32 },
+  privacyIconTile: { width: 48, height: 48, borderRadius: 12, backgroundColor: colors.lavender, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  privacyBody: { flex: 1, minWidth: 240, gap: 10 },
+  privacyTitle: { fontFamily: fonts.display, fontSize: 20, color: colors.navy },
+  privacyLead: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: colors.ink },
+  privacyBullets: { gap: 10, marginTop: 4 },
 
   cardsRow: { flexDirection: 'row', gap: 24, flexWrap: 'wrap' },
   audCard: { flex: 1, minWidth: 300, borderRadius: radius.lg, padding: 32, gap: 16 },

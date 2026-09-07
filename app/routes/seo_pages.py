@@ -344,6 +344,34 @@ def program_page(slug: str):
     return HTMLResponse(doc, headers={"Cache-Control": _PAGE_CACHE})
 
 
+# PostgREST caps a single response at 1000 rows regardless of a higher `limit` in the query —
+# the exact trap CLAUDE.md warns about. With >1000 indexed pages, a single request silently
+# dropped the tail from the sitemap, so those pages were never advertised to crawlers. Page
+# through with Range instead.
+_SITEMAP_PAGE = 1000
+
+
+def _fetch_indexed_rows():
+    """Every active, indexed row's (seo_slug, seo_evaluated_at), paging past the 1000-row cap.
+    Returns [] (→ sitemap degrades to the static URLs) if Supabase is unset or the column is
+    not migrated — _supabase_request returns None on failure, which stops the loop."""
+    if not (SUPABASE_URL and SUPABASE_SERVICE_KEY):
+        return []
+    rows, offset = [], 0
+    while True:
+        page = _supabase_request("opportunities", params={
+            "select": "seo_slug,seo_evaluated_at", "seo_status": f"eq.{STATUS_INDEXED}",
+            "is_active": "eq.true", "order": "seo_slug",
+        }, extra_headers={"Range": f"{offset}-{offset + _SITEMAP_PAGE - 1}"})
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < _SITEMAP_PAGE:
+            break
+        offset += _SITEMAP_PAGE
+    return rows
+
+
 @router.get("/sitemap.xml")
 def sitemap():
     """Lists the static pages plus every opportunity the last evaluation stored as `indexed`.
@@ -356,13 +384,7 @@ def sitemap():
             f"{SEO_SITE_ORIGIN}/pricing.html"]
     entries = [f"  <url><loc>{html.escape(u)}</loc></url>" for u in urls]
 
-    rows = None
-    if SUPABASE_URL and SUPABASE_SERVICE_KEY:
-        rows = _supabase_request("opportunities", params={
-            "select": "seo_slug,seo_evaluated_at", "seo_status": f"eq.{STATUS_INDEXED}",
-            "is_active": "eq.true", "limit": "10000",
-        })
-    for r in (rows or []):
+    for r in _fetch_indexed_rows():
         slug = _clean(r.get("seo_slug"))
         if not slug:
             continue

@@ -264,9 +264,20 @@ export function cachedProfileFilterTags(record: ProfileRecord | null | undefined
   return rec!.enrichedTags;
 }
 
+// The slots pre-warmed eagerly after a profile edit. `starterPool` is deliberately NOT one of
+// them: it is a Claude call generating 10 chat openers, and a synthesis fires the instant the
+// student CLOSES the chat drawer — the least likely moment they will reopen it — so pre-paying
+// that call here mostly warmed a cache nobody read. It is now lazy: the next drawer open
+// computes it (getProfileDerived recomputes on a miss and caches from then on), trading a
+// one-time ~3.8s cold open for not billing an opener pool the student may never see. The three
+// that stay eager DO feed surfaces shown right after a merge — `filterTags`/`basics` back the
+// always-visible My Vibe tiles and the theme facet, and `filterValues` carries the (free) grade
+// plus the subjects the form/quiz pre-filter reads.
+const EAGER_SLOTS: SlotName[] = ['filterValues', 'filterTags', 'basics'];
+
 // Fire-and-forget refresh after a profile edit, so neither a search nor a results render has
-// to pay for these. All slots go at once — they don't block each other here. A failure is not
-// user-facing: the next reader recomputes, or does without (no subject hints for the
+// to pay for these. The eager slots go at once — they don't block each other here. A failure is
+// not user-facing: the next reader recomputes, or does without (no subject hints for the
 // pre-filter, no tag facet on the bar).
 export function refreshProfileDerived(
   store: ProfileStore,
@@ -274,7 +285,7 @@ export function refreshProfileDerived(
   record?: ProfileRecord | null,
 ): void {
   if (!record?.synthesized) return;
-  (Object.keys(SLOTS) as SlotName[]).forEach((slot) => {
+  EAGER_SLOTS.forEach((slot) => {
     getProfileDerived(store, calls, slot, record).catch((err) =>
       console.warn(`Profile ${slot} refresh failed:`, (err as Error).message),
     );

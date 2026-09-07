@@ -35,6 +35,7 @@ LOGO_SVG = """<circle cx="71" cy="32" r="13" fill="#FACC15" opacity="0.35"></cir
 NAV_LINKS = [
     ("Pricing", "/pricing.html", "pricing"),
     ("How we use AI", "/how-we-use-ai.html", "how-we-use-ai"),
+    ("FAQ", "/faq.html", "faq"),
     ("About", "/about.html", "about"),
     ("Terms", "/terms.html", "terms"),
     ("Privacy", "/privacy.html", "privacy"),

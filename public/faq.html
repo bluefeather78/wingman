@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FAQ - Wingman</title>
+<link rel="icon" href="favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0;background:#FBF8F3;font-family:'Plus Jakarta Sans',system-ui,sans-serif;}
+  a{text-decoration:none;}
+  .navlink{font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:13px;color:#B7D3E8;}
+  .navlink:hover{color:#fff;}
+  .navlink.active{color:#fff;}
+  /* Mobile nav: a CSS-only hamburger (checkbox toggle, no JS) mirroring the app's
+     landing header. The secondary links collapse behind it below 768px. */
+  .navlinks{display:flex;align-items:center;gap:18px;flex-wrap:wrap;}
+  .menu-toggle{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;}
+  .hamburger{display:none;flex-direction:column;gap:4px;cursor:pointer;padding:8px;margin-left:4px;}
+  .hb-bar{display:block;width:20px;height:2px;border-radius:1px;background:#fff;}
+  .mobile-menu{display:none;}
+  .menu-link{padding:11px 16px;font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:14px;color:#1D4E89;}
+  .menu-link.active{color:#F79256;}
+  @media (max-width:767px){
+    .navlinks{display:none;}
+    .hamburger{display:flex;}
+    .menu-toggle:checked ~ .mobile-menu{display:flex;flex-direction:column;position:absolute;top:calc(100% + 8px);right:0;min-width:190px;background:#fff;border:2px solid #1D4E89;border-radius:14px;padding:6px 0;box-shadow:0 10px 24px rgba(15,23,42,0.2);z-index:60;}
+  }
+  /* FAQ accordion — native <details>/<summary>, no JS. Each question is a card; the
+     answer expands beneath it. A rotating chevron is the only affordance. */
+  .qa{background:#fff;border-radius:16px;box-shadow:0 2px 18px rgba(15,23,42,0.06);margin-bottom:14px;overflow:hidden;}
+  .qa>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:22px 26px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:17px;line-height:24px;color:#1D4E89;}
+  .qa>summary::-webkit-details-marker{display:none;}
+  .qa>summary:hover{color:#153a66;}
+  .qa .chev{flex:none;width:22px;height:22px;transition:transform 0.2s ease;color:#F79256;}
+  .qa[open]>summary .chev{transform:rotate(180deg);}
+  .qa .answer{padding:0 26px 24px 26px;font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:15px;line-height:24px;color:#1A2540;}
+  .qa .answer p{margin:0 0 12px 0;}
+  .qa .answer p:last-child{margin-bottom:0;}
+  .qa .answer a{font-weight:700;color:#6A63E8;}
+  .qa .answer strong{font-weight:700;color:#1D4E89;}
+  .cat{display:block;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:13px;letter-spacing:1px;color:#F79256;text-transform:uppercase;margin:40px 0 16px 0;}
+  .cat:first-of-type{margin-top:0;}
+</style>
+</head>
+<body>
+
+<div style="min-height:100vh;background:#FBF8F3;overflow-x:hidden;">
+
+  <!-- Header pill -->
+  <div style="width:100%;max-width:1100px;margin:0 auto;padding:16px 24px 0 24px;position:sticky;top:16px;z-index:50;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;background:#1D4E89;border-radius:999px;padding:8px 16px;box-shadow:0 10px 25px -5px rgba(29,78,137,0.45);position:relative;">
+      <input type="checkbox" id="nav-toggle" class="menu-toggle" aria-hidden="true" tabindex="-1">
+      <a href="/" style="display:flex;align-items:center;gap:8px;">
+        <svg width="30" height="30" viewBox="0 0 100 100">
+          <circle cx="71" cy="32" r="13" fill="#FACC15" opacity="0.35"></circle>
+          <rect x="24" y="60" width="10" height="16" rx="2" fill="#F97316"></rect>
+          <rect x="38" y="52" width="10" height="24" rx="2" fill="#F97316"></rect>
+          <rect x="52" y="44" width="10" height="32" rx="2" fill="#F97316"></rect>
+          <rect x="66" y="36" width="10" height="40" rx="2" fill="#F97316"></rect>
+          <circle cx="71" cy="32" r="6.5" fill="#FACC15"></circle>
+        </svg>
+        <span style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:16px;color:#fff;">Wingman</span>
+        <span style="background:#F79256;border-radius:999px;padding:3px 9px;">
+          <span style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:9px;color:#fff;letter-spacing:0.5px;">BETA</span>
+        </span>
+      </a>
+      <div style="display:flex;align-items:center;gap:18px;">
+        <div class="navlinks">
+          <a class="navlink" href="/pricing.html">Pricing</a>
+          <a class="navlink" href="/how-we-use-ai.html">How we use AI</a>
+          <a class="navlink active" href="/faq.html">FAQ</a>
+          <a class="navlink" href="/about.html">About</a>
+          <a class="navlink" href="/terms.html">Terms</a>
+          <a class="navlink" href="/privacy.html">Privacy</a>
+        </div>
+        <a href="/login" style="display:flex;align-items:center;gap:6px;padding-right:8px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></circle><path d="M4 20c0-4 4-6 8-6s8 2 8 6" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+          <span style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:14px;color:#fff;opacity:0.9;">Sign In</span>
+        </a>
+        <label for="nav-toggle" class="hamburger" aria-label="Open menu">
+          <span class="hb-bar"></span><span class="hb-bar"></span><span class="hb-bar"></span>
+        </label>
+      </div>
+      <div class="mobile-menu">
+        <a class="menu-link" href="/pricing.html">Pricing</a>
+        <a class="menu-link" href="/how-we-use-ai.html">How we use AI</a>
+        <a class="menu-link active" href="/faq.html">FAQ</a>
+        <a class="menu-link" href="/about.html">About</a>
+        <a class="menu-link" href="/terms.html">Terms</a>
+        <a class="menu-link" href="/privacy.html">Privacy</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hero -->
+  <div style="width:100%;max-width:1100px;margin:0 auto;padding:64px 24px 40px 24px;display:flex;flex-direction:column;align-items:center;">
+    <span style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:13px;letter-spacing:1px;color:#F79256;text-transform:uppercase;margin-bottom:10px;">FAQ</span>
+    <span style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:40px;line-height:48px;color:#1D4E89;text-align:center;max-width:680px;">Questions, answered plainly.</span>
+    <span style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:17px;line-height:27px;color:#64748B;text-align:center;max-width:560px;margin-top:12px;">How Wingman uses AI, what happens to your data, and what you're always in control of.</span>
+  </div>
+
+  <!-- FAQ list -->
+  <div style="width:100%;max-width:780px;margin:0 auto;padding:0 24px 24px 24px;">
+
+    <span class="cat">AI &amp; how Wingman works</span>
+
+    <details class="qa">
+      <summary>What does Wingman use AI for?<svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+      <div class="answer">
+        <p>AI does the searching so you don't have to. It turns what you tell us into a written profile, ranks opportunities against it and explains why each one fits, and — when you track something — checks the program's own page for its deadline and next steps.</p>
+        <p>The rest of the app, like browsing your catalog, your Quest Log and your calendar, works without any AI at all. For the full breakdown, see <a href="/how-we-use-ai.html">How we use AI</a>.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Does Wingman train AI models on my data or my conversations?<svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+      <div class="answer">
+        <p><strong>No.</strong> We do not intentionally use your information to train our own AI models. Your profile and activity are used to run Wingman's features for you, not to build a model.</p>
+        <p>Wingman uses third-party AI providers, Anthropic and Google, to process information. Their own policies may apply, and we aim to use provider configurations consistent with the practices we describe.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Is the AI ever wrong, and how would I know?<svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+      <div class="answer">
+        <p>It can be, so Wingman is built to be honest about how sure it is. A checklist step tells you plainly whether it came from the program's own page, a trusted guide, or a typical-steps guess — never dressed up as more certain than it is. Estimated dates are labeled as estimates.</p>
+        <p>Always confirm deadlines and requirements on the program's official page before you apply.</p>
+      </div>
+    </details>
+
+    <span class="cat">Your data &amp; privacy</span>
+
+    <details class="qa">
+      <summary>Can I download a copy of my data?<svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+      <div class="answer">
+        <p><strong>Yes, anytime.</strong> Open <strong>Manage Plan</strong> in the app and choose <em>Export my data</em>. You'll get a file with your profile, tracked opportunities and account details.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Can I delete my account and everything in it?<svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+      <div class="answer">
+        <p><strong>Yes, anytime, and it's yours to do.</strong> In <strong>Manage Plan</strong>, choose <em>Delete my account</em>. We ask you to confirm it's really you, then remove your account and the data tied to it. This can't be undone.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>What personal information does Wingman collect?<svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+      <div class="answer">
+        <p>As little as possible — only what's needed to find and track opportunities. Your profile is built from your interests, projects and goals, not a demographic form. Wingman doesn't ask for your gender or other personal details it doesn't need.</p>
+        <p>The full detail is in our <a href="/privacy.html">Privacy Policy</a>.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Who can see my profile?<svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+      <div class="answer">
+        <p>Only you. Wingman has no public profiles, no social feed and no user-to-user messaging, so there's nothing for other students to browse or find. Your profile and activity stay private to your account.</p>
+      </div>
+    </details>
+
+    <span class="cat">Using the profile chat</span>
+
+    <details class="qa">
+      <summary>Are my chats stored word for word?<svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+      <div class="answer">
+        <p>No. Your conversations with the profile chatbot aren't kept as a transcript. What Wingman keeps is the profile they produce — a summary of your interests and goals — not everything you typed to get there.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>What happens if the conversation goes off topic?<svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+      <div class="answer">
+        <p>The chatbot has one job: helping you build your profile. If a conversation drifts off topic, it steers back to that or stops, rather than following the conversation wherever it goes. It isn't a general-purpose chatbot or a homework helper.</p>
+      </div>
+    </details>
+
+    <span class="cat">Students, parents &amp; plans</span>
+
+    <details class="qa">
+      <summary>Is Wingman for students or for parents?<svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+      <div class="answer">
+        <p>It's built for the student. A parent can absolutely help set things up and pay, but Wingman is the student's own space — not a dashboard for parents to check up on them.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>I'm under 18. Can I use Wingman?<svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+      <div class="answer">
+        <p>Yes, with a parent or guardian's permission, as described in our <a href="/terms.html">Terms</a>. When you sign up, we ask you to confirm this.</p>
+      </div>
+    </details>
+
+    <details class="qa">
+      <summary>Is Wingman free? What do I get if I pay?<svg class="chev" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></summary>
+      <div class="answer">
+        <p>You can start free, no card required. The Free plan gives you a daily allowance of AI actions — profile chats, match-finding, deadline checks and resume imports — that resets each day. The rest of the app keeps working either way.</p>
+        <p><strong>Wingman Unlimited</strong> removes that daily cap for <strong>$4.99/month</strong>. See <a href="/pricing.html">Pricing</a> for the details.</p>
+      </div>
+    </details>
+
+  </div>
+
+  <!-- Still have questions -->
+  <div style="width:100%;max-width:1100px;margin:0 auto;padding:16px 24px 64px 24px;">
+    <div style="border-radius:16px;padding:40px;display:flex;flex-direction:column;align-items:center;background:linear-gradient(90deg,#101C36,#182750);">
+      <span style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:22px;color:#fff;margin-bottom:8px;text-align:center;">Still have a question?</span>
+      <span style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:15px;color:#AAB3C9;text-align:center;max-width:520px;margin-bottom:20px;">We're a small team and we read everything. Reach us at <a href="mailto:contactus@highschoolwingman.com" style="color:#fff;font-weight:700;">contactus@highschoolwingman.com</a>.</span>
+      <a href="/login" style="background:#F79256;border-radius:12px;padding:14px 32px;font-family:'Plus Jakarta Sans',sans-serif;font-weight:800;font-size:15px;color:#fff;">Get started free</a>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="width:100%;max-width:1100px;margin:0 auto;padding:32px 24px 32px 24px;border-top:1px solid #E2E8F0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <a href="/" style="display:flex;align-items:center;gap:8px;">
+      <svg width="20" height="20" viewBox="0 0 100 100">
+        <circle cx="71" cy="32" r="13" fill="#FACC15" opacity="0.35"></circle>
+        <rect x="24" y="60" width="10" height="16" rx="2" fill="#F97316"></rect>
+        <rect x="38" y="52" width="10" height="24" rx="2" fill="#F97316"></rect>
+        <rect x="52" y="44" width="10" height="32" rx="2" fill="#F97316"></rect>
+        <rect x="66" y="36" width="10" height="40" rx="2" fill="#F97316"></rect>
+        <circle cx="71" cy="32" r="6.5" fill="#FACC15"></circle>
+      </svg>
+      <span style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:12px;color:#64748B;">Wingman</span>
+    </a>
+    <div style="display:flex;gap:20px;">
+      <a href="/terms.html" style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:12px;color:#64748B;">Terms</a>
+      <a href="/privacy.html" style="font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;font-size:12px;color:#64748B;">Privacy</a>
+    </div>
+    <span style="width:100%;font-family:'Plus Jakarta Sans',sans-serif;font-weight:500;font-size:12px;line-height:18px;color:#94A3B8;">Highschool Wingman is a doing-business-as (DBA) name of Blufeather Labs LLC. &copy; 2026 Blufeather Labs LLC.</span>
+  </div>
+
+</div>
+
+</body>
+</html>

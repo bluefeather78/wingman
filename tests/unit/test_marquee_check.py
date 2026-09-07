@@ -137,8 +137,12 @@ def _sentinels_in_tree():
                 for line in fh:
                     m = mc.SENTINEL_RX.search(line)
                     if m:
+                        # Normalize to forward slashes: os.path.relpath emits the platform
+                        # separator (backslashes on Windows), but every comparison here and the
+                        # real checker's git-diff paths use "/". Without this the whole-tree
+                        # lookups below miss on Windows.
                         found.setdefault(m.group(1).upper(), set()).add(
-                            os.path.relpath(path, REPO_ROOT))
+                            os.path.relpath(path, REPO_ROOT).replace(os.sep, "/"))
     return found
 
 

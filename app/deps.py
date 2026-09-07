@@ -70,13 +70,19 @@ _ERROR_LOGGED_HEADER = "x-wingman-error-logged"
 DB_UNAVAILABLE = "We could not reach your account data just now. Please try again."
 
 
-def opaque_error(status, public_message, exc, *, op):
+def opaque_error(status, public_message, exc, *, op, code=None):
     """json_error(status, public_message + a ref), with the real detail logged not sent.
 
     `op` is a short, stable label for the failing operation ("login.lookup",
     "calendar.sync") — it groups rows in the API Errors tab, so keep it stable rather than
     descriptive. Marks the response as already-recorded so app.main's capture middleware
     does not log a second, detail-free row for the same failure.
+
+    `code` is an OPTIONAL stable, machine-readable marker added to the body alongside the
+    human `error` string (same shape as allowance_error: old clients still read `error`,
+    newer ones branch on `code`). It lets the client distinguish a specific recoverable
+    failure — e.g. "calendar_reconnect" — from a generic one WITHOUT string-matching the
+    user-facing copy, which carries the volatile "(ref …)" suffix and is free to be reworded.
     """
     ref = secrets.token_hex(4)
     detail = f"{type(exc).__name__}: {exc}"
@@ -85,7 +91,9 @@ def opaque_error(status, public_message, exc, *, op):
         record_api_error("", op, status, f"{op}_failed", message=f"ref={ref} {detail}")
     except Exception:                                      # noqa: BLE001
         pass                                               # logging must never be the fault
-    resp = json_error(status, f"{public_message} (ref {ref})")
+    message = f"{public_message} (ref {ref})"
+    resp = (json_response(status, {"error": message, "code": code})
+            if code else json_error(status, message))
     try:
         resp.headers[_ERROR_LOGGED_HEADER] = "1"
     except Exception:                                      # noqa: BLE001

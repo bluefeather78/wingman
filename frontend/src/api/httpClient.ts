@@ -931,7 +931,16 @@ export const httpClient: ApiClient = {
       }
     }
     if (res.status === 409) return { ok: false, notConnected: true };
-    if (!res.ok) return { ok: false, error: await errorMessage(res) };
+    if (!res.ok) {
+      // Read the body ONCE and branch on the machine-readable `code` (deps.opaque_error),
+      // never on the human `error` string — that copy carries a volatile "(ref …)" suffix.
+      // code "calendar_reconnect" is a present-but-revoked Google token: recover it through
+      // the connect page like a fresh connect, not a dead-end error. See tracker.tsx.
+      let body: { error?: string; code?: string } = {};
+      try { body = (await res.json()) as { error?: string; code?: string }; } catch { /* non-JSON */ }
+      if (body.code === 'calendar_reconnect') return { ok: false, needsReconnect: true };
+      return { ok: false, error: body.error || `API error ${res.status}` };
+    }
     const data = (await res.json()) as {
       results?: { id: string; status: string; googleEventId?: string }[];
       deleted?: number;

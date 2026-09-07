@@ -97,6 +97,9 @@ export type SyncOutcome =
   | { kind: 'ok'; synced: number; failed: number; removed: number; deduped: number;
       sweepErrors: string[]; calendarName: string; calendarLink: string }
   | { kind: 'not-connected' }
+  // Was connected, but the Google refresh token is revoked/expired. Same recovery as
+  // not-connected (back through Google's consent page), kept distinct for accurate copy.
+  | { kind: 'reconnect' }
   | { kind: 'error'; message: string };
 
 export async function syncTrackerToCalendar(): Promise<SyncOutcome> {
@@ -119,6 +122,7 @@ export async function syncTrackerToCalendar(): Promise<SyncOutcome> {
   );
   if (!res.ok) {
     if (res.notConnected) return { kind: 'not-connected' };
+    if (res.needsReconnect) return { kind: 'reconnect' };
     return { kind: 'error', message: res.error };
   }
 

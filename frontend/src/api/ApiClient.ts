@@ -247,8 +247,13 @@ export type CalendarSyncResult =
       calendarName: string;
       /** Opens Google Calendar focused on that calendar, when we wrote at least one event. */
       calendarLink: string }
-  | { ok: false; notConnected: true }
-  | { ok: false; notConnected?: false; error: string };
+  | { ok: false; notConnected: true; needsReconnect?: false }
+  // The calendar WAS connected, but the stored Google refresh token is now revoked/expired
+  // (server 502 with code "calendar_reconnect"). Recovered exactly like notConnected — send
+  // the user back through Google's consent page — but kept distinct so the copy can say
+  // "expired" rather than "not connected yet".
+  | { ok: false; needsReconnect: true; notConnected?: false }
+  | { ok: false; notConnected?: false; needsReconnect?: false; error: string };
 
 // Thrown when a request needs auth but the session is gone/unrecoverable (refresh failed).
 // The router catches this to bounce the user to /login.

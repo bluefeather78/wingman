@@ -302,12 +302,19 @@ export default function Tracker() {
     setSyncNote(`Pulling deadlines into your Google Calendar — this can take up to a minute.`);
     try {
       const out = await syncTrackerToCalendar();
-      if (out.kind === 'not-connected') {
+      // Both of these recover the same way — send the student back through Google's consent
+      // page. 'reconnect' is a present-but-revoked token (server 502, code
+      // "calendar_reconnect"): before this it fell through to the generic error branch and
+      // showed a dead-end "could not refresh… reconnect" message with no way to actually
+      // reconnect, since the connect page only ever opened for a never-connected account.
+      if (out.kind === 'not-connected' || out.kind === 'reconnect') {
         const url = await httpClient.googleCalendarConnectUrl(googleCalendarReturnUri());
         setSyncState('error');
         setSyncNote(
           url
-            ? 'Google Calendar isn’t connected yet — opening the connect page…'
+            ? (out.kind === 'reconnect'
+                ? 'Your Google Calendar connection expired — reopening the connect page…'
+                : 'Google Calendar isn’t connected yet — opening the connect page…')
             : 'Please sign in again to connect Google Calendar.',
         );
         if (url) await Linking.openURL(url);

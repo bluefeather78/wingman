@@ -454,6 +454,44 @@ def _db_on():
     return _db_available and all(_creds())
 
 
+class LeadQueueUnavailable(RuntimeError):
+    """A `require_db=True` caller asked for the shared table and it is not usable.
+
+    The console passes `require_db=True` precisely so it can NEVER read from or write to
+    the local JSONL fallback: a laptop-local queue that silently diverges from the shared
+    table is exactly what stranded 235 leads in the Phase 4 migration. A strict caller
+    gets this exception (and renders a "run db/discovered_leads_schema.sql" setup notice)
+    instead of quietly operating on a file nobody backs up. The offline agents and the
+    tests still get the file fallback — they pass an explicit `path=` or leave
+    `require_db` off — because a fresh checkout with no table is a case they must survive.
+    """
+
+
+def _strict_db(op):
+    """Run a table operation for a `require_db` caller, or raise LeadQueueUnavailable.
+
+    Translates "no creds" and "table missing" into the one exception the console knows how
+    to show, and NEVER falls back to the file. Deliberately does not consult
+    `_db_available`: a soft fallback earlier in this long-lived process latches it False,
+    and a strict caller must still re-attempt the table rather than inherit that verdict.
+    """
+    if not all(_creds()):
+        raise LeadQueueUnavailable(
+            "no Supabase credentials — set SUPABASE_URL and SUPABASE_SERVICE_KEY in .env. "
+            "The console will not fall back to a local file.")
+    try:
+        return op()
+    except LeadQueueUnavailable:
+        raise
+    except Exception as e:                                            # noqa: BLE001
+        if _is_missing(e):
+            raise LeadQueueUnavailable(
+                "the discovered_leads table is missing — run "
+                "db/discovered_leads_schema.sql in the Supabase SQL editor. "
+                "The console will not fall back to a local file.") from e
+        raise
+
+
 def _fall_back(reason):
     global _db_available, _db_warned
     _db_available = False
@@ -506,8 +544,16 @@ def _db_load(kind=None, status=None, limit=None):
     return [_row_to_lead(r) for r in rows]
 
 
-def load_leads(path=None):
-    """Every lead in the queue, oldest first. A malformed file line is skipped, never fatal."""
+def load_leads(path=None, require_db=False):
+    """Every lead in the queue, oldest first. A malformed file line is skipped, never fatal.
+
+    `require_db=True` demands the shared table and raises LeadQueueUnavailable rather than
+    reading the local file — the console uses it so its view can never be a laptop-local one.
+    """
+    if require_db:
+        if path is not None:
+            raise LeadQueueUnavailable("require_db is for the shared table; drop the explicit path=")
+        return _strict_db(_db_load)
     if path is None and _db_on():
         try:
             return _db_load()
@@ -539,15 +585,21 @@ def lead_keys(leads):
     return {_key(l.get("url")) for l in leads if l.get("url")}
 
 
-def append_leads(leads, path=None):
+def append_leads(leads, path=None, require_db=False):
     """Add leads not already queued. Returns how many were actually written.
 
     Deduped on `url_key` — url_dedupe.match_key — on BOTH backends, which is the same key the
     consumers compare with. The table additionally carries a UNIQUE constraint on it, so two
     machines capturing the same round-up cannot both queue it even if their reads interleave.
+
+    `require_db=True` writes to the shared table or raises LeadQueueUnavailable — never the file.
     """
     if not leads:
         return 0
+    if require_db:
+        if path is not None:
+            raise LeadQueueUnavailable("require_db is for the shared table; drop the explicit path=")
+        return _strict_db(lambda: _db_append(leads))
     if path is None and _db_on():
         try:
             return _db_append(leads)
@@ -608,8 +660,15 @@ def _db_append(leads):
     return len(rows)
 
 
-def pending(kind, path=None, limit=None):
-    """The unprocessed leads of one kind, oldest first — what a consumer should work on."""
+def pending(kind, path=None, limit=None, require_db=False):
+    """The unprocessed leads of one kind, oldest first — what a consumer should work on.
+
+    `require_db=True` reads the shared table or raises LeadQueueUnavailable — never the file.
+    """
+    if require_db:
+        if path is not None:
+            raise LeadQueueUnavailable("require_db is for the shared table; drop the explicit path=")
+        return _strict_db(lambda: _db_load(kind=kind, status=STATUS_NEW, limit=limit))
     if path is None and _db_on():
         try:
             return _db_load(kind=kind, status=STATUS_NEW, limit=limit)
@@ -623,27 +682,37 @@ def pending(kind, path=None, limit=None):
     return out[:limit] if limit else out
 
 
-def mark_processed(urls, path=None):
+def _db_mark_processed(keys):
+    """The table half of mark_processed: an RPC taking an array, not a PATCH with
+    url_key=in.(...) — a url_key can contain a comma or a parenthesis, and building that
+    filter by string concatenation from URLs is the shape of bug this repo has a rule about."""
+    from wingman import supabase_common
+    url, key = _creds()
+    result = supabase_common.supabase_rpc(url, "mark_leads_processed",
+                                          {"keys": sorted(keys)}, key)
+    return int(result if not isinstance(result, list) else (result or [0])[0])
+
+
+def mark_processed(urls, path=None, require_db=False):
     """Stamp these leads processed so the next gated run does not re-pay for them.
 
     On the file backend this REWRITES the whole file rather than appending a tombstone: the
     file is the work-list, and a work-list you have to replay to interpret is how a queue
     quietly grows forever. That rewrite is also why the table exists — it is not atomic, so an
     interrupted mark_processed can truncate the only copy of the queue.
+
+    `require_db=True` stamps on the shared table or raises LeadQueueUnavailable — never the file.
     """
     keys = {_key(u) for u in (urls or []) if u}
     if not keys:
         return 0
+    if require_db:
+        if path is not None:
+            raise LeadQueueUnavailable("require_db is for the shared table; drop the explicit path=")
+        return _strict_db(lambda: _db_mark_processed(keys))
     if path is None and _db_on():
         try:
-            from wingman import supabase_common
-            url, key = _creds()
-            # An RPC taking an array, not a PATCH with url_key=in.(...): a url_key can contain
-            # a comma or a parenthesis, and building that filter by string concatenation from
-            # URLs is the shape of bug this repo already has a rule about.
-            result = supabase_common.supabase_rpc(url, "mark_leads_processed",
-                                                  {"keys": sorted(keys)}, key)
-            return int(result if not isinstance(result, list) else (result or [0])[0])
+            return _db_mark_processed(keys)
         except Exception as e:                                        # noqa: BLE001
             if _is_missing(e):
                 _fall_back(str(e)[:80])
@@ -670,6 +739,42 @@ def queue_backend():
     whether the queue they are looking at is the one the other machine sees.
     """
     return "supabase" if _db_on() else "file"
+
+
+def file_lead_count(path=None):
+    """How many leads sit in the LOCAL file, regardless of the active backend. 0 if none.
+
+    Reads the file directly (explicit path bypasses the table selection), so the console can
+    warn that leads are stranded on this laptop even while it itself reads only the table.
+    """
+    return len(load_leads(path=path or LEADS_PATH))
+
+
+def import_file_to_table(path=None, dry_run=False):
+    """Copy any leads sitting in the LOCAL file into the shared table. Requires the table.
+
+    This closes the Phase 4 migration gap: creating the table left the file's leads stranded
+    because nothing ever moved them across. Deduped by url_key on the table's UNIQUE
+    constraint, so it is safe to run twice and safe when some rows are already there; each
+    lead's own status (processed / not-a-lead / new) is carried over, not reset. Raises
+    LeadQueueUnavailable if the table is not usable. NEVER deletes the file — the operator
+    confirms the import landed, then removes it by hand.
+
+    Returns {"file", "written", "skipped"} (a dry run adds "would_write" and "dry_run": True).
+    """
+    src = path or LEADS_PATH
+    file_leads = load_leads(path=src)                 # explicit path => the FILE, not the table
+    if not file_leads:
+        return {"file": 0, "written": 0, "skipped": 0, "dry_run": bool(dry_run)}
+    if dry_run:
+        known = {_key(l.get("url")) for l in _strict_db(_db_load)}
+        would = sum(1 for l in file_leads
+                    if _key(l.get("url")) and _key(l.get("url")) not in known)
+        return {"file": len(file_leads), "written": 0, "would_write": would,
+                "skipped": len(file_leads) - would, "dry_run": True}
+    written = append_leads(file_leads, require_db=True)
+    return {"file": len(file_leads), "written": written,
+            "skipped": len(file_leads) - written, "dry_run": False}
 
 
 def _reset_for_tests():
@@ -713,7 +818,12 @@ def main():
     ap.add_argument("--list", action="store_true", help="FREE: show the queued leads.")
     ap.add_argument("--kind", choices=[KIND_NAMES, KIND_HUB], help="Only this kind.")
     ap.add_argument("--all", action="store_true", help="Include already-processed leads.")
-    ap.add_argument("--path", default=LEADS_PATH)
+    ap.add_argument("--path", default=None,
+                    help="Operate on a specific local FILE instead of the shared queue. Omitted "
+                         "(the default) means the shared Supabase table when it is configured, "
+                         "falling back to the local file only when there is no table — so an "
+                         "ordinary run writes where the console reads, never a laptop-only file. "
+                         "Pass a path only when you genuinely mean one file (e.g. walk_up_hubs).")
     ap.add_argument("--from-rejects", action="store_true",
                     help="FREE: queue the rows you rejected AS ROUND-UPS. This is the catch-up "
                          "for rows rejected before the live hook existed — new ones are queued "
@@ -724,7 +834,32 @@ def main():
                          "round-up reason existed. Its NOs are remembered, so it is cheap twice.")
     ap.add_argument("--limit", type=int, help="Max rejected rows to classify.")
     ap.add_argument("--commit", action="store_true", help="Write the leads (default: preview).")
+    ap.add_argument("--import-file", action="store_true",
+                    help="One-shot: copy leads from the local file (discovered_leads.jsonl, or "
+                         "--path) into the shared Supabase table. Closes the Phase 4 gap where "
+                         "creating the table left the file's leads stranded. Preview by default; "
+                         "add --commit to write. Deduped by url_key, safe to re-run, never "
+                         "deletes the file.")
     args = ap.parse_args()
+
+    if args.import_file:
+        src = args.path or LEADS_PATH        # the file to read; --path is optional here
+        try:
+            result = import_file_to_table(src, dry_run=not args.commit)
+        except LeadQueueUnavailable as e:
+            print(f"[ERROR] {e}")
+            return
+        if result["file"] == 0:
+            print(f"[OK] The local file ({src}) holds no leads — nothing to import.")
+        elif result["dry_run"]:
+            print(f"[PREVIEW] {result['file']} lead(s) in the file; {result['would_write']} "
+                  f"would be written to the table, {result['skipped']} already there. "
+                  f"Re-run with --commit to import.")
+        else:
+            print(f"[OK] Imported {result['written']} lead(s) into the table "
+                  f"({result['skipped']} already present). The file was NOT deleted — verify "
+                  f"the table looks right, then remove {src} by hand.")
+        return
 
     if args.from_rejects:
         from wingman.supabase_common import require_service_key
@@ -746,10 +881,12 @@ def main():
         if nos:
             print(f"    ({nos} page(s) judged not a round-up — remembered, never re-fetched)")
         real = [l for l in leads if l["status"] == STATUS_NEW]
+        where = queue_backend() if args.path is None else os.path.basename(args.path)
         if args.commit:
             n = append_leads(leads, args.path)
-            print(f"[OK] Wrote {n} row(s) ({len(real)} lead(s), {len(leads) - len(real)} "
-                  f"remembered as not-a-round-up). Queue: {summarize(load_leads(args.path))}")
+            print(f"[OK] Wrote {n} row(s) to {where} ({len(real)} lead(s), "
+                  f"{len(leads) - len(real)} remembered as not-a-round-up). "
+                  f"Queue: {summarize(load_leads(args.path))}")
         else:
             print("")
             print(f"[PREVIEW] {len(real)} lead(s) would be queued, and "
@@ -758,14 +895,15 @@ def main():
         return
 
     leads = load_leads(args.path)
+    where = queue_backend() if args.path is None else args.path
     if not leads:
-        print(f"[OK] No leads yet ({args.path} does not exist or is empty). Leads are captured "
-              f"by agents/scrape_opportunities.py as a free side-effect of a search run.")
+        print(f"[OK] No leads yet (queue: {where}). Leads are captured by "
+              f"agents/scrape_opportunities.py as a free side-effect of a search run.")
         return
     shown = leads_to_show(leads, show_all=args.all, kind=args.kind)
     counts = summarize(leads)
     nos = sum(1 for l in leads if l.get("status") == STATUS_NOT_A_LEAD)
-    print(f"[OK] {len(leads)} lead(s) on file; unprocessed by kind: "
+    print(f"[OK] {len(leads)} lead(s) in {where}; unprocessed by kind: "
           + (", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "none")
           + (f"; {nos} remembered NO(s)" if nos else ""))
     for lead in shown:

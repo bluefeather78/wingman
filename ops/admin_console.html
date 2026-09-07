@@ -4673,10 +4673,27 @@ async function loadLeads() {
   if (!el) return;
   try {
     const d = await api('/api/agents/leads?limit=40');
-    if (!d.ok) { el.textContent = 'Could not read the lead file: ' + (d.error || 'unknown'); return; }
+    if (!d.ok) {
+      if (d.needs_setup) {
+        el.innerHTML = `<div>The shared lead queue is not set up on this database &mdash; run
+          <span class="mono">db/discovered_leads_schema.sql</span> in the Supabase SQL editor
+          (idempotent), then reload. This console reads only the shared table; it will not fall
+          back to a local file.</div>
+          <div style="font-size:12px;color:var(--text-3);margin-top:6px">${esc(d.error || '')}</div>`;
+        return;
+      }
+      el.textContent = 'Could not read the lead queue: ' + (d.error || 'unknown');
+      return;
+    }
+    const stranded = d.stranded_file_leads
+      ? `<div class="hint warn" style="padding:8px;margin-bottom:8px;border:1px solid var(--border)">
+          ${d.stranded_file_leads} lead(s) are stranded in a local file this table-only view does
+          not read. Import them into the shared table:
+          <div class="mono" style="margin-top:4px">python -m wingman.discovered_leads --import-file --commit</div></div>`
+      : '';
     const c = d.counts || {};
     if (!c.new) {
-      el.innerHTML = `<div>Queue empty. A scrape refills it for free — every page it consulted
+      el.innerHTML = stranded + `<div>Queue empty. A scrape refills it for free — every page it consulted
         that did not become a row goes to the router, which classifies it and queues it.
         Rejecting a row as a round-up queues that page too.</div>
         <div style="margin-top:6px">${c.processed || 0} mined · ${c.not_a_lead || 0} remembered
@@ -4702,7 +4719,7 @@ async function loadLeads() {
     }).join('');
     const more = d.truncated
       ? `<div class="hint" style="padding-top:8px">…and ${d.truncated} more in ${esc(d.path || '')}.</div>` : '';
-    el.innerHTML = head + rows + more;
+    el.innerHTML = stranded + head + rows + more;
   } catch (e) {
     el.textContent = 'Could not load leads: ' + e.message;
   }

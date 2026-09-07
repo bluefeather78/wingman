@@ -51,6 +51,35 @@ central finding generalised, and as of 2026-08-23 it is enforced in three more p
   with *"YOU MUST use web_search and web_fetch"* while search was off, which left the model
   no way to comply except to answer from memory in the voice of a lookup. It now says it has
   no web access and that null is the expected answer.
+- **A page the M1 refresh cannot fetch is now RECORDED and eventually QUARANTINED, not
+  silently re-skipped forever** (`db/refresh_health_schema.sql`, added 2026-09-07). The refresh
+  reads each program's live page and never invents from memory, so a fetch failure is skipped
+  with no write and no staleness stamp — correct, but it used to be *invisible*: ~80
+  live-but-unfetchable rows (sites that 403 our client / anti-bot walls, TLS failures, JS/PDF
+  shells) were walked and re-skipped on every pass, clogging the "awaiting refresh" queue with
+  no record and no way to find them. Three columns now carry the skip — `refresh_fetch_status`
+  (the specific reason: `http-403` / `error-URLError` / `not-html` / `empty-or-js`),
+  `refresh_fetch_attempts` (CONSECUTIVE failures, reset to 0 the moment the page reads again),
+  `refresh_fetch_failed_at` — written by `_record_fetch_result()` on failure and CLEARED on a
+  successful read. `check_one()` returns the specific reason as a **4th** value for this; it is
+  the skip *record*, pure telemetry — never a metadata field or a staleness stamp, so **MARQUEE
+  M1 is untouched**, and free (no model call is made on a failed fetch).
+  - After **`QUARANTINE_AFTER_FAILURES = 3`** consecutive failures a row is dropped from the
+    default whole-catalog and awaiting-refresh selections (client-side, in `_drop_quarantined()`),
+    behind **`--include-unfetchable`**; `--ids`/`--pending` are explicit targets and never
+    filtered. **This is NOT MARQUEE M9**: a quarantined row only ever fetch-FAILED, which is free
+    (no model call), so nothing billable is added or removed — it only stops the noise.
+  - **Degrades cleanly with no migration.** The agent probes the columns once at startup
+    (`_probe_refresh_health()`); if `db/refresh_health_schema.sql` has not been run the whole
+    feature stays off and the agent behaves exactly as before — the same one-probe degradation the
+    activation-refresh queue column uses.
+  - **Surfaced as a distinct state** in `agents/db_health_check.py` (and so the console **Health**
+    tab, which renders the `queues` array generically): a "Live rows the refresh can't fetch
+    (403/anti-bot)" count, banded warn at 60 / alert at 200. It is deliberately **not**
+    `action_needed` — these rows are live and correct (a 403 is our client being blocked, not a
+    dead page, which is why `check_links.py` keeps them), and no action clears them short of the
+    site changing. Measured 2026-09-07: of 218 unverified/never-checked rows, a sample through the
+    real fetch path (HTTP + headless browser) had ~37% still failing, almost all persistent 403s.
 - `agents/check_reviews.py` **takes `review_sources` from the search, not from memory**: phase 2 is
   handed the URLs resolved from phase 1's grounding chunks and told to copy them, and
   `clean_sources()` marks each kept source `retrieved: true/false` and drops any unretrieved

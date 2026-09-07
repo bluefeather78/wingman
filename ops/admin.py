@@ -315,6 +315,17 @@ def handle_metadata_refresh_queue(request: Request):
     return json_response(200 if result.get("ok") else 400, result, default=str)
 
 
+@router.get("/api/agents/unrefreshable")
+def handle_unrefreshable(request: Request):
+    """Read-only: active rows the metadata refresh could not fetch (refresh_fetch_attempts >= 1) —
+    live but blocked by the site (403/anti-bot, TLS, JS/PDF). Backs the 'Live but un-refreshable'
+    card in the Refresh subview. Localhost-gated like the rest of /api/agents/* (carries row
+    names/urls)."""
+    limit = _qs_int(request, "limit", 500) or 500
+    result = core.unrefreshable_rows(limit=limit)
+    return json_response(200 if result.get("ok") else 400, result, default=str)
+
+
 @router.get("/api/agents/health")
 def handle_db_health():
     """Read-only, one-shot database health snapshot for the console's Health tab. FREE — reads

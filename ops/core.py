@@ -2576,6 +2576,56 @@ def metadata_refresh_queue(limit=200):
             "queue_sql": ACTIVATION_REFRESH_SQL}
 
 
+# The fetch-health columns added by db/refresh_health_schema.sql. refresh_fetch_attempts counts
+# CONSECUTIVE page-fetch failures (reset to 0 the moment the page reads); a row at or past
+# QUARANTINE_AFTER_FAILURES is dropped from the refresh's default selection. Kept in step with
+# agents/refresh_opportunities.QUARANTINE_AFTER_FAILURES.
+REFRESH_HEALTH_SQL = "db/refresh_health_schema.sql"
+REFRESH_FETCH_ATTEMPTS_COLUMN = "refresh_fetch_attempts"
+QUARANTINE_AFTER_FAILURES = 3
+
+
+def unrefreshable_rows(limit=500):
+    """Active rows the metadata refresh could not FETCH — refresh_fetch_attempts >= 1 (a page that
+    blocked our fetcher on a recent run: 403/anti-bot, TLS, JS/PDF shell). Read-only.
+
+    Backs the 'Live but un-refreshable' card in the console's Refresh subview — the place you go to
+    refresh existing opportunities, so the rows the last run could NOT read are shown right there
+    rather than only as a Health-tab number. These are LIVE and correct (check_links keeps a 403,
+    because it is our client being blocked, not a dead page); they just cannot be re-read. A row at
+    >= QUARANTINE_AFTER_FAILURES consecutive failures is flagged `quarantined` — the next default
+    pass skips it (run the refresh with --include-unfetchable to retry). Worst-first.
+
+    Populates only once agents/refresh_opportunities.py has ATTEMPTED the rows (it stamps the count
+    on each failed fetch), so it reads 0 until a refresh run has walked them. Degrades if
+    db/refresh_health_schema.sql has not been run — queue_ready=False + the file name, exactly like
+    metadata_refresh_queue().
+    """
+    cap = max(1, min(int(limit or 500), 2000))
+    params = {
+        "select": ("id,name,org,url,source,refresh_fetch_status,"
+                   f"{REFRESH_FETCH_ATTEMPTS_COLUMN},refresh_fetch_failed_at"),
+        REFRESH_FETCH_ATTEMPTS_COLUMN: "gte.1",
+        "is_active": "eq.true",
+        "order": f"{REFRESH_FETCH_ATTEMPTS_COLUMN}.desc,refresh_fetch_failed_at.desc",
+        "limit": str(cap),
+    }
+    rows = _supabase_request("opportunities", params=params)
+    if rows is None:
+        # Missing column (feature off) vs. a transient outage: a bare HEAD tells them apart.
+        probe = _supabase_request("opportunities", params={"select": "id", "limit": "1"})
+        if probe is not None:
+            return {"ok": True, "queue_ready": False, "count": 0, "quarantined_count": 0,
+                    "rows": [], "queue_sql": REFRESH_HEALTH_SQL}
+        return {"ok": False, "error": "Could not read opportunities from Supabase."}
+    for r in rows:
+        r["quarantined"] = (r.get(REFRESH_FETCH_ATTEMPTS_COLUMN) or 0) >= QUARANTINE_AFTER_FAILURES
+    return {"ok": True, "queue_ready": True, "count": len(rows),
+            "quarantined_count": sum(1 for r in rows if r["quarantined"]),
+            "quarantine_after": QUARANTINE_AFTER_FAILURES, "rows": rows,
+            "truncated": len(rows) >= cap, "queue_sql": REFRESH_HEALTH_SQL}
+
+
 def get_db_health():
     """One-shot, read-only health snapshot of the catalog for the console's Health tab.
 

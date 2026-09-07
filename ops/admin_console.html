@@ -635,6 +635,22 @@ tr.disabled-seed { opacity: .48; }
           <div id="mrqBody" class="hint" style="padding:10px 14px">Loading&hellip;</div>
         </div>
       </div>
+
+      <!-- Live rows the refresh could NOT fetch (refresh_fetch_attempts >= 1): the page blocks our
+           fetcher (403/anti-bot, TLS, JS/PDF). Distinct from "Awaiting refresh" above (that is
+           activated-but-not-yet-enriched); these are already-enriched live rows the latest run
+           could not re-read. Read-only. Off until db/refresh_health_schema.sql is run, and empty
+           until a refresh has attempted them. -->
+      <div class="card">
+        <div class="card-head">
+          <h2>Won't re-check &mdash; site blocks our fetcher<span class="count" id="unrefreshCount"></span></h2>
+          <div class="spacer"></div>
+          <div class="hint">Already enriched at activation; the re-check just can't re-read the page for drift</div>
+        </div>
+        <div class="card-body tight">
+          <div id="unrefreshBody" class="hint" style="padding:10px 14px">Loading&hellip;</div>
+        </div>
+      </div>
     </div>
 
     <div class="subview" id="rsub-lists">
@@ -1359,6 +1375,7 @@ tr.disabled-seed { opacity: .48; }
         <div class="tabs" id="emailKindTabs">
           <button class="tab active" data-kind="welcome">Welcome</button>
           <button class="tab" data-kind="trial_ending">Trial ending</button>
+          <button class="tab" data-kind="subscribed">Subscribed</button>
           <button class="tab" data-kind="goodbye">Goodbye</button>
           <button class="tab" data-kind="deadline_alert">Deadline alert</button>
         </div>
@@ -3492,6 +3509,10 @@ function relocateConsole() {
   move(cardOf('costChart'), 'slot-money-chart');
   move(cardOf('billedBody'), 'slot-money-billed');
   move(cardOf('userCostSummary'), 'slot-money-users');
+  // The "Break it down" card was split out of the Cost-per-user card (2026-09-07). It is its
+  // OWN .card now, so it needs its own relocate — without this it is orphaned in the hidden
+  // #view-users legacy view and never shown, the exact trap the comment below warns about.
+  move(cardOf('userCostPanels'), 'slot-money-users');
   move(cardOf('historyBody'), 'slot-log-history');
   move(cardOf('snapshotBody'), 'slot-log-snapshots');
   // The discovery lead queue belongs in the New-opportunities workflow, next to the tool that
@@ -3529,7 +3550,7 @@ function initSubtabs() {
         document.querySelectorAll('#view-run .subview').forEach(
           v => v.classList.toggle('active', v.id === 'rsub-' + sub));
         if (sub === 'hubs') loadLeads();
-        if (sub === 'refresh') loadMetadataRefreshQueue();
+        if (sub === 'refresh') { loadMetadataRefreshQueue(); loadUnrefreshable(); }
         if (sub === 'utils') loadAggregators();
         if (sub === 'links') loadLinkQueue();
         if (sub === 'dupes') renderDupes();
@@ -4798,6 +4819,57 @@ async function loadMetadataRefreshQueue() {
     el.innerHTML = head + rows + more;
   } catch (e) {
     el.textContent = 'Could not load the refresh queue: ' + e.message;
+  }
+}
+
+async function loadUnrefreshable() {
+  const el = $('unrefreshBody'), badge = $('unrefreshCount');
+  if (!el) return;
+  if (badge) badge.textContent = '';
+  try {
+    const d = await api('/api/agents/unrefreshable?limit=500');
+    if (!d.ok) { el.textContent = 'Could not read the list: ' + (d.error || 'unknown'); return; }
+    if (!d.queue_ready) {
+      el.innerHTML = `<div>Not tracking yet &mdash; run <span class="mono">${esc(d.queue_sql || 'db/refresh_health_schema.sql')}</span>
+        in the Supabase SQL editor (idempotent), then restart with <span class="mono">restart_server.ps1</span>.</div>`;
+      return;
+    }
+    if (!d.count) {
+      el.innerHTML = `<div>Nothing here &mdash; every live row read cleanly on the last re-check.</div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:4px">A row appears here only after a
+        <span class="mono">agents/refresh_opportunities.py</span> run has tried and failed to re-read its page
+        (403/anti-bot, TLS, JS/PDF). It clears itself the moment the page reads again.</div>`;
+      return;
+    }
+    if (badge) badge.textContent = String(d.count);
+    const qn = d.quarantined_count || 0, qa = d.quarantine_after || 3;
+    const head = `<div style="padding:2px 0 10px">
+      <b>${d.count}</b> live row${d.count === 1 ? '' : 's'} the re-check can't re-read for drift &mdash; already
+      enriched at activation, so nothing is missing; the site just blocks our fetcher now.
+      ${qn ? `<b>${qn}</b> have failed ${qa}+ times in a row and are <b>skipped by default</b> so a pass isn't spent
+        re-walking them; retry with <span class="mono">python -m agents.refresh_opportunities --include-unfetchable</span>.` : ''}
+      <div style="font-size:12px;color:var(--text-3);margin-top:4px">Not dead &mdash; a 403 is our fetcher
+        being blocked, not a missing page, so these stay live. Worst-first.</div></div>`;
+    const rows = (d.rows || []).map(r => {
+      const when = r.refresh_fetch_failed_at
+        ? new Date(r.refresh_fetch_failed_at).toISOString().slice(0, 10) : '';
+      const pill = r.quarantined
+        ? '<span class="pill warn" title="skipped by the default re-check pass; --include-unfetchable retries it">skipped by default</span> '
+        : '';
+      return `<div style="padding:7px 0;border-top:1px solid var(--border)">
+        <div>${pill}<span class="mono">${esc(r.id || '')}</span> &middot; ${esc(r.name || '(no name)')}
+          ${r.org ? '<span style="color:var(--text-3)">&mdash; ' + esc(r.org) + '</span>' : ''}</div>
+        <div style="font-size:12px;color:var(--text-3)">
+          <span class="mono">${esc(r.refresh_fetch_status || '?')}</span>
+          &middot; ${r.refresh_fetch_attempts || 0} consecutive fail${(r.refresh_fetch_attempts || 0) === 1 ? '' : 's'}${when ? ' &middot; last ' + when : ''}
+          &middot; <span class="mono" title="${esc(r.url || '')}">${esc((r.url || '').slice(0, 80))}</span></div>
+      </div>`;
+    }).join('');
+    const more = d.truncated
+      ? `<div class="hint" style="padding-top:8px">Showing the worst 500; more exist.</div>` : '';
+    el.innerHTML = head + rows + more;
+  } catch (e) {
+    el.textContent = 'Could not load the un-refreshable list: ' + e.message;
   }
 }
 

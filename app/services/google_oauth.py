@@ -121,6 +121,64 @@ def take_calendar_state(state):
     return handoff_store.take(KIND_CALENDAR_STATE, state)
 
 
+# ---- Delete-account re-auth (DATA_DELETION_EXPORT_PLAN.md P3, Google-only accounts) ----
+# A passwordless (Google) account proves current control of its Google account before it can
+# delete, exactly the way calendar-connect proves control: a bearer POST mints a nonce, the
+# nonce drives a Google round-trip, and the callback verifies the SAME google_id came back
+# before minting a single-use PROOF that the delete route consumes in place of a password.
+# Its own `kind`s throughout, so a nonce from one flow can never be replayed against another.
+DELETE_REAUTH_HANDOFF_TTL_SECONDS = 120
+DELETE_REAUTH_PROOF_TTL_SECONDS = 120
+KIND_DELETE_REAUTH_HANDOFF = "delete_reauth_handoff"
+KIND_DELETE_REAUTH_STATE = "delete_reauth_state"
+KIND_DELETE_REAUTH_PROOF = "delete_reauth_proof"
+
+
+def mint_delete_reauth_handoff(userid):
+    """A single-use nonce standing in for `userid` while the Google round-trip runs. None if
+    the store refuses it (same reason mint_calendar_handoff can be None)."""
+    nonce = secrets.token_urlsafe(32)
+    if not handoff_store.put(KIND_DELETE_REAUTH_HANDOFF, nonce, {"userid": userid},
+                             DELETE_REAUTH_HANDOFF_TTL_SECONDS):
+        return None
+    return nonce
+
+
+def take_delete_reauth_handoff(nonce):
+    """The userid this nonce stands for, consuming it. None if unknown or expired."""
+    entry = handoff_store.take(KIND_DELETE_REAUTH_HANDOFF, nonce)
+    return (entry or {}).get("userid")
+
+
+def remember_delete_reauth_state(state, userid, app_redirect=""):
+    """Record what a delete-reauth handshake is for. False if it could not be stored."""
+    return handoff_store.put(KIND_DELETE_REAUTH_STATE, state,
+                             {"userid": userid, "app_redirect": app_redirect or ""},
+                             GOOGLE_TOKEN_TTL_SECONDS)
+
+
+def take_delete_reauth_state(state):
+    """The handshake this state belongs to, consuming it. None if unknown or expired."""
+    return handoff_store.take(KIND_DELETE_REAUTH_STATE, state)
+
+
+def mint_delete_reauth_proof(userid):
+    """A single-use PROOF that `userid` just re-authenticated via Google. The delete route
+    consumes it in place of a password. None if the store refuses it."""
+    token = secrets.token_urlsafe(32)
+    if not handoff_store.put(KIND_DELETE_REAUTH_PROOF, token, {"userid": userid},
+                             DELETE_REAUTH_PROOF_TTL_SECONDS):
+        return None
+    return token
+
+
+def take_delete_reauth_proof(token):
+    """The userid this proof stands for, consuming it. None if unknown or expired. Single-use:
+    a proof that reaches browser history or a Referer header is inert on the second read."""
+    entry = handoff_store.take(KIND_DELETE_REAUTH_PROOF, token)
+    return (entry or {}).get("userid")
+
+
 # The sign-in handshake's OAuth `state` -> {"app_redirect"}. Phase 3
 # (docs/archive/PLAN_3_rn.md): the sign-in redirect flow historically ended at the SPA served
 # from the backend root ("/"). The Expo app is a SEPARATE origin (web) or a native app (custom

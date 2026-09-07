@@ -160,13 +160,18 @@ export interface ApiClient {
   // the file Blob; the caller triggers the browser download. Rejects with HttpError on
   // failure (429 rate limit, 404 gone). Identity is the token's — no userid parameter.
   exportData(): Promise<Blob>;
-  // Permanently delete the account after a PASSWORD re-auth (P3). Pass the raw password; it
-  // is SHA-256 hashed client-side like login. Resolves on success (the local session is
-  // dropped, so onSessionLost fires and the router bounces to /login). Rejects with HttpError:
-  // 403 = wrong password; 400 with reauth 'google_required' = a Google-only account that must
-  // confirm via Google instead (see error message); 502 = a live subscription could not be
-  // cancelled, so NOTHING was deleted and the caller can retry.
-  deleteAccount(password: string): Promise<void>;
+  // Permanently delete the account after a re-auth (P3). Re-auth is either a raw `password`
+  // (SHA-256 hashed client-side like login) or a `reauthToken` (the single-use proof a
+  // Google-only account gets back from the Google confirmation flow). Resolves on success (the
+  // local session is dropped, so onSessionLost fires and the router bounces to /login).
+  // Rejects with HttpError (403 wrong password / bad token, 502 a live subscription could not
+  // be cancelled so NOTHING was deleted), or GoogleReauthRequiredError when a Google-only
+  // account sent a password path — the caller then runs googleDeleteReauthUrl().
+  deleteAccount(reauth: { password?: string; reauthToken?: string }): Promise<void>;
+  // Start the Google confirmation for a Google-only account's deletion. `appReturn` is the URL
+  // Google should send the app back to (it arrives carrying `?delete_reauth_proof=<token>`,
+  // which the app passes to deleteAccount({ reauthToken })). Returns the URL to navigate to.
+  googleDeleteReauthUrl(appReturn: string): Promise<string>;
 
   // Subscription status + promo flow (payments themselves stay deferred).
   subscriptionStatus(): Promise<Record<string, unknown>>;

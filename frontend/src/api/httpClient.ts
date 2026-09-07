@@ -261,6 +261,16 @@ export class HttpError extends Error {
   }
 }
 
+// deleteAccount throws this (instead of HttpError) when a Google-only account tried the
+// password path: the UI catches it and runs the Google confirmation flow instead. A distinct
+// type rather than a status check so the branch can't be confused with any other 400.
+export class GoogleReauthRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GoogleReauthRequiredError';
+  }
+}
+
 // Parse an error body that may ALSO carry a two-tier allowance snapshot (a 429 cap hit). Read
 // once — a Response body can only be consumed a single time — and hand back both pieces.
 async function errorBody(res: Response): Promise<{ error?: string; allowance?: AllowanceSnapshot }> {
@@ -729,21 +739,40 @@ export const httpClient: ApiClient = {
     return res.blob();
   },
 
-  async deleteAccount(password: string): Promise<void> {
-    const passwordHash = await sha256Hex(password);
-    const body = JSON.stringify({ passwordHash });
+  async deleteAccount(reauth: { password?: string; reauthToken?: string }): Promise<void> {
+    const payload: Record<string, string> = reauth.reauthToken
+      ? { reauthToken: reauth.reauthToken }
+      : { passwordHash: await sha256Hex(reauth.password ?? '') };
+    const body = JSON.stringify(payload);
     const doPost = () => rawFetch('/api/account/delete', { method: 'POST', body });
-    // A 401 here is a genuinely expired ACCESS token (refresh + retry). A wrong password
-    // answers 403, deliberately, so it never enters this refresh path (see the route).
+    // A 401 here is a genuinely expired ACCESS token (refresh + retry). A wrong password /
+    // bad token answers 403, deliberately, so it never enters this refresh path (see route).
     let res = await doPost();
     if (res.status === 401 && (await refreshOnce()) === 'ok') res = await doPost();
     if (!res.ok) {
-      const { error } = await errorBody(res);
-      throw new HttpError(res.status, error ?? `Could not delete your account (${res.status}).`);
+      // Read the body ONCE. A Google-only account with no re-auth token comes back as a 400
+      // whose reauth field tells the UI to run the Google confirmation instead of a password.
+      let parsed: { error?: string; reauth?: string } = {};
+      try { parsed = (await res.json()) as typeof parsed; } catch { /* non-JSON body */ }
+      if (parsed.reauth === 'google_required') {
+        throw new GoogleReauthRequiredError(
+          parsed.error ?? 'This account signs in with Google. Please confirm with Google.');
+      }
+      throw new HttpError(res.status,
+        parsed.error ?? `Could not delete your account (${res.status}).`);
     }
     // Success — the row is gone and every token for it now fails server-side. Drop the local
     // session so onSessionLost fires and the router leaves the app.
     await forgetSession();
+  },
+
+  async googleDeleteReauthUrl(appReturn: string): Promise<string> {
+    const data = await request<{ nonce?: string }>('/api/account/reauth/google/start', {
+      method: 'POST', body: '{}',
+    });
+    if (!data?.nonce) throw new HttpError(0, 'Could not start Google confirmation.');
+    const params = new URLSearchParams({ nonce: data.nonce, app_redirect: appReturn });
+    return backendUrl(`/api/account/reauth/google/redirect?${params.toString()}`);
   },
 
   // --- Stable since Phase 1 (soft/public; bearer attached if present, for attribution) ---

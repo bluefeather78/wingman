@@ -322,7 +322,11 @@ def test_every_google_oauth_store_goes_through_the_shared_store():
     from app.services import google_oauth
     src = inspect.getsource(google_oauth)
     for kind in ("KIND_SESSION", "KIND_CALENDAR_HANDOFF", "KIND_CALENDAR_STATE",
-                 "KIND_LOGIN_REDIRECT"):
+                 "KIND_LOGIN_REDIRECT",
+                 # Delete-account re-auth for Google-only accounts (DATA_DELETION_EXPORT_PLAN.md).
+                 "KIND_DELETE_REAUTH_HANDOFF", "KIND_DELETE_REAUTH_STATE",
+                 "KIND_DELETE_REAUTH_PROOF"):
         assert kind in src, f"{kind} is gone — was a store dropped rather than migrated?"
-    assert src.count("handoff_store.put") == 4
-    assert src.count("handoff_store.take") == 4
+    # 4 sign-in/calendar stores + 3 delete-reauth stores (handoff, state, proof).
+    assert src.count("handoff_store.put") == 7
+    assert src.count("handoff_store.take") == 7

@@ -320,12 +320,20 @@ Edit the **markdown** (never the generated `.html`), then `python -m agents.buil
    on success it routes to `/landing`. Backend refinement: a failed re-auth now answers **403**
    (not 401) so the client's refresh-on-401 never misfires and logs the student out over a typo.
    `tsc` clean; the 403 change is covered by the updated P2 test.
-   - **Still open (Google-only path):** a Google-linked account gets the backend's `400
-     {reauth:"google_required"}`, which the modal surfaces as a message — it does NOT yet
-     complete deletion. The fresh-Google-handoff re-auth (new OAuth-callback plumbing) is the
-     one remaining piece; password accounts delete end-to-end today.
-   - **Not browser-verified:** `tsc` + backend tests pass, but no live Metro run — a concurrent
-     session's dev server is active in this checkout and a second watcher would disrupt it.
+   - **Google-only path: ✅ DONE 2026-09-06.** Three backend routes mirror the hardened
+     calendar-connect flow: `POST /api/account/reauth/google/start` (bearer, mints a
+     userid-bound nonce) → `GET …/reauth/google/redirect` (nonce → Google, `prompt=select_account
+     consent`, state cookie) → `GET …/reauth/google/callback` (exchanges code, checks
+     `email_verified`, and — THE control — refuses unless the returned `google_id` matches the
+     one linked to the target userid, then mints a single-use proof via `handoff_store`). The
+     delete route accepts `{reauthToken}` in place of a password and refuses a proof bound to a
+     different userid. Client: `googleDeleteReauthUrl()` + `GoogleReauthRequiredError`; Manage
+     Plan swaps to a "Confirm with Google & delete" button and consumes the returned
+     `?delete_reauth_proof=` on mount. Tests: proof is single-use; a proof for another user is
+     refused; an invalid proof is refused. `tsc` clean; suite at the 31-failure env baseline.
+   - **Not browser-verified:** `tsc` + backend tests pass, but no live Metro run (a concurrent
+     session's dev server is active here) and no live-Google E2E (no OAuth creds in this env —
+     the code exchange is exercised the same way the existing Google login is: unit-level).
 5. **P4 — Legal. ✅ DONE 2026-09-06.** privacy.md §9/§10/§14 (self-serve deletion mechanism +
    export/portability + retention exceptions) and terms.md §7/§18 (delete-your-account right,
    permanence, no-refund) rewritten; `public/*.html` rebuilt via `agents/build_legal`.

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { httpClient } from '@/api/httpClient';
+import { httpClient, GoogleReauthRequiredError } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
 import { AiActionsBar, PopButton, Screen, SoftCard, usePopInteraction } from '@/ui/components';
 import { colors, fonts, popShadow, radius } from '@/ui/theme';
@@ -52,6 +52,7 @@ export default function Subscription() {
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteStatus, setDeleteStatus] = useState('');
+  const [googleReauth, setGoogleReauth] = useState(false);
   const promoBtnPop = usePopInteraction(3, colors.navy, 1);
 
   useEffect(() => {
@@ -149,6 +150,7 @@ export default function Subscription() {
     setDeletePassword('');
     setDeleteConfirm('');
     setDeleteStatus('');
+    setGoogleReauth(false);
     setShowDelete(true);
   }
 
@@ -156,18 +158,61 @@ export default function Subscription() {
     setDeleting(true);
     setDeleteStatus('');
     try {
-      await httpClient.deleteAccount(deletePassword);
+      await httpClient.deleteAccount({ password: deletePassword });
       // Success: the session is already dropped inside deleteAccount(). Leave the app.
       setShowDelete(false);
       router.replace('/landing');
     } catch (e) {
-      // 403 wrong password, 400 google_required, 502 stripe — all surface their message in
-      // the tile rather than closing it. Nothing was deleted on any of these.
-      setDeleteStatus((e as Error).message || 'Could not delete your account. Please try again.');
+      if (e instanceof GoogleReauthRequiredError) {
+        // This account has no password — it signs in with Google. Swap the modal to the
+        // Confirm-with-Google path instead of asking for a password it doesn't have.
+        setGoogleReauth(true);
+        setDeleteStatus('This account signs in with Google. Confirm with Google to delete it.');
+      } else {
+        // 403 wrong password, 502 stripe — surface the message; nothing was deleted.
+        setDeleteStatus((e as Error).message || 'Could not delete your account. Please try again.');
+      }
     } finally {
       setDeleting(false);
     }
   }
+
+  async function confirmWithGoogle() {
+    if (Platform.OS !== 'web' || typeof globalThis === 'undefined' || !(globalThis as { location?: unknown }).location) {
+      setDeleteStatus('Open Wingman in a web browser to confirm with Google.');
+      return;
+    }
+    setDeleting(true);
+    setDeleteStatus('Opening Google…');
+    try {
+      const origin = (globalThis as { location: { origin: string } }).location.origin;
+      const url = await httpClient.googleDeleteReauthUrl(`${origin}/subscription`);
+      (globalThis as { location: { href: string } }).location.href = url;
+    } catch (e) {
+      setDeleteStatus((e as Error).message || 'Could not start Google confirmation.');
+      setDeleting(false);
+    }
+  }
+
+  // When Google sends the app back carrying a one-time proof (?delete_reauth_proof=…), finish
+  // the deletion with it. Web only; the param is stripped so a reload can't replay it (the
+  // proof is single-use server-side regardless).
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof globalThis === 'undefined') return;
+    const loc = (globalThis as { location?: { search?: string; pathname?: string } }).location;
+    if (!loc?.search) return;
+    const proof = new URLSearchParams(loc.search).get('delete_reauth_proof');
+    if (!proof) return;
+    const hist = (globalThis as { history?: { replaceState?: (a: unknown, b: string, c: string) => void } }).history;
+    hist?.replaceState?.(null, '', loc.pathname ?? '/subscription');
+    setShowDelete(true);
+    setDeleting(true);
+    setDeleteStatus('Confirming with Google…');
+    httpClient.deleteAccount({ reauthToken: proof })
+      .then(() => { setShowDelete(false); router.replace('/landing'); })
+      .catch((e) => setDeleteStatus((e as Error).message || 'Could not delete your account. Please try again.'))
+      .finally(() => setDeleting(false));
+  }, [router]);
 
   async function upgrade() {
     setUpgradeStatus('Starting checkout…');
@@ -397,41 +442,74 @@ export default function Subscription() {
             This permanently removes your profile, your Quest Log, your saved opportunities and
             your account details. It cannot be undone{paid ? ', and it cancels your subscription' : ''}.
           </Text>
-          <Text style={styles.deleteFieldLabel}>Confirm your password</Text>
-          <TextInput
-            style={styles.deleteInput}
-            value={deletePassword}
-            onChangeText={setDeletePassword}
-            placeholder="Your password"
-            placeholderTextColor={colors.slate500}
-            secureTextEntry
-            autoCapitalize="none"
-            editable={!deleting}
-          />
-          <Text style={styles.deleteFieldLabel}>Type DELETE to confirm</Text>
-          <TextInput
-            style={styles.deleteInput}
-            value={deleteConfirm}
-            onChangeText={setDeleteConfirm}
-            placeholder="DELETE"
-            placeholderTextColor={colors.slate500}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            editable={!deleting}
-          />
-          {!!deleteStatus && <Text style={styles.cancelStatus}>{deleteStatus}</Text>}
-          <View style={styles.modalActions}>
-            <Pressable
-              style={[styles.modalDanger, (deleting || !deletePassword || deleteConfirm.trim() !== 'DELETE') && styles.dataBtnDisabled]}
-              onPress={deleteAccount}
-              disabled={deleting || !deletePassword || deleteConfirm.trim() !== 'DELETE'}
-            >
-              <Text style={styles.modalDangerText}>{deleting ? 'Deleting…' : 'Permanently delete my account'}</Text>
-            </Pressable>
-            <Pressable style={styles.modalKeep} onPress={() => !deleting && setShowDelete(false)} disabled={deleting}>
-              <Text style={styles.modalKeepText}>Never mind, keep my account</Text>
-            </Pressable>
-          </View>
+          {googleReauth ? (
+            // Google-only account: no password to type — confirm by re-authenticating with
+            // Google. The typed-DELETE gate still applies before the button enables.
+            <>
+              <Text style={styles.deleteFieldLabel}>Type DELETE to confirm</Text>
+              <TextInput
+                style={styles.deleteInput}
+                value={deleteConfirm}
+                onChangeText={setDeleteConfirm}
+                placeholder="DELETE"
+                placeholderTextColor={colors.slate500}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                editable={!deleting}
+              />
+              {!!deleteStatus && <Text style={styles.cancelStatus}>{deleteStatus}</Text>}
+              <View style={styles.modalActions}>
+                <Pressable
+                  style={[styles.modalDanger, (deleting || deleteConfirm.trim() !== 'DELETE') && styles.dataBtnDisabled]}
+                  onPress={confirmWithGoogle}
+                  disabled={deleting || deleteConfirm.trim() !== 'DELETE'}
+                >
+                  <Text style={styles.modalDangerText}>{deleting ? 'Working…' : 'Confirm with Google & delete'}</Text>
+                </Pressable>
+                <Pressable style={styles.modalKeep} onPress={() => !deleting && setShowDelete(false)} disabled={deleting}>
+                  <Text style={styles.modalKeepText}>Never mind, keep my account</Text>
+                </Pressable>
+              </View>
+            </>
+          ) : (
+            <>
+              <Text style={styles.deleteFieldLabel}>Confirm your password</Text>
+              <TextInput
+                style={styles.deleteInput}
+                value={deletePassword}
+                onChangeText={setDeletePassword}
+                placeholder="Your password"
+                placeholderTextColor={colors.slate500}
+                secureTextEntry
+                autoCapitalize="none"
+                editable={!deleting}
+              />
+              <Text style={styles.deleteFieldLabel}>Type DELETE to confirm</Text>
+              <TextInput
+                style={styles.deleteInput}
+                value={deleteConfirm}
+                onChangeText={setDeleteConfirm}
+                placeholder="DELETE"
+                placeholderTextColor={colors.slate500}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                editable={!deleting}
+              />
+              {!!deleteStatus && <Text style={styles.cancelStatus}>{deleteStatus}</Text>}
+              <View style={styles.modalActions}>
+                <Pressable
+                  style={[styles.modalDanger, (deleting || !deletePassword || deleteConfirm.trim() !== 'DELETE') && styles.dataBtnDisabled]}
+                  onPress={deleteAccount}
+                  disabled={deleting || !deletePassword || deleteConfirm.trim() !== 'DELETE'}
+                >
+                  <Text style={styles.modalDangerText}>{deleting ? 'Deleting…' : 'Permanently delete my account'}</Text>
+                </Pressable>
+                <Pressable style={styles.modalKeep} onPress={() => !deleting && setShowDelete(false)} disabled={deleting}>
+                  <Text style={styles.modalKeepText}>Never mind, keep my account</Text>
+                </Pressable>
+              </View>
+            </>
+          )}
         </Pressable>
       </Pressable>
     </Modal>

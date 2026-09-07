@@ -29,7 +29,7 @@ from app.services.email import send_lifecycle_email_async
 from app.deps import (json_body, json_response, json_error, login_response,
                       require_subscription,
                       opaque_error, DB_UNAVAILABLE)
-from app.auth import AuthedUser
+from app.auth import AuthedUser, get_current_user
 from app.auth.tokens import AuthConfigError
 from app.services import google_oauth as g
 
@@ -459,6 +459,121 @@ def handle_google_finish(request: Request, body: dict = Depends(json_body)):
         # operational detail a signed-out caller has no business reading (S1-13, L5).
         return opaque_error(503, "Sign-in is temporarily unavailable. Please try again "
                                  "shortly.", e, op="auth.config")
+
+
+# ---- Delete-account re-auth for Google-only accounts (DATA_DELETION_EXPORT_PLAN.md P3) ----
+# Three steps, mirroring calendar-connect exactly (S1-3): a bearer POST mints a nonce, a
+# top-level navigation drives the Google round-trip, and the callback verifies the SAME Google
+# account came back before minting a single-use proof the delete route accepts. get_current_user
+# (NOT require_subscription) so a lapsed account can still delete — the same rule as the export
+# and delete routes themselves.
+@router.post("/api/account/reauth/google/start")
+def handle_delete_reauth_start(user: AuthedUser = Depends(get_current_user)):
+    """Mint the nonce that /reauth/google/redirect takes. Bearer in the header, only the nonce
+    in the URL that follows — a delete-confirmation link in browser history must be inert."""
+    nonce = g.mint_delete_reauth_handoff(user.id)
+    if not nonce:
+        return json_error(503, "Account deletion is temporarily unavailable. Please try "
+                               "again shortly.")
+    return json_response(200, {"nonce": nonce})
+
+
+@router.get("/api/account/reauth/google/redirect")
+def handle_delete_reauth_redirect(request: Request):
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        return json_error(503, "Google Sign-In is not configured.")
+    canonical = _canonicalize_loopback(request)
+    if canonical:
+        return canonical
+    nonce = request.query_params.get("nonce") or ""
+    userid = g.take_delete_reauth_handoff(nonce) if nonce else None
+    if not userid:
+        return json_error(401, "That confirmation link expired. Start the deletion again.")
+    state = secrets.token_urlsafe(24)
+    app_redirect = request.query_params.get("app_redirect") or ""
+    if not g.remember_delete_reauth_state(
+            state, userid, app_redirect if _is_allowed_app_redirect(app_redirect) else ""):
+        return json_error(503, "Account deletion is temporarily unavailable. Please try "
+                               "again shortly.")
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": _redirect_uri(request, "/api/account/reauth/google/callback"),
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        # Force the account chooser: the user must actively pick the account, and the callback
+        # then refuses anything but the google_id already linked to this Wingman account.
+        "prompt": "select_account consent",
+    }
+    resp = RedirectResponse(f"{GOOGLE_AUTH_URL}?{urllib.parse.urlencode(params)}", status_code=302)
+    return _state_cookie(resp, "delete_reauth_oauth_state", state, request)
+
+
+@router.get("/api/account/reauth/google/callback")
+def handle_delete_reauth_callback(request: Request):
+    query = request.query_params
+    cookie_state = request.cookies.get("delete_reauth_oauth_state")
+    req_state = query.get("state") or ""
+    code = query.get("code") or ""
+    entry = g.take_delete_reauth_state(req_state) if req_state else None
+    if not code or not req_state or not cookie_state or req_state != cookie_state or not entry:
+        return json_error(400, "Confirmation failed: invalid or expired request. Please "
+                               "try again.")
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        return json_error(503, "Google Sign-In is not configured.")
+    userid = entry.get("userid")
+
+    try:
+        token_req = urllib.request.Request(
+            GOOGLE_TOKEN_URL,
+            data=urllib.parse.urlencode({
+                "code": code,
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uri": _redirect_uri(request, "/api/account/reauth/google/callback"),
+                "grant_type": "authorization_code",
+            }).encode(),
+            method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with urllib.request.urlopen(token_req, timeout=10) as resp:
+            tokens = json.loads(resp.read())
+        userinfo_req = urllib.request.Request(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        with urllib.request.urlopen(userinfo_req, timeout=10) as resp:
+            profile = json.loads(resp.read())
+    except Exception as e:
+        print(f"[WARN] Google delete-reauth exchange failed: {e}")
+        return json_error(502, "Could not verify your Google account. Please try again.")
+
+    google_id = profile.get("sub")
+    _verified = profile.get("email_verified")
+    if _verified is not True and str(_verified).strip().lower() != "true":
+        return json_error(400, "Google has not verified that account, so we can't use it to "
+                               "confirm the deletion.")
+    # THE control: the account that just authenticated must be the SAME Google account linked
+    # to this Wingman account. Without this, any signed-in caller could authenticate as
+    # THEMSELVES and delete SOMEONE ELSE'S account — the nonce carries the target userid.
+    try:
+        record = select_user(userid, "userid,google_id")
+    except Exception as e:
+        return opaque_error(502, DB_UNAVAILABLE, e, op="google.db")
+    if not record or not record.get("google_id") or not google_id \
+            or record.get("google_id") != google_id:
+        return json_error(403, "That Google account does not match this Wingman account.")
+
+    proof = g.mint_delete_reauth_proof(userid)
+    if not proof:
+        return json_error(503, "Account deletion is temporarily unavailable. Please try "
+                               "again shortly.")
+    # Hand the single-use proof back to the app, which passes it to POST /api/account/delete.
+    # Same allow-listed redirect the sign-in flow uses, so this can't become an open redirect.
+    dest = (entry.get("app_redirect") or "/google-auth")
+    sep = "&" if "?" in dest else "?"
+    return RedirectResponse(f"{dest}{sep}delete_reauth_proof={urllib.parse.quote(proof)}",
+                            status_code=302)
 
 
 @router.post("/api/auth/google/calendar/handoff")

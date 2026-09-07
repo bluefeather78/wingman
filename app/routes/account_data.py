@@ -22,6 +22,7 @@ from app.auth import get_current_user, AuthedUser, verify_password
 from app.auth.passwords import is_valid_client_hash
 from app.auth.ratelimit import account_export_limiter, account_delete_limiter
 from app.services.account_data import assemble_export, erase_account, StripeCancelError
+from app.services.google_oauth import take_delete_reauth_proof
 
 router = APIRouter()
 
@@ -72,10 +73,15 @@ def handle_account_delete(body: dict = Depends(json_body),
                           user: AuthedUser = Depends(get_current_user)):
     """Permanently erase the signed-in account and everything Wingman holds about it.
 
-    Requires `{passwordHash}` (the same client-side SHA-256 login sends) and re-verifies it
-    server-side. 401 on a wrong/missing password; 400 `reauth=google_required` for a
-    Google-only account (no password to check — completed via a fresh Google sign-in in a
-    later phase); 502 (nothing deleted) if a live subscription cannot be cancelled.
+    Re-auth is required and comes one of two ways:
+      * `{passwordHash}` — the same client-side SHA-256 login sends, re-verified server-side.
+      * `{reauthToken}` — a single-use proof that the account just re-authenticated via Google
+        (for Google-only accounts with no password). Minted only after the Google callback
+        confirmed the SAME Google account, and bound to this userid.
+
+    403 on a wrong password or an invalid/mismatched re-auth token; 400 `reauth=google_required`
+    for a Google-only account that sent neither; 502 (nothing deleted) if a live subscription
+    cannot be cancelled.
     """
     userid = user.id
     if not account_delete_limiter.allow(userid):
@@ -83,33 +89,43 @@ def handle_account_delete(body: dict = Depends(json_body),
         resp.headers["Retry-After"] = str(account_delete_limiter.retry_after(userid))
         return resp
 
-    # Re-auth against the STORED hash. get_user_account carries password_hash.
-    try:
-        record = get_user_account(userid)
-    except Exception as e:
-        return opaque_error(502, DB_UNAVAILABLE, e, op="account.delete.lookup")
-    if not record:
-        return json_error(404, "No account found.")
-    stored_hash = record.get("password_hash")
-    if not stored_hash:
-        # Google-only account: there is no password to re-verify. Refuse rather than weaken
-        # the guard to "a valid session is enough"; the frontend completes this via a fresh
-        # Google handoff (P3). DATA_DELETION_EXPORT_PLAN.md §3.3.
-        return json_response(400, {
-            "error": "This account signs in with Google. Please confirm with Google to "
-                     "delete it.",
-            "reauth": "google_required"})
-    # A failed re-auth answers 403, NOT 401. 401 is reserved for "not authenticated" (an
-    # expired/absent access token, raised by get_current_user) — and the client refreshes and
-    # retries on a 401. A wrong password returned as 401 would send the client into a
-    # refresh-and-retry loop and then log the student out over a typo; 403 ("authenticated,
-    # but this action is refused") is the honest, non-looping answer.
-    password_hash = body.get("passwordHash") or ""
-    if not is_valid_client_hash(password_hash):
-        return json_error(403, "Incorrect password.")
-    ok, _needs_upgrade = verify_password(stored_hash, password_hash)
-    if not ok:
-        return json_error(403, "Incorrect password.")
+    reauth_token = body.get("reauthToken")
+    if reauth_token:
+        # Google-only path: the proof is single-use, minted by the Google callback only after
+        # it verified the SAME google_id, and bound to a userid. It must be THIS user's — a
+        # proof minted for someone else is refused even with a valid session.
+        proof_userid = take_delete_reauth_proof(reauth_token)
+        if not proof_userid or proof_userid != userid:
+            return json_error(403, "We could not confirm that with Google. Please try again.")
+        # Verified via Google — fall through to the erase, no password needed.
+    else:
+        # Password path. Re-auth against the STORED hash; get_user_account carries password_hash.
+        try:
+            record = get_user_account(userid)
+        except Exception as e:
+            return opaque_error(502, DB_UNAVAILABLE, e, op="account.delete.lookup")
+        if not record:
+            return json_error(404, "No account found.")
+        stored_hash = record.get("password_hash")
+        if not stored_hash:
+            # Google-only account and no re-auth token: tell the client to run the Google
+            # confirmation flow (POST /api/account/reauth/google/start). Refuse rather than
+            # weaken the guard to "a valid session is enough".
+            return json_response(400, {
+                "error": "This account signs in with Google. Please confirm with Google to "
+                         "delete it.",
+                "reauth": "google_required"})
+        # A failed re-auth answers 403, NOT 401. 401 is reserved for "not authenticated" (an
+        # expired/absent access token, raised by get_current_user) — and the client refreshes
+        # and retries on a 401. A wrong password returned as 401 would send the client into a
+        # refresh-and-retry loop and then log the student out over a typo; 403 ("authenticated,
+        # but this action is refused") is the honest, non-looping answer.
+        password_hash = body.get("passwordHash") or ""
+        if not is_valid_client_hash(password_hash):
+            return json_error(403, "Incorrect password.")
+        ok, _needs_upgrade = verify_password(stored_hash, password_hash)
+        if not ok:
+            return json_error(403, "Incorrect password.")
 
     # Re-auth passed — erase. StripeCancelError means a live subscription could not be
     # cancelled, so NOTHING was deleted and the student can retry with their data intact.

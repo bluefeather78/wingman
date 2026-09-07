@@ -124,6 +124,10 @@ UNGATED = {
     # (get_current_user, hard 401), plus a password re-auth on delete, but no subscription gate.
     ("POST", "/api/account/export"),
     ("POST", "/api/account/delete"),
+    # Google-only delete re-auth start: authenticated (get_current_user) but NOT subscription
+    # gated — a lapsed account must still be able to delete. The redirect/callback GETs use
+    # nonces + a state cookie, no bearer, so they carry no gate dependency either.
+    ("POST", "/api/account/reauth/google/start"),
     # Stripe calls this with a signature, not a bearer token — it must never require auth or
     # the subscription gate. Its events are what LIFT the block (write status='active'), so
     # gating it would make it unreachable exactly when it matters.

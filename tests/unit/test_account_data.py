@@ -332,3 +332,57 @@ def test_delete_429_denies_before_reauth(monkeypatch):
                                        user=AuthedUser(id="alice"))
     assert resp.status_code == 429
     assert looked_up["called"] is False        # rate-limited before any account read
+
+
+# ---------- the delete route: the Google re-auth proof path ----------
+
+def _stub_delete_reauth(monkeypatch, proof_userid, erase=lambda uid: {"account_deleted": True}):
+    monkeypatch.setattr(route.account_delete_limiter, "allow", lambda k: True)
+    monkeypatch.setattr(route, "take_delete_reauth_proof", lambda tok: proof_userid)
+    monkeypatch.setattr(route, "erase_account", erase)
+
+
+def test_delete_via_google_proof_succeeds(monkeypatch):
+    _stub_delete_reauth(monkeypatch, proof_userid="alice")
+    resp = route.handle_account_delete(body={"reauthToken": "good"}, user=AuthedUser(id="alice"))
+    assert resp.status_code == 200
+    assert json.loads(resp.body)["deleted"] is True
+
+
+def test_delete_google_proof_for_another_user_is_refused(monkeypatch):
+    # THE security case: a proof minted for bob must NOT delete alice's account, even though
+    # the caller holds alice's valid session. The proof is bound to a userid; it must match.
+    erased = {"called": False}
+    _stub_delete_reauth(monkeypatch, proof_userid="bob",
+                        erase=lambda uid: erased.__setitem__("called", True))
+    resp = route.handle_account_delete(body={"reauthToken": "bobs-proof"},
+                                       user=AuthedUser(id="alice"))
+    assert resp.status_code == 403
+    assert erased["called"] is False
+
+
+def test_delete_invalid_google_proof_is_refused(monkeypatch):
+    # take_delete_reauth_proof returns None for an unknown/expired/consumed token.
+    erased = {"called": False}
+    _stub_delete_reauth(monkeypatch, proof_userid=None,
+                        erase=lambda uid: erased.__setitem__("called", True))
+    resp = route.handle_account_delete(body={"reauthToken": "expired"},
+                                       user=AuthedUser(id="alice"))
+    assert resp.status_code == 403
+    assert erased["called"] is False
+
+
+def test_delete_reauth_proof_is_single_use():
+    # The proof mint/take round-trip, and that a second take gets nothing (a proof that reaches
+    # browser history or a Referer header is inert on the second read).
+    import app.services.google_oauth as g
+    import app.services.handoff_store as hs
+    hs._reset_for_tests()
+    hs._db_available = False                    # force the in-memory backend for the test
+    try:
+        token = g.mint_delete_reauth_proof("alice")
+        assert token
+        assert g.take_delete_reauth_proof(token) == "alice"
+        assert g.take_delete_reauth_proof(token) is None
+    finally:
+        hs._reset_for_tests()

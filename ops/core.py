@@ -3575,6 +3575,165 @@ def get_scorecard_html(run_id=None):
     <p>eval/{name} is missing. Run <code>python eval/gen_scorecard.py --run &lt;id&gt;</code>.</p></body></html>"""
 
 
+# ---------------- Docs hub ----------------
+
+DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs")
+
+# The internal documentation set — the visual "source of truth" pages for how Wingman works,
+# grouped for the /docs hub. These are served ONLY through this localhost-gated ops console,
+# never from public/ (the logic map was pulled out of public/ on 2026-09-04 for exactly this
+# reason: a repo-root static route was publishing it). ops/ is never mounted on Render, so a
+# doc here is reachable only through the gated console.
+#
+# To add a doc: drop an HTML file in ops/docs/ and add one entry below. The control-room doc
+# reuses the existing ops/logic_map.html (its own /admin/logic-map route), so it carries an
+# explicit href and no `file`.
+_DOC_REGISTRY = [
+    {
+        "group": "How Wingman works",
+        "blurb": "The technical source of truth — the pipeline that fills the catalog and the app students use.",
+        "docs": [
+            {"slug": "control-room", "title": "Catalog Control Room", "icon": "\U0001F5FA️",
+             "href": "/admin/logic-map",
+             "desc": "Operator field guide: how to bring in new opportunities and keep the live ones accurate — without spending money you didn't mean to."},
+            {"slug": "scraper", "title": "Scraper Logic Map", "icon": "\U0001F52D",
+             "file": "scraper_logic_map.html",
+             "desc": "The discovery pipeline end to end — search angles, the free router, walk-up hubs, hub mining, name harvest, and the per-candidate discovery gate."},
+            {"slug": "dedupe", "title": "Opportunity Dedupe Flow", "icon": "\U0001F500",
+             "file": "dedupe_flow.html",
+             "desc": "How every candidate is checked against the whole catalog — the free URL/name track, the paid embedding track, and the one verdict written per row."},
+            {"slug": "app", "title": "How the Wingman app works", "icon": "\U0001F9ED",
+             "file": "app_architecture.html",
+             "desc": "The student-facing product and its backend — serving, auth, subscription, the AI flow, profile chat, matching, tracker, deadlines and lifecycle email."},
+        ],
+    },
+    {
+        "group": "Go to market",
+        "blurb": "How Wingman reaches students and converts — strategy, not code. Internal drafts.",
+        "docs": [
+            {"slug": "launch", "title": "Launch Plan", "icon": "\U0001F6EB",
+             "file": "launch_plan.html",
+             "desc": "The go-to-market plan — the honest starting line, who pays, channels ranked by fit, the four launch phases, growth loops, metrics and risks."},
+            {"slug": "seo", "title": "SEO Page Sketches", "icon": "\U0001F50D",
+             "file": "seo_sketches.html",
+             "desc": "Three programmatic-SEO page templates — program page, category hub, comparison/question — each filled from the opportunities catalog."},
+        ],
+    },
+]
+
+_DOC_BY_SLUG = {d["slug"]: d for g in _DOC_REGISTRY for d in g["docs"]}
+
+
+def get_doc_html(slug):
+    """Serve one internal doc by slug, read fresh from disk on each request so an edit shows on
+    reload with no restart. Returns None for an unknown slug or a doc with no file (the
+    control-room doc has its own /admin/logic-map route), so the router can 404."""
+    doc = _DOC_BY_SLUG.get(slug)
+    if not doc or not doc.get("file"):
+        return None
+    path = os.path.join(DOCS_DIR, doc["file"])
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    return None
+
+
+def get_docs_hub_html():
+    """The /docs landing page: a card per internal doc, grouped, generated from _DOC_REGISTRY so
+    adding a doc is one entry + one file. Standalone, theme-aware, styled to sit beside the docs
+    it links to. Missing files are shown greyed rather than as dead links, so a not-yet-built
+    doc reads as 'coming' instead of a 404."""
+    def esc(s):
+        return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+    groups_html = []
+    for g in _DOC_REGISTRY:
+        cards = []
+        for d in g["docs"]:
+            href = d.get("href") or f"/docs/{d['slug']}"
+            present = bool(d.get("href")) or (
+                d.get("file") and os.path.exists(os.path.join(DOCS_DIR, d["file"])))
+            missing_cls = "" if present else " missing"
+            tag = "" if present else '<span class="soon">not built yet</span>'
+            open_attr = 'target="_blank" rel="noopener"' if present else 'aria-disabled="true"'
+            el = "a" if present else "div"
+            icon = d.get("icon") or "\U0001F4C4"
+            cards.append(
+                f'<{el} class="doc{missing_cls}" '
+                + (f'href="{href}" {open_attr}' if present else "")
+                + f'><div class="ic">{icon}</div>'
+                f'<div class="body"><div class="t">{esc(d["title"])}{tag}</div>'
+                f'<div class="d">{esc(d["desc"])}</div></div></{el}>')
+        groups_html.append(
+            f'<section class="group"><h2>{esc(g["group"])}</h2>'
+            f'<p class="gb">{esc(g.get("blurb", ""))}</p>'
+            f'<div class="cards">{"".join(cards)}</div></section>')
+
+    body = "".join(groups_html)
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wingman Docs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{{ --bg:#F6F4EE; --surface:#FFFFFF; --surface-2:#EFECE2; --ink:#1E2530; --ink-soft:#57616F;
+    --line:#DAD5C8; --accent:#2B5C82; --accent-soft:#DCE7EE;
+    --shadow:0 1px 2px rgba(30,37,48,.06),0 8px 24px rgba(30,37,48,.06); }}
+  @media (prefers-color-scheme:dark){{ :root:not([data-theme="light"]){{
+    --bg:#12161C; --surface:#1A2029; --surface-2:#212833; --ink:#E8E5DD; --ink-soft:#A6ADB8;
+    --line:#2B323C; --accent:#7FB2D9; --accent-soft:#20303D;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px rgba(0,0,0,.35); }} }}
+  :root[data-theme="dark"]{{ --bg:#12161C; --surface:#1A2029; --surface-2:#212833; --ink:#E8E5DD;
+    --ink-soft:#A6ADB8; --line:#2B323C; --accent:#7FB2D9; --accent-soft:#20303D;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 28px rgba(0,0,0,.35); }}
+  *{{ box-sizing:border-box; }}
+  body{{ margin:0; background:var(--bg); color:var(--ink);
+    font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; line-height:1.55;
+    -webkit-font-smoothing:antialiased; }}
+  .wrap{{ max-width:960px; margin:0 auto; padding:44px 24px 90px; }}
+  header{{ border-bottom:1px solid var(--line); padding-bottom:22px; margin-bottom:8px; }}
+  .eyebrow{{ font-family:"IBM Plex Mono",monospace; font-size:12px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--accent); margin:0 0 10px; }}
+  h1{{ font-family:"Source Serif 4",Georgia,serif; font-weight:600; font-size:clamp(28px,5vw,40px);
+    line-height:1.08; letter-spacing:-.01em; margin:0 0 12px; }}
+  .lede{{ font-size:16.5px; color:var(--ink-soft); margin:0; max-width:66ch;
+    font-family:"Source Serif 4",Georgia,serif; }}
+  .back{{ display:inline-block; margin-top:18px; font-size:13px; color:var(--accent);
+    text-decoration:none; font-weight:500; }}
+  .back:hover{{ text-decoration:underline; }}
+  .group{{ margin-top:40px; }}
+  .group h2{{ font-family:"Source Serif 4",Georgia,serif; font-size:22px; font-weight:600; margin:0 0 3px; }}
+  .gb{{ color:var(--ink-soft); font-size:14px; margin:0 0 16px; max-width:70ch; }}
+  .cards{{ display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; }}
+  .doc{{ display:flex; gap:14px; align-items:flex-start; background:var(--surface);
+    border:1px solid var(--line); border-radius:10px; padding:16px 18px; text-decoration:none;
+    color:inherit; box-shadow:var(--shadow); transition:transform .13s ease, border-color .13s ease; }}
+  a.doc:hover{{ transform:translateY(-2px); border-color:var(--accent); }}
+  .doc.missing{{ opacity:.55; box-shadow:none; }}
+  .doc .ic{{ font-size:22px; line-height:1; flex:none; margin-top:1px; }}
+  .doc .t{{ font-weight:600; font-size:15.5px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
+  .doc .d{{ font-size:13px; color:var(--ink-soft); margin-top:4px; }}
+  .soon{{ font-family:"IBM Plex Mono",monospace; font-size:9.5px; letter-spacing:.06em;
+    text-transform:uppercase; color:var(--ink-soft); background:var(--surface-2);
+    border:1px solid var(--line); padding:2px 6px; border-radius:5px; font-weight:500; }}
+  footer{{ margin-top:52px; padding-top:18px; border-top:1px solid var(--line);
+    font-size:12px; color:var(--ink-soft); font-family:"IBM Plex Mono",monospace; }}
+</style></head><body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Highschool Wingman &middot; Admin Console</p>
+    <h1>Docs</h1>
+    <p class="lede">The living source of truth for how Wingman works &mdash; the catalog pipeline,
+      the student app, and the plan to launch it. Each opens in a new tab and is served straight
+      from the repo, so it is always the latest version. Internal &mdash; localhost only.</p>
+    <a class="back" href="/admin">&larr; Back to the console</a>
+  </header>
+  {body}
+  <footer>Served from ops/docs/ &middot; localhost-gated &middot; never public</footer>
+</div></body></html>"""
+
+
 def mark_agent_running(agent_name):
     with _agent_runs_lock:
         _agent_runs[agent_name] = {

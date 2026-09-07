@@ -43,7 +43,13 @@ def require_local(request: Request):
 #
 # /evals/data is deliberately NOT here: nothing navigates to it (the hub embeds the same
 # payload), so it is tooling, and tooling can send a header.
-_TOKENLESS_PAGES = frozenset({"/admin", "/admin/logic-map", "/evals", "/evals/scorecard"})
+_TOKENLESS_PAGES = frozenset({"/admin", "/admin/logic-map", "/evals", "/evals/scorecard", "/docs"})
+
+# The internal docs hub and each doc page (/docs/<slug>) are browser-navigable shells like the
+# pages above — a navigation cannot carry a header, and they hold no credential and no user data
+# (they are the "how it works" source-of-truth pages, localhost-gated like everything else). The
+# hub is exact-matched above; the per-doc pages match by this prefix.
+_TOKENLESS_PREFIXES = ("/docs/",)
 
 
 def require_ops_token(request: Request):
@@ -58,7 +64,7 @@ def require_ops_token(request: Request):
     and test email sends to arbitrary addresses — an unset secret must never read as
     "no check needed". `python server.py` mints and prints one for local dev.
     """
-    if request.url.path in _TOKENLESS_PAGES:
+    if request.url.path in _TOKENLESS_PAGES or request.url.path.startswith(_TOKENLESS_PREFIXES):
         return
     if not WINGMAN_OPS_TOKEN:
         raise HTTPException(status_code=503,
@@ -129,6 +135,29 @@ def handle_evals_scorecard(request: Request):
     run is reachable from the hub; no param serves the canonical latest. Moved off the external
     Claude artifact link so it lives with the code and is served from the ops console."""
     html = core.get_scorecard_html(request.query_params.get("run"))
+    return Response(content=html.encode(), media_type="text/html; charset=utf-8")
+
+
+# ---------------- Docs hub ----------------
+
+@router.get("/docs")
+def handle_docs_hub():
+    """The internal documentation hub: a card per source-of-truth page, grouped (how Wingman
+    works / go to market). Localhost-only like every route here; the admin topbar links to it.
+    The docs it lists are internal (pipeline internals, launch strategy) and are served ONLY
+    through this gated console, never from public/."""
+    html = core.get_docs_hub_html()
+    return Response(content=html.encode(), media_type="text/html; charset=utf-8")
+
+
+@router.get("/docs/{slug}")
+def handle_doc(slug: str):
+    """Serve one internal doc (ops/docs/<file>.html) by its registry slug, read fresh from disk.
+    The control-room doc is served by /admin/logic-map instead, so its slug 404s here and the
+    hub links straight to that route."""
+    html = core.get_doc_html(slug)
+    if html is None:
+        raise HTTPException(status_code=404, detail="Unknown doc.")
     return Response(content=html.encode(), media_type="text/html; charset=utf-8")
 
 

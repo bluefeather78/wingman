@@ -1,0 +1,316 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found]){display:none!important}</style></head><body>
+<title>Wingman SEO Page Sketches</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap">
+<style>
+  :root {
+    --ink: #141d33;
+    --ink-soft: #33405c;
+    --paper: #eceef1;
+    --surface: #ffffff;
+    --surface-2: #f1f3f6;
+    --line: #dde1e8;
+    --line-strong: #c6ccd6;
+    --muted: #616a7c;
+    --marigold: #d9860a;
+    --marigold-wash: #fbf0da;
+    --teal: #0f9e8f;
+    --teal-wash: #e2f4f1;
+    --coral: #db4032;
+    --chrome: #e3e6eb;
+    --note: #6b4bd6;
+    --note-wash: #efeafc;
+    --r: 12px;
+    --shadow: 0 2px 6px rgba(20,29,51,.07), 0 18px 44px rgba(20,29,51,.10);
+    --f-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+    --f-body: "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif;
+    --f-mono: "Space Mono", ui-monospace, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #eef1f6; --ink-soft: #c3cbdb; --paper: #0b111b; --surface: #151e2d;
+      --surface-2: #1d2740; --line: #29344a; --line-strong: #3a4761; --muted: #909db4;
+      --marigold: #f3ab3c; --marigold-wash: #2c2413; --teal: #3ecabb; --teal-wash: #113230;
+      --coral: #f0685b; --chrome: #1d2740; --note: #a992f5; --note-wash: #221a3a;
+      --shadow: 0 2px 6px rgba(0,0,0,.35), 0 18px 44px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #eef1f6; --ink-soft: #c3cbdb; --paper: #0b111b; --surface: #151e2d;
+    --surface-2: #1d2740; --line: #29344a; --line-strong: #3a4761; --muted: #909db4;
+    --marigold: #f3ab3c; --marigold-wash: #2c2413; --teal: #3ecabb; --teal-wash: #113230;
+    --coral: #f0685b; --chrome: #1d2740; --note: #a992f5; --note-wash: #221a3a;
+    --shadow: 0 2px 6px rgba(0,0,0,.35), 0 18px 44px rgba(0,0,0,.45);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--f-body); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 22px; }
+
+  h1,h2,h3,h4 { font-family: var(--f-display); text-wrap: balance; }
+  .eyebrow { font-family: var(--f-mono); font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+
+  /* page intro */
+  header.top { padding: 48px 0 8px; }
+  header.top h1 { font-size: clamp(30px, 5vw, 46px); font-weight: 700; letter-spacing: -.025em; margin: 14px 0 12px; }
+  header.top h1 em { font-style: normal; color: var(--marigold); }
+  header.top p { max-width: 68ch; color: var(--ink-soft); font-size: 16.5px; margin: 0; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 22px; font-size: 12.5px; color: var(--muted); align-items: center; }
+  .legend .k { display: inline-flex; align-items: center; gap: 7px; }
+  .legend .swatch { width: 22px; height: 0; border-top: 2px dashed var(--note); }
+  .legend .chipk { font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; background: var(--note-wash); color: var(--note); padding: 3px 7px; border-radius: 5px; font-weight: 700; }
+
+  /* layer block */
+  .layer { padding: 40px 0; }
+  .layer-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; }
+  .layer-head .lno { font-family: var(--f-mono); font-weight: 700; font-size: 13px; color: var(--marigold); background: var(--marigold-wash); padding: 4px 10px; border-radius: 6px; letter-spacing: .06em; }
+  .layer-head h2 { font-size: clamp(20px, 3vw, 26px); font-weight: 600; letter-spacing: -.02em; margin: 0; }
+  .layer-sub { color: var(--ink-soft); font-size: 15px; margin: 0 0 22px; max-width: 74ch; }
+  .layer-sub b { color: var(--ink); }
+
+  /* browser frame */
+  .browser { background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden; }
+  .bar { background: var(--chrome); border-bottom: 1px solid var(--line-strong); padding: 11px 14px; display: flex; align-items: center; gap: 12px; }
+  .dots { display: flex; gap: 6px; }
+  .dots i { width: 11px; height: 11px; border-radius: 50%; display: block; background: var(--line-strong); }
+  .url { flex: 1; background: var(--surface); border: 1px solid var(--line); border-radius: 100px; padding: 6px 14px; font-family: var(--f-mono); font-size: 12.5px; color: var(--ink-soft); display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .url .lock { color: var(--teal); flex: none; }
+  .url .path { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .url .path b { color: var(--ink); }
+
+  /* meta tag readout */
+  .metatag { background: var(--surface-2); border-bottom: 1px solid var(--line); padding: 10px 20px; font-family: var(--f-mono); font-size: 11.5px; color: var(--muted); display: flex; gap: 10px; align-items: baseline; }
+  .metatag .lab { color: var(--note); font-weight: 700; flex: none; }
+  .metatag .val { color: var(--ink-soft); }
+
+  .viewport { padding: 26px 30px 30px; }
+
+  /* site nav inside mock */
+  .sitenav { display: flex; align-items: center; gap: 10px; padding-bottom: 20px; border-bottom: 1px solid var(--line); margin-bottom: 22px; }
+  .sitenav .brand { font-family: var(--f-display); font-weight: 700; font-size: 14px; display: inline-flex; align-items: center; gap: 7px; }
+  .sitenav .brand .d { width: 10px; height: 10px; background: var(--marigold); transform: rotate(45deg); border-radius: 2px; }
+  .sitenav .sp { flex: 1; }
+  .sitenav .cta-mini { font-size: 12.5px; font-weight: 600; background: var(--ink); color: var(--paper); padding: 7px 14px; border-radius: 8px; }
+  .crumbs { font-family: var(--f-mono); font-size: 11.5px; color: var(--muted); margin-bottom: 12px; }
+  .crumbs a { color: var(--muted); text-decoration: none; }
+
+  .anno { position: relative; }
+  .chip { font-family: var(--f-mono); font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; background: var(--note-wash); color: var(--note); padding: 2px 7px; border-radius: 5px; font-weight: 700; vertical-align: middle; white-space: nowrap; }
+
+  h3.pageh1 { font-size: 26px; font-weight: 700; letter-spacing: -.02em; margin: 6px 0 6px; line-height: 1.2; }
+  .sub { color: var(--ink-soft); font-size: 15px; margin: 0 0 20px; }
+
+  /* fact row */
+  .facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0 0 22px; }
+  .facts .f { border: 1px solid var(--line); border-radius: 9px; padding: 12px 13px; background: var(--surface); }
+  .facts .fl { font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .facts .fv { font-family: var(--f-display); font-weight: 600; font-size: 16px; margin-top: 4px; }
+  .facts .fv .est { font-family: var(--f-mono); font-size: 10px; color: var(--marigold); font-weight: 700; }
+  .verified { color: var(--teal); font-family: var(--f-mono); font-size: 10px; font-weight: 700; }
+
+  .body-copy { font-size: 14.5px; color: var(--ink-soft); max-width: 70ch; }
+  .body-copy h4 { font-size: 15px; color: var(--ink); margin: 22px 0 8px; }
+  .checklist { list-style: none; padding: 0; margin: 10px 0 0; display: flex; flex-direction: column; gap: 9px; }
+  .checklist li { display: grid; grid-template-columns: 20px 1fr; gap: 11px; align-items: start; font-size: 14px; color: var(--ink); }
+  .checklist .bx { width: 16px; height: 16px; border: 2px solid var(--line-strong); border-radius: 4px; margin-top: 2px; }
+  .checklist small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+  /* conversion band */
+  .conv { margin-top: 24px; background: var(--ink); border-radius: 11px; padding: 20px 22px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  .conv .txt { color: #eef1f6; flex: 1; min-width: 200px; }
+  .conv .txt b { font-family: var(--f-display); font-size: 16px; display: block; margin-bottom: 2px; color: #fff; }
+  .conv .txt span { font-size: 13px; color: #aeb8cc; }
+  .conv .btn { background: var(--marigold); color: #1a1205; font-weight: 700; font-family: var(--f-display); font-size: 14px; padding: 12px 20px; border-radius: 9px; white-space: nowrap; }
+
+  /* hub grid */
+  .hubgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 6px; }
+  .prog { border: 1px solid var(--line); border-radius: 10px; padding: 14px; background: var(--surface); display: flex; flex-direction: column; gap: 6px; text-decoration: none; }
+  .prog .pn { font-family: var(--f-display); font-weight: 600; font-size: 14.5px; color: var(--marigold); }
+  .prog .pmeta { font-size: 12px; color: var(--muted); }
+  .prog .ptags { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 4px; }
+  .prog .t { font-size: 10px; font-family: var(--f-mono); background: var(--surface-2); color: var(--ink-soft); padding: 2px 7px; border-radius: 5px; }
+  .internal-note { text-align: center; font-family: var(--f-mono); font-size: 11px; color: var(--note); margin-top: 8px; }
+
+  /* comparison table */
+  .cmp { width: 100%; border-collapse: collapse; margin-top: 4px; font-size: 13.5px; }
+  .cmp th, .cmp td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .cmp thead th { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+  .cmp thead th:first-child { color: transparent; }
+  .cmp td.rowlab { font-weight: 600; color: var(--ink); font-family: var(--f-display); font-size: 13px; }
+  .cmp .col-a { color: var(--ink); } .cmp .col-b { color: var(--ink); }
+  .cmp tbody tr:hover { background: var(--surface-2); }
+  .verdict { margin-top: 16px; background: var(--teal-wash); border-left: 3px solid var(--teal); border-radius: 0 9px 9px 0; padding: 14px 16px; font-size: 14px; color: var(--ink); }
+  .verdict b { font-family: var(--f-display); }
+
+  /* why-it-ranks caption */
+  .ranks { margin-top: 16px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .ranks .r { background: var(--note-wash); border-radius: 9px; padding: 13px 14px; }
+  .ranks .r .rl { font-family: var(--f-mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--note); font-weight: 700; margin-bottom: 5px; }
+  .ranks .r p { margin: 0; font-size: 12.8px; color: var(--ink-soft); }
+
+  footer { padding: 34px 0 60px; color: var(--muted); font-size: 12.5px; font-family: var(--f-mono); text-align: center; }
+
+  @media (max-width: 760px) {
+    .facts, .hubgrid, .ranks { grid-template-columns: 1fr 1fr; }
+    .viewport { padding: 20px 16px 22px; }
+    .metatag { flex-direction: column; gap: 3px; }
+    .cmp { font-size: 12.5px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header class="top wrap">
+  <span class="eyebrow">Highschool Wingman · SEO page sketches</span>
+  <h1>Three page templates, <em>one catalog behind them.</em></h1>
+  <p>Each layer is a template you build once and fill from the <span style="font-family:var(--f-mono);font-size:13px;">opportunities</span> table you already maintain. Below is a realistic mock of one page per layer, with the search-engine details called out in purple. Program data shown is illustrative — in production every value is a catalog field.</p>
+  <div class="legend">
+    <span class="k"><span class="chipk">SEO</span> = an element that helps the page rank or convert</span>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- LAYER 1 -->
+  <section class="layer">
+    <div class="layer-head"><span class="lno">LAYER 1</span><h2>Program page — one per catalog row</h2></div>
+    <p class="layer-sub">Generated for all 1,200+ opportunities. Targets the long tail: someone searching the <b>exact program name</b>. Highest volume, lowest competition, and it grows automatically as the agents add rows.</p>
+
+    <div class="browser">
+      <div class="bar">
+        <span class="dots"><i></i><i></i><i></i></span>
+        <span class="url"><span class="lock">🔒</span><span class="path">highschoolwingman.com<b>/opportunities/mit-primes</b></span></span>
+      </div>
+      <div class="metatag"><span class="lab">&lt;title&gt;</span><span class="val">MIT PRIMES — Deadline, Eligibility &amp; How to Apply (2027) | Highschool Wingman</span></div>
+      <div class="metatag"><span class="lab">schema.org</span><span class="val">EducationalOccupationalProgram + Event · applicationDeadline: 2026-12-01 · offers: free</span></div>
+      <div class="viewport">
+        <div class="sitenav"><span class="brand"><span class="d"></span>Wingman</span><span class="sp"></span><span class="cta-mini">Start free</span></div>
+        <div class="crumbs"><a href="#">Opportunities</a> › <a href="#">Research programs</a> › MIT PRIMES</div>
+
+        <h3 class="pageh1">MIT PRIMES <span class="chip">SEO · H1 = the search query</span></h3>
+        <p class="sub">A free, year-long research program in mathematics, computer science and computational biology for high schoolers near Boston.</p>
+
+        <div class="facts">
+          <div class="f"><div class="fl">Deadline</div><div class="fv">Dec 1, 2026 <span class="verified">✓ verified</span></div></div>
+          <div class="f"><div class="fl">Cost</div><div class="fv">Free</div></div>
+          <div class="f"><div class="fl">Eligibility</div><div class="fv">Grades 9–12</div></div>
+          <div class="f"><div class="fl">Format</div><div class="fv">Research · Boston</div></div>
+        </div>
+
+        <div class="body-copy">
+          <p>PRIMES pairs students with MIT researchers on a real, year-long project. Admission is competitive and turns heavily on the entrance problem set.</p>
+          <h4>How to apply <span class="chip">SEO · matches "how to apply"</span></h4>
+          <ul class="checklist">
+            <li><span class="bx"></span><div>Solve the PRIMES entrance problem set <small>From the program page — verified, not invented</small></div></li>
+            <li><span class="bx"></span><div>Submit the online application with your problem-set solutions</div></li>
+            <li><span class="bx"></span><div>Provide a teacher recommendation</div></li>
+          </ul>
+        </div>
+
+        <div class="conv">
+          <div class="txt"><b>Don't miss the Dec 1 deadline.</b><span>Track this program free — Wingman reminds you and syncs it to your calendar.</span></div>
+          <span class="btn">Track this deadline →</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ranks">
+      <div class="r"><div class="rl">Why it ranks</div><p>The H1, title and URL all match the query "MIT PRIMES." Almost nobody else writes a clean, current page for each program name.</p></div>
+      <div class="r"><div class="rl">Why it's fresh</div><p>The deadline is a live catalog field the agents keep verified — so the page never goes stale, which Google rewards.</p></div>
+      <div class="r"><div class="rl">Why it converts</div><p>The one thing the searcher fears — missing the deadline — is exactly what the CTA solves. Track it free → sign up.</p></div>
+    </div>
+  </section>
+
+  <!-- LAYER 2 -->
+  <section class="layer">
+    <div class="layer-head"><span class="lno">LAYER 2</span><h2>Hub page — one per category</h2></div>
+    <p class="layer-sub">A curated collection that ranks for the <b>fat head keyword</b> ("free STEM summer programs") and links <b>down</b> to dozens of Layer-1 pages. Hubs win broad searches; the internal links pass authority to the program pages.</p>
+
+    <div class="browser">
+      <div class="bar">
+        <span class="dots"><i></i><i></i><i></i></span>
+        <span class="url"><span class="lock">🔒</span><span class="path">highschoolwingman.com<b>/free-stem-summer-programs-for-high-schoolers</b></span></span>
+      </div>
+      <div class="metatag"><span class="lab">&lt;title&gt;</span><span class="val">37 Free STEM Summer Programs for High Schoolers (2027 Deadlines) | Highschool Wingman</span></div>
+      <div class="metatag"><span class="lab">schema.org</span><span class="val">ItemList + Breadcrumb · 37 listElement entries linking to each program page</span></div>
+      <div class="viewport">
+        <div class="sitenav"><span class="brand"><span class="d"></span>Wingman</span><span class="sp"></span><span class="cta-mini">Start free</span></div>
+        <div class="crumbs"><a href="#">Opportunities</a> › Free STEM summer programs</div>
+
+        <h3 class="pageh1">Free STEM summer programs for high schoolers <span class="chip">SEO · high-volume head term</span></h3>
+        <p class="sub">37 fully-funded programs with 2027 deadlines, updated weekly. Sorted by deadline so you apply to the soonest first.</p>
+
+        <div class="hubgrid">
+          <a class="prog" href="#"><span class="pn">MIT PRIMES</span><span class="pmeta">Deadline Dec 1 · Free</span><span class="ptags"><span class="t">Research</span><span class="t">Math/CS</span></span></a>
+          <a class="prog" href="#"><span class="pn">RSI (MIT)</span><span class="pmeta">Deadline Jan 11 · Free</span><span class="ptags"><span class="t">Research</span><span class="t">Selective</span></span></a>
+          <a class="prog" href="#"><span class="pn">Simons Summer Research</span><span class="pmeta">Deadline Feb 6 · Stipend</span><span class="ptags"><span class="t">Research</span><span class="t">Lab</span></span></a>
+          <a class="prog" href="#"><span class="pn">SSP (Summer Science)</span><span class="pmeta">Deadline Feb 15 · Aid</span><span class="ptags"><span class="t">Residential</span></span></a>
+          <a class="prog" href="#"><span class="pn">Clark Scholars</span><span class="pmeta">Deadline Dec 20 · Stipend</span><span class="ptags"><span class="t">Research</span></span></a>
+          <a class="prog" href="#"><span class="pn">Garcia Program</span><span class="pmeta">Deadline Feb 14 · Free</span><span class="ptags"><span class="t">Materials sci</span></span></a>
+        </div>
+        <p class="internal-note">↑ each card links to its Layer-1 program page — 31 more below</p>
+
+        <div class="conv">
+          <div class="txt"><b>Track every deadline in one place.</b><span>Save the programs you like and Wingman handles the reminders and calendar sync.</span></div>
+          <span class="btn">Build my shortlist →</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ranks">
+      <div class="r"><div class="rl">Why it ranks</div><p>"Free STEM summer programs" is searched far more than any single program. A comprehensive, current list is what Google wants to show for it.</p></div>
+      <div class="r"><div class="rl">Why it lifts the others</div><p>Internal links from a strong hub pass authority down to every program page, helping the whole set rank — a compounding structure.</p></div>
+      <div class="r"><div class="rl">Why it converts</div><p>A student with 37 deadlines to juggle is the exact person who needs a tracker. The list creates the problem; the CTA solves it.</p></div>
+    </div>
+  </section>
+
+  <!-- LAYER 3 -->
+  <section class="layer">
+    <div class="layer-head"><span class="lno">LAYER 3</span><h2>Comparison &amp; question page</h2></div>
+    <p class="layer-sub">Targets the <b>exact phrasings</b> students type when deciding — "X vs Y", "is X worth it", "X acceptance rate." Extremely high intent, and it's where you show judgment a static list can't.</p>
+
+    <div class="browser">
+      <div class="bar">
+        <span class="dots"><i></i><i></i><i></i></span>
+        <span class="url"><span class="lock">🔒</span><span class="path">highschoolwingman.com<b>/compare/rsi-vs-mit-primes</b></span></span>
+      </div>
+      <div class="metatag"><span class="lab">&lt;title&gt;</span><span class="val">RSI vs. MIT PRIMES: Which Research Program Should You Apply To? (2027)</span></div>
+      <div class="metatag"><span class="lab">schema.org</span><span class="val">FAQPage · "Is RSI harder to get into than PRIMES?" + 3 more Q&amp;A</span></div>
+      <div class="viewport">
+        <div class="sitenav"><span class="brand"><span class="d"></span>Wingman</span><span class="sp"></span><span class="cta-mini">Start free</span></div>
+        <div class="crumbs"><a href="#">Compare</a> › RSI vs MIT PRIMES</div>
+
+        <h3 class="pageh1">RSI vs. MIT PRIMES <span class="chip">SEO · matches "rsi vs primes"</span></h3>
+        <p class="sub">Both are elite, free MIT research programs — but they suit different students. Here's the honest breakdown.</p>
+
+        <table class="cmp">
+          <thead><tr><th></th><th>RSI</th><th>MIT PRIMES</th></tr></thead>
+          <tbody>
+            <tr><td class="rowlab">Format</td><td class="col-a">6 weeks, residential summer</td><td class="col-b">Year-long, remote/local</td></tr>
+            <tr><td class="rowlab">Selectivity</td><td class="col-a">~5% — one of the most selective</td><td class="col-b">Competitive, problem-set driven</td></tr>
+            <tr><td class="rowlab">Deadline</td><td class="col-a">Jan 11, 2027 <span class="verified">✓</span></td><td class="col-b">Dec 1, 2026 <span class="verified">✓</span></td></tr>
+            <tr><td class="rowlab">Best for</td><td class="col-a">Students wanting an intensive summer</td><td class="col-b">Students near Boston wanting depth over a year</td></tr>
+          </tbody>
+        </table>
+
+        <div class="verdict"><b>Short answer:</b> apply to both — the deadlines don't clash. PRIMES rewards sustained work over a year; RSI is a sprint. Location and format are the deciding factors, not prestige.</div>
+
+        <div class="conv">
+          <div class="txt"><b>Applying to both? Track both deadlines.</b><span>Wingman keeps the Dec 1 and Jan 11 dates straight so neither slips.</span></div>
+          <span class="btn">Track both free →</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ranks">
+      <div class="r"><div class="rl">Why it ranks</div><p>"RSI vs PRIMES" has near-zero competition and a searcher who is decided on the category and just picking. Pure high-intent traffic.</p></div>
+      <div class="r"><div class="rl">Why it's credible</div><p>An honest verdict — including "apply to both" — earns trust and links, which is what actually moves these pages up over time.</p></div>
+      <div class="r"><div class="rl">Why it converts</div><p>The answer ("apply to both") naturally creates two deadlines to track — the CTA is the logical next click, not a bolt-on.</p></div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="wrap">Illustrative template fills · production values come from the opportunities catalog</footer>
+
+</body></html>

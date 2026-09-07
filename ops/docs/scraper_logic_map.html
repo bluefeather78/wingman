@@ -1,0 +1,650 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}</style></head><body>
+<title>Scraper Logic Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<style>
+  :root{
+    --bg:#f5f7f9; --surface:#ffffff; --ink:#16202e; --muted:#586573; --faint:#8a94a2;
+    --line:#e2e7ec; --accent:#0e7490; --accent-soft:#cff0f4;
+    --prod-t:#15803d; --prod-b:#86efac; --prod-f:#e7f8ee;
+    --built-t:#b45309; --built-b:#fcd34d; --built-f:#fdf4de;
+    --pin-t:#6d28d9;  --pin-b:#c4b5fd;  --pin-f:#f3efff;
+    --todo-t:#5b6675; --todo-b:#c3ccd6; --todo-f:#eef1f4;
+    --free-t:#0f766e; --free-b:#99e6dd; --free-f:#e6f7f5;
+    --paid-t:#9f1239; --paid-b:#fbb6c8; --paid-f:#fdf0f4;
+    --figure:#f8fafc;   /* diagram paper — light in BOTH themes, see below */
+    --inset:#f2f5f8;
+  }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+    --bg:#0d1219; --surface:#141c26; --ink:#e8edf3; --muted:#9aa6b4; --faint:#6b7686;
+    --line:#243040; --accent:#22d3ee; --accent-soft:#12333c;
+    --prod-t:#7ee2a8; --prod-b:#2f7048; --prod-f:#12271b;
+    --built-t:#f4c14e; --built-b:#6f5417; --built-f:#2a2109;
+    --pin-t:#c4b5fd;  --pin-b:#4c3a80;  --pin-f:#1f1936;
+    --todo-t:#9aa6b4; --todo-b:#3a4656; --todo-f:#1a2330;
+    --free-t:#6ee7d7; --free-b:#155e56; --free-f:#0c2622;
+    --paid-t:#fda4bd; --paid-b:#7a1733; --paid-f:#2a0e17;
+    /* --figure is deliberately NOT redefined: the diagram is a fixed-colour SVG,
+       so its panel keeps its light paper ground on a dark page. */
+    --inset:#0d151d;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#0d1219; --surface:#141c26; --ink:#e8edf3; --muted:#9aa6b4; --faint:#6b7686;
+    --line:#243040; --accent:#22d3ee; --accent-soft:#12333c;
+    --prod-t:#7ee2a8; --prod-b:#2f7048; --prod-f:#12271b;
+    --built-t:#f4c14e; --built-b:#6f5417; --built-f:#2a2109;
+    --pin-t:#c4b5fd;  --pin-b:#4c3a80;  --pin-f:#1f1936;
+    --todo-t:#9aa6b4; --todo-b:#3a4656; --todo-f:#1a2330;
+    --free-t:#6ee7d7; --free-b:#155e56; --free-f:#0c2622;
+    --paid-t:#fda4bd; --paid-b:#7a1733; --paid-f:#2a0e17;
+    --inset:#0d151d;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height:1.55; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:980px; margin:0 auto; padding:48px 24px 80px}
+  header{border-bottom:1px solid var(--line); padding-bottom:22px; margin-bottom:26px}
+  .eyebrow{font-family:"IBM Plex Mono", monospace; font-size:12px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--accent); margin:0 0 10px}
+  h1{font-family:"Bricolage Grotesque", sans-serif; font-weight:700; font-size:clamp(30px,5vw,44px);
+    line-height:1.05; letter-spacing:-.02em; margin:0 0 12px; text-wrap:balance}
+  .lede{font-size:16.5px; color:var(--muted); margin:0; max-width:66ch}
+
+  .legend{display:flex; flex-wrap:wrap; gap:9px; margin:22px 0 4px; align-items:center}
+  .legend .sep{width:1px; height:20px; background:var(--line); margin:0 4px}
+  .chip{display:inline-flex; align-items:center; gap:8px; font-size:12.5px; font-weight:500;
+    padding:5px 11px 5px 9px; border-radius:999px; border:1px solid var(--line); background:var(--surface)}
+  .dot{width:11px; height:11px; border-radius:3px; flex:none}
+  .dot.prod{background:var(--prod-f); border:1.5px solid var(--prod-b)}
+  .dot.built{background:var(--built-f); border:1.5px solid var(--built-b)}
+  .dot.pin{background:var(--pin-f); border:1.5px dashed var(--pin-b)}
+  .dot.todo{background:var(--todo-f); border:1.5px dashed var(--todo-b)}
+
+  .cost{font-family:"IBM Plex Mono", monospace; font-size:10.5px; font-weight:500;
+    letter-spacing:.06em; padding:2px 7px; border-radius:4px; white-space:nowrap}
+  .cost.free{color:var(--free-t); background:var(--free-f); border:1px solid var(--free-b)}
+  .cost.paid{color:var(--paid-t); background:var(--paid-f); border:1px solid var(--paid-b)}
+
+  figure{margin:24px 0 38px}
+  .diagram{background:var(--figure); border:1px solid var(--line); border-radius:14px;
+    padding:18px 14px; overflow-x:auto; box-shadow:0 1px 2px rgba(20,30,45,.04)}
+  figcaption{font-size:13px; color:var(--faint); margin-top:12px; text-align:center; max-width:74ch;
+    margin-left:auto; margin-right:auto}
+
+  h2{font-family:"Bricolage Grotesque", sans-serif; font-weight:700; font-size:15px;
+    letter-spacing:.02em; margin:36px 0 4px; display:flex; align-items:center; gap:10px;
+    flex-wrap:wrap}
+  h2 .tag{font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:500; padding:3px 9px;
+    border-radius:999px; letter-spacing:.03em}
+  .tag.prod{color:var(--prod-t); background:var(--prod-f); border:1px solid var(--prod-b)}
+  .tag.built{color:var(--built-t); background:var(--built-f); border:1px solid var(--built-b)}
+  .tag.pin{color:var(--pin-t); background:var(--pin-f); border:1px dashed var(--pin-b)}
+  .tag.todo{color:var(--todo-t); background:var(--todo-f); border:1px dashed var(--todo-b)}
+  .grouphint{font-size:14px; color:var(--muted); margin:0 0 14px; max-width:74ch}
+
+  .rows{display:flex; flex-direction:column; gap:10px}
+  .box{padding:15px 18px; border-radius:11px; background:var(--surface); border:1px solid var(--line)}
+  .boxhead{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:3px}
+  .boxhead .name{font-weight:600; font-size:15.5px}
+  .boxhead .file{font-family:"IBM Plex Mono", monospace; font-size:11.5px; color:var(--accent)}
+  .box .what{font-size:14.5px; color:var(--muted); margin:2px 0 0}
+  .box .what b{color:var(--ink); font-weight:600}
+
+  .logic{margin-top:11px; padding:11px 14px; border-radius:8px; background:var(--inset);
+    border:1px solid var(--line)}
+  .logic .lbl{font-family:"IBM Plex Mono",monospace; font-size:10px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--faint); display:block; margin-bottom:7px}
+  .logic ol,.logic ul{margin:0; padding-left:19px}
+  .logic li{font-size:13.5px; color:var(--muted); margin-bottom:5px; line-height:1.5}
+  .logic li:last-child{margin-bottom:0}
+  .logic code{font-family:"IBM Plex Mono", monospace; font-size:12px; color:var(--ink)}
+  .logic b{color:var(--ink); font-weight:600}
+
+  table{width:100%; border-collapse:collapse; margin-top:12px; font-size:13.5px}
+  th,td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--line)}
+  th{font-family:"IBM Plex Mono",monospace; font-size:10.5px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--faint); font-weight:500}
+  td.num{text-align:right; font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums;
+    color:var(--ink)}
+  .tablewrap{overflow-x:auto}
+
+  .note{margin-top:34px; padding:16px 18px; border-radius:12px; background:var(--accent-soft);
+    border:1px solid color-mix(in srgb, var(--accent) 30%, transparent); font-size:14.5px}
+  .note b{color:var(--ink)}
+  footer{margin-top:40px; padding-top:18px; border-top:1px solid var(--line);
+    font-size:12.5px; color:var(--faint); font-family:"IBM Plex Mono", monospace}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Highschool Wingman · pipeline</p>
+    <h1>How the opportunity scraper works</h1>
+    <p class="lede">Four ways a page reaches the pipeline (one — the walk-up — retired 2026-09-07), a router that stops third-party pages being thrown away, and — new this session — a <b>per-candidate gate</b> that reads each page once, says what kind of page it is, fills the row's fields, and hunts for a duplicate the URL match can't see. Everything still ends at one human gate before a student sees anything. Each box shows the rules inside it, whether running it costs money, and where it is still blind.</p>
+  </header>
+
+  <div class="legend">
+    <span class="chip"><span class="dot prod"></span>Live &amp; producing rows</span>
+    <span class="chip"><span class="dot built"></span>Built, not yet run in a live scrape</span>
+    <span class="chip"><span class="dot pin"></span>Pinned — paused by decision</span>
+    <span class="chip"><span class="dot todo"></span>Not yet built</span>
+    <span class="sep"></span>
+    <span class="chip"><span class="cost free">FREE</span>plain HTTP / pure code</span>
+    <span class="chip"><span class="cost paid">PAID</span>spends on model calls</span>
+  </div>
+
+  <figure>
+    <div class="diagram">
+<svg viewBox="0 0 900 610" role="img" style="width:100%;min-width:700px;height:auto;font-family:'IBM Plex Sans',system-ui,sans-serif" aria-label="Search angles and the rejected review pile feed a free router, while walking up from a program already in the catalog goes straight to hub mining with nothing to classify. The router sends a page that links programs on other sites to hub mining, gives no verdict at all to a page that arrived with no links, and merely records a page that names programs without linking them. Name harvest is aimed by hand rather than fed by the router. Both extractors feed one verify-and-dedupe pipeline, then a hidden pending row, human review, and the live catalog. A learning loop feeds verdicts back.">
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="8" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#334155"/></marker>
+    <marker id="ahc" markerWidth="9" markerHeight="8" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#0e7490"/></marker>
+  </defs>
+
+  <text x="12" y="14" font-size="10.5" font-weight="700" letter-spacing=".06em" fill="#475569">① WHERE PAGES COME FROM</text>
+
+  <!-- sources -->
+  <g>
+    <rect x="12" y="24" width="212" height="62" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="118" y="45" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">Search angles</text>
+    <text x="118" y="60" text-anchor="middle" font-size="10.5" fill="#166534">you name a topic — two-phase</text>
+    <text x="118" y="73" text-anchor="middle" font-size="10.5" fill="#166534">search keeps the REAL page URLs</text>
+    <rect x="166" y="28" width="52" height="13" rx="3" fill="#fdf0f4" stroke="#fbb6c8"/>
+    <text x="192" y="38" text-anchor="middle" font-size="8.5" font-weight="700" fill="#9f1239">PAID</text>
+  </g>
+  <g>
+    <rect x="238" y="24" width="212" height="62" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="344" y="45" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">Your rejected pile</text>
+    <text x="344" y="60" text-anchor="middle" font-size="10.5" fill="#166534">reject one as a round-up and</text>
+    <text x="344" y="73" text-anchor="middle" font-size="10.5" fill="#166534">it routes itself — human-vetted</text>
+    <rect x="392" y="28" width="52" height="13" rx="3" fill="#e6f7f5" stroke="#99e6dd"/>
+    <text x="418" y="38" text-anchor="middle" font-size="8.5" font-weight="700" fill="#0f766e">FREE</text>
+  </g>
+  <g>
+    <rect x="464" y="24" width="200" height="62" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="564" y="45" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">Re-find a dead link</text>
+    <text x="564" y="60" text-anchor="middle" font-size="10.5" fill="#166534">a program whose page moved</text>
+    <text x="564" y="73" text-anchor="middle" font-size="10.5" fill="#166534">— one search, same site only</text>
+    <rect x="606" y="28" width="52" height="13" rx="3" fill="#fdf0f4" stroke="#fbb6c8"/>
+    <text x="632" y="38" text-anchor="middle" font-size="8.5" font-weight="700" fill="#9f1239">PAID</text>
+  </g>
+  <g>
+    <rect x="678" y="24" width="210" height="62" rx="9" fill="#eef1f4" stroke="#c3ccd6" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="783" y="45" text-anchor="middle" font-size="12.5" font-weight="700" fill="#5b6675" text-decoration="line-through">Walk up from the catalog</text>
+    <text x="783" y="60" text-anchor="middle" font-size="10.5" fill="#8a94a2">RETIRED 2026-09-07</text>
+    <text x="783" y="73" text-anchor="middle" font-size="10.5" fill="#8a94a2">now the classify pill's job</text>
+    <rect x="822" y="28" width="60" height="13" rx="3" fill="#eef1f4" stroke="#c3ccd6"/>
+    <text x="852" y="38" text-anchor="middle" font-size="8" font-weight="700" fill="#8a94a2">RETIRED</text>
+  </g>
+
+  <!-- search splits: program page straight down, third-party into router -->
+  <path d="M40,86 L40,324" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#ah)"/>
+  <rect x="8" y="150" width="112" height="13" fill="#f8fafc"/>
+  <text x="64" y="160" text-anchor="middle" font-size="9.5" font-weight="600" fill="#475569">the program's own page</text>
+  <path d="M175,86 L175,100" fill="none" stroke="#0e7490" stroke-width="1.6" marker-end="url(#ahc)"/>
+  <path d="M344,86 L344,100" fill="none" stroke="#0e7490" stroke-width="1.6" marker-end="url(#ahc)"/>
+  <rect x="222" y="92" width="132" height="13" fill="#f8fafc"/>
+  <text x="288" y="102" text-anchor="middle" font-size="9.5" font-weight="600" fill="#0e7490">everything else — kept, not binned</text>
+  <path d="M640,86 L640,324" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#ah)"/>
+
+  <!-- the catalog's own rows become hubs: straight to hub mining, never through the router -->
+  <path d="M783,86 L783,110 L130,110 L130,240 L196,240" fill="none" stroke="#c3ccd6"
+        stroke-width="1.5" stroke-dasharray="5 4"/>
+  <rect x="150" y="104" width="150" height="13" fill="#f8fafc"/>
+  <text x="225" y="114" text-anchor="middle" font-size="9.5" font-weight="600" fill="#8a94a2">former walk-up path (retired)</text>
+
+  <text x="330" y="122" font-size="10.5" font-weight="700" letter-spacing=".06em" fill="#475569">② THE ROUTER</text>
+
+  <!-- router -->
+  <rect x="150" y="126" width="470" height="88" rx="10" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+  <rect x="556" y="131" width="52" height="13" rx="3" fill="#e6f7f5" stroke="#99e6dd"/>
+  <text x="582" y="141" text-anchor="middle" font-size="8.5" font-weight="700" fill="#0f766e">FREE</text>
+  <text x="385" y="148" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">Is this a round-up — and does it LINK its programs?</text>
+  <text x="385" y="166" text-anchor="middle" font-size="10.5" fill="#166534">no links on it at all → we never received the page. no verdict.</text>
+  <text x="385" y="181" text-anchor="middle" font-size="10.5" fill="#166534">title must promise many opportunities · the site's own name stripped off first</text>
+  <text x="385" y="196" text-anchor="middle" font-size="10.5" fill="#166534">≥ 6 distinct off-site domains → it LINKS them → hub mining</text>
+  <text x="385" y="209" text-anchor="middle" font-size="10" fill="#5b8f6d">names them without linking them → written down only; nothing runs on it by itself</text>
+
+  <path d="M260,214 L260,246" fill="none" stroke="#334155" stroke-width="1.6"
+        stroke-dasharray="5 4" marker-end="url(#ah)"/>
+  <path d="M196,240 L196,246" fill="none" stroke="#0e7490" stroke-width="1.5"
+        marker-end="url(#ahc)"/>
+  <rect x="212" y="222" width="96" height="13" fill="#f8fafc"/>
+  <text x="260" y="232" text-anchor="middle" font-size="9.5" font-weight="600" fill="#475569">it LINKS them → queued</text>
+  <rect x="410" y="218" width="200" height="17" rx="5" fill="#f8fafc" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="510" y="230" text-anchor="middle" font-size="9.5" font-weight="600" fill="#475569">you point it at a page yourself</text>
+  <path d="M510,235 L510,246" fill="none" stroke="#334155" stroke-width="1.6" marker-end="url(#ah)"/>
+
+  <text x="12" y="242" font-size="10.5" font-weight="700" letter-spacing=".06em" fill="#475569">③ EXTRACTORS — YOU RUN THESE</text>
+
+  <!-- extractors -->
+  <g>
+    <rect x="150" y="248" width="220" height="52" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="260" y="268" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">Hub mining</text>
+    <text x="260" y="283" text-anchor="middle" font-size="10" fill="#166534">sitemap + LLM pick pages · read page (¢)</text>
+    <rect x="313" y="252" width="52" height="13" rx="3" fill="#fdf0f4" stroke="#fbb6c8"/>
+    <text x="339" y="262" text-anchor="middle" font-size="8.5" font-weight="700" fill="#9f1239">PAID</text>
+  </g>
+  <g>
+    <rect x="400" y="248" width="220" height="52" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="510" y="268" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">Name harvest</text>
+    <text x="510" y="283" text-anchor="middle" font-size="10" fill="#166534">read names (free gates) · search each ($)</text>
+    <rect x="563" y="252" width="52" height="13" rx="3" fill="#fdf0f4" stroke="#fbb6c8"/>
+    <text x="589" y="262" text-anchor="middle" font-size="8.5" font-weight="700" fill="#9f1239">PAID</text>
+  </g>
+
+  <line x1="260" y1="300" x2="260" y2="326" stroke="#334155" stroke-width="1.6" marker-end="url(#ah)"/>
+  <line x1="510" y1="300" x2="510" y2="326" stroke="#334155" stroke-width="1.6" marker-end="url(#ah)"/>
+  <rect x="150" y="306" width="470" height="14" fill="#f8fafc"/>
+  <text x="385" y="316" text-anchor="middle" font-size="10" font-weight="600" fill="#9f1239">nothing above spends until you run one of these — the router only ever queues</text>
+
+  <!-- gate + pipeline -->
+  <rect x="30" y="326" width="840" height="66" rx="11" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+  <rect x="740" y="331" width="118" height="13" rx="3" fill="#fdf0f4" stroke="#fbb6c8"/>
+  <text x="799" y="341" text-anchor="middle" font-size="8.5" font-weight="700" fill="#9f1239">PAID gate · FREE checks</text>
+  <text x="450" y="352" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">④ The discovery gate, then verify &amp; dedupe</text>
+  <text x="450" y="371" text-anchor="middle" font-size="10.5" fill="#166534">read each page once → classify it → fill the row's fields → look for a look-alike the URL missed</text>
+  <text x="450" y="384" text-anchor="middle" font-size="10.5" fill="#166534">then: store only a retrieved link · merge exact duplicates · resolve a contact email · flag, never silently drop</text>
+
+  <line x1="150" y1="392" x2="150" y2="418" stroke="#334155" stroke-width="1.6" marker-end="url(#ah)"/>
+
+  <!-- pending / review / catalog -->
+  <g>
+    <rect x="30" y="418" width="250" height="56" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="155" y="440" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">Saved as PENDING</text>
+    <text x="155" y="456" text-anchor="middle" font-size="10" fill="#166534">hidden · tagged with its class</text>
+    <text x="155" y="468" text-anchor="middle" font-size="10" fill="#166534">+ any duplicate hint</text>
+  </g>
+  <g>
+    <rect x="320" y="418" width="230" height="56" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="435" y="442" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">⑤ You review</text>
+    <text x="435" y="459" text-anchor="middle" font-size="10" fill="#166534">activate · reject · merge · mark duplicate</text>
+  </g>
+  <g>
+    <rect x="590" y="418" width="280" height="56" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="730" y="442" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">Live catalog</text>
+    <text x="730" y="459" text-anchor="middle" font-size="10" fill="#166534">students see it · activated row is embedded</text>
+  </g>
+  <line x1="280" y1="446" x2="318" y2="446" stroke="#334155" stroke-width="1.6" marker-end="url(#ah)"/>
+  <line x1="550" y1="446" x2="588" y2="446" stroke="#334155" stroke-width="1.6" marker-end="url(#ah)"/>
+  <rect x="554" y="429" width="46" height="13" fill="#f8fafc"/>
+  <text x="567" y="439" text-anchor="middle" font-size="9.5" fill="#475569">approve</text>
+
+  <!-- rejected feeds the router -->
+  <path d="M400,474 L400,492 L894,492 L894,116 L600,116 L600,122" fill="none" stroke="#0e7490" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ahc)"/>
+  <rect x="540" y="486" width="236" height="13" fill="#f8fafc"/>
+  <text x="658" y="496" text-anchor="middle" font-size="9.5" font-weight="600" fill="#0e7490">reject it as a round-up → fed back automatically</text>
+
+  <text x="12" y="518" font-size="10.5" font-weight="700" letter-spacing=".06em" fill="#475569">⑥ THE LEARNING LOOP</text>
+
+  <g>
+    <rect x="30" y="526" width="250" height="52" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="155" y="547" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">Angle scorecard</text>
+    <text x="155" y="563" text-anchor="middle" font-size="10" fill="#166534">hits vs waste · mined-out angles auto-off</text>
+  </g>
+  <g>
+    <rect x="320" y="526" width="230" height="52" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="435" y="547" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">New angle ideas</text>
+    <text x="435" y="563" text-anchor="middle" font-size="10" fill="#166534">coverage gaps → added switched-off</text>
+  </g>
+  <g>
+    <rect x="590" y="526" width="280" height="52" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+    <text x="730" y="547" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">Safety net</text>
+    <text x="730" y="563" text-anchor="middle" font-size="10" fill="#166534">every verdict becomes a frozen test</text>
+  </g>
+  <line x1="280" y1="552" x2="318" y2="552" stroke="#334155" stroke-width="1.6" marker-end="url(#ah)"/>
+  <path d="M370,474 L200,524" fill="none" stroke="#334155" stroke-width="1.5" marker-end="url(#ah)"/>
+  <rect x="232" y="490" width="92" height="13" fill="#f8fafc"/>
+  <text x="278" y="500" text-anchor="middle" font-size="9.5" fill="#475569">reject + reason</text>
+  <polyline points="435,578 435,596 16,596 16,110 60,110" fill="none" stroke="#334155" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+  <text transform="rotate(-90 26 350)" x="26" y="350" text-anchor="middle" font-size="9.5" fill="#475569">you enable the good angles</text>
+</svg>
+    </div>
+    <figcaption>The macro flow. New this session is box ④'s first half — <b>the discovery gate</b>, drawn in full below — which reads each candidate page once and decides what it is before the row is saved. <b>Everything down to the router is automatic and free; everything below it is a command you run.</b> Your rejected pile feeds the same router.</figcaption>
+  </figure>
+
+  <div class="note" style="margin-top:0">
+    <b>What runs on its own, and what waits for you.</b> This is the line the diagram above is
+    drawn around, and it is worth stating plainly because the two halves look continuous.
+    <br><br>
+    <b>Automatic and free:</b> a scrape captures leads as a side-effect — every page it consulted
+    that did not become a row goes to the router, which classifies it and writes it onto a queue.
+    Rejecting a row as a round-up in the console queues that page the moment you pick the reason.
+    <br><br>
+    <b>Waiting for you, and only ever started by hand:</b> every extractor — hub mining, name
+    harvest, re-finding dead links — plus the search-angle scrape itself. No scheduler,
+    no console button calls them. Most spend money, and the standing rule is that a paid run gets
+    fresh approval each time.
+    <br><br>
+    So <b>the queue fills itself and nothing ever drains it.</b> That is deliberate: draining it
+    spends, and everything it produces lands in a review queue that only a person can clear.
+  </div>
+
+  <h2>① Where pages come from <span class="tag prod">live</span></h2>
+  <p class="grouphint">Four ways a candidate page reaches the pipeline — the walk-up (last box) was retired 2026-09-07, folded into the classify pill's first-party-hub verdict. Of the three still live, two cost money to run; the rejected pile is free because a person already did the work.</p>
+  <div class="rows">
+
+    <div class="box">
+      <div class="boxhead"><span class="name">Search angles</span><span class="file">agents/scrape_opportunities.py</span><span class="cost paid">PAID</span></div>
+      <p class="what">You give it a topic ("Marine Science programs"). The main discovery engine — and the only one that finds programs nobody has linked to.</p>
+      <div class="logic"><span class="lbl">inside the box</span><ol>
+        <li><b>Phase 1 — research.</b> Prose out, web search <b>on</b>. Keeps the search's own record of which pages it really opened; that record is the only place a real URL exists.</li>
+        <li><b>If it didn't search, ask again once.</b> The model decides per call whether to search, and a silent call is free — so re-rolling is cheaper than arguing with it.</li>
+        <li><b>Phase 2 — extract.</b> Phase 1's notes plus the real URLs go in, strict JSON comes out, no search. <b>Never merged into one call:</b> asking for JSON up front collapses the search rate to near zero.</li>
+        <li><b>Each candidate then passes through the discovery gate</b> (below) before it can become a row. Pages that didn't become a program row go to the router instead of the bin.</li>
+      </ol></div>
+    </div>
+
+    <div class="box">
+      <div class="boxhead"><span class="name">Your rejected pile</span><span class="file">the console's Reject button</span><span class="cost free">FREE</span></div>
+      <p class="what">When you reject a row <b>because it's a round-up</b>, that page is fed straight back in — automatically, the moment you pick the reason. <b>Better evidence than anything automated</b>: you looked at the page and said what it is.</p>
+      <div class="logic"><span class="lbl">inside the box</span><ul>
+        <li><b>The reason is the trigger, not the rejection.</b> "Wrong page", "dead link", "not a fit" say nothing about a page being a round-up, so they route nothing. Only the round-up reason does.</li>
+        <li><b>It skips the title check.</b> That check asks "is this about many programs?" — which you just answered, having actually read the page. All that's left is <b>links them or names them</b>.</li>
+        <li><b>It never drops what you flagged</b>, runs in the background so a slow site can't hang the button, and <b>remembers a "no"</b> so a page judged not-a-round-up is never re-opened.</li>
+        <li>The one-off catch-up has been run over the whole pile: <b>349 rejected rows → 12 leads</b> (8 link, 4 name); the other 323 are remembered as "not a round-up".</li>
+      </ul></div>
+    </div>
+
+    <div class="box">
+      <div class="boxhead"><span class="name">Walk up from the catalog</span><span class="file">wingman/walk_up_hubs.py — RETIRED 2026-09-07</span><span class="cost free">FREE</span></div>
+      <p class="what"><b>Retired 2026-09-07 as redundant.</b> A university's own index links its programs on its <b>own</b> site, which the ≥6-off-site-domains router cannot see. This finder used to <b>derive</b> such an index by walking up from a trusted catalog row; that job is now done instead by the <b>classify pill</b> — when it tags a fetched page a <code>first_party_hub</code> it is queued as a <b>same-domain lead</b> for the miner, so a dedicated walk-up finder no longer earns its keep.</p>
+      <div class="logic"><span class="lbl">how it worked, while it existed</span><ol>
+        <li>Take a program <b>you already activated</b> — the strongest trust signal there is, since nothing here activates anything on its own.</li>
+        <li>Go one level up its address. <code>…/summer-programs/summer-institute</code> → <code>…/summer-programs/</code>.</li>
+        <li><b>Does that page link the program back?</b> This was the proof. A page that doesn't is a shorter address, not an index — which is why a costs page covered in hundreds of links could never sneak through.</li>
+        <li>Does it offer program pages beyond that one, and is it not a homepage? Densest first, ranked by how many of our own programs it really links.</li>
+      </ol></div>
+      <div class="logic"><span class="lbl">the one live sweep it ran — free, no search at all</span><ul>
+        <li><b>1,325 activated programs → 612 distinct parent pages → 244 proven indexes</b> — CMU's pre-college index alone had 12 of our rows under it and 25 more programs on it. Ten mined; the rest queued before the finder was retired.</li>
+      </ul></div>
+    </div>
+
+    <div class="box">
+      <div class="boxhead"><span class="name">Re-find a dead link</span><span class="file">agents/refind_dead_links.py</span><span class="cost paid">PAID</span></div>
+      <p class="what">A program whose stored link died is usually a program that <b>moved</b>, not one that ended. One narrow search per row.</p>
+      <div class="logic"><span class="lbl">inside the box</span><ul>
+        <li>Only rows deactivated for a dead link, and only ones not already tried — each row is stamped, so a discontinued program is never re-paid for.</li>
+        <li>A replacement is accepted only if it is on the <b>same site as the dead link</b>, its page title names the program, and it hasn't dropped a word the old URL used to identify it. A blog or news post on that site is rejected outright.</li>
+      </ul></div>
+    </div>
+  </div>
+
+  <h2>② The router <span class="tag prod">live — feeds the mining queue</span></h2>
+  <p class="grouphint">The piece that stops good leads being thrown away. One question — does the page LINK its programs, or only NAME them? — answered by looking at the page, never by recognising its domain.</p>
+  <div class="rows">
+    <div class="box">
+      <div class="boxhead"><span class="name">Links them, or only names them?</span><span class="file">wingman/discovered_leads.py</span><span class="cost free">FREE</span></div>
+      <div class="logic"><span class="lbl">the whole rule</span><ol>
+        <li><b>Skip</b> anything already a catalog row, already queued, or that can never be a source (social, shops, blog/news posts, YouTube, Reddit).</li>
+        <li><b>Are there any links on the page at all?</b> None means we never really received it — a site builder answered one round-up with 400KB and zero <code>&lt;a&gt;</code> tags. So no verdict: a confident wrong answer here just wastes the paid extractor on the same nothing.</li>
+        <li><b>Does the title promise many opportunities?</b> A plural — and the site's own name is stripped off the title first, because that suffix lies about the page.</li>
+        <li><b>Links ≥ 6 different outside sites → hub mining.</b> Distinct <i>sites</i>, not links.</li>
+        <li><b>Otherwise, ≥ 2000 characters of prose for high schoolers → a names lead</b> (recorded only). Neither → not a lead, and it says why.</li>
+      </ol></div>
+      <div class="logic"><span class="lbl">why off-site links, and what it still can't see</span><ul>
+        <li>Same-site links are mostly the site's own navigation, so counting them measures menu size. Distinct outside sites separate cleanly: round-ups scored 9–20, ordinary pages 1–3.</li>
+        <li><b>What this rule cannot see:</b> a university index that links its programs on its <i>own</i> site — which the classify pill's <code>first_party_hub</code> verdict now catches instead, queuing it as a same-domain lead. (A dedicated walk-up finder used to derive it; retired 2026-09-07 as redundant with that verdict.)</li>
+      </ul></div>
+    </div>
+  </div>
+
+  <h2>③ The two extractors <span class="tag prod">live — both have produced rows</span></h2>
+  <p class="grouphint">Hub mining is far cheaper per candidate because a link needs no search; name harvest pays a search fee per program. Since 2026-09-07 both are the <b>one</b> agent — <code>agents/mine_hub_pages.py</code> drains both hub leads and name-only leads (<code>--names</code>), <code>harvest_names.py</code> being an imported helper. Both are commands you run — the router only ever queues.</p>
+  <div class="rows">
+    <div class="box">
+      <div class="boxhead"><span class="name">Hub mining</span><span class="file">agents/mine_hub_pages.py · wingman/sitemap_hub.py</span><span class="cost free">mostly FREE</span><span class="cost paid">PAID to classify + read</span></div>
+      <p class="what">An institution's own index. The miner reads the site's <b>own page list</b> and lets a model pick the program pages — <b>one cheap call in place of a dozen slug rules</b>.</p>
+      <div class="logic"><span class="lbl">the primary path — sitemap + LLM</span><ol>
+        <li><b>Enumerate</b> the union of the site's sitemap and the hub's own links; <b>scope</b> to URLs under the hub's own path (one 20,000-URL sitemap dropped to 18).</li>
+        <li><b>Classify — the one paid step, ~$0.001/hub.</b> Hand the scoped URL list to a model: paths in, program home pages out. No page fetch, no search. This replaces every slug drop-list.</li>
+        <li>Drop a page that is the sub-page of another program page; a hub the classifier empties falls through to the old link-harvest miner, so recall is never worse.</li>
+      </ol></div>
+      <div class="logic"><span class="lbl">what the runs measured</span><ul>
+        <li>Sitemap+LLM selector: <b>22 real hubs, ~$0.0009/hub, ~100% precision</b>, zero tuition/nav/staff junk.</li>
+        <li>The earlier link-harvest run: <b>43 hubs → 300 pages read → 144 rows, $0.29</b> — and the catalog's first <b>local</b> rows (Seattle Parks, the YMCA's BOLD &amp; GOLD). Just over half of everything read is refused — the safety net working, not waste.</li>
+      </ul></div>
+    </div>
+    <div class="box">
+      <div class="boxhead"><span class="name">Name harvest</span><span class="file">agents/harvest_names.py (helper) · run via agents/mine_hub_pages.py --names</span><span class="cost paid">PAID</span></div>
+      <p class="what">The page names programs but won't link them. The names are in the text; the URLs are not, so each has to be searched for. <b>Merged into the hub miner 2026-09-07:</b> <code>harvest_names.py</code> is now a helper library with no <code>main()</code> of its own — the miner drains a <code>names</code> lead down this path so a name-harvested row gets the same classify pill and embedding-dedupe hint as a hub-mined one. <b>You aim it yourself</b> (<code>mine_hub_pages --hubs &lt;url&gt; --names</code>, or a <code>names</code> lead via <code>--from-leads</code>) — free preview by default, and the name cap doubles as the spend ceiling.</p>
+      <div class="logic"><span class="lbl">three free checks before a single paid search</span><ol>
+        <li><b>Is the name really on the page?</b> Every distinctive word of it, literally — a model can't list programs it merely remembers. Exact words, never fuzzy.</li>
+        <li><b>Could it ever be proven?</b> A name needs two words of its own, or no title could confirm it. <b>Do we already have it?</b> Strict catalog match. <b>Same program named twice?</b> Collapsed.</li>
+        <li><b>Rank, then spend.</b> Shorter names first; penalise a description and a name carrying the host's own brand. A quality floor decides — the count cap is just a ceiling.</li>
+      </ol></div>
+    </div>
+  </div>
+
+  <h2>④ The discovery gate — read once, classify, enrich, dedupe <span class="tag prod">live (M9) — ran on 5 angles this session</span></h2>
+  <p class="grouphint">New this session. Every candidate that survives the checks above passes through this gate before it becomes a row. It is <b>one page fetch feeding three model steps</b>, wired into the search-angle scrape and always on. This is where a page finally gets <i>read</i> rather than merely found.</p>
+
+  <figure>
+    <div class="diagram">
+<svg viewBox="0 0 900 500" role="img" style="width:100%;min-width:720px;height:auto;font-family:'IBM Plex Sans',system-ui,sans-serif" aria-label="One candidate page is fetched once, then classified into one of six kinds. A fresh program page is enriched with its own fields and embedding-deduped, then kept. A stale program is dropped in act mode but kept in observe mode. A first- or third-party hub is routed to the mining queue in act mode but kept in observe mode. A none or unreadable page is always kept and flagged. Every kept row lands in the review queue labelled with its class pill and any duplicate hint.">
+  <defs>
+    <marker id="g_ah" markerWidth="9" markerHeight="8" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#334155"/></marker>
+    <marker id="g_ahp" markerWidth="9" markerHeight="8" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9f1239"/></marker>
+    <marker id="g_ahc" markerWidth="9" markerHeight="8" refX="6.5" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#0e7490"/></marker>
+  </defs>
+
+  <!-- one page, fetched once -->
+  <rect x="330" y="16" width="240" height="46" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="450" y="35" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">One candidate page</text>
+  <text x="450" y="51" text-anchor="middle" font-size="10.5" fill="#166534">fetched ONCE — powers all three steps</text>
+
+  <line x1="450" y1="62" x2="450" y2="80" stroke="#334155" stroke-width="1.6" marker-end="url(#g_ah)"/>
+
+  <!-- classify -->
+  <rect x="300" y="80" width="300" height="56" rx="10" fill="#fdf0f4" stroke="#e0779a" stroke-width="1.6"/>
+  <rect x="510" y="85" width="52" height="13" rx="3" fill="#fdf0f4" stroke="#fbb6c8"/>
+  <text x="536" y="95" text-anchor="middle" font-size="8.5" font-weight="700" fill="#9f1239">PAID</text>
+  <text x="450" y="104" text-anchor="middle" font-size="12.5" font-weight="700" fill="#7a1733">Classify the page — one no-search call</text>
+  <text x="450" y="120" text-anchor="middle" font-size="10" fill="#9f1239">what KIND of page is this? · a verbatim quote must be on the page</text>
+  <text x="450" y="131" text-anchor="middle" font-size="9.5" fill="#b25b76">staleness is decided by a date regex, never by the model</text>
+
+  <!-- fan-out lines to six class columns -->
+  <line x1="450" y1="136" x2="450" y2="150" stroke="#9f1239" stroke-width="1.4"/>
+  <path d="M450,150 L88,150" stroke="#9f1239" stroke-width="1.2" fill="none"/>
+  <path d="M450,150 L812,150" stroke="#9f1239" stroke-width="1.2" fill="none"/>
+  <!-- six drop lines -->
+  <line x1="88"  y1="150" x2="88"  y2="176" stroke="#9f1239" stroke-width="1.2" marker-end="url(#g_ahp)"/>
+  <line x1="248" y1="150" x2="248" y2="176" stroke="#9f1239" stroke-width="1.2" marker-end="url(#g_ahp)"/>
+  <line x1="418" y1="150" x2="418" y2="176" stroke="#9f1239" stroke-width="1.2" marker-end="url(#g_ahp)"/>
+  <line x1="588" y1="150" x2="588" y2="176" stroke="#9f1239" stroke-width="1.2" marker-end="url(#g_ahp)"/>
+  <line x1="812" y1="150" x2="812" y2="176" stroke="#9f1239" stroke-width="1.2" marker-end="url(#g_ahp)"/>
+
+  <!-- column 1: program -->
+  <rect x="20" y="178" width="176" height="150" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.6"/>
+  <text x="108" y="197" text-anchor="middle" font-size="11.5" font-weight="700" fill="#14532d">program (fresh)</text>
+  <text x="108" y="213" text-anchor="middle" font-size="9.5" fill="#166534">one opportunity's own page</text>
+  <rect x="34" y="222" width="148" height="44" rx="6" fill="#f8fafc" stroke="#86efac"/>
+  <text x="108" y="238" text-anchor="middle" font-size="9.5" font-weight="600" fill="#15803d">Enrich the row's fields</text>
+  <text x="108" y="251" text-anchor="middle" font-size="8.5" fill="#166534">refresh's own extraction,</text>
+  <text x="108" y="261" text-anchor="middle" font-size="8.5" fill="#166534">from the page we just read</text>
+  <rect x="34" y="272" width="148" height="46" rx="6" fill="#f8fafc" stroke="#86efac"/>
+  <text x="108" y="288" text-anchor="middle" font-size="9.5" font-weight="600" fill="#15803d">Embedding dedupe</text>
+  <text x="108" y="300" text-anchor="middle" font-size="8.5" fill="#166534">same program, different URL?</text>
+  <text x="108" y="310" text-anchor="middle" font-size="8.5" fill="#166534">→ a tiered duplicate HINT</text>
+
+  <!-- column 2: stale -->
+  <rect x="204" y="178" width="152" height="150" rx="9" fill="#fdf4de" stroke="#e0ba55" stroke-width="1.6"/>
+  <text x="280" y="197" text-anchor="middle" font-size="11.5" font-weight="700" fill="#8a5a12">stale program</text>
+  <text x="280" y="213" text-anchor="middle" font-size="9.5" fill="#a06a1a">newest date on it ≥ 3y old</text>
+  <text x="280" y="236" text-anchor="middle" font-size="10" font-weight="700" fill="#9f1239">ACT: dropped</text>
+  <text x="280" y="250" text-anchor="middle" font-size="8.5" fill="#a06a1a">logged with its reason</text>
+  <text x="280" y="272" text-anchor="middle" font-size="10" font-weight="700" fill="#0e7490">OBSERVE: kept, labelled</text>
+  <text x="280" y="286" text-anchor="middle" font-size="8.5" fill="#a06a1a">you decide instead</text>
+
+  <!-- column 3: hubs -->
+  <rect x="364" y="178" width="176" height="150" rx="9" fill="#fdf4de" stroke="#e0ba55" stroke-width="1.6"/>
+  <text x="452" y="197" text-anchor="middle" font-size="11.5" font-weight="700" fill="#8a5a12">first / third-party hub</text>
+  <text x="452" y="213" text-anchor="middle" font-size="9.5" fill="#a06a1a">an index, not a program</text>
+  <text x="452" y="236" text-anchor="middle" font-size="10" font-weight="700" fill="#0e7490">→ mining queue</text>
+  <text x="452" y="250" text-anchor="middle" font-size="8.5" fill="#a06a1a">its programs get harvested</text>
+  <text x="452" y="272" text-anchor="middle" font-size="10" font-weight="700" fill="#9f1239">ACT: no row of its own</text>
+  <text x="452" y="286" text-anchor="middle" font-size="10" font-weight="700" fill="#0e7490">OBSERVE: kept, labelled too</text>
+
+  <!-- column 4: none/unreadable -->
+  <rect x="548" y="178" width="176" height="150" rx="9" fill="#eef1f4" stroke="#c3ccd6" stroke-width="1.6"/>
+  <text x="636" y="197" text-anchor="middle" font-size="11.5" font-weight="700" fill="#4b5563">none · unreadable</text>
+  <text x="636" y="213" text-anchor="middle" font-size="9.5" fill="#5b6675">not an opportunity page,</text>
+  <text x="636" y="225" text-anchor="middle" font-size="9.5" fill="#5b6675">or we couldn't fetch it</text>
+  <text x="636" y="250" text-anchor="middle" font-size="10" font-weight="700" fill="#15803d">always KEPT</text>
+  <text x="636" y="266" text-anchor="middle" font-size="8.5" fill="#5b6675">flagged for a human —</text>
+  <text x="636" y="277" text-anchor="middle" font-size="8.5" fill="#5b6675">a fetch fail is about our</text>
+  <text x="636" y="287" text-anchor="middle" font-size="8.5" fill="#5b6675">client, never the page</text>
+
+  <!-- column 5: mode note -->
+  <rect x="732" y="178" width="150" height="150" rx="9" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="807" y="197" text-anchor="middle" font-size="11" font-weight="700" fill="#334155">the mode switch</text>
+  <text x="807" y="216" text-anchor="middle" font-size="9" fill="#475569">ACT (default):</text>
+  <text x="807" y="228" text-anchor="middle" font-size="8.5" fill="#586573">drop stale, divert hubs</text>
+  <text x="807" y="248" text-anchor="middle" font-size="9" fill="#475569">OBSERVE:</text>
+  <text x="807" y="260" text-anchor="middle" font-size="8.5" fill="#586573">keep everything, labelled,</text>
+  <text x="807" y="270" text-anchor="middle" font-size="8.5" fill="#586573">for you to look at first</text>
+  <text x="807" y="290" text-anchor="middle" font-size="8" fill="#8a94a2">same paid calls either way</text>
+  <text x="807" y="301" text-anchor="middle" font-size="8" fill="#8a94a2">--gate-observe</text>
+
+  <!-- kept rows converge to pending -->
+  <line x1="108" y1="328" x2="108" y2="352" stroke="#334155" stroke-width="1.5"/>
+  <line x1="636" y1="328" x2="636" y2="352" stroke="#334155" stroke-width="1.5"/>
+  <path d="M108,352 L450,352" stroke="#334155" stroke-width="1.5" fill="none"/>
+  <path d="M636,352 L450,352" stroke="#334155" stroke-width="1.5" fill="none"/>
+  <line x1="452" y1="328" x2="452" y2="352" stroke="#0e7490" stroke-width="1.3" stroke-dasharray="4 3"/>
+  <line x1="450" y1="352" x2="450" y2="372" stroke="#334155" stroke-width="1.6" marker-end="url(#g_ah)"/>
+
+  <rect x="250" y="374" width="400" height="52" rx="10" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.6"/>
+  <text x="450" y="394" text-anchor="middle" font-size="12.5" font-weight="700" fill="#14532d">Saved as a PENDING row — hidden, and LABELLED</text>
+  <text x="450" y="411" text-anchor="middle" font-size="10" fill="#166534">a class pill (program / hub / none / …) + any duplicate back-link</text>
+
+  <line x1="450" y1="426" x2="450" y2="448" stroke="#334155" stroke-width="1.6" marker-end="url(#g_ah)"/>
+  <rect x="300" y="450" width="300" height="38" rx="9" fill="#e7f8ee" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="450" y="474" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">You review — nothing is auto-activated</text>
+</svg>
+    </div>
+    <figcaption>The gate, per candidate. One fetch, one classify call, and — only for a fresh program — a metadata call and an embedding lookup. <b>Act mode</b> disposes by class (drop stale, send hubs to mining); <b>observe mode</b> keeps everything in the queue labelled so you can look first. Either way, nothing reaches a student without your yes.</figcaption>
+  </figure>
+
+  <div class="rows">
+    <div class="box">
+      <div class="boxhead"><span class="name">Classify the page</span><span class="file">wingman/classify_page.py</span><span class="cost paid">PAID — one no-search call</span></div>
+      <p class="what">Reads the page's full text and returns one of four kinds — <b>program</b>, <b>first-party hub</b> (an institution listing its own programs), <b>third-party hub</b> (a blog naming others'), or <b>none</b> — plus a deterministic staleness check. The prompt is locked (a marquee decision); the call is a money seam.</p>
+      <div class="logic"><span class="lbl">the guarantees that live in code, not in the prompt</span><ul>
+        <li><b>Staleness is a date regex, never the model.</b> "The newest year on this page is ≥ 3 years old" is decided by counting years in the text — dates are exactly where models fabricate. A page with <i>no</i> date is kept, because it cannot be proven old.</li>
+        <li><b>Evidence must be on the page.</b> A positive verdict owes a verbatim quote; if that quote isn't literally in the fetched text, the class is capped at low confidence and marked unverified.</li>
+        <li><b>Conservative v1:</b> the model's judgement never drops a would-be row on its own. Only the date rule drops, and only in act mode. <code>none</code> is flagged and kept so its precision can be measured before it earns drop authority.</li>
+        <li>A page we cannot fetch costs <b>nothing</b> — no model call is made — and is kept as <code>unreadable</code>.</li>
+      </ul></div>
+      <div class="logic"><span class="lbl">measured — full review queue, 279 rows, $0.4631</span><ul>
+        <li>program <b>159</b> · first-party hub <b>38</b> · third-party hub <b>18</b> · none <b>20</b> · unreadable <b>44</b>, and <b>11 dropped as stale</b> by the date rule.</li>
+      </ul></div>
+    </div>
+
+    <div class="box">
+      <div class="boxhead"><span class="name">One read, then enrich</span><span class="file">wingman/combined_reader.py</span><span class="cost paid">PAID</span></div>
+      <p class="what">The orchestrator that made this a gate rather than three separate agents re-fetching the same page. It fetches once, classifies, and — <b>only for a fresh program</b> — fills the row's fields and looks for a duplicate.</p>
+      <div class="logic"><span class="lbl">inside the box</span><ul>
+        <li><b>Metadata comes from the page, not the model's memory.</b> It reuses the refresh agent's own extraction (its approved prompt and field validation) on the text already in hand — so a gate-produced row is field-complete the moment it is saved, indistinguishable from one a refresh pass would produce.</li>
+        <li><b>This closes the "activate then it's still blank" gap</b> for scraped rows: they arrive enriched, so activation needs no separate refresh run.</li>
+        <li>A hub, a <code>none</code> or an unreadable page skips enrichment — there is no single program to describe.</li>
+        <li>Wrapped whole: a gate failure inserts the row <b>ungated</b> rather than losing the candidate.</li>
+      </ul></div>
+    </div>
+
+    <div class="box">
+      <div class="boxhead"><span class="name">The duplicate the URL missed</span><span class="file">wingman/embed_common.py · dedupe_confidence.py · dedupe_embed_store.py</span><span class="cost free">mostly FREE</span></div>
+      <p class="what">The name/URL dedupe catches the same program at the same address. This catches the same program at a <b>different</b> address — a Facebook page, an Empowerly listing, a moved URL — by comparing the meaning of the fields, not the string.</p>
+      <div class="logic"><span class="lbl">how it decides</span><ul>
+        <li>Each row's <b>fields</b> (name + org + type + summary + eligibility) are embedded and matched against the catalog's own <code>dedupe_vector</code> index over every active row (stored in the database since 2026-09-02, not a local file). Fields beat page text — the high-similarity band is nearly pure duplicates, and it needs no fetch, so it covers rows whose page has since died.</li>
+        <li><b>A single score can't separate a duplicate from a sibling</b> (two YoungArts categories look identical to an embedding), so confidence comes from independent signals agreeing — name identity, hard fields, same institution. The result is a <b>tier</b>: PROOF · CONFIDENT · ADJUDICATE · SIBLING · HINT.</li>
+        <li><b>Auto-merge stays off</b> until each tier's false-positive rate is measured against your verdicts. For now the tier is a labelled hint on the row; a person still decides.</li>
+        <li><b>The index stays current on its own:</b> activating a row now embeds it into the index (a paid ~$0.0002 call, best-effort), so the next scrape matches against everything you've made live. It holds <b>1,676</b> rows today.</li>
+      </ul></div>
+      <div class="logic"><span class="lbl">measured — full review queue, 279 rows, $0.0036</span><ul>
+        <li><b>4 confident · 4 adjudicate · 10 hints</b> — e.g. a re-discovered SHIP internship at cosine 0.968, and an intra-queue twin of <i>Blue Marble Review</i> found at two URLs. Three siblings were correctly <i>not</i> flagged.</li>
+      </ul></div>
+    </div>
+  </div>
+
+  <h2>⑤ Verify, review, and drain the queue <span class="tag prod">live</span></h2>
+  <p class="grouphint">The classic checks still run around the gate, and the one hard human gate is unchanged. New this session: the labels the gate writes make the queue triageable in one command.</p>
+  <div class="rows">
+    <div class="box">
+      <div class="boxhead"><span class="name">Verify &amp; dedupe (name / URL)</span><span class="file">wingman/url_validate · url_repair · url_dedupe</span><span class="cost free">FREE</span></div>
+      <div class="logic"><span class="lbl">inside the box</span><ul>
+        <li>Store only a link the search <b>actually retrieved</b>; drop ad-mills; rescue an off-site mention to the program's own page; require the title to name the program.</li>
+        <li>If we already have the program at that URL, <b>improve the existing row</b> rather than adding a second. <b>Flag, never silently discard</b> — only an exact duplicate or a URL-less candidate is dropped.</li>
+      </ul></div>
+    </div>
+    <div class="box">
+      <div class="boxhead"><span class="name">Human review</span><span class="file">admin console</span><span class="cost free">FREE</span></div>
+      <p class="what">The one hard gate. Nothing reaches a student automatically: rows sit hidden until you activate, reject, merge or mark them duplicate. The queue now shows each row's <b>class pill</b> and any <b>"possible duplicate of…" back-link</b>, and a class filter, so a decision is a five-second spot-check instead of a cold read.</p>
+    </div>
+    <div class="box">
+      <div class="boxhead"><span class="name">Bulk triage by verdict</span><span class="file">agents/triage_queue.py</span><span class="cost free">FREE</span></div>
+      <p class="what">Once the queue is classified, most of it sorts itself. This rejects the safe classes in one command instead of clicking through them — <b>hubs</b> (their programs are already mined), <b>none</b> pages, and <b>stale</b> programs.</p>
+      <div class="logic"><span class="lbl">inside the box</span><ul>
+        <li><b>Never touches a fresh program</b> (yours to activate) or an <b>unreadable</b> row (a fetch fail is about us, not the page). Rejecting is reversible — the row stays in the table, its URL still blocks re-submission.</li>
+        <li>Preview-first: no flags prints the class breakdown and writes nothing. Reuses the console's own moderation endpoint, so there is no logic drift.</li>
+        <li>On the current queue it would clear <b>87 of 279</b> — 56 hubs, 20 none, 11 stale — leaving 148 programs and 44 unreadable for you.</li>
+      </ul></div>
+    </div>
+    <div class="box">
+      <div class="boxhead"><span class="name">The learning loop</span><span class="file">seed ledger · agents/propose_angles.py · eval/grade_scraper_batch.py</span><span class="cost free">FREE</span></div>
+      <div class="logic"><span class="lbl">inside the box</span><ul>
+        <li>Each topic is scored on approvals against waste and switches itself off once mined out. Coverage gaps become proposed new topics, added switched-off.</li>
+        <li>Every verdict you record becomes a frozen test; any pipeline change is graded against them before it ships — <b>zero approved rows lost</b> is the bar. Grading the gate this way is the next agreed run.</li>
+      </ul></div>
+    </div>
+  </div>
+
+  <h2>What each step actually costs <span class="tag prod">measured, not estimated</span></h2>
+  <p class="grouphint">The gate rows are from this session's runs; the extractor rows are fitted to two earlier real runs. Everything not listed is free.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>step</th><th>per</th><th>cost</th><th>note</th></tr></thead>
+    <tbody>
+      <tr><td>Gate — classify a page</td><td>candidate</td><td class="num">~$0.004</td><td>one no-search call; an unreadable page costs $0</td></tr>
+      <tr><td>Gate — enrich a program's fields</td><td>program</td><td class="num">~$0.001</td><td>refresh's extraction on the page already read</td></tr>
+      <tr><td>Gate — embedding dedupe</td><td>program</td><td class="num">~$0.0002</td><td>one embedding; the catalog index is prebuilt</td></tr>
+      <tr><td>Embed a row on activation</td><td>row</td><td class="num">~$0.0002</td><td>keeps the dedupe index current, best-effort</td></tr>
+      <tr><td>Hub mining — read a page</td><td>page</td><td class="num">$0.00096</td><td>measured over 300 real pages, refusals included</td></tr>
+      <tr><td>Name harvest — search one name</td><td>name</td><td class="num">$0.0167</td><td>84% of it a flat per-search fee</td></tr>
+      <tr><td>Re-find a dead link</td><td>row</td><td class="num">$0.02–0.05</td><td>one narrow search</td></tr>
+      <tr><td>Router · all filters · dedupe · review · loop</td><td>—</td><td class="num">$0.00</td><td>plain HTTP and pure code</td></tr>
+    </tbody>
+  </table></div>
+  <p class="grouphint" style="margin-top:12px">A 5-angle observe run this session cost <b>$0.4552 all-in</b> — 94 raw candidates, 21 rows saved and labelled (10 program · 3 hub · 3 none · 5 unreadable), zero errors. The gate roughly doubles per-candidate cost against a pre-gate scrape and adds wall-time (each of its two calls waits out the 5-second inter-call floor) — the price of reading every page instead of trusting the model's guess.</p>
+
+  <h2>What isn't built, and what's next</h2>
+  <p class="grouphint">Open by decision, most-important first.</p>
+  <div class="rows">
+    <div class="box">
+      <div class="boxhead"><span class="name">Grade the gate before a full-scale scrape</span><span class="file">eval/grade_scraper_batch.py</span><span class="tag todo">the next run</span></div>
+      <p class="what">The gate is wired always-on and has run once (5 angles). Before it drives a large scrape, it should be graded against the frozen verdicts — <b>zero approved rows lost</b> — exactly as every other pipeline change is. A paid run you trigger.</p>
+    </div>
+    <div class="box">
+      <div class="boxhead"><span class="name">Auto-merge the safe duplicate tiers</span><span class="file">wingman/dedupe_confidence.py</span><span class="tag todo">measured, not yet enabled</span></div>
+      <p class="what">CONFIDENT and PROOF tiers are eligible for reversible, audited auto-merge; today they are only labelled. Turning it on waits on the false-positive rate measured against your accumulating verdicts — 4 confident pairs came out of the last dedupe pass to start that count.</p>
+    </div>
+    <div class="box">
+      <div class="boxhead"><span class="name">Local discovery (a metro)</span><span class="file">data/hubs_seattle.json</span><span class="tag pin">pinned</span></div>
+      <p class="what">Paused by decision. Two designs measured, neither worked: search-first (small orgs, no SEO) and hub-first (civic sites link branch locations, not programs).</p>
+    </div>
+    <div class="box">
+      <div class="boxhead"><span class="name">Pages we cannot read at all</span><span class="file">— proposed —</span><span class="tag todo">not built</span></div>
+      <p class="what"><b>~22% of candidate pages can't be opened</b> — the site refuses us, it's a PDF, or the list is built in the browser. The gate keeps these as <code>unreadable</code> and flags them rather than guessing. A headless-render fallback is flagged, not solved, because it is the minority case.</p>
+    </div>
+  </div>
+
+  <div class="note"><b>The one rule that ties it together:</b> a find is only trusted because the search truly retrieved its page and the page proves the program — never because a model asserted it. The gate is that rule made per-candidate: it reads the page, quotes it, and dates it by counting, so the label on every row is earned. And a find only reaches a student because <b>you</b> said yes. Everything else is about making that yes take five seconds.</div>
+
+  <footer>Highschool Wingman · scraper v2 · updated 2026-08-30 — discovery gate wired always-on (M9): classify + enrich + embedding-dedupe per candidate; 5-angle observe run gave 21 labelled rows for $0.46; activation now keeps the dedupe index (1,676 rows) current on its own · paths + facts synced 2026-09-07 (repo reorg into agents/ + wingman/; walk_up_hubs.py retired; harvest_names.py merged into mine_hub_pages.py; dedupe index moved from catalog_embeddings.jsonl to the DB dedupe_vector)</footer>
+</div>
+
+</body></html>

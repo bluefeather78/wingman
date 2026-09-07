@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How the Wingman app works</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root{
+    --bg:#F6F4EE;
+    --surface:#FFFFFF;
+    --surface-2:#EFECE2;
+    --ink:#1E2530;
+    --ink-soft:#57616F;
+    --line:#DAD5C8;
+    --accent:#2B5C82;
+    --accent-soft:#DCE7EE;
+    --shadow: 0 1px 2px rgba(30,37,48,0.06), 0 8px 24px rgba(30,37,48,0.06);
+
+    --gemini-bg:#2F6C4F; --claude-bg:#8A4B2F; --client-bg:#5A4B8A;
+    --server-bg:#2B5C82; --shipped-bg:#2F7D5A; --dormant-bg:#9A7A2E;
+    --warn-border:#B8791A; --warn-bg:#F7ECD9;
+  }
+
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#12161C;
+      --surface:#1A2029;
+      --surface-2:#212833;
+      --ink:#E8E5DD;
+      --ink-soft:#A6ADB8;
+      --line:#2B323C;
+      --accent:#7FB2D9;
+      --accent-soft:#20303D;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 28px rgba(0,0,0,0.35);
+      --warn-bg:#2A2416;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#12161C;
+    --surface:#1A2029;
+    --surface-2:#212833;
+    --ink:#E8E5DD;
+    --ink-soft:#A6ADB8;
+    --line:#2B323C;
+    --accent:#7FB2D9;
+    --accent-soft:#20303D;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 12px 28px rgba(0,0,0,0.35);
+    --warn-bg:#2A2416;
+  }
+
+  *{ box-sizing:border-box; }
+  html{ -webkit-text-size-adjust:100%; }
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size:17px;
+    line-height:1.6;
+  }
+  ::selection{ background:var(--accent-soft); }
+
+  h1,h2,h3, .mono, .eyebrow, .badge, nav.jump, table, .path-label{
+    font-family:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  }
+  code, .figref, .cost, .breadcrumb{
+    font-family:"IBM Plex Mono","SFMono-Regular",Consolas,monospace;
+  }
+  code{
+    font-size:0.86em; background:var(--surface-2); padding:1px 5px; border-radius:3px;
+    color:var(--ink); word-break:break-word;
+  }
+
+  .wrap{ max-width: 940px; margin:0 auto; padding: 0 24px 96px; }
+
+  /* ---------- header ---------- */
+  header.top{
+    border-bottom:1px solid var(--line);
+    background:var(--surface);
+  }
+  header.top .inner{ max-width:940px; margin:0 auto; padding:40px 24px 28px; }
+  .eyebrow{
+    font-size:12px; font-weight:600; letter-spacing:.11em; text-transform:uppercase;
+    color:var(--accent); margin:0 0 10px;
+  }
+  h1{
+    font-size: clamp(28px, 4vw, 40px);
+    line-height:1.1; margin:0 0 12px; font-weight:700;
+    text-wrap:balance;
+    letter-spacing:-0.01em;
+  }
+  .dek{
+    margin:0; color:var(--ink-soft); font-size:17px; max-width:64ch;
+    font-family:"Source Serif 4", serif;
+  }
+  .legend{ display:flex; flex-wrap:wrap; gap:10px 22px; margin-top:22px; }
+  .legend-item{ display:flex; align-items:center; gap:8px; font-size:13px; color:var(--ink-soft); }
+  .badge{
+    display:inline-flex; align-items:center; justify-content:center;
+    font-size:10.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase;
+    padding:3px 9px; border-radius:99px; color:#fff; white-space:nowrap;
+  }
+  .badge.gemini{ background:var(--gemini-bg); }
+  .badge.claude{ background:var(--claude-bg); }
+  .badge.client{ background:var(--client-bg); }
+  .badge.server{ background:var(--server-bg); }
+  .badge.shipped{ background:var(--shipped-bg); }
+  .badge.dormant{ background:var(--dormant-bg); }
+
+  /* jump nav */
+  nav.jump{
+    position:sticky; top:0; z-index:5;
+    background:var(--bg);
+    border-bottom:1px solid var(--line);
+  }
+  nav.jump .inner{
+    max-width:940px; margin:0 auto; padding:10px 24px;
+    display:flex; gap:18px; overflow-x:auto;
+  }
+  nav.jump a{
+    color:var(--ink-soft); text-decoration:none; font-size:13px; font-weight:500;
+    white-space:nowrap; padding:4px 2px; border-bottom:2px solid transparent;
+  }
+  nav.jump a:hover, nav.jump a:focus-visible{ color:var(--ink); border-bottom-color:var(--accent); }
+
+  /* ---------- sections ---------- */
+  section{ padding-top:52px; scroll-margin-top:52px; }
+  section > .head{ margin-bottom:18px; }
+  .num{
+    font-family:"IBM Plex Mono",monospace; font-size:13px; color:var(--accent);
+    letter-spacing:.08em;
+  }
+  h2{ font-size:25px; margin:6px 0 10px; font-weight:700; text-wrap:balance; }
+  .lede{ color:var(--ink-soft); max-width:68ch; margin:0; }
+
+  p{ max-width:70ch; }
+  section p{ font-size:15.5px; }
+  strong{ color:var(--ink); font-weight:600; }
+
+  /* ---------- diagram panel ---------- */
+  figure.panel{
+    margin: 24px 0 8px;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:3px;
+    box-shadow:var(--shadow);
+    overflow:hidden;
+  }
+  figure.panel .diagram-head{
+    display:flex; align-items:baseline; justify-content:space-between;
+    gap:12px; padding:14px 18px 0;
+  }
+  figure.panel .figref{
+    font-size:11px; color:var(--accent); letter-spacing:.08em; font-weight:600;
+  }
+  .diagram-holder{
+    padding: 8px 12px 12px;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 28px 28px;
+    background-position: -1px -1px;
+  }
+  figure.panel svg{ display:block; width:100%; height:auto; }
+  figure.panel figcaption{
+    padding:12px 18px 18px;
+    font-size:14px; color:var(--ink-soft);
+    border-top:1px solid var(--line);
+    font-family:"Source Serif 4", serif;
+  }
+  figure.panel figcaption strong{ color:var(--ink); font-weight:600; }
+
+  svg text{ font-family:"IBM Plex Sans", sans-serif; }
+  svg .box-title{ font-size:13.5px; font-weight:600; fill:currentColor; }
+  svg .box-sub{ font-size:10.5px; fill:currentColor; opacity:.72; }
+  svg .path-eyebrow{ font-size:11px; font-weight:600; letter-spacing:.09em; fill:currentColor; opacity:.6; }
+  svg .arrow-label{ font-size:11px; fill:currentColor; opacity:.78; }
+
+  /* ---------- key/value facts ---------- */
+  .facts{ display:grid; gap:10px; margin:20px 0 4px; }
+  .fact{
+    display:grid; grid-template-columns: 200px 1fr; gap:14px;
+    padding:12px 16px; background:var(--surface); border:1px solid var(--line); border-radius:3px;
+    align-items:start;
+  }
+  .fact .k{ font-family:"IBM Plex Sans"; font-weight:600; font-size:14px; color:var(--ink); }
+  .fact .v{ font-size:14.5px; color:var(--ink-soft); }
+  .fact .v code{ font-size:0.85em; }
+  @media (max-width:640px){ .fact{ grid-template-columns:1fr; gap:4px; } }
+
+  /* ---------- callout ---------- */
+  aside.note{
+    margin:20px 0; padding:15px 18px; border-left:3px solid var(--accent);
+    background:var(--accent-soft); border-radius:0 3px 3px 0; font-size:14.5px;
+  }
+  aside.note p{ margin:0; font-size:14.5px; max-width:none; }
+  aside.note p + p{ margin-top:8px; }
+  aside.note.warn{ border-left-color:var(--warn-border); background:var(--warn-bg); }
+  aside.note strong{ color:var(--ink); }
+
+  /* ---------- endpoint table ---------- */
+  .table-scroll{ overflow-x:auto; margin-top:20px; border:1px solid var(--line); border-radius:3px; }
+  table{ border-collapse:collapse; width:100%; min-width:620px; font-size:13.5px; background:var(--surface); }
+  thead th{
+    text-align:left; font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+    color:var(--ink-soft); font-weight:600; padding:10px 14px; background:var(--surface-2);
+    border-bottom:1px solid var(--line); white-space:nowrap;
+  }
+  tbody td{ padding:10px 14px; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.ep{ font-family:"IBM Plex Mono",monospace; font-size:12.5px; color:var(--ink); white-space:nowrap; }
+  td.method{ font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--accent); }
+
+  footer{
+    margin-top:56px; padding-top:20px; border-top:1px solid var(--line);
+    font-size:12.5px; color:var(--ink-soft);
+  }
+  footer code{ font-size:12px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="inner">
+    <p class="eyebrow">Highschool Wingman &middot; Internal Docs</p>
+    <h1>How the Wingman app works</h1>
+    <p class="dek">The visual source-of-truth for the <strong>student-facing</strong> half of
+      Wingman — the Expo app and its FastAPI backend. (Its sibling doc, the Catalog Control
+      Room, covers the other half: the offline catalog pipeline and the ops console.)</p>
+
+    <div class="legend" aria-label="Badge legend">
+      <span class="legend-item"><span class="badge gemini">Gemini</span> served by the Gemini model</span>
+      <span class="legend-item"><span class="badge claude">Claude</span> served by Anthropic Haiku</span>
+      <span class="legend-item"><span class="badge server">Server</span> backend / FastAPI</span>
+      <span class="legend-item"><span class="badge client">Client</span> Expo / RN-web</span>
+    </div>
+  </div>
+</header>
+
+<nav class="jump" aria-label="Section navigation">
+  <div class="inner">
+    <a href="#served">Two halves</a>
+    <a href="#screens">Screens</a>
+    <a href="#auth">Auth</a>
+    <a href="#subscription">Subscription</a>
+    <a href="#ai">AI flow</a>
+    <a href="#profile">Profile chat</a>
+    <a href="#matching">Fresh Finds</a>
+    <a href="#tracker">Quest Log</a>
+    <a href="#tasks">Action items</a>
+    <a href="#email">Lifecycle email</a>
+    <a href="#data">Data rights</a>
+    <a href="#endpoints">Endpoints</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <!-- 01 -->
+  <section id="served">
+    <div class="head">
+      <p class="num">01</p>
+      <h2>Two halves, and how they're served</h2>
+      <p class="lede">The frontend is an <strong>Expo (React Native + RN-web) app</strong> in
+        <code>frontend/</code> targeting web + iOS + Android from one codebase. The backend is a
+        <strong>FastAPI</strong> service in <code>app/</code> (the only Python thing deployed to
+        Render). In dev they are two origins; in production they are one.</p>
+    </div>
+
+    <figure class="panel">
+      <div class="diagram-head"><span class="figref">FIG. 01 — DEV VS PROD SERVING</span></div>
+      <div class="diagram-holder">
+        <svg viewBox="0 0 900 340" role="img" aria-label="In development the Expo Metro dev server on port 8081 calls the FastAPI API on port 8000 as a separate origin, which is why the API carries CORS. In production one Render web service both serves the exported Expo bundle from frontend/dist and answers the API, so the app and API share one origin with no CORS.">
+          <defs>
+            <marker id="s-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <text x="225" y="26" text-anchor="middle" class="path-eyebrow">DEV — TWO ORIGINS</text>
+          <rect x="40" y="44" width="170" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="125" y="70" text-anchor="middle" class="box-title">Metro (Expo)</text>
+          <text x="125" y="87" text-anchor="middle" class="box-sub">localhost:8081</text>
+          <rect x="250" y="44" width="170" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="335" y="70" text-anchor="middle" class="box-title">FastAPI API</text>
+          <text x="335" y="87" text-anchor="middle" class="box-sub">localhost:8000</text>
+          <line x1="210" y1="74" x2="244" y2="74" stroke="currentColor" stroke-width="1.5" marker-end="url(#s-arrow)"/>
+          <text x="225" y="130" text-anchor="middle" class="arrow-label">cross-origin → CORS on the API</text>
+
+          <text x="675" y="26" text-anchor="middle" class="path-eyebrow">PROD — ONE ORIGIN</text>
+          <rect x="560" y="44" width="230" height="86" rx="3" fill="currentColor" fill-opacity="0.07" stroke="currentColor" stroke-width="1.8"/>
+          <text x="675" y="72" text-anchor="middle" class="box-title">Render web service</text>
+          <text x="675" y="90" text-anchor="middle" class="box-sub">SERVE_WEB_DIST=1</text>
+          <text x="675" y="106" text-anchor="middle" class="box-sub">app + API, one host</text>
+          <text x="675" y="150" text-anchor="middle" class="arrow-label">highschoolwingman.com — no CORS,</text>
+          <text x="675" y="165" text-anchor="middle" class="arrow-label">OAuth callback host never moves</text>
+
+          <!-- serve_static resolution order -->
+          <rect x="40" y="210" width="810" height="104" rx="3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <text x="60" y="234" class="path-eyebrow">serve_static() RESOLUTION ORDER (app/main.py)</text>
+          <text x="60" y="262" class="box-sub" style="font-size:12px;">1 · frontend/dist file  →  2 · exported route html (tracker.html …)  →</text>
+          <text x="60" y="284" class="box-sub" style="font-size:12px;">3 · public/ page (terms / privacy / about + styles.css / favicon)  →  4 · dist index.html fallback</text>
+          <text x="60" y="306" class="box-sub" style="font-size:11px; opacity:.6;">the public/ step sits BEFORE the fallback so /terms.html can never be shadowed by the app shell</text>
+        </svg>
+      </div>
+      <figcaption>The static route resolves <strong>only inside <code>public/</code></strong>
+        (an allow-list — publishing a file means putting it there), never the whole repo. Two
+        HTTP-header behaviours ride along in <code>app/main.py</code>: a <strong>no-store</strong>
+        default on API JSON and HTML shells with a content-hashed-asset exemption (the font-flash
+        fix), and <strong>security headers</strong> (HSTS, nosniff, X-Frame-Options DENY, and a
+        <strong>report-only CSP</strong> until <code>CSP_ENFORCE=1</code>).</figcaption>
+    </figure>
+    <div class="facts">
+      <div class="fact"><div class="k">Frontend build</div><div class="v"><code>expo export -p web</code> → <code>frontend/dist</code> (Render static site); native ships via EAS.</div></div>
+      <div class="fact"><div class="k">Two catalog caches</div><div class="v">A vector-free catalog cache (<code>OPPORTUNITIES_CACHE_TTL</code>, 300s) served with a gzip + <code>ETag</code>; and the 768-dim <code>match_vector</code> embeddings behind <code>CATALOG_VECTOR_CACHE_TTL</code> (24h). Only <code>/api/match</code> reads vectors; the client route strips them.</div></div>
+    </div>
+  </section>
+
+  <!-- 02 -->
+  <section id="screens">
+    <div class="head">
+      <p class="num">02</p>
+      <h2>The app screens</h2>
+      <p class="lede">Routes are files under <code>frontend/app/</code> (expo-router — the path
+        <em>is</em> the route). The branded tab names are <strong>load-bearing</strong> — never
+        Home / Profile / Search / Tracker.</p>
+    </div>
+    <div class="facts">
+      <div class="fact"><div class="k">Auth gate</div><div class="v"><code>index.tsx</code> redirects to <code>/(app)</code> or <code>/landing</code>. <code>(app)/_layout.tsx</code> renders the <code>NavBar</code> + <code>&lt;Slot&gt;</code> and bounces signed-out users to <code>/login</code>.</div></div>
+      <div class="fact"><div class="k">Home Base</div><div class="v"><code>(app)/index.tsx</code> — the dashboard: tracked items, action-item checklists.</div></div>
+      <div class="fact"><div class="k">My Vibe</div><div class="v"><code>(app)/profile.tsx</code> — the student profile + profile chat drawer.</div></div>
+      <div class="fact"><div class="k">Fresh Finds</div><div class="v"><code>(app)/finder.tsx</code> — a staged single screen (<code>home → quiz | form → results</code>), not four routes.</div></div>
+      <div class="fact"><div class="k">Quest Log</div><div class="v"><code>(app)/tracker.tsx</code> — the tracker, 6 buckets (<code>ALL_BUCKETS</code>).</div></div>
+      <div class="fact"><div class="k">Manage Plan</div><div class="v"><code>(app)/subscription.tsx</code> — status, promo flow, upgrade.</div></div>
+      <div class="fact"><div class="k">Signed-out</div><div class="v"><code>landing.tsx</code>, <code>login.tsx</code> (sign-in + register + consent), <code>google-auth.tsx</code> (OAuth handoff), <code>+html.tsx</code> (web document shell).</div></div>
+    </div>
+  </section>
+
+  <!-- 03 -->
+  <section id="auth">
+    <div class="head">
+      <p class="num">03</p>
+      <h2>Auth — bearer + refresh, verified server-side</h2>
+      <p class="lede">Identity is a signed JWT in an <code>Authorization: Bearer</code> header,
+        never the request body — that is what closed the pre-migration IDOR on
+        <code>/api/data/*</code>. Two token types, both HS256 over <code>JWT_SECRET</code>
+        (which <strong>fails closed</strong>: unset → 503, never a guessable key).</p>
+    </div>
+
+    <figure class="panel">
+      <div class="diagram-head"><span class="figref">FIG. 02 — REQUEST → GATE → HANDLER</span></div>
+      <div class="diagram-holder">
+        <svg viewBox="0 0 900 250" role="img" aria-label="A request carries a bearer access token. get_current_user verifies it statelessly with no database read; a missing or invalid token is 401. On a 401 the client makes one refresh call to /api/auth/refresh, which checks the refresh token's version and single-use jti against the users row. A valid access token reaches the subscription gate, which under the two-tier model always allows app access, then the route handler runs.">
+          <defs>
+            <marker id="a-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <rect x="20" y="60" width="150" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="95" y="86" text-anchor="middle" class="box-title">Request</text>
+          <text x="95" y="103" text-anchor="middle" class="box-sub">Bearer access JWT</text>
+
+          <rect x="210" y="60" width="160" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="290" y="82" text-anchor="middle" class="box-title">get_current_user</text>
+          <text x="290" y="99" text-anchor="middle" class="box-sub">verify — no DB read</text>
+          <text x="290" y="113" text-anchor="middle" class="box-sub">missing/bad → 401</text>
+
+          <rect x="410" y="60" width="180" height="60" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="500" y="82" text-anchor="middle" class="box-title">subscription gate</text>
+          <text x="500" y="99" text-anchor="middle" class="box-sub">require_subscription /</text>
+          <text x="500" y="113" text-anchor="middle" class="box-sub">optional_subscribed_user</text>
+
+          <rect x="630" y="60" width="150" height="60" rx="3" fill="currentColor" fill-opacity="0.07" stroke="currentColor" stroke-width="1.6"/>
+          <text x="705" y="86" text-anchor="middle" class="box-title">Route handler</text>
+          <text x="705" y="103" text-anchor="middle" class="box-sub">plain def → threadpool</text>
+
+          <line x1="170" y1="90" x2="204" y2="90" stroke="currentColor" stroke-width="1.5" marker-end="url(#a-arrow)"/>
+          <line x1="370" y1="90" x2="404" y2="90" stroke="currentColor" stroke-width="1.5" marker-end="url(#a-arrow)"/>
+          <line x1="590" y1="90" x2="624" y2="90" stroke="currentColor" stroke-width="1.5" marker-end="url(#a-arrow)"/>
+
+          <!-- refresh loop -->
+          <rect x="210" y="175" width="160" height="52" rx="3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <text x="290" y="197" text-anchor="middle" class="box-title">/api/auth/refresh</text>
+          <text x="290" y="214" text-anchor="middle" class="box-sub">ver + single-use jti vs DB</text>
+          <line x1="290" y1="120" x2="290" y2="171" stroke="currentColor" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#a-arrow)"/>
+          <text x="300" y="150" text-anchor="start" class="arrow-label">on 401, once</text>
+        </svg>
+      </div>
+      <figcaption>The <strong>subscription gate</strong> is still the seam every access route
+        hangs off, but under the two-tier model <code>subscription_block_reason()</code> always
+        returns <code>None</code> — a signed-in account is never walled out of the app (see §04).
+        A stale trial or subscription lapses into the Free tier rather than a lockout.</figcaption>
+    </figure>
+
+    <div class="facts">
+      <div class="fact"><div class="k">Access token</div><div class="v">45 min TTL, verified statelessly on every gated request (no DB hit). Carries <code>ver</code> for symmetry.</div></div>
+      <div class="fact"><div class="k">Refresh token</div><div class="v">30 day TTL, presented only to <code>/api/auth/refresh</code>. Its <code>ver</code> is checked against <code>users.token_version</code> (bump = log out everywhere) and its single-use <code>jti</code> is rotated (<code>refresh_jtis</code>).</div></div>
+      <div class="fact"><div class="k">Passwords</div><div class="v">Client sends SHA-256(password) as 64 hex chars; the server stores <strong>argon2 over that</strong> (64 MiB, 1–3s). Legacy bare-SHA rows upgrade transparently on next login.</div></div>
+      <div class="fact"><div class="k">Client token store</div><div class="v"><code>tokenStore.ts</code> — <code>expo-secure-store</code> on native, <code>localStorage</code> on web (<code>wingman.access_token</code> / <code>wingman.refresh_token</code>), plus a cached <code>wingman.session_user</code> so startup skips a blocking refresh.</div></div>
+      <div class="fact"><div class="k">Server state (not client)</div><div class="v">The Supabase <code>users.data</code> jsonb holds the whole app under three byte-stable keys: <code>student-profile</code>, <code>hs-tracker-data</code> (a JSON string), <code>hs-tracker-saved</code>. Reached via <code>/api/data/{save,load}</code>.</div></div>
+    </div>
+  </section>
+
+  <!-- 04 -->
+  <section id="subscription">
+    <div class="head">
+      <p class="num">04</p>
+      <h2>Subscription, trial &amp; consent — and the two-tier shift</h2>
+      <p class="lede">Every account starts a <strong>7-day free trial</strong> converting to a
+        <strong>$4.99/month</strong> Stripe plan. <code>subscription_state(record)</code> in
+        <code>app/core.py</code> is the single source of truth both the client paywall and the
+        server gate derive from, so they cannot disagree.</p>
+    </div>
+
+    <aside class="note">
+      <p><strong>The important change from the prose docs:</strong> there is no longer an
+        app-access lockout. Under the two-tier model (<code>TWO_TIER_AI_PLAN.md</code>),
+        <code>subscription_block_reason()</code> <strong>always returns <code>None</code></strong>
+        — <code>has_access</code> is effectively always true for a signed-in account. A lapsed
+        paid/comped account becomes <strong>Free</strong> rather than being walled off. The real
+        gate is now a <strong>metered daily AI-action allowance</strong> at <code>/api/ai</code>,
+        which answers <strong>429</strong>, not 402 (see §05).</p>
+    </aside>
+
+    <div class="facts">
+      <div class="fact"><div class="k"><code>has_access</code> rules</div><div class="v"><code>active</code> → yes; <code>trial</code> → until <code>trial_ends_at</code>; <code>beta</code>/<code>canceled</code> → until <code>subscription_end_at</code>. NULL <code>trial_ends_at</code> = "clock not started", not expired (<code>ensure_trial_started()</code> stamps it on first sign-in).</div></div>
+      <div class="fact"><div class="k">Free tier allowance</div><div class="v"><code>FREE_TIER_DAILY_AI_ACTIONS</code> (10), <code>FIRST_DAY_AI_ACTIONS</code> (20), same-class calls collapse inside a 300s window. <strong>Not yet enforced</strong> — ships in observe mode until <code>FREE_TIER_AI_GATE_ENFORCED=1</code>. Unlimited = paid; <code>BUDGET_EXEMPT_USERIDS</code> is the operator override.</div></div>
+      <div class="fact"><div class="k">Promo codes</div><div class="v">Two kinds keyed by <code>kind</code>: a <strong>grant</strong> (<code>BETAUSER</code> → <code>beta</code>, +7d) redeemed against the row via <code>/api/subscription/redeem-promo</code>, no Stripe; a <strong>checkout</strong> discount (<code>FREEMONTH</code>, <code>WELCOME10</code>) passed to the Checkout Session. <code>promo_codes_used</code> enforces one-per-account.</div></div>
+      <div class="fact"><div class="k">Signup consent</div><div class="v">Three checkboxes (18+; else parent/guardian per Terms §2; accept Terms + Privacy), re-checked server-side and stamped on the row (<code>is_adult</code>, <code>parental_consent</code>, <code>terms_accepted_at</code>, <code>terms_version</code>). <code>TERMS_VERSION = 2026-09-07</code>.</div></div>
+      <div class="fact"><div class="k">Stripe (sharp edge)</div><div class="v"><strong>Not configured</strong>: <code>STRIPE_API_KEY</code>/<code>STRIPE_PRICE_ID</code> absent, so <code>/api/subscription/checkout</code> errors and Upgrade surfaces that. A <code>/api/webhook/stripe</code> endpoint exists for when it is. Everything upstream of payment (trial, promo grant/redeem, cancel bookkeeping) works without it.</div></div>
+    </div>
+    <p style="margin-top:14px;">Client side, <code>(app)/_layout.tsx</code> is still the paywall
+      (redirect on an explicit <code>has_access === false</code>, hide tabs) and
+      <code>httpClient</code> still flips the cached identity on any <strong>402</strong> — but
+      because the server no longer emits an access-lockout 402, that machinery is effectively
+      dormant today.</p>
+  </section>
+
+  <!-- 05 -->
+  <section id="ai">
+    <div class="head">
+      <p class="num">05</p>
+      <h2>AI call flow — one door, feature-keyed</h2>
+      <p class="lede">There is exactly one AI endpoint: <code>POST /api/ai</code>, taking
+        <code>{feature, inputs}</code>. It replaced the old <code>/api/messages</code> and
+        <code>/api/messages-claude</code> (S1-1). The <strong>server owns the prompt text, the
+        provider, the tool config and the token budget</strong>; an unknown feature is a 400 that
+        never reaches a model.</p>
+    </div>
+
+    <aside class="note">
+      <p>The prompts live in <code>app/services/prompts.py</code> — <strong>marquee M8</strong>,
+        and every branch of the route is <strong>marquee M9</strong> (a paid call). The provider
+        is a property of the feature id: <span class="badge gemini">Gemini</span>
+        (<code>gemini-3.5-flash-lite</code>) for ranking / tag extraction / tracker extraction, and
+        the deliberate <span class="badge claude">Claude</span> holdout
+        (<code>claude-haiku-4-5-20251001</code>) for the profile chat + synthesis.</p>
+    </aside>
+
+    <div class="facts">
+      <div class="fact"><div class="k">Client seam</div><div class="v"><code>httpClient.callFeature(feature, inputs)</code> → <code>POST /api/ai</code>. Every <code>src/lib/*</code> module takes the call function as a <strong>parameter</strong> (dependency-injected, pure/testable). <code>extractJSON()</code> depth-scans the reply; <code>callGeminiJSON</code> (<code>aiJson.ts</code>) retries once on a parse failure.</div></div>
+      <div class="fact"><div class="k">Mock mode</div><div class="v">No key → <code>generate_mock_text</code> pattern-matches the (server-built) system prompt, so the app is fully click-through-able offline. The AI route stays reachable signed-out precisely so mock mode works; the gate keys on <em>whether a live key is configured</em>, not the route.</div></div>
+      <div class="fact"><div class="k">Guardrails at the route</div><div class="v">Rate limits (<code>~30/min/user</code>, <code>~120/min/IP</code>), a <strong>concurrency lane</strong> (<code>AI_MAX_CONCURRENCY=12</code>, sheds with 503 + Retry-After), a 512 KB body cap (413), a 60s upstream timeout, and web search <strong>pinned off</strong> server-side.</div></div>
+      <div class="fact"><div class="k">Spend guards</div><div class="v">A global daily circuit breaker (<code>GLOBAL_DAILY_BUDGET_USD=25</code>) that <em>degrades to mock</em> when tripped, and a per-user/per-row forced-deadline-recheck cooldown. Cost is attributed per call by feature id (exact, no substring guess).</div></div>
+    </div>
+  </section>
+
+  <!-- 06 -->
+  <section id="profile">
+    <div class="head">
+      <p class="num">06</p>
+      <h2>The profile chat &amp; its caching</h2>
+      <p class="lede">My Vibe's chat drawer builds the student profile. Its two halves are cached
+        <strong>asymmetrically, and the asymmetry is the point</strong>.</p>
+    </div>
+    <div class="facts">
+      <div class="fact"><div class="k">Openers — cached</div><div class="v">The 3 starter questions depend only on the profile text, so they're safe to cache: a <code>starterPool</code> slot (10 generated, a rotating window of 3). <em>Known RN gap: the pool is ported but not wired — the drawer currently calls the live 3-question path on each open.</em></div></div>
+      <div class="fact"><div class="k">Follow-ups — always live</div><div class="v"><code>profileChatNextQuestion</code> is one live Claude call per bot turn and must stay so — a follow-up reacts to what the student just said, which a pool cannot. The transcript sent includes the bot lines, not just answers.</div></div>
+      <div class="fact"><div class="k">One merged extract</div><div class="v">Tags + tag enrichment + basics tiles are ONE Gemini call, <code>extractTagsAndBasics</code> (<code>profileTags.ts</code>) — down from 3. A full profile update is 3 model calls (subjects, the merged extract, opener pool), ~5 counting enrichment top-ups.</div></div>
+      <div class="fact"><div class="k">Slot freshness</div><div class="v">Exact profile-text identity (<code>slot.profile === synthesized</code>), no tolerance — swapping "robotics" for "chemistry" is a zero-word delta that must still invalidate. Every synthesis rebuilds all derived slots in the background.</div></div>
+      <div class="fact"><div class="k">Synthesis</div><div class="v">Runs on drawer close (only if the student answered), rewriting the whole profile — the expensive call, on Claude, retried at a higher token ceiling if truncated (<code>stop_reason</code>).</div></div>
+      <div class="fact"><div class="k">MECE filter tags</div><div class="v">Filter tags are mutually-exclusive, collectively-exhaustive <strong>themes</strong> at the altitude a program is described, not one tag per profile line. No cap on tag count; grouping (not truncation) controls the number.</div></div>
+    </div>
+  </section>
+
+  <!-- 07 -->
+  <section id="matching">
+    <div class="head">
+      <p class="num">07</p>
+      <h2>Fresh Finds — matching</h2>
+      <p class="lede">The finder narrows the catalog to what fits a student. Two layers: a
+        client-side rank, and a server-side semantic recall.</p>
+    </div>
+    <div class="facts">
+      <div class="fact"><div class="k">Client rank</div><div class="v"><code>preFilter</code> narrows by <code>inferSubjects</code> (a derived slot, deliberately kept off the merged extract because it's on the search critical path), then <code>rankCandidates</code> (<code>ranking.ts</code>) scores the pool via an AI call.</div></div>
+      <div class="fact"><div class="k">Server recall</div><div class="v"><code>POST /api/match</code> (paid, <code>require_subscription</code>) embeds the student's selected themes + projects, recalls top-N by cosine over <code>match_vector</code>, drops verified-ineligible rows via an eligibility-gate model call, and returns the scored pool. <code>{prewarm:true}</code> embeds while the student is still on the theme picker.</div></div>
+      <div class="fact"><div class="k">Degrade path</div><div class="v">No key, or circuit-breaker open → an honest recall-ordered, ungated list (no embeddings, no eligibility call) rather than a broken screen.</div></div>
+    </div>
+  </section>
+
+  <!-- 08 -->
+  <section id="tracker">
+    <div class="head">
+      <p class="num">08</p>
+      <h2>Quest Log — tracker &amp; deadlines</h2>
+      <p class="lede">Six buckets (<code>summerPrograms, internships, researchCompetitions,
+        pureCompetitions, conferences, journals</code>). Deadlines are checked <strong>on demand
+        and shared</strong>, not on a schedule.</p>
+    </div>
+    <div class="facts">
+      <div class="fact"><div class="k">Deadline check</div><div class="v"><code>GET /api/opportunities/{id}/deadline</code> — a Claude web-search check (~$0.07) run the first time a student opens a row, <strong>cached 7 days</strong> and shared across all students. Bounded by a paid-check concurrency lane (<code>PAID_CHECK_MAX_CONCURRENCY=4</code>).</div></div>
+      <div class="fact"><div class="k">Write decision</div><div class="v"><code>deadline_write_decision()</code> is the one place that decides whether a check may overwrite a row. Four outcomes, three of which write nothing and don't stamp: <code>unverified-fallback</code> (never searched), <code>unparsed-fallback</code> (searched, JSON unreadable), <code>kept-existing</code> (verified-empty over existing dates), and <em>fresh, real search</em> (write + stamp). <code>not_running</code> always writes.</div></div>
+      <div class="fact"><div class="k">Verified-source gate</div><div class="v">The client may only DELETE dates on a verified <code>source</code> — <code>isVerifiedDeadlineSource()</code> (<code>tracker.ts</code>) accepts only <code>cached</code> and <code>fresh, real search</code>. Estimated dates are marked per-date and rendered "(estimated)".</div></div>
+      <div class="fact"><div class="k">Free batch mirror</div><div class="v"><code>GET /api/tracker/sync?ids=</code> returns the catalog's cached deadline+task data for tracked ids in one call — no paid check, never throws.</div></div>
+      <div class="fact"><div class="k">Calendar sync</div><div class="v"><code>POST /api/calendar/sync</code> writes to a dedicated <strong>"Highschool Wingman"</strong> calendar under the <code>calendar.app.created</code> scope (marquee M7 — it can never touch a student's own calendars). The calendar <strong>mirrors</strong> the Quest Log: the sweep deletes unmarked events too, so anything a student adds by hand is removed on the next sync. <code>not_running</code> rows are skipped.</div></div>
+    </div>
+  </section>
+
+  <!-- 09 -->
+  <section id="tasks">
+    <div class="head">
+      <p class="num">09</p>
+      <h2>Action items — the checklist that can't fabricate</h2>
+      <p class="lede">Each row's application checklist is <strong>catalog data</strong>, generated
+        by the 7th agent (<code>generate_action_items.py</code>) and verified line-by-line against
+        the program's own page — the fix for a fabricated "Algebra 2 prerequisite" that no page
+        stated.</p>
+    </div>
+    <div class="facts">
+      <div class="fact"><div class="k">The guarantee is in code</div><div class="v"><code>page_text.py</code>: every distinctive word of a task must appear on the fetched page (<code>claim_is_supported</code>) and a page-backed task must supply a verbatim quote (<code>quote_is_on_page</code>). Failing the first <strong>drops</strong> the task; failing the second <strong>demotes</strong> it to generic. No fuzzy matching.</div></div>
+      <div class="fact"><div class="k">basis (page-backed vs generic)</div><div class="v">Served from <code>GET /api/opportunities/{id}/action-items</code>. The client honours <code>basis</code> in exactly one place (<code>normalizeVerifiedActionItems</code>); anything a model produces in the browser is forced to <code>generic</code>. Home Base renders "From the program page" vs "Typical steps — confirm on the site".</div></div>
+      <div class="fact"><div class="k">Unfetchable page</div><div class="v">Costs nothing — no model call — and gets a local per-type generic checklist. A fetch failure is a fact about our HTTP client, never about the program.</div></div>
+    </div>
+  </section>
+
+  <!-- 10 -->
+  <section id="email">
+    <div class="head">
+      <p class="num">10</p>
+      <h2>Lifecycle email</h2>
+      <p class="lede">Three transactional emails via <strong>Resend</strong> — <code>welcome</code>
+        at signup, <code>trial_ending</code> ~2 days before the trial expires, <code>goodbye</code>
+        on cancel. Deliberately <strong>not</strong> a marketing system: no list, no broadcast, no
+        path that mails everybody at once (the roster is largely minors).</p>
+    </div>
+    <div class="facts">
+      <div class="fact"><div class="k">Claim table</div><div class="v"><code>email_sends</code> is written <strong>before</strong> Resend is called; its <code>unique (userid, kind, dedupe_key)</code> is what makes a repeated sweep safe. A mock send (no <code>RESEND_API_KEY</code>) writes no claim row. <code>db/email_schema.sql</code> gates the whole feature.</div></div>
+      <div class="fact"><div class="k">Triggers</div><div class="v"><code>welcome</code>/<code>goodbye</code> are event-driven from <code>app/routes/</code> (register, Google finish, cancel). <code>trial_ending</code> comes from <code>POST /api/email/sweep</code> (guarded by <code>EMAIL_CRON_SECRET</code> in a header, fails closed).</div></div>
+      <div class="fact"><div class="k">Sweep cron — DISARMED</div><div class="v"><code>.github/workflows/lifecycle-emails.yml</code> carries <code>workflow_dispatch</code> only, so the trial reminder does not auto-send; someone must run it. Re-arming = uncommenting the cron + setting two secrets.</div></div>
+      <div class="fact"><div class="k">Opt-out</div><div class="v"><code>GET /api/email/unsubscribe</code> answers HTML, carries an HMAC of the userid, and is honoured for all three kinds (even the defensibly-transactional two). Also: deadline-alert digest emails exist (<code>DEADLINE_ALERT_RUNGS = 7,3,1</code>).</div></div>
+    </div>
+  </section>
+
+  <!-- 11 -->
+  <section id="data">
+    <div class="head">
+      <p class="num">11</p>
+      <h2>Data rights — export &amp; delete</h2>
+      <p class="lede">Both self-serve endpoints ship (<code>app/routes/account_data.py</code>,
+        <code>DATA_DELETION_EXPORT_PLAN.md</code>). Identity is <strong>always</strong>
+        <code>user.id</code> from the verified token — there is no <code>userid</code> parameter
+        anywhere, which is the "can't touch another user's data" guarantee.</p>
+    </div>
+    <div class="facts">
+      <div class="fact"><div class="k">Export</div><div class="v"><code>POST /api/account/export</code> — assembles everything Wingman holds and returns it as one JSON file attachment. Rate-limited per hour.</div></div>
+      <div class="fact"><div class="k">Delete</div><div class="v"><code>POST /api/account/delete</code> — immediate hard delete guarded by <strong>re-auth</strong>: either <code>{passwordHash}</code> re-verified server-side, or a single-use <code>{reauthToken}</code> from a Google re-auth flow (for Google-only accounts). A live Stripe subscription is cancelled first; if that fails, nothing is deleted.</div></div>
+      <div class="fact"><div class="k">Both ungated</div><div class="v">Hang off <code>get_current_user</code>, not <code>require_subscription</code> — a lapsed account must still be able to take or erase its own data.</div></div>
+    </div>
+  </section>
+
+  <!-- endpoints -->
+  <section id="endpoints">
+    <div class="head">
+      <p class="num">12</p>
+      <h2>Endpoint reference</h2>
+      <p class="lede">The public API surface of <code>app/routes/*.py</code>, grouped by domain.</p>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Method</th><th>Path</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td class="method">POST</td><td class="ep">/api/register · /api/login</td><td>Create / sign in an account; returns identity + access + refresh tokens.</td></tr>
+          <tr><td class="method">POST</td><td class="ep">/api/auth/refresh · /logout · /logout-all</td><td>Rotate the token pair; revoke this device; bump token_version (kill all sessions).</td></tr>
+          <tr><td class="method">GET/POST</td><td class="ep">/api/auth/google/*</td><td>Google sign-in (start / callback / session / finish) and calendar-connect grant.</td></tr>
+          <tr><td class="method">POST</td><td class="ep">/api/data/save · /api/data/load</td><td>Read/write the <code>users.data</code> jsonb (batched by key).</td></tr>
+          <tr><td class="method">POST</td><td class="ep">/api/ai</td><td>The one model door: <code>{feature, inputs}</code> → text envelope. (M8/M9)</td></tr>
+          <tr><td class="method">POST</td><td class="ep">/api/match</td><td>Semantic recall + eligibility over the catalog for one student.</td></tr>
+          <tr><td class="method">GET</td><td class="ep">/api/opportunities</td><td>The active catalog (vector-stripped, gzip + ETag).</td></tr>
+          <tr><td class="method">GET</td><td class="ep">/api/opportunities/{id}/deadline</td><td>On-demand, 7-day-cached deadline check.</td></tr>
+          <tr><td class="method">GET</td><td class="ep">/api/opportunities/{id}/action-items · /api/tracker/sync</td><td>The verified checklist; the free tracked-row mirror.</td></tr>
+          <tr><td class="method">POST</td><td class="ep">/api/subscription/{status,checkout,cancel,redeem-promo,validate-promo}</td><td>Trial/plan status, Stripe checkout, cancel, promo grant + validate.</td></tr>
+          <tr><td class="method">POST</td><td class="ep">/api/webhook/stripe</td><td>Stripe subscription lifecycle webhook.</td></tr>
+          <tr><td class="method">POST</td><td class="ep">/api/extract-from-resume · /extract-from-linkedin · /user-submitted-opportunities</td><td>Resume/LinkedIn profile import; custom Quest Log add.</td></tr>
+          <tr><td class="method">GET/POST</td><td class="ep">/api/mailing-list/* · /api/opportunities/{id}/subscribe</td><td>Mailing-list status and one-tap signup (verified recipes only).</td></tr>
+          <tr><td class="method">POST</td><td class="ep">/api/calendar/sync</td><td>Mirror the Quest Log to the app-created Google calendar.</td></tr>
+          <tr><td class="method">POST</td><td class="ep">/api/events</td><td>Behavioral event capture (append-only log).</td></tr>
+          <tr><td class="method">POST</td><td class="ep">/api/account/export · /api/account/delete</td><td>Self-serve data export + re-auth-guarded hard delete.</td></tr>
+          <tr><td class="method">POST/GET</td><td class="ep">/api/email/sweep · /api/email/unsubscribe</td><td>Daily trial-reminder trigger (cron-secret); unsubscribe (HTML).</td></tr>
+          <tr><td class="method">GET</td><td class="ep">/opportunities/{slug} · /sitemap.xml · /robots.txt</td><td>Public SEO program pages + sitemap.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    How the Wingman app works — a map of the student-facing product (<code>frontend/</code>) and
+    its FastAPI backend (<code>app/</code>). Verified against code 2026-09-07; prose source
+    <code>docs/CLAUDE-app.md</code>. Local-only doc, served over the ops console.
+  </footer>
+</div>
+</body>
+</html>

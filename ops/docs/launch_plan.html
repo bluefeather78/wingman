@@ -1,0 +1,630 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found]){display:none!important}</style></head><body>
+<title>Wingman Launch Plan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap">
+<style>
+  :root {
+    --ink: #141d33;
+    --ink-soft: #33405c;
+    --paper: #f4f5f3;
+    --surface: #ffffff;
+    --surface-2: #eceef0;
+    --line: #d9dde3;
+    --line-strong: #c3c9d2;
+    --muted: #61697a;
+    --marigold: #e8930a;
+    --marigold-wash: #fbf0da;
+    --teal: #0f9e8f;
+    --teal-wash: #e0f3f0;
+    --coral: #db4032;
+    --coral-wash: #fae4e1;
+    --accent: var(--marigold);
+
+    --maxw: 940px;
+    --r: 10px;
+    --shadow: 0 1px 2px rgba(20,29,51,.06), 0 8px 24px rgba(20,29,51,.05);
+    --f-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+    --f-body: "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif;
+    --f-mono: "Space Mono", ui-monospace, "SFMono-Regular", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #eef1f6;
+      --ink-soft: #c3cbdb;
+      --paper: #0e1420;
+      --surface: #161f2f;
+      --surface-2: #1e293b;
+      --line: #2a3547;
+      --line-strong: #3a4761;
+      --muted: #93a0b6;
+      --marigold: #f3ab3c;
+      --marigold-wash: #2c2413;
+      --teal: #3ecabb;
+      --teal-wash: #12312e;
+      --coral: #f0685b;
+      --coral-wash: #331c1a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 28px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #eef1f6;
+    --ink-soft: #c3cbdb;
+    --paper: #0e1420;
+    --surface: #161f2f;
+    --surface-2: #1e293b;
+    --line: #2a3547;
+    --line-strong: #3a4761;
+    --muted: #93a0b6;
+    --marigold: #f3ab3c;
+    --marigold-wash: #2c2413;
+    --teal: #3ecabb;
+    --teal-wash: #12312e;
+    --coral: #f0685b;
+    --coral-wash: #331c1a;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 28px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--f-body);
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; line-height: 1.15; }
+  p { max-width: 66ch; }
+  a { color: var(--marigold); }
+
+  .eyebrow {
+    font-family: var(--f-mono);
+    font-size: 12px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* ---------- masthead ---------- */
+  header.mast {
+    border-bottom: 1px solid var(--line);
+    background:
+      radial-gradient(120% 140% at 100% 0%, var(--marigold-wash), transparent 55%),
+      var(--surface);
+  }
+  .mast-inner { padding: 54px 24px 40px; max-width: var(--maxw); margin: 0 auto; }
+  .kicker { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+  .logo {
+    font-family: var(--f-display); font-weight: 700; font-size: 15px;
+    letter-spacing: -.01em; display: inline-flex; align-items: center; gap: 8px;
+  }
+  .logo .dot { width: 11px; height: 11px; border-radius: 3px; background: var(--marigold); display: inline-block; transform: rotate(45deg); }
+  .kicker .sep { flex: 1; height: 1px; background: var(--line); }
+  .kicker .date { font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
+  h1.title {
+    font-size: clamp(38px, 6.4vw, 62px);
+    font-weight: 700;
+    letter-spacing: -.025em;
+    margin: 0 0 18px;
+  }
+  h1.title em { font-style: normal; color: var(--marigold); }
+  .lede { font-size: clamp(17px, 2.1vw, 20px); color: var(--ink-soft); margin: 0; max-width: 60ch; }
+  .thesis {
+    margin-top: 30px; padding: 18px 22px;
+    border-left: 3px solid var(--marigold);
+    background: var(--surface-2);
+    border-radius: 0 var(--r) var(--r) 0;
+    font-family: var(--f-display); font-weight: 500;
+    font-size: clamp(16px, 2vw, 19px); color: var(--ink);
+    max-width: 62ch;
+  }
+
+  /* ---------- snapshot strip ---------- */
+  .snap { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 34px 0 0; }
+  .snap .cell {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 16px 16px 15px;
+  }
+  .snap .n { font-family: var(--f-mono); font-weight: 700; font-size: 25px; letter-spacing: -.02em; color: var(--ink); }
+  .snap .n small { font-size: 15px; color: var(--muted); font-weight: 400; }
+  .snap .l { font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.35; }
+
+  /* ---------- sections ---------- */
+  section { padding: 44px 0; border-top: 1px solid var(--line); }
+  section:first-of-type { border-top: none; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 8px; }
+  .sec-head .no { font-family: var(--f-mono); font-size: 13px; color: var(--marigold); font-weight: 700; }
+  h2 { font-size: clamp(23px, 3.2vw, 30px); font-weight: 600; letter-spacing: -.02em; margin: 0; }
+  .sec-intro { color: var(--ink-soft); margin: 10px 0 26px; font-size: 16.5px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 20px 20px 18px; box-shadow: var(--shadow);
+  }
+  .card h3 { font-size: 17px; font-weight: 600; margin: 0 0 8px; }
+  .card p { font-size: 14.5px; color: var(--ink-soft); margin: 0; max-width: none; }
+  .card .tag {
+    font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); display: block; margin-bottom: 10px;
+  }
+
+  /* who-pays split */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+  .split > div { padding: 22px; }
+  .split .a { background: var(--teal-wash); }
+  .split .b { background: var(--marigold-wash); border-left: 1px solid var(--line); }
+  .split h3 { margin: 0 0 4px; font-size: 15px; }
+  .split .who { font-family: var(--f-mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .split ul { margin: 12px 0 0; padding-left: 18px; }
+  .split li { font-size: 14px; color: var(--ink-soft); margin-bottom: 6px; }
+
+  /* channel ranking */
+  .chan { display: flex; flex-direction: column; gap: 12px; }
+  .chan .row {
+    display: grid; grid-template-columns: 40px 1fr auto; gap: 18px; align-items: center;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 16px 18px;
+  }
+  .chan .rank { font-family: var(--f-mono); font-weight: 700; font-size: 20px; color: var(--marigold); }
+  .chan .body h3 { font-size: 16px; margin: 0 0 3px; }
+  .chan .body p { font-size: 13.8px; color: var(--muted); margin: 0; max-width: 62ch; }
+  .chan .meta { text-align: right; min-width: 120px; }
+  .pill {
+    font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase;
+    padding: 4px 9px; border-radius: 100px; display: inline-block; font-weight: 700;
+  }
+  .pill.free { background: var(--teal-wash); color: var(--teal); }
+  .pill.paid { background: var(--marigold-wash); color: var(--marigold); }
+  .pill.owned { background: var(--surface-2); color: var(--ink-soft); }
+  .chan .cost { display: block; font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+  /* phase timeline */
+  .phases { display: flex; flex-direction: column; gap: 0; }
+  .phase { display: grid; grid-template-columns: 130px 1fr; gap: 26px; padding: 22px 0; border-top: 1px dashed var(--line-strong); position: relative; }
+  .phase:first-child { border-top: none; }
+  .phase .rail .ph { font-family: var(--f-mono); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--marigold); }
+  .phase .rail .when { font-family: var(--f-mono); font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .phase .rail .goal { font-size: 12.5px; color: var(--ink-soft); margin-top: 10px; line-height: 1.4; }
+  .phase h3 { font-size: 18px; font-weight: 600; margin: 0 0 10px; }
+  .phase ul { margin: 0; padding-left: 18px; }
+  .phase li { font-size: 14.5px; color: var(--ink-soft); margin-bottom: 7px; }
+  .phase li b { color: var(--ink); font-weight: 600; }
+
+  /* funnel */
+  .funnel { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+  .funnel .stage { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 16px; }
+  .funnel .bar { position: relative; height: 44px; border-radius: 7px; background: var(--surface-2); overflow: hidden; border: 1px solid var(--line); }
+  .funnel .fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, var(--marigold), var(--teal)); opacity: .9; }
+  .funnel .txt { position: relative; z-index: 1; display: flex; align-items: center; height: 100%; padding: 0 15px; font-weight: 600; font-size: 14px; color: var(--ink); }
+  :root:not([data-theme="light"]) .funnel .txt { mix-blend-mode: normal; }
+  .funnel .target { font-family: var(--f-mono); font-size: 15px; font-weight: 700; color: var(--ink); min-width: 62px; text-align: right; }
+  .funnel .sub { font-size: 12px; color: var(--muted); font-family: var(--f-body); font-weight: 500; }
+
+  /* risk table */
+  .risks { display: flex; flex-direction: column; gap: 10px; }
+  .risk { display: grid; grid-template-columns: 150px 1fr; gap: 20px; padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+  .risk .name { font-weight: 600; font-size: 14.5px; display: flex; align-items: flex-start; gap: 9px; }
+  .risk .name .sev { width: 8px; height: 8px; border-radius: 50%; margin-top: 7px; flex: none; }
+  .risk .sev.hi { background: var(--coral); }
+  .risk .sev.med { background: var(--marigold); }
+  .risk .mit { font-size: 14px; color: var(--ink-soft); }
+  .risk .mit b { color: var(--ink); font-weight: 600; }
+
+  /* checklist */
+  .todo { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 26px; }
+  .todo .item { display: grid; grid-template-columns: 22px 1fr; gap: 12px; align-items: start; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .todo .box { width: 18px; height: 18px; border: 2px solid var(--line-strong); border-radius: 5px; margin-top: 2px; }
+  .todo .item.crit .box { border-color: var(--coral); background: var(--coral-wash); }
+  .todo .t { font-size: 14.5px; color: var(--ink); font-weight: 500; }
+  .todo .t small { display: block; color: var(--muted); font-weight: 400; font-size: 12.5px; margin-top: 2px; }
+
+  ul.clean { list-style: none; padding: 0; margin: 0; }
+
+  footer { padding: 40px 0 60px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  footer .f-inner { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  footer .mono { font-family: var(--f-mono); }
+
+  @media (max-width: 720px) {
+    .snap { grid-template-columns: 1fr 1fr; }
+    .grid-2, .grid-3, .split, .todo { grid-template-columns: 1fr; }
+    .phase { grid-template-columns: 1fr; gap: 12px; }
+    .risk { grid-template-columns: 1fr; gap: 6px; }
+    .chan .row { grid-template-columns: 32px 1fr; }
+    .chan .meta { grid-column: 2; text-align: left; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<header class="mast">
+  <div class="mast-inner">
+    <div class="kicker">
+      <span class="logo"><span class="dot"></span> HIGHSCHOOL WINGMAN</span>
+      <span class="sep"></span>
+      <span class="date">GO-TO-MARKET · v1 · SEP 2026</span>
+    </div>
+    <h1 class="title">Getting Wingman into the hands of students <em>before the deadlines hit.</em></h1>
+    <p class="lede">A launch plan for an app that helps high schoolers find and track extracurricular opportunities — summer programs, internships, research and academic competitions, conferences, and journals — across web, iOS and Android.</p>
+    <div class="thesis">The product is built. The catalog is stocked. The one thing we don't get back is the calendar: students choose next summer's programs in the fall and winter of this school year. Everything below is sequenced around arriving before that window closes, not after.</div>
+
+    <div class="snap">
+      <div class="cell"><div class="n">1,200<small>+</small></div><div class="l">Live opportunities in the catalog, AI-maintained</div></div>
+      <div class="cell"><div class="n">$4.99<small>/mo</small></div><div class="l">Unlimited-AI tier price — a free metered tier sits below it (no trial)</div></div>
+      <div class="cell"><div class="n">3</div><div class="l">Platforms from one codebase — web, iOS, Android</div></div>
+      <div class="cell"><div class="n">14–18</div><div class="l">Target age — mostly minors; parents pay</div></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- 1. STARTING LINE -->
+  <section>
+    <div class="sec-head"><span class="no">01</span><h2>The honest starting line</h2></div>
+    <div class="card" style="border-left:3px solid var(--teal);background:var(--teal-wash);margin-bottom:22px">
+      <span class="tag" style="color:var(--teal)">Product update · 2026-09-07 · reconciled to the code</span>
+      <h3>The monetization model changed: two-tier freemium, no trial</h3>
+      <p>This plan was drafted around a <b>7-day free trial → single $9.99/mo plan → lockout on expiry</b>. The product now ships a <b>two-tier freemium model</b> (<code>TWO_TIER_AI_PLAN.md</code>): every signed-in account has full app access, and the only thing that varies is the AI tier — a metered <b>Free</b> tier (a daily AI-action allowance) versus <b>Unlimited</b> at <b>$4.99/mo</b>. There is <b>no trial</b> and <b>no app-access lockout</b> — a lapsing or free account simply becomes a normal metered Free user. (The free-tier AI meter currently ships in observe-mode, not yet enforced.) Prices below are corrected to $4.99; the trial-era <em>tactics</em> — the trial-ending email, the "trial → paid" funnel — are kept as written and should be re-read as <b>free → paid</b>. A fuller freemium rewrite of the funnel and lifecycle messaging is a strategic call still to make.</p>
+    </div>
+    <p class="sec-intro">A go-to-market plan is worthless if it front-runs the product's readiness. Three things must be true before a single paid dollar of acquisition is spent — two are blockers.</p>
+    <div class="grid-3">
+      <div class="card" style="border-color: var(--coral);">
+        <span class="tag" style="color: var(--coral);">Blocker · money</span>
+        <h3>Payments aren't wired</h3>
+        <p>Stripe keys are absent, so the Upgrade button can't take money — the <b>$4.99 Unlimited tier can't be sold at all</b>. A lapsing account is no longer locked out (it drops to the metered Free tier), so the blocker is <em>monetization, not access</em>: nothing here earns a dollar until <b>STRIPE_API_KEY / STRIPE_PRICE_ID</b> are set and one real upgrade goes through checkout end-to-end.</p>
+      </div>
+      <div class="card" style="border-color: var(--coral);">
+        <span class="tag" style="color: var(--coral);">Blocker · retention</span>
+        <h3>Lifecycle email is dormant</h3>
+        <p>Welcome, trial-ending and goodbye emails exist but the daily sweep is disarmed and the sending domain isn't verified. For a deadline product, the reminder <em>is</em> the retention loop. Arm the cron, verify DKIM/SPF, send one real welcome.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Gate · distribution</span>
+        <h3>Minors change everything</h3>
+        <p>The audience is largely under 18. App-store review, parental-consent flow, COPPA/FERPA posture and a "we don't sell a list of kids" privacy stance are launch prerequisites, not fine print. They also shape which channels are even allowed.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. WHO PAYS -->
+  <section>
+    <div class="sec-head"><span class="no">02</span><h2>Two people, one purchase</h2></div>
+    <p class="sec-intro">The user and the buyer are different humans with different anxieties. Every message, screen and email has to satisfy both — the teen has to want it, the parent has to approve the card.</p>
+    <div class="split">
+      <div class="a">
+        <span class="who">The user · grades 9–12</span>
+        <h3>Wants to look impressive without the grind</h3>
+        <ul>
+          <li>Doesn't know what programs exist beyond the three their friends mention</li>
+          <li>Misses deadlines because they live in fifteen browser tabs</li>
+          <li>Responds to game-shaped progress — Quest Log, Fresh Finds, Home Base</li>
+          <li>Has no credit card</li>
+        </ul>
+      </div>
+      <div class="b">
+        <span class="who">The buyer · parent / guardian</span>
+        <h3>Wants a real return on $4.99</h3>
+        <ul>
+          <li>Anchors price against a single summer program that costs thousands</li>
+          <li>Needs to trust where their kid's data goes</li>
+          <li>Approves the trial, gets the trial-ending email, taps upgrade</li>
+          <li>Is reachable through parent Facebook groups and school newsletters</li>
+        </ul>
+      </div>
+    </div>
+    <p class="sec-intro" style="margin-top:20px;margin-bottom:0;">The pricing story writes itself: <b>one missed fee-waiver deadline or one program you never heard of costs more than a year of Wingman.</b> Lead with that math on the paywall and in the trial-ending email.</p>
+  </section>
+
+  <!-- 3. POSITIONING & BEACHHEAD -->
+  <section>
+    <div class="sec-head"><span class="no">03</span><h2>Positioning &amp; the beachhead</h2></div>
+    <p class="sec-intro">Don't launch to "all high schoolers." Win one tight, deadline-driven, self-selecting segment first, then widen.</p>
+    <div class="grid-2">
+      <div class="card">
+        <span class="tag">Positioning</span>
+        <h3>The co-pilot for your extracurricular life</h3>
+        <p>Not another college-admissions consultant, not a static list. Wingman finds opportunities matched to a student's actual profile, tracks every deadline, and hands them the exact next step for each application — verified against the program's own page, never invented. Category: <b>opportunity discovery + deadline tracking</b>, priced like an app, not a consultant.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Beachhead segment</span>
+        <h3>Ambitious 10th &amp; 11th graders, STEM-leaning</h3>
+        <p>They apply to competitive summer programs and research competitions with hard fall/winter deadlines, they cluster in findable communities, and they feel the pain acutely. Land them, earn word-of-mouth and testimonials, then expand to arts/humanities and to 9th graders planning ahead.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. CHANNELS -->
+  <section>
+    <div class="sec-head"><span class="no">04</span><h2>Channels, ranked by fit</h2></div>
+    <p class="sec-intro">Ranked for a bootstrapped, minors-facing product where paid ads to teens are restricted and trust is the currency. Start free and owned; earn paid.</p>
+    <div class="chan">
+      <div class="row">
+        <span class="rank">1</span>
+        <div class="body">
+          <h3>Programmatic SEO on the catalog itself</h3>
+          <p>1,200+ named programs are 1,200+ long-tail search pages ("Is [program] worth it?", "[program] deadline 2027"). Students Google program names constantly. This is the cheapest durable moat we have.</p>
+        </div>
+        <div class="meta"><span class="pill owned">Owned</span><span class="cost">Highest leverage</span></div>
+      </div>
+      <div class="row">
+        <span class="rank">2</span>
+        <div class="body">
+          <h3>Reddit — r/ApplyingToCollege &amp; subject subs</h3>
+          <p>Where this exact segment already asks "what should I do this summer?" every day. Show up as a genuinely useful tool, not an ad. Founder-led, transparent, one great post beats a month of spend.</p>
+        </div>
+        <div class="meta"><span class="pill free">Free</span><span class="cost">Community-led</span></div>
+      </div>
+      <div class="row">
+        <span class="rank">3</span>
+        <div class="body">
+          <h3>School counselors &amp; enrichment coordinators</h3>
+          <p>One counselor reaches hundreds of students and talks to the parents who pay. High trust, slow to close. Offer free classroom/counselor access; let them be the distribution.</p>
+        </div>
+        <div class="meta"><span class="pill free">Free</span><span class="cost">Slow, durable</span></div>
+      </div>
+      <div class="row">
+        <span class="rank">4</span>
+        <div class="body">
+          <h3>Short-form video — TikTok / Instagram / YouTube</h3>
+          <p>"Programs nobody tells you about" and "the deadline you just missed" are made for the format. Creator partnerships in the admissions niche outperform brand-owned accounts early on.</p>
+        </div>
+        <div class="meta"><span class="pill paid">Paid+organic</span><span class="cost">Awareness</span></div>
+      </div>
+      <div class="row">
+        <span class="rank">5</span>
+        <div class="body">
+          <h3>Parent communities &amp; school newsletters</h3>
+          <p>Facebook parent groups, PTA lists, local "gifted &amp; talented" networks. This is where the buyer lives, and where the $4.99 math lands hardest.</p>
+        </div>
+        <div class="meta"><span class="pill free">Free</span><span class="cost">Reaches the buyer</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. SEO STRATEGY -->
+  <section>
+    <div class="sec-head"><span class="no">05</span><h2>SEO strategy — the catalog is the moat</h2></div>
+    <p class="sec-intro">Students search program names constantly, and those searches are low-competition and high-intent. A 1,200-row catalog that grows itself is 1,200 pages that can rank — this is the cheapest durable acquisition channel Wingman owns. Four layers:</p>
+    <div class="grid-2">
+      <div class="card">
+        <span class="tag">Layer 1 · Programmatic pages</span>
+        <h3>One indexable page per opportunity</h3>
+        <p>Template a public page for every catalog row: name, org, eligibility, verified deadline, and the application checklist. Title pattern <b>"[Program] — Deadlines, Eligibility &amp; How to Apply (2027)"</b>. 1,200+ pages at launch, and every row the agents add ships a new one automatically.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Layer 2 · Hub / cluster pages</span>
+        <h3>Rank for the category, funnel to the program</h3>
+        <p>Curated hubs — "Summer research programs for high schoolers," "Free STEM summer programs," "[State] pre-college programs" — that internally link down to the program pages. Hubs win the fat head keywords; programs win the long tail. Classic topic-cluster structure.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Layer 3 · Question &amp; comparison pages</span>
+        <h3>Own the queries students actually type</h3>
+        <p>"Is [program] worth it?", "[program] acceptance rate", "[program] vs [program]", "[program] deadline 2027". These are the exact phrasings in Reddit threads and Google autocomplete — high intent, almost no competition, and a natural place to show the tracker as the answer.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Layer 4 · Technical foundation</span>
+        <h3>Make it crawlable and trustworthy</h3>
+        <p>Ship <b>robots.txt</b> and a <b>catalog-generated sitemap.xml</b>; add <code>Event</code>/<code>schema.org</code> structured data with <code>startDate</code>/deadline so programs can win rich results; set canonical URLs; and <b>server-render the SEO pages</b> — a client-only Expo bundle indexes poorly, and these pages must be static HTML the crawler reads on first byte.</p>
+      </div>
+    </div>
+    <p class="sec-intro" style="margin-top:20px;margin-bottom:0;"><b>Freshness is a built-in advantage.</b> The deadline agents update dates continuously, so program pages stay current — a signal static competitor lists can't match. Regenerate the sitemap on each catalog refresh so Google re-crawls what changed.</p>
+  </section>
+
+  <!-- 6. ADVERTISING STRATEGY -->
+  <section>
+    <div class="sec-head"><span class="no">06</span><h2>Advertising strategy — aim at the wallet</h2></div>
+    <p class="sec-intro">The hard constraint shapes everything: ad platforms <b>forbid personalized targeting of under-18 users</b>. So paid ads don't target teens directly — they target the buyer (parents), the gatekeeper (counselors), and use <em>contextual</em> rather than behavioral placement. Spend nothing until Phase 0 is done and the funnel converts; then start small and buy on payback, not vanity reach.</p>
+    <div class="grid-3">
+      <div class="card">
+        <span class="tag">Channel</span>
+        <h3>Google Search — high intent</h3>
+        <p>Bid on parent-side, purchase-intent queries: "summer program for high schoolers," "college application help for my child." Search catches demand that already exists — best first dollar. Let SEO own the program-name long tail; buy the commercial head terms.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Channel</span>
+        <h3>Meta — target parents, not kids</h3>
+        <p>Facebook/Instagram to adults 35–55 with college-prep and parenting interests. This is where the "$4.99 vs. one program that costs thousands" creative lands. Compliant because the audience is adults.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Channel</span>
+        <h3>Creator / short-form — contextual</h3>
+        <p>Sponsor admissions-niche TikTok/YouTube creators rather than running personalized ads to teen accounts. The creator's audience does the targeting; the content is the ad. Highest early ROI for reaching students themselves.</p>
+      </div>
+    </div>
+    <div class="grid-2" style="margin-top:16px;">
+      <div class="card">
+        <span class="tag">Creative &amp; message</span>
+        <h3>Two ads, two audiences</h3>
+        <p>Parent creative: the value math and the trust/privacy stance. Student-facing creator content: discovery FOMO ("programs nobody tells you about") and deadline urgency. Every ad routes to a "start your free trial" or "send this to a parent" flow — never a dead end for a user with no card.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Budget &amp; discipline</span>
+        <h3>Buy payback, spend seasonally</h3>
+        <p>Concentrate spend in the Nov–Feb deadline peak when intent is highest. Cap early tests at a few hundred dollars per channel, measure <b>cost per activated trial</b> against the $4.99 LTV, and only scale the channel with the shortest payback. Kill anything that can't beat organic.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7. LAUNCH PHASES -->
+  <section>
+    <div class="sec-head"><span class="no">07</span><h2>The launch, in four phases</h2></div>
+    <p class="sec-intro">Sequenced against the application calendar. Today is early September — Phases 0 and 1 have to finish before deadline season peaks.</p>
+    <div class="phases">
+      <div class="phase">
+        <div class="rail">
+          <div class="ph">Phase 0</div>
+          <div class="when">Sep 2026 · ~3 wks</div>
+          <div class="goal">Goal: one dollar can be charged, one email can be sent.</div>
+        </div>
+        <div>
+          <h3>Make it launchable</h3>
+          <ul>
+            <li><b>Wire Stripe</b> and put a real trial through checkout to conversion.</li>
+            <li><b>Verify the sending domain</b> (SPF/DKIM/DMARC) and arm the lifecycle sweep; test welcome + trial-ending against a real inbox.</li>
+            <li><b>Ship the app-store builds</b> and pass review with the parental-consent flow.</li>
+            <li>Freeze the catalog quality bar — dead links and bad deadlines are the fastest way to lose a first-time user.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="rail">
+          <div class="ph">Phase 1</div>
+          <div class="when">Oct 2026 · ~4 wks</div>
+          <div class="goal">Goal: proof the loop works on strangers, not friends.</div>
+        </div>
+        <div>
+          <h3>Closed beta — 50–100 real students</h3>
+          <ul>
+            <li>Recruit from <b>one</b> channel (a counselor cohort or a single subject community). Hand out <b>BETAUSER</b> grants.</li>
+            <li>Watch the activation funnel you already instrument: signup → meaningful profile → first tracked program → came back.</li>
+            <li>Interview the students who <em>didn't</em> come back. Fix the drop-off before scaling it.</li>
+            <li>Collect 5–10 quotable testimonials and 3 before/after stories for launch.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="rail">
+          <div class="ph">Phase 2</div>
+          <div class="when">Nov–Dec 2026</div>
+          <div class="goal">Goal: ride peak deadline season into paid conversions.</div>
+        </div>
+        <div>
+          <h3>Seasonal public launch</h3>
+          <ul>
+            <li>Open signups. Turn on programmatic SEO pages and the Reddit + short-form push together.</li>
+            <li>Lean into urgency: "summer program deadlines are closing" is true and it's the exact moment the product is most valuable.</li>
+            <li>Launch a <b>referral loop</b> — a student who invites a friend extends their access; both win.</li>
+            <li>Measure free → paid conversion against <em>activated</em> free users (profile built, something tracked), never against all signups. (Under freemium there is no trial to "end" — the conversion trigger is hitting the free AI ceiling, once that meter is enforced.)</li>
+          </ul>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="rail">
+          <div class="ph">Phase 3</div>
+          <div class="when">Jan 2027 →</div>
+          <div class="goal">Goal: turn a seasonal spike into a year-round habit.</div>
+        </div>
+        <div>
+          <h3>Widen &amp; retain</h3>
+          <ul>
+            <li>Expand beyond STEM to arts/humanities segments and to 9th-graders planning early.</li>
+            <li>Formalize the counselor/school channel — a free tier that makes Wingman the school's default tool.</li>
+            <li>Use deadline alerts + calendar sync as the always-on reason to keep the app installed between application seasons.</li>
+            <li>Double down on whichever Phase-2 channel produced the cheapest activated user.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8. GROWTH LOOPS -->
+  <section>
+    <div class="sec-head"><span class="no">08</span><h2>Three loops that compound</h2></div>
+    <p class="sec-intro">Campaigns spend money once. Loops pay forward. These three are already latent in the product.</p>
+    <div class="grid-3">
+      <div class="card">
+        <span class="tag">Content loop</span>
+        <h3>Catalog → search → signup</h3>
+        <p>Every opportunity the agents add becomes an indexable page that ranks for its own name and feeds new students back into the app. The catalog grows on its own; the SEO surface grows with it.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Habit loop</span>
+        <h3>Deadline → alert → return</h3>
+        <p>Tracked deadlines fire reminders and calendar events, which pull the student back exactly when a competitor's static list has gone cold. The reminder is the retention engine — which is why lifecycle email is a Phase-0 blocker.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Referral loop</span>
+        <h3>Student → friend → both extend</h3>
+        <p>Extracurriculars are social and competitive — students compare notes constantly. A grant-based referral (extend both accounts) rides that behavior instead of fighting it, and costs nothing but access.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9. METRICS -->
+  <section>
+    <div class="sec-head"><span class="no">09</span><h2>What we'll watch</h2></div>
+    <p class="sec-intro">Directional targets for the first full season, mapped to the activation funnel already built into the admin console. Percentages are of the previous step, not of all signups.</p>
+    <div class="funnel">
+      <div class="stage">
+        <div class="bar"><div class="fill" style="width:100%"></div><div class="txt">Signed up <span class="sub">&nbsp;· top of funnel</span></div></div>
+        <div class="target">100%</div>
+      </div>
+      <div class="stage">
+        <div class="bar"><div class="fill" style="width:70%"></div><div class="txt">Built a meaningful profile</div></div>
+        <div class="target">~70%</div>
+      </div>
+      <div class="stage">
+        <div class="bar"><div class="fill" style="width:55%"></div><div class="txt">Tracked ≥1 opportunity</div></div>
+        <div class="target">~55%</div>
+      </div>
+      <div class="stage">
+        <div class="bar"><div class="fill" style="width:40%"></div><div class="txt">Came back after day one</div></div>
+        <div class="target">~40%</div>
+      </div>
+      <div class="stage">
+        <div class="bar"><div class="fill" style="width:22%"></div><div class="txt">Converted free → paid <span class="sub">&nbsp;· of activated free users</span></div></div>
+        <div class="target">~20%+</div>
+      </div>
+    </div>
+    <p class="sec-intro" style="margin-top:22px;margin-bottom:0;">North-star: <b>activated, retained students per week</b> (profile built + a tracked deadline they came back to). It captures value the $0 mock-mode and free-trial users create long before the revenue line moves — and it's the number that predicts paid conversion.</p>
+  </section>
+
+  <!-- 10. RISKS -->
+  <section>
+    <div class="sec-head"><span class="no">10</span><h2>Risks &amp; guardrails</h2></div>
+    <p class="sec-intro">The ones most likely to bite, and the specific move that defuses each.</p>
+    <div class="risks">
+      <div class="risk">
+        <div class="name"><span class="sev hi"></span>Payment friction (teens have no card)</div>
+        <div class="mit">The buyer isn't the user. <b>Make the parent hand-off explicit</b> — a "send this to a parent" flow and a trial-ending email addressed to the person with the card, not the kid.</div>
+      </div>
+      <div class="risk">
+        <div class="name"><span class="sev hi"></span>Minors &amp; privacy / COPPA-FERPA</div>
+        <div class="mit">Keep the "no marketing list, no data resale" stance as a <b>selling point</b>, not a liability. It's what earns counselor and parent trust — the two highest-value channels. Self-serve <b>data export and account deletion are already built</b> (<code>/api/account/export</code>, <code>/api/account/delete</code> behind a re-auth confirm) — point to them as proof, not promises.</div>
+      </div>
+      <div class="risk">
+        <div class="name"><span class="sev hi"></span>Seasonality — spike then silence</div>
+        <div class="mit">A deadline app is loudest in fall/winter. <b>Deadline alerts and calendar sync</b> are the off-season reason to stay installed; build the year-round habit in Phase 3, not the spike.</div>
+      </div>
+      <div class="risk">
+        <div class="name"><span class="sev med"></span>Email deliverability to school inboxes</div>
+        <div class="mit">School Google Workspace MXes are unforgiving. Verify the domain, warm it slowly, ship a text/plain part, and let students <b>edit the address</b> off a locked school account.</div>
+      </div>
+      <div class="risk">
+        <div class="name"><span class="sev med"></span>Catalog trust — one bad link burns a first impression</div>
+        <div class="mit">A dead link or an invented deadline on day one loses the user for good. The link-health and page-verified-task guardrails already exist; <b>keep the quality bar green before each push</b>.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11. DO THIS NEXT -->
+  <section>
+    <div class="sec-head"><span class="no">11</span><h2>Do this next — the 30-day list</h2></div>
+    <p class="sec-intro">Two critical items gate everything. Start there.</p>
+    <div class="todo">
+      <div class="item crit"><div class="box"></div><div class="t">Configure Stripe &amp; run one real trial to conversion<small>Critical — nothing monetizes until this is true</small></div></div>
+      <div class="item crit"><div class="box"></div><div class="t">Verify sending domain &amp; arm the lifecycle email sweep<small>Critical — the retention loop is off until this is on</small></div></div>
+      <div class="item"><div class="box"></div><div class="t">Submit iOS / Android builds with the consent flow<small>Long review lead time — start early</small></div></div>
+      <div class="item"><div class="box"></div><div class="t">Stand up 10–20 programmatic SEO pages from the catalog<small>Compounding; start indexing now</small></div></div>
+      <div class="item"><div class="box"></div><div class="t">Recruit one beta cohort (a counselor or one community)<small>50–100 students, BETAUSER grants</small></div></div>
+      <div class="item"><div class="box"></div><div class="t">Write the paywall &amp; trial-ending "$4.99 vs. one program" story<small>Same message, two audiences</small></div></div>
+      <div class="item"><div class="box"></div><div class="t">Draft the referral grant mechanic<small>Extend both accounts on a successful invite</small></div></div>
+      <div class="item"><div class="box"></div><div class="t">Set the funnel dashboard as the weekly review ritual<small>Watch drop-off, interview the churned</small></div></div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap f-inner">
+    <span>Highschool Wingman — Go-to-Market Plan</span>
+    <span class="mono">Internal strategy · v1 · draft for review</span>
+  </div>
+</footer>
+
+</body></html>

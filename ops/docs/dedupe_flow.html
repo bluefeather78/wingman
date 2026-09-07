@@ -1,0 +1,593 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found]){display:none!important}</style></head><body>
+<title>Opportunity Dedupe Flow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600;700&display=swap">
+<style>
+  :root {
+    --bg: #e9edf2;
+    --surface: #ffffff;
+    --surface-2: #f4f7fb;
+    --ink: #17202e;
+    --muted: #58657a;
+    --faint: #8090a3;
+    --line: #d2dae4;
+    --accent: #33507d;
+    --spine: #9fb0c6;
+
+    --reject: #c0392b;
+    --merge: #7c4dbd;
+    --flag: #b06f10;
+    --keep: #237a4b;
+    --hint: #2168b0;
+    --lead: #0f7d86;
+
+    --shadow: 0 1px 2px rgba(20,32,50,.06), 0 6px 20px rgba(20,32,50,.05);
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --disp: "Archivo", var(--sans);
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d131b;
+      --surface: #141d29;
+      --surface-2: #1a2432;
+      --ink: #e7edf5;
+      --muted: #9aa8bb;
+      --faint: #6b7c92;
+      --line: #2a3646;
+      --accent: #86a6dc;
+      --spine: #3d4d63;
+      --reject: #ee8379;
+      --merge: #bd9cf2;
+      --flag: #e0ac57;
+      --keep: #63c98c;
+      --hint: #78b0ea;
+      --lead: #4dc3cd;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.32);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d131b;
+    --surface: #141d29;
+    --surface-2: #1a2432;
+    --ink: #e7edf5;
+    --muted: #9aa8bb;
+    --faint: #6b7c92;
+    --line: #2a3646;
+    --accent: #86a6dc;
+    --spine: #3d4d63;
+    --reject: #ee8379;
+    --merge: #bd9cf2;
+    --flag: #e0ac57;
+    --keep: #63c98c;
+    --hint: #78b0ea;
+    --lead: #4dc3cd;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.32);
+  }
+
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--sans); line-height: 1.55;
+         -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 40px 22px 72px; }
+
+  code, .mono { font-family: var(--mono); font-feature-settings: "liga" 0; }
+  .mono { font-size: .84em; }
+
+  /* ---------- header ---------- */
+  header { margin-bottom: 34px; }
+  .eyebrow { font-family: var(--mono); font-size: .72rem; letter-spacing: .22em; text-transform: uppercase;
+             color: var(--accent); font-weight: 600; margin: 0 0 12px; }
+  h1 { font-family: var(--disp); font-weight: 800; font-size: clamp(2rem, 5.2vw, 3.1rem); line-height: 1.02;
+       letter-spacing: -.02em; margin: 0 0 14px; text-wrap: balance; }
+  .lede { font-size: 1.08rem; color: var(--muted); max-width: 64ch; margin: 0; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  .rule-card { margin-top: 24px; display: flex; gap: 14px; align-items: flex-start;
+               background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+               border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+               border-left: 4px solid var(--accent); border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); }
+  .rule-card .k { font-family: var(--mono); font-size: .7rem; letter-spacing: .12em; text-transform: uppercase;
+                  color: var(--accent); font-weight: 600; white-space: nowrap; padding-top: 3px; }
+  .rule-card p { margin: 0; font-size: 1rem; }
+  .rule-card b { font-weight: 600; }
+
+  /* ---------- section chrome ---------- */
+  section { margin-top: 48px; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+  .sec-num { font-family: var(--mono); color: var(--faint); font-size: .82rem; font-weight: 500; }
+  h2 { font-family: var(--disp); font-weight: 700; font-size: 1.5rem; letter-spacing: -.01em; margin: 0; }
+  .sec-sub { color: var(--muted); margin: 2px 0 22px; max-width: 68ch; }
+
+  /* ---------- legend ---------- */
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 10px; margin: 22px 0 0; }
+  .lg { display: inline-flex; align-items: center; gap: 7px; font-size: .8rem; color: var(--muted);
+        border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 11px 5px 9px; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .lg b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- entry sources ---------- */
+  .sources { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 720px) { .sources { grid-template-columns: repeat(2, 1fr); } }
+  .src { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; box-shadow: var(--shadow); }
+  .src .nm { font-weight: 600; font-size: .98rem; display: flex; align-items: center; gap: 7px; }
+  .src .file { font-family: var(--mono); font-size: .72rem; color: var(--accent); margin: 3px 0 8px; }
+  .src .desc { font-size: .82rem; color: var(--muted); }
+  .src .tracks { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+
+  .tk { font-family: var(--mono); font-size: .64rem; letter-spacing: .04em; text-transform: uppercase; font-weight: 600;
+        padding: 3px 7px; border-radius: 5px; border: 1px solid; white-space: nowrap; }
+  .tk.a { color: var(--hint); border-color: color-mix(in srgb, var(--hint) 40%, transparent);
+          background: color-mix(in srgb, var(--hint) 10%, var(--surface)); }
+  .tk.b { color: var(--merge); border-color: color-mix(in srgb, var(--merge) 40%, transparent);
+          background: color-mix(in srgb, var(--merge) 10%, var(--surface)); }
+
+  .fanin { display: block; width: 100%; height: auto; margin: 4px 0 -6px; }
+  .fanin .edge { stroke: var(--spine); stroke-width: 2; fill: none; }
+  .fanin .tip { fill: var(--spine); }
+
+  /* ---------- flow spine ---------- */
+  .flow { display: flex; flex-direction: column; align-items: center; }
+  .node { width: 100%; max-width: 660px; background: var(--surface); border: 1px solid var(--line);
+          border-radius: 12px; padding: 15px 17px; box-shadow: var(--shadow); }
+  .node.decision { border-left: 4px solid var(--accent); }
+  .node.terminal { max-width: 660px; background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+                   border: 1.5px solid var(--accent); }
+  .node-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .node .q { font-weight: 600; font-size: 1rem; }
+  .node .q .mono { color: var(--accent); }
+  .node .proc { font-weight: 600; font-size: 1rem; }
+  .node .note { font-size: .84rem; color: var(--muted); margin-top: 6px; }
+  .node .note code { color: var(--ink); background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  .badge { margin-left: auto; }
+
+  .branches { display: flex; flex-direction: column; gap: 9px; margin-top: 13px; }
+  .branch { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .cond { font-family: var(--mono); font-size: .76rem; color: var(--muted);
+          background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; white-space: nowrap; }
+  .arw { color: var(--faint); font-weight: 700; }
+
+  .out { display: inline-flex; align-items: baseline; gap: 8px; padding: 6px 12px; border-radius: 7px;
+         font-size: .86rem; border: 1px solid; font-weight: 500; }
+  .out .tag { font-family: var(--mono); text-transform: uppercase; letter-spacing: .05em; font-size: .68rem; font-weight: 600; }
+  .out .desc { color: var(--ink); }
+  .out.reject { border-color: color-mix(in srgb, var(--reject) 45%, transparent); background: color-mix(in srgb, var(--reject) 11%, var(--surface)); }
+  .out.reject .tag { color: var(--reject); }
+  .out.merge { border-color: color-mix(in srgb, var(--merge) 45%, transparent); background: color-mix(in srgb, var(--merge) 11%, var(--surface)); }
+  .out.merge .tag { color: var(--merge); }
+  .out.flag { border-color: color-mix(in srgb, var(--flag) 45%, transparent); background: color-mix(in srgb, var(--flag) 12%, var(--surface)); }
+  .out.flag .tag { color: var(--flag); }
+  .out.keep { border-color: color-mix(in srgb, var(--keep) 45%, transparent); background: color-mix(in srgb, var(--keep) 11%, var(--surface)); }
+  .out.keep .tag { color: var(--keep); }
+  .out.hint { border-color: color-mix(in srgb, var(--hint) 45%, transparent); background: color-mix(in srgb, var(--hint) 11%, var(--surface)); }
+  .out.hint .tag { color: var(--hint); }
+  .out.lead { border-color: color-mix(in srgb, var(--lead) 45%, transparent); background: color-mix(in srgb, var(--lead) 11%, var(--surface)); }
+  .out.lead .tag { color: var(--lead); }
+
+  .trkbadge { font-family: var(--mono); font-size: .64rem; letter-spacing: .05em; text-transform: uppercase; font-weight: 600;
+              padding: 3px 8px; border-radius: 5px; border: 1px solid; white-space: nowrap; }
+  .trkbadge.a { color: var(--hint); border-color: color-mix(in srgb, var(--hint) 40%, transparent); background: color-mix(in srgb, var(--hint) 9%, var(--surface)); }
+  .trkbadge.b { color: var(--merge); border-color: color-mix(in srgb, var(--merge) 40%, transparent); background: color-mix(in srgb, var(--merge) 9%, var(--surface)); }
+
+  /* connector */
+  .conn { display: flex; flex-direction: column; align-items: center; padding: 3px 0; }
+  .conn .lbl { font-family: var(--mono); font-size: .68rem; color: var(--faint); margin-bottom: 3px; }
+  .conn .bar { width: 2px; height: 16px; background: var(--spine); }
+  .conn .tip { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent;
+               border-top: 7px solid var(--spine); }
+
+  /* ---------- cascade (find_duplicates zoom) ---------- */
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+           padding: 20px 22px; }
+  .cascade { display: flex; flex-direction: column; gap: 0; }
+  .rung { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 12px;
+          padding: 11px 0; border-bottom: 1px dashed var(--line); }
+  .rung:last-child { border-bottom: 0; }
+  .rung .ix { font-family: var(--mono); font-size: .8rem; color: var(--faint); }
+  .rung .cx { font-family: var(--mono); font-size: .82rem; color: var(--ink); }
+  .rung .cx small { display: block; font-family: var(--sans); color: var(--muted); font-size: .8rem; margin-top: 2px; }
+  .rung.weak { opacity: .62; }
+  .rung.weak .ix { color: var(--faint); }
+
+  .feeder-note { margin-top: 16px; display: flex; gap: 12px; align-items: flex-start;
+                 background: color-mix(in srgb, var(--hint) 8%, var(--surface));
+                 border: 1px solid color-mix(in srgb, var(--hint) 26%, var(--line)); border-radius: 10px; padding: 13px 15px; }
+  .feeder-note .k { font-family: var(--mono); font-size: .7rem; text-transform: uppercase; letter-spacing: .08em;
+                    color: var(--hint); font-weight: 600; padding-top: 2px; white-space: nowrap; }
+  .feeder-note p { margin: 0; font-size: .9rem; color: var(--muted); }
+  .feeder-note b { color: var(--ink); font-weight: 600; }
+
+  .guards { margin-top: 20px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  @media (max-width: 640px) { .guards { grid-template-columns: 1fr; } }
+  .guard { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--surface-2); }
+  .guard .gt { font-family: var(--mono); font-size: .78rem; color: var(--accent); font-weight: 600; margin-bottom: 4px; }
+  .guard .gd { font-size: .84rem; color: var(--muted); }
+
+  /* ---------- two-track table ---------- */
+  .cmp { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 12px; border: 1px solid var(--line);
+         box-shadow: var(--shadow); background: var(--surface); }
+  .cmp th, .cmp td { text-align: left; padding: 13px 16px; border-bottom: 1px solid var(--line); vertical-align: top; font-size: .92rem; }
+  .cmp thead th { font-family: var(--mono); font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+  .cmp tbody th { font-weight: 600; color: var(--muted); font-size: .84rem; width: 26%; }
+  .cmp tr:last-child td, .cmp tr:last-child th { border-bottom: 0; }
+  .cmp .ta { color: var(--hint); font-weight: 700; font-family: var(--disp); }
+  .cmp .tb { color: var(--merge); font-weight: 700; font-family: var(--disp); }
+  .cmp td b { font-weight: 600; }
+  .cmp-scroll { overflow-x: auto; }
+
+  /* ---------- post-insert ---------- */
+  .tiers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
+  @media (max-width: 760px) { .tiers { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 440px) { .tiers { grid-template-columns: 1fr; } }
+  .tier { border: 1px solid var(--line); border-radius: 10px; padding: 13px 14px; background: var(--surface); box-shadow: var(--shadow); }
+  .tier .tn { font-family: var(--mono); font-size: .74rem; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; margin-bottom: 5px; }
+  .tier .td { font-size: .82rem; color: var(--muted); }
+  .tier.proof { border-top: 3px solid var(--keep); } .tier.proof .tn { color: var(--keep); }
+  .tier.confident { border-top: 3px solid var(--keep); } .tier.confident .tn { color: var(--keep); }
+  .tier.adjudicate { border-top: 3px solid var(--flag); } .tier.adjudicate .tn { color: var(--flag); }
+  .tier.sibling { border-top: 3px solid var(--hint); } .tier.sibling .tn { color: var(--hint); }
+  .tier.hint2 { border-top: 3px solid var(--hint); } .tier.hint2 .tn { color: var(--hint); }
+  .tier.none { border-top: 3px solid var(--spine); } .tier.none .tn { color: var(--muted); }
+
+  .jobs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 760px) { .jobs { grid-template-columns: 1fr; } }
+  .job { border: 1px solid var(--line); border-radius: 10px; padding: 14px; background: var(--surface-2); }
+  .job .jn { font-weight: 600; margin-bottom: 3px; }
+  .job .jf { font-family: var(--mono); font-size: .72rem; color: var(--accent); margin-bottom: 7px; }
+  .job .jd { font-size: .84rem; color: var(--muted); }
+
+  .human { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .human .hl { font-family: var(--mono); font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); }
+  .chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 12px; font-size: .84rem; font-weight: 500; }
+
+  /* ---------- invariant footer ---------- */
+  .invariant { margin-top: 46px; background: var(--ink); color: var(--bg); border-radius: 16px; padding: 26px 26px 22px; }
+  :root[data-theme="dark"] .invariant, :root:not([data-theme="light"]) .invariant { }
+  .invariant h2 { color: inherit; font-family: var(--disp); margin: 0 0 4px; }
+  .invariant .sub { color: color-mix(in srgb, var(--bg) 72%, var(--ink)); font-size: .92rem; margin: 0 0 18px; }
+  .drops { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  @media (max-width: 760px) { .drops { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 420px) { .drops { grid-template-columns: 1fr; } }
+  .drop { background: color-mix(in srgb, var(--bg) 12%, var(--ink)); border: 1px solid color-mix(in srgb, var(--bg) 22%, var(--ink));
+          border-radius: 10px; padding: 12px; }
+  .drop .dn { font-family: var(--mono); font-size: .74rem; font-weight: 600; color: var(--bg); margin-bottom: 4px; }
+  .drop .dd { font-size: .8rem; color: color-mix(in srgb, var(--bg) 68%, var(--ink)); }
+  .invariant .close { margin: 18px 0 0; font-size: .95rem; color: color-mix(in srgb, var(--bg) 82%, var(--ink)); }
+  .invariant .close b { color: var(--bg); font-weight: 600; }
+
+  footer { margin-top: 34px; font-size: .8rem; color: var(--faint); font-family: var(--mono); line-height: 1.9; }
+  footer b { color: var(--muted); font-weight: 500; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .node, .src, .tier, .job { transition: transform .15s ease, box-shadow .15s ease; }
+    .node:hover, .src:hover, .tier:hover, .job:hover { transform: translateY(-1px); }
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Highschool Wingman · discovery pipeline</p>
+    <h1>How a new opportunity is deduped</h1>
+    <p class="lede">Every candidate a scraper, hub miner, name search or student turns up is checked against the whole catalog before it can reach the review queue. Two independent matchers run: a <b>free URL/name comparison</b> and a <b>paid page-embedding</b>. Only one thing they find can ever reject a row on its own.</p>
+
+    <div class="rule-card">
+      <span class="k">the rule</span>
+      <p>An <b>exact normalized URL <em>and</em> an agreeing name</b> is the only signal strong enough to auto-reject. Every weaker match &mdash; same domain, similar name, high embedding cosine &mdash; becomes a <b>hint attached to the row</b> for a human. A wrongly-flagged row costs a reviewer ten seconds; a wrongly-rejected one is lost silently.</p>
+    </div>
+
+    <div class="legend" aria-label="outcome legend">
+      <span class="lg"><span class="dot" style="background:var(--reject)"></span><b>Reject</b> &mdash; dropped, logged</span>
+      <span class="lg"><span class="dot" style="background:var(--merge)"></span><b>Merge</b> &mdash; folded into incumbent</span>
+      <span class="lg"><span class="dot" style="background:var(--flag)"></span><b>Flag</b> &mdash; kept, marked</span>
+      <span class="lg"><span class="dot" style="background:var(--lead)"></span><b>Lead</b> &mdash; sent to hub mining</span>
+      <span class="lg"><span class="dot" style="background:var(--hint)"></span><b>Hint</b> &mdash; back-link, never rejects</span>
+      <span class="lg"><span class="dot" style="background:var(--keep)"></span><b>Keep</b> &mdash; enters the queue</span>
+    </div>
+  </header>
+
+  <!-- ===================== ENTRY POINTS ===================== -->
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><h2>Where candidates come from</h2></div>
+    <p class="sec-sub">Four feeders discover opportunities. Each runs Track&nbsp;A (URL/name); the two that fetch pages also run Track&nbsp;B (embedding). They converge on one shared pipeline.</p>
+
+    <div class="sources">
+      <div class="src">
+        <div class="nm">Scraper</div>
+        <div class="file">agents/scrape_opportunities.py</div>
+        <div class="desc">Broad Gemini search by angle. The only feeder that can also <b>merge</b> and <b>insert</b>.</div>
+        <div class="tracks"><span class="tk a">Track A</span><span class="tk b">Track B</span></div>
+      </div>
+      <div class="src">
+        <div class="nm">Hub miner</div>
+        <div class="file">agents/mine_hub_pages.py</div>
+        <div class="desc">Reads an institution&rsquo;s index page and extracts every program on it.</div>
+        <div class="tracks"><span class="tk a">Track A</span><span class="tk b">Track B</span></div>
+      </div>
+      <div class="src">
+        <div class="nm">Name harvest</div>
+        <div class="file">agents/harvest_names.py</div>
+        <div class="desc">Resolves a discovered program <em>name</em> to its own page via one narrow search.</div>
+        <div class="tracks"><span class="tk a">Track A</span></div>
+      </div>
+      <div class="src">
+        <div class="nm">Student / resume</div>
+        <div class="file">app/services/resume.py</div>
+        <div class="desc">A hand-added opportunity or a résumé/LinkedIn import. Returns the existing id on a hit.</div>
+        <div class="tracks"><span class="tk a">Track A</span></div>
+      </div>
+    </div>
+
+    <svg class="fanin" viewBox="0 0 660 84" role="img" aria-label="Four sources converge into one pipeline">
+      <path class="edge" d="M 82 6 C 82 44, 330 34, 330 70"></path>
+      <path class="edge" d="M 247 6 C 247 40, 330 40, 330 70"></path>
+      <path class="edge" d="M 413 6 C 413 40, 330 40, 330 70"></path>
+      <path class="edge" d="M 578 6 C 578 44, 330 34, 330 70"></path>
+      <polygon class="tip" points="330,80 324,68 336,68"></polygon>
+    </svg>
+  </section>
+
+  <!-- ===================== THE SPINE ===================== -->
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><h2>The pipeline, top to bottom</h2></div>
+    <p class="sec-sub">Shown as the scraper runs it &mdash; the most complete path. Notes call out where a feeder differs.</p>
+
+    <div class="flow">
+
+      <div class="node process">
+        <div class="node-top"><span class="proc">Candidate <span class="mono">{ url, name, org, &hellip; }</span></span></div>
+        <div class="note">Phase-1 search &rarr; phase-2 JSON extract has already produced the fields. URL health flags (dead link, bare domain, low-value path, off-site) are attached here too.</div>
+      </div>
+
+      <div class="conn"><div class="bar"></div><div class="tip"></div></div>
+
+      <div class="node decision">
+        <div class="node-top"><span class="q">Does it have a URL?</span></div>
+        <div class="branches">
+          <div class="branch"><span class="cond">no url</span><span class="arw">&rarr;</span>
+            <span class="out reject"><span class="tag">reject</span><span class="desc">not catalogued &mdash; the URL <em>is</em> the row&rsquo;s identity</span></span></div>
+        </div>
+      </div>
+
+      <div class="conn"><div class="lbl">has url</div><div class="bar"></div><div class="tip"></div></div>
+
+      <div class="node process">
+        <div class="node-top"><span class="proc">Normalize &rarr; <span class="mono">match_key(url)</span></span><span class="badge trkbadge a">Track A · free</span></div>
+        <div class="note">Lowercase host, drop <code>www</code>, default port, fragment, trailing slash, <code>index.html</code>, and tracking params (<code>utm_*</code>, <code>fbclid</code>&hellip;). All other query params are <b>kept</b> &mdash; sites that key programs off <code>?id=</code> must not collapse.</div>
+      </div>
+
+      <div class="conn"><div class="bar"></div><div class="tip"></div></div>
+
+      <div class="node process">
+        <div class="node-top"><span class="proc"><span class="mono">find_duplicates()</span> vs the whole catalog</span><span class="badge trkbadge a">Track A · free</span></div>
+        <div class="note">Compared against every active <b>and inactive</b> row (paginated past the 1000-row cap). Returns one possible exact match plus ranked hints. Expanded in section&nbsp;03.</div>
+      </div>
+
+      <div class="conn"><div class="bar"></div><div class="tip"></div></div>
+
+      <div class="node decision">
+        <div class="node-top"><span class="q">Same <span class="mono">match_key</span> &amp; the name agrees?</span></div>
+        <div class="note">Name agrees = normalized-equal or similarity &ge; <span class="mono">0.82</span>, and neither side is a bare institution name.</div>
+        <div class="branches">
+          <div class="branch"><span class="cond">yes</span><span class="arw">&rarr;</span>
+            <span class="out reject"><span class="tag">reject</span><span class="desc">exact duplicate &mdash; the one hard stop</span></span></div>
+        </div>
+      </div>
+
+      <div class="conn"><div class="lbl">not an exact dup</div><div class="bar"></div><div class="tip"></div></div>
+
+      <div class="node decision">
+        <div class="node-top"><span class="q">Same URL &mdash; what kind of page?</span><span class="badge trkbadge a">scraper / hub&#8209;miner</span></div>
+        <div class="note"><span class="mono">classify_same_url()</span>. One URL can host several real programs (a shared SmApply portal backs six), so a same-URL hit is not automatically a duplicate. A student submission skips this &mdash; it just returns the existing row&rsquo;s id to track.</div>
+        <div class="branches">
+          <div class="branch"><span class="cond">dedicated page, same program</span><span class="arw">&rarr;</span>
+            <span class="out merge"><span class="tag">merge</span><span class="desc">best-copy-wins into the incumbent</span></span></div>
+          <div class="branch"><span class="cond">bare homepage, name matches</span><span class="arw">&rarr;</span>
+            <span class="out reject"><span class="tag">reject</span><span class="desc">homepage + matching name &asymp; dup</span></span></div>
+          <div class="branch"><span class="cond">bare homepage, name differs</span><span class="arw">&rarr;</span>
+            <span class="out flag"><span class="tag">flag</span><span class="desc">shares a homepage &mdash; maybe distinct &middot; still inserts</span></span></div>
+        </div>
+      </div>
+
+      <div class="conn"><div class="lbl">no same-URL match &rarr; build row</div><div class="bar"></div><div class="tip"></div></div>
+
+      <div class="node process">
+        <div class="node-top"><span class="proc">Weaker Track-A matches &rarr; attach as hints</span><span class="badge trkbadge a">Track A · free</span></div>
+        <div class="branches">
+          <div class="branch"><span class="cond">same domain · sub-page · name&nbsp;&ge;&nbsp;0.82</span><span class="arw">&rarr;</span>
+            <span class="out hint"><span class="tag">hint</span><span class="desc">strong <span class="mono">dup_candidates</span> back-link</span></span></div>
+        </div>
+        <div class="note">Weak hints (cross-host name similarity, busy-domain same-site) are <b>dropped at the feeders</b> &mdash; see section&nbsp;03.</div>
+      </div>
+
+      <div class="conn"><div class="bar"></div><div class="tip"></div></div>
+
+      <div class="node decision">
+        <div class="node-top"><span class="q">Discovery gate &mdash; fetch the page once</span><span class="badge trkbadge b">Track B · paid</span></div>
+        <div class="note"><span class="mono">read_candidate_live()</span> classifies the page, then embeds it. One fetch powers three checks.</div>
+        <div class="branches">
+          <div class="branch"><span class="cond">stale program (old year)</span><span class="arw">&rarr;</span>
+            <span class="out reject"><span class="tag">drop</span><span class="desc">to rejected snapshot</span></span></div>
+          <div class="branch"><span class="cond">page is a hub / index</span><span class="arw">&rarr;</span>
+            <span class="out lead"><span class="tag">lead</span><span class="desc">not a row &mdash; queued for hub mining</span></span></div>
+          <div class="branch"><span class="cond">fresh program page</span><span class="arw">&rarr;</span>
+            <span class="out keep"><span class="tag">enrich</span><span class="desc">overlay page metadata, then embed</span></span></div>
+        </div>
+      </div>
+
+      <div class="conn"><div class="lbl">program page</div><div class="bar"></div><div class="tip"></div></div>
+
+      <div class="node process">
+        <div class="node-top"><span class="proc">Embed page &rarr; cosine vs catalog vectors</span><span class="badge trkbadge b">Track B · paid</span></div>
+        <div class="branches">
+          <div class="branch"><span class="cond">nearest rows &ge; threshold</span><span class="arw">&rarr;</span>
+            <span class="out hint"><span class="tag">hint</span><span class="desc">content-embedding <span class="mono">dup_candidates</span></span></span></div>
+        </div>
+        <div class="note">Catches the same program at a <b>different URL</b> that Track&nbsp;A&rsquo;s URL/name match can never see. Reads the stored <code>dedupe_vector</code> index. A hint only &mdash; it never rejects.</div>
+      </div>
+
+      <div class="conn"><div class="bar"></div><div class="tip"></div></div>
+
+      <div class="node decision">
+        <div class="node-top"><span class="q">Does the page say it&rsquo;s no longer running?</span></div>
+        <div class="note"><span class="mono">queue_flags.is_not_running()</span>. Only an explicit <span class="mono">running == false</span> drops &mdash; silence is never read as discontinuation.</div>
+        <div class="branches">
+          <div class="branch"><span class="cond">yes</span><span class="arw">&rarr;</span>
+            <span class="out reject"><span class="tag">drop</span><span class="desc">before insert &mdash; kept in the rejected snapshot</span></span></div>
+        </div>
+      </div>
+
+      <div class="conn"><div class="lbl">still running</div><div class="bar"></div><div class="tip"></div></div>
+
+      <div class="node process">
+        <div class="node-top"><span class="proc">Collapse intra-run twins</span></div>
+        <div class="note"><span class="mono">collapse_intra_run_twins()</span> &mdash; two rows minted <em>this run</em> on the same domain with name similarity &ge; <span class="mono">0.9</span> collapse to the one whose URL ranks best. A looser rule than catalog dedupe, safe because it only touches fresh rows.</div>
+      </div>
+
+      <div class="conn"><div class="bar"></div><div class="tip"></div></div>
+
+      <div class="node terminal">
+        <div class="node-top"><span class="proc">&#9679;&nbsp; Review queue</span>
+          <span class="badge out keep"><span class="tag">keep</span><span class="desc"><span class="mono">is_active = false</span> · <span class="mono">pending_review</span></span></span></div>
+        <div class="note">Written with its <span class="mono">quality_flags</span> and its <span class="mono">dup_candidates</span> (Track&nbsp;A + Track&nbsp;B hints combined). Nothing is auto-activated &mdash; a human decides next.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ===================== ZOOM: find_duplicates ===================== -->
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><h2>Inside <span class="mono" style="font-size:.8em">find_duplicates()</span></h2></div>
+    <p class="sec-sub">The Track-A cascade, checked in order against each catalog row. The first rung is the only one that rejects; the rest emit hints.</p>
+
+    <div class="panel">
+      <div class="cascade">
+        <div class="rung">
+          <span class="ix">1</span>
+          <span class="cx">same <span style="color:var(--accent)">match_key</span> + name agrees (&ge;0.82)
+            <small>The one hard stop. Guarded so a bare-institution name can&rsquo;t satisfy &ldquo;agrees&rdquo;.</small></span>
+          <span class="out reject"><span class="tag">reject</span></span>
+        </div>
+        <div class="rung">
+          <span class="ix">2</span>
+          <span class="cx">same match_key, name differs / bare
+            <small>Same page, different name &mdash; a rename, or a shared application portal.</small></span>
+          <span class="out hint"><span class="tag">strong</span></span>
+        </div>
+        <div class="rung">
+          <span class="ix">3</span>
+          <span class="cx">candidate URL == an existing row&rsquo;s <span style="color:var(--accent)">apply_url</span>
+            <small>Different landing page, same place to apply.</small></span>
+          <span class="out hint"><span class="tag">strong</span></span>
+        </div>
+        <div class="rung">
+          <span class="ix">4</span>
+          <span class="cx">same domain + one path is a sub-page of the other
+            <small>Real path-prefix relation, never root-vs-deep (that&rsquo;s just the shared-domain problem).</small></span>
+          <span class="out hint"><span class="tag">strong</span></span>
+        </div>
+        <div class="rung">
+          <span class="ix">5</span>
+          <span class="cx">same domain + name similarity &ge; 0.82
+            <small>A shared host makes the name threshold safe to lower.</small></span>
+          <span class="out hint"><span class="tag">strong</span></span>
+        </div>
+        <div class="rung weak">
+          <span class="ix">6</span>
+          <span class="cx">cross-host name similarity &ge; 0.88
+            <small>&lsquo;1-Week&rsquo; vs &lsquo;3-Week Medical Academy&rsquo; scores 0.95 &mdash; noisy.</small></span>
+          <span class="out hint"><span class="tag">weak</span></span>
+        </div>
+        <div class="rung weak">
+          <span class="ix">7</span>
+          <span class="cx">same domain, &le; 3 existing rows on it
+            <small>&ldquo;Same site&rdquo; is only evidence when the domain is quiet; nyu.edu hosts 36.</small></span>
+          <span class="out hint"><span class="tag">weak</span></span>
+        </div>
+      </div>
+
+      <div class="feeder-note">
+        <span class="k">at the feeders</span>
+        <p>All four feeders call <span class="mono">find_duplicates(&hellip;, include_weak=False)</span>, so rungs&nbsp;6&ndash;7 never reach the reviewer &mdash; they were <b>74% of stored hints and the least useful</b>. The embedding track (section&nbsp;02) backstops any genuine cross-host duplicate they drop.</p>
+      </div>
+
+      <div class="guards">
+        <div class="guard"><div class="gt">generic names &rarr; 0</div><div class="gd">&ldquo;Program&rdquo;, &ldquo;Summer Internship&rdquo;, the extraction fallback &mdash; too generic to be evidence, so two of them never match.</div></div>
+        <div class="guard"><div class="gt">bare institution &rarr; suppressed</div><div class="gd">&ldquo;Tulane University&rdquo; carries no program identity; two rows sharing it would falsely score 1.0, so the name signal fails open.</div></div>
+        <div class="guard"><div class="gt">containment &rarr; floor 0.9</div><div class="gd">&ge; 2 distinctive tokens of the shorter name inside the longer catches renames like &ldquo;X&rdquo; vs &ldquo;Org X (ACRONYM)&rdquo;.</div></div>
+        <div class="guard"><div class="gt">year stripped</div><div class="gd">&ldquo;ISEF 2025&rdquo; and &ldquo;ISEF 2026&rdquo; compare equal &mdash; the same recurring program on its next cycle.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== TWO TRACKS ===================== -->
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><h2>Why two matchers</h2></div>
+    <p class="sec-sub">They see different duplicates. Neither is redundant; the embedding exists to catch exactly what URL matching is blind to.</p>
+
+    <div class="cmp-scroll">
+      <table class="cmp">
+        <thead><tr><th></th><th><span class="ta">Track A</span> &mdash; URL / name</th><th><span class="tb">Track B</span> &mdash; page embedding</th></tr></thead>
+        <tbody>
+          <tr><th>Where</th><td><span class="mono">wingman/url_dedupe.py</span></td><td><span class="mono">wingman/combined_reader.py</span> + <span class="mono">wingman/dedupe_confidence.py</span></td></tr>
+          <tr><th>Cost</th><td><b>Free</b> &mdash; pure string/set logic</td><td><b>Paid</b> &mdash; one page fetch + one embedding</td></tr>
+          <tr><th>When</th><td>Every candidate, synchronously</td><td>Only when a page is fetched (scraper, hub miner)</td></tr>
+          <tr><th>Can reject?</th><td><b>Yes</b> &mdash; exact URL + name only</td><td><b>Never</b> &mdash; emits hints, and tiers for a human</td></tr>
+          <tr><th>Catches</th><td>Same page, sub-pages, apply-URL twins, close names on one host</td><td>The same program at a <b>different URL / host</b> &mdash; a listicle, a social page, a re-slug</td></tr>
+          <tr><th>Blind to</th><td>The same program on a URL it has never seen</td><td>Nothing structural &mdash; but similarity alone can&rsquo;t tell a duplicate from a sibling</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===================== POST-INSERT ===================== -->
+  <section>
+    <div class="sec-head"><span class="sec-num">05</span><h2>After it&rsquo;s in the queue</h2></div>
+    <p class="sec-sub"><span class="mono">dedupe_confidence</span> fuses every signal &mdash; embedding cosine + name relation, hard-field conflicts, shared acronyms, same-institution guard &mdash; into one tier per pair. As of the <b>2026-09 revamp</b> a single resolver, <span class="mono">resolve_dup_verdict</span>, picks the strongest pair per row and writes ONE verdict to the <span class="mono">dup_verdict</span> column &mdash; <b>{confidence, best-guess survivor}</b> &mdash; so the console shows one line, not a pile of hints. The six tiers below collapse to three operator labels: <b>proof&rarr;Certain</b>, <b>confident&rarr;Likely</b>, <b>adjudicate/hint&rarr;Possible</b>; <b>sibling</b> is hidden below a cosine floor (shown as Possible above it), <b>none</b> never surfaces. Auto-action stays <b>off</b> &mdash; every tier only labels.</p>
+
+    <div class="tiers">
+      <div class="tier proof"><div class="tn">Proof</div><div class="td">Redirect or canonical URL equal &mdash; certain. Would auto-merge.</div></div>
+      <div class="tier confident"><div class="tn">Confident</div><div class="td">High cosine + name same + no field conflict + same institution.</div></div>
+      <div class="tier adjudicate"><div class="tn">Adjudicate</div><div class="td">A qualifier or a field discrepancy &mdash; send to the LLM judge.</div></div>
+      <div class="tier sibling"><div class="tn">Sibling</div><div class="td">Looks alike but a name/field conflict says <em>different program</em>. Kept.</div></div>
+      <div class="tier hint2"><div class="tn">Hint</div><div class="td">Moderate cosine, no conflict &mdash; a back-link for a human.</div></div>
+      <div class="tier none"><div class="tn">None</div><div class="td">Not similar enough &mdash; a genuinely new program.</div></div>
+    </div>
+
+    <div class="jobs">
+      <div class="job"><div class="jn">One resolver</div><div class="jf">wingman/dup_verdict.py</div><div class="jd">Fuses the signals into ONE verdict per row via <span class="mono">dedupe_confidence</span>. The single seam; both queues use it.</div></div>
+      <div class="job"><div class="jn">Ad-hoc detector</div><div class="jf">wingman/dedupe_resolve.py</div><div class="jd"><b>ACTIVE rows only &rarr; Duplicate queue.</b> One bulk matmul over stored vectors; change-only writes; the one-step &ldquo;Scan for duplicates&rdquo; button. Catches the different-URL / barely-overlapping-name dup (SYCCL) heuristics miss.</div></div>
+      <div class="job"><div class="jn">Review queue</div><div class="jf">agents/dedupe_queue.py</div><div class="jd">Pending rows still carry insert-time <span class="mono">dup_candidates</span>, collapsed to one line in the console. Storing a real verdict AT insert is <b>deferred</b> (four paid feeders + a paid validation run).</div></div>
+      <div class="job"><div class="jn">Human console</div><div class="jf">ops/admin_console.html</div><div class="jd">Reads one verdict line and acts &mdash; Confirm, or Not a duplicate. Nothing here is automatic.</div></div>
+    </div>
+    <p class="sec-sub" style="margin-top:14px">Two queues, one resolver, never crossed: the ad-hoc detector reads ACTIVE rows and publishes to the <b>Duplicate queue</b>; the <b>Review queue</b> (pending rows) is deduped at insert. <span class="mono">wingman/find_catalog_dups.py</span> and the old two-step Scan&rarr;flag flow are superseded; both files stay only until the insert-time half lands.</p>
+
+    <div class="human">
+      <span class="hl">reviewer actions</span>
+      <span class="chip">Activate &rarr; <span class="mono">is_active = true</span></span>
+      <span class="chip">Reject</span>
+      <span class="chip">Mark duplicate <span class="mono">(duplicate_of)</span></span>
+      <span class="chip">Edit</span>
+    </div>
+  </section>
+
+  <!-- ===================== INVARIANT ===================== -->
+  <div class="invariant">
+    <h2>The whole thing in one rule</h2>
+    <p class="sub">Discard almost nothing; explain everything. Only five things ever remove a candidate before a human sees it &mdash; and every one is logged.</p>
+    <div class="drops">
+      <div class="drop"><div class="dn">exact URL + name</div><div class="dd">The single hard duplicate.</div></div>
+      <div class="drop"><div class="dn">no URL</div><div class="dd">Nothing to identify the row by.</div></div>
+      <div class="drop"><div class="dn">stale program</div><div class="dd">Page&rsquo;s latest cycle is years old.</div></div>
+      <div class="drop"><div class="dn">hub page</div><div class="dd">Not dropped &mdash; becomes a mining lead.</div></div>
+      <div class="drop"><div class="dn">not running</div><div class="dd">Page explicitly says it&rsquo;s over.</div></div>
+    </div>
+    <p class="close">Everything else &mdash; a merge aside &mdash; <b>enters the queue with ONE verdict attached</b>: a confidence label and a best-guess survivor. A duplicate the machine isn&rsquo;t sure about is a reviewer&rsquo;s ten seconds, never a silent deletion.</p>
+  </div>
+
+  <footer>
+    <b>source of truth:</b> wingman/url_dedupe.py · agents/scrape_opportunities.py · wingman/combined_reader.py · wingman/dedupe_confidence.py · wingman/dup_verdict.py · wingman/dedupe_resolve.py · db/dup_verdict_schema.sql · wingman/queue_flags.py · wingman/dedupe_embed_store.py · agents/mine_hub_pages.py · agents/harvest_names.py · wingman/find_catalog_dups.py · agents/dedupe_queue.py · docs/plans/DEDUPE_SIMPLIFICATION_PLAN.md
+  </footer>
+
+</div>
+</body></html>

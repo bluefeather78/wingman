@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { httpClient } from '@/api/httpClient';
 import { syncTrackerFromCatalog } from '@/api/trackerStore';
+import { identify, setTag } from '@/lib/analytics';
 import type { AllowanceSnapshot, GoogleFinishInput, GoogleSessionResult, RegisterInput, SessionUser } from '@/api/types';
 
 // App-wide auth state, backed by the ApiClient. `ready` is false until the persisted token
@@ -70,6 +71,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user?.userid) return;
     void syncTrackerFromCatalog({ force: true });
   }, [user?.userid]);
+
+  // Clarity: tie the (web) session to the opaque account id once per genuine login/restore.
+  // Keyed on userid so it does not re-fire on background refreshes. No PII — id only.
+  useEffect(() => {
+    if (!user?.userid) return;
+    identify(user.userid);
+  }, [user?.userid]);
+
+  // Clarity plan segmentation. Re-runs when the tier changes (upgrade/cancel/lapse) since it
+  // reads the subscription block, which the background refresh and 402 gate keep fresh.
+  useEffect(() => {
+    if (!user?.userid) return;
+    setTag('plan', user.subscription?.status || user.subscription?.ai_tier || 'unknown');
+  }, [user?.userid, user?.subscription?.status, user?.subscription?.ai_tier]);
 
   const value = useMemo<AuthState>(
     () => ({

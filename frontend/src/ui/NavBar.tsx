@@ -7,6 +7,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { Logo, RightDrawer, usePopInteraction } from './components';
 import { CalendarIcon, HomeIcon, PersonIcon, SearchIcon, SettingsIcon } from './icons';
 import { APP_MAX_WIDTH, colors, fonts, navShadow, popShadow, radius, space } from './theme';
+import { trackEvent } from '@/lib/analytics';
 
 // The live app's floating pill navigation: sticky, centered in the max-w-4xl column with
 // 16px top inset, navy pill with a soft blue glow. Wordmark + BETA, four tabs (orange when
@@ -71,6 +72,7 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
   const compact = width < 800;
 
   async function handleLogout() {
+    trackEvent('acct_logout');
     setDrawerOpen(false);
     // Navigate BEFORE clearing the session: the (app) layout redirects to /login the moment
     // `user` goes null, and that guard would win the race. Old app behavior: logout lands
@@ -123,7 +125,7 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
             )}
             <Pressable
               style={styles.avatar}
-              onPress={() => setDrawerOpen(true)}
+              onPress={() => { trackEvent('acct_drawer_opened'); setDrawerOpen(true); }}
               accessibilityRole="button"
               // An emoji is announced by its own name ("bust in silhouette"), which says nothing
               // about what the button does (Phase 5, finding 20).
@@ -190,8 +192,8 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
                 <Text style={styles.boxTitle}>Legal</Text>
                 <Text style={styles.boxDesc}>The documents you agreed to when you signed up.</Text>
                 <View style={styles.btnRow}>
-                  <SmallBtn label="Terms of Use" onPress={() => openBackendPage('/terms.html')} />
-                  <SmallBtn label="Privacy Policy" onPress={() => openBackendPage('/privacy.html')} />
+                  <SmallBtn label="Terms of Use" onPress={() => { trackEvent('acct_legal_opened'); openBackendPage('/terms.html'); }} />
+                  <SmallBtn label="Privacy Policy" onPress={() => { trackEvent('acct_legal_opened'); openBackendPage('/privacy.html'); }} />
                 </View>
               </View>
 
@@ -202,7 +204,7 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
                 <View style={styles.btnRow}>
                   <SmallBtn
                     label="Email us"
-                    onPress={() => Linking.openURL('mailto:contactus@highschoolwingman.com?subject=Highschool%20Wingman%20Feedback')}
+                    onPress={() => { trackEvent('acct_contact_clicked'); Linking.openURL('mailto:contactus@highschoolwingman.com?subject=Highschool%20Wingman%20Feedback'); }}
                   />
                 </View>
               </View>
@@ -212,7 +214,7 @@ export function NavBar({ locked = false }: { locked?: boolean } = {}) {
                 <Text style={styles.boxTitle}>About us</Text>
                 <Text style={styles.boxDesc}>Why we built Wingman.</Text>
                 <View style={styles.btnRow}>
-                  <SmallBtn label="Read our story" onPress={() => openBackendPage('/about.html')} />
+                  <SmallBtn label="Read our story" onPress={() => { trackEvent('acct_legal_opened'); openBackendPage('/about.html'); }} />
                 </View>
               </View>
             </ScrollView>

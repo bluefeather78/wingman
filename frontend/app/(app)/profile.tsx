@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
+import { trackEvent } from '@/lib/analytics';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import {
   SpeechRecognitionCtor, cancelSpeech, createRecognizer, speakText, ttsAvailable,
@@ -299,6 +300,7 @@ export default function Profile() {
     }
     if (clearArmTimer.current) clearTimeout(clearArmTimer.current);
     setClearArmed(false);
+    trackEvent('profile_cleared');
     void (async () => {
       await persist({ synthesized: '', updatedAt: null, chatRounds: 0 });
       setBasics({});
@@ -330,6 +332,7 @@ export default function Profile() {
     setStartersLoading(true);
     try {
       if (regenerate) {
+        trackEvent('profile_chat_regenerate');
         setStarters(await profileChatStarterQuestionsFromAI(callFeature, profile.synthesized, profile.chatRounds, true));
       } else {
         const slot = (await getProfileDerived(profileStore, modelCalls, 'starterPool')) as StarterPoolSlot;
@@ -344,10 +347,12 @@ export default function Profile() {
     }
   }
   async function openDrawer() {
+    trackEvent('profile_chat_opened');
     setDrawerOpen(true); setHistory([]); setStarters(null);
     void loadStarters(false);
   }
   function pickStarter(q: string) {
+    trackEvent('profile_chat_starter_picked');
     setHistory([{ role: 'bot', text: q }]);
     setStarters(null);
     speak(q);
@@ -375,6 +380,7 @@ export default function Profile() {
       recognition.current?.stop();
       return;
     }
+    trackEvent('profile_voice_input_used');
     if (!recognition.current) {
       recognition.current = createRecognizer({
         onTranscript: setDraft,
@@ -396,6 +402,7 @@ export default function Profile() {
 
   async function sendText(text: string) {
     if (!text || busy) return;
+    trackEvent('profile_chat_message_sent');
     setDraft('');
     // Phase 5, frontend_report finding 16. The side effects below used to live INSIDE a
     // setHistory updater. A state updater must be a pure function of its argument: React is
@@ -427,12 +434,14 @@ export default function Profile() {
     setDrawerOpen(false);
     if (recognition.current && listening) recognition.current.stop();
     if (!history.some((m) => m.role === 'user')) { setHistory([]); setStarters(null); setDraft(''); return; }
+    trackEvent('profile_chat_closed_synthesized');
     const transcript = profileChatTranscript(history);
     setHistory([]); setStarters(null); setDraft('');
     await mergeIntoProfile(transcript, true);
   }
 
   async function tidyUp() {
+    trackEvent('profile_tidy_up');
     setBusy('tidying');
     beginProfileWrite();
     try {
@@ -482,6 +491,7 @@ export default function Profile() {
   }
   async function submitResume() {
     if (!resumeFile) return;
+    trackEvent('profile_resume_submitted');
     setResumeStatus('Extracting from your resume…');
     try {
       const extracted = await httpClient.extractFromResume(resumeFile, resumeFile.name);
@@ -503,6 +513,7 @@ export default function Profile() {
       setLinkedinStatus('⚠️ Please paste your LinkedIn profile text');
       return;
     }
+    trackEvent('profile_linkedin_submitted');
     setLinkedinStatus('Extracting from LinkedIn…');
     try {
       const extracted = await httpClient.extractFromLinkedIn(text);
@@ -587,7 +598,7 @@ export default function Profile() {
                 is no longer repeated here. */}
           </View>
           <View style={styles.headBtns}>
-            <PopButton label="Quick add from resume / LinkedIn" variant="ink" small textStyle={styles.hBtnText} shadowColor={colors.ink} style={dimStyle} onPress={aiGuard(() => setImportOpen(true))} />
+            <PopButton label="Quick add from resume / LinkedIn" variant="ink" small textStyle={styles.hBtnText} shadowColor={colors.ink} style={dimStyle} onPress={aiGuard(() => { trackEvent('profile_import_opened'); setImportOpen(true); })} />
             {/* With no profile yet there is nothing to deepen — the card's own "Start
                 chatting" button is the CTA, so both "deepen" affordances stay hidden. */}
             {hasProfile && (

@@ -45,6 +45,7 @@ import {
 import { MiniBadge, PopButton, ReviewBadge, Screen, SoftCard, Txt, usePopInteraction } from '@/ui/components';
 import { useAiGate } from '@/ui/AiLimitBanner';
 import { reopenAiLimitBanner } from '@/lib/aiLimit';
+import { trackEvent } from '@/lib/analytics';
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 
 interface Result {
@@ -480,6 +481,7 @@ export default function Finder() {
   );
 
   function openForm(k: string) {
+    trackEvent('finder_form_opened');
     setKind(k);
     setSuggestMode(false);
     setDescription('');
@@ -649,6 +651,7 @@ export default function Finder() {
   // (picking the current one again clears it) and clears any "explore" text — a chosen theme
   // and a typed direction are mutually exclusive.
   function pickTheme(tag: string) {
+    trackEvent('finder_theme_picked');
     setSelectedThemes((prev) => (prev.has(tag) ? new Set<string>() : new Set([tag])));
     setExploreText('');
   }
@@ -815,6 +818,7 @@ export default function Finder() {
   // then grade; otherwise go straight to the suggest search. Both are hard filters, so a search
   // without them is one that quietly shows opportunities the student can't apply to.
   function startSuggestFlow() {
+    trackEvent('finder_search_started');
     if (!knownLocation()) {
       setLocationInput('');
       setAskLocation(true);
@@ -834,6 +838,7 @@ export default function Finder() {
   async function submitLocationAndSearch() {
     const value = locationInput.trim();
     if (!value || savingLocation) return;
+    trackEvent('finder_location_submitted');
     setSavingLocation(true);
     try {
       // Re-read the freshest record so a slot the background refresh warmed since this screen
@@ -866,6 +871,7 @@ export default function Finder() {
   async function submitGradeAndSearch() {
     const value = parseGradeLevel(gradeInput);
     if (value == null || savingGrade) return;
+    trackEvent('finder_grade_submitted');
     setSavingGrade(true);
     try {
       const rec = (await profileStore.load()) ?? profileRecord.current ?? {};
@@ -993,6 +999,7 @@ export default function Finder() {
 
   async function addSelectedToTracker() {
     if (!selected.size || adding) return;
+    trackEvent('opp_added_from_finder');
     setAdding(true);
     const ids = [...selected];
     setAddProgress({ done: 0, total: ids.length });
@@ -1070,12 +1077,14 @@ export default function Finder() {
     (untrackedOnly ? 1 : 0);
 
   function clearAllFilters() {
+    trackEvent('finder_filters_cleared');
     setFilters({ type: new Set(), price: new Set(), season: new Set(), location: new Set() });
     setSelectedTag(null);
     setUntrackedOnly(false);
     setVisibleCount(10);
   }
   function toggleFilter(key: FilterKey, value: string) {
+    trackEvent('finder_filter_applied');
     setFilters((p) => {
       const n = { ...p, [key]: new Set(p[key]) };
       if (n[key].has(value)) n[key].delete(value);
@@ -1177,13 +1186,13 @@ export default function Finder() {
               <Text style={[styles.heroSub, styles.heroSubItalic]}>
                 Every match here gets better once we know you. Takes 2 minutes — add a few things and your matches will show up right here.
               </Text>
-              <PopButton label="Build my profile" onPress={() => router.push({ pathname: '/(app)/profile', params: { chat: '1' } })} style={styles.selfStart} />
+              <PopButton label="Build my profile" onPress={() => { trackEvent('profile_build_started'); router.push({ pathname: '/(app)/profile', params: { chat: '1' } }); }} style={styles.selfStart} />
             </>
           ) : !profileReady ? (
             <>
               <Text style={styles.heroTitle}>I don't have enough yet to match opportunities</Text>
               <Text style={[styles.heroSub, styles.heroSubItalic]}>Help me help you by building your profile</Text>
-              <PopButton label="Deepen your story" onPress={() => router.push('/(app)/profile')} style={styles.selfStart} />
+              <PopButton label="Deepen your story" onPress={() => { trackEvent('profile_build_started'); router.push('/(app)/profile'); }} style={styles.selfStart} />
             </>
           ) : results.length ? (
             <>
@@ -1192,8 +1201,8 @@ export default function Finder() {
                   so, and offer the re-run explicitly rather than doing it unasked. */}
               <Text style={[styles.heroSub, styles.heroSubItalic]}>Based on everything in your profile.</Text>
               <View style={styles.heroActions}>
-                <PopButton label="View my matches" onPress={() => setStage('results')} />
-                <Pressable onPress={aiGuard(() => { sessionSearch = null; void suggestForMe(); })}>
+                <PopButton label="View my matches" onPress={() => { trackEvent('finder_results_viewed'); setStage('results'); }} />
+                <Pressable onPress={aiGuard(() => { trackEvent('finder_search_again'); sessionSearch = null; void suggestForMe(); })}>
                   <Text style={[styles.link, dimStyle]}>Search again</Text>
                 </Pressable>
               </View>
@@ -1310,7 +1319,7 @@ export default function Finder() {
             tests the PROFILE first, so a student who searched by browsing without a profile
             saw "Your profile is empty" with their results stranded behind it. */}
         {!oppsError && !!results.length && !profileReady && (
-          <Pressable style={styles.centerLink} onPress={() => setStage('results')}>
+          <Pressable style={styles.centerLink} onPress={() => { trackEvent('finder_results_viewed'); setStage('results'); }}>
             <Text style={styles.link}>← Back to your {results.length} match{results.length === 1 ? '' : 'es'}</Text>
           </Pressable>
         )}
@@ -1330,7 +1339,7 @@ export default function Finder() {
                 </Pressable>
               ))}
             </View>
-            <Pressable style={styles.quizCta} onPress={() => { setQuizBranch(null); setStage('quiz'); }}>
+            <Pressable style={styles.quizCta} onPress={() => { trackEvent('finder_quiz_started'); setQuizBranch(null); setStage('quiz'); }}>
               <Text style={styles.quizCtaText}>Not sure? Take a quick quiz</Text>
             </Pressable>
           </SoftCard>
@@ -1365,6 +1374,7 @@ export default function Finder() {
                     : hoveredQuizOption === i && styles.quizOptionHovered,
                 ]}
                 onPress={() => {
+                  trackEvent('finder_quiz_answered');
                   const opt = o as { kind?: string; branch?: string };
                   if (opt.kind) openForm(opt.kind);
                   else if (opt.branch) setQuizBranch(opt.branch);
@@ -1429,7 +1439,7 @@ export default function Finder() {
               square
               loading={searching}
               disabled={!opps || !description.trim()}
-              onPress={aiGuard(() => search(description, kind, buildPrefs()))}
+              onPress={aiGuard(() => { trackEvent('finder_form_search'); search(description, kind, buildPrefs()); })}
               style={[styles.findBtn, dimStyle]}
               textStyle={styles.findBtnText}
             />
@@ -1453,7 +1463,7 @@ export default function Finder() {
           <Text style={styles.deepenSub}>Add more to your profile.</Text>
         </View>
         <View style={styles.deepenRight}>
-          <Pressable style={[styles.deepenBtn, dimStyle]} onPress={aiGuard(() => router.push('/(app)/profile'))}>
+          <Pressable style={[styles.deepenBtn, dimStyle]} onPress={aiGuard(() => { trackEvent('profile_build_started'); router.push('/(app)/profile'); })}>
             <Text style={styles.deepenBtnText}>Deepen your story</Text>
           </Pressable>
           <Pressable onPress={() => { setStage('home'); setBrowseOpen(true); }}>
@@ -1675,7 +1685,7 @@ export default function Finder() {
               : "Nothing in the catalog lined up with what you described. Try describing it differently, or browse by type."}
           </Text>
           <View style={styles.heroActions}>
-            <PopButton label="Deepen your story" onPress={() => router.push('/(app)/profile')} />
+            <PopButton label="Deepen your story" onPress={() => { trackEvent('profile_build_started'); router.push('/(app)/profile'); }} />
             <Pressable onPress={() => { setStage('home'); setBrowseOpen(true); }}>
               <Text style={styles.link}>Browse all opportunity types</Text>
             </Pressable>
@@ -1737,7 +1747,10 @@ export default function Finder() {
                   status={opp.review_status as string | null | undefined}
                   summary={opp.review_summary as string | null | undefined}
                   open={reviewOpen}
-                  onToggle={() => setOpenReviewId((cur) => (cur === opp.id ? null : opp.id))}
+                  onToggle={() => setOpenReviewId((cur) => {
+                    if (cur !== opp.id) trackEvent('opp_review_opened');
+                    return cur === opp.id ? null : opp.id;
+                  })}
                 />
               </View>
               {isTracked ? (
@@ -1758,7 +1771,7 @@ export default function Finder() {
                       : hoveredSaveBtnId === opp.id && styles.saveBtnHovered,
                     isSelected && styles.saveBtnSelected,
                   ]}
-                  onPress={() => toggleSelect(opp.id)}
+                  onPress={() => { trackEvent('opp_saved_match'); toggleSelect(opp.id); }}
                 >
                   <Text style={styles.saveBtnText}>{isSelected ? 'Saved Match' : 'Save Match'}</Text>
                 </Pressable>
@@ -1766,7 +1779,7 @@ export default function Finder() {
             </View>
 
             <View>
-              <Pressable onPress={() => opp.url && Linking.openURL(opp.url as string)}>
+              <Pressable onPress={() => { if (opp.url) { trackEvent('opp_link_click_finder'); Linking.openURL(opp.url as string); } }}>
                 <Text style={styles.resultName}>{opp.name}</Text>
               </Pressable>
               {!!opp.org && typeof opp.org === 'string' && (
@@ -1824,7 +1837,7 @@ export default function Finder() {
 
       {!themeMatching && filteredResults.length > visibleCount && (
         <View style={styles.centerLink}>
-          <PopButton label={`Show more (${filteredResults.length - visibleCount} left)`} variant="ink" small square shadowColor={colors.slate900} onPress={() => setVisibleCount((c) => c + 10)} />
+          <PopButton label={`Show more (${filteredResults.length - visibleCount} left)`} variant="ink" small square shadowColor={colors.slate900} onPress={() => { trackEvent('finder_show_more'); setVisibleCount((c) => c + 10); }} />
         </View>
       )}
 

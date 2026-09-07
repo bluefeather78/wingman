@@ -10,6 +10,7 @@ import type { TrackerItem } from '@/api/trackerStore';
 import { IconBtn, MiniBadge, ReviewBadge, StatusPill, usePopInteraction } from '@/ui/components';
 import { StarIcon, XIcon } from '@/ui/icons';
 import { colors, fonts, popShadow, radius } from '@/ui/theme';
+import { trackEvent } from '@/lib/analytics';
 
 // One tracked opportunity's card in the Quest Log's List view.
 //
@@ -145,7 +146,7 @@ export function ListCard({
             status={item.reviewStatus}
             summary={item.reviewSummary}
             open={!!reviewOpen}
-            onToggle={() => onToggleReview?.(item.id)}
+            onToggle={() => { trackEvent('opp_review_opened'); onToggleReview?.(item.id); }}
           />
         </View>
         <View style={styles.iconRow}>
@@ -153,19 +154,19 @@ export function ListCard({
               cards, "Save for later" a dozen times says nothing about which one, and a
               star that is already filled needs to announce that it will un-save. */}
           <IconBtn
-            onPress={() => onToggleSaved(item.id)}
+            onPress={() => { trackEvent('quest_saved_toggled'); onToggleSaved(item.id); }}
             label={isSaved ? `Remove ${item.name} from saved for later` : `Save ${item.name} for later`}
           >
             <StarIcon size={15} color={isSaved ? colors.orange : colors.navy} filled={isSaved} />
           </IconBtn>
-          <IconBtn onPress={() => onRemove(item.id)} label={`Remove ${item.name} from your Quest Log`}>
+          <IconBtn onPress={() => { trackEvent('quest_opportunity_removed'); onRemove(item.id); }} label={`Remove ${item.name} from your Quest Log`}>
             <XIcon size={14} color={colors.slate400} />
           </IconBtn>
         </View>
       </View>
 
       <View>
-        <Pressable onPress={() => item.url && Linking.openURL(item.url)}>
+        <Pressable onPress={() => { trackEvent('opp_link_click_quest'); item.url && Linking.openURL(item.url); }}>
           <Text style={styles.cardName}>{item.name}</Text>
         </Pressable>
         {!!item.org && <Text style={styles.cardOrg} numberOfLines={1}>{item.org}</Text>}
@@ -215,7 +216,7 @@ export function ListCard({
         </View>
       )}
 
-      <Pressable onPress={() => setShowDetails(!showDetails)}>
+      <Pressable onPress={() => { if (!showDetails) trackEvent('quest_card_details_expanded'); setShowDetails(!showDetails); }}>
         <Text style={styles.detailsToggle}>▶ Show details</Text>
       </Pressable>
       {showDetails && (
@@ -229,7 +230,7 @@ export function ListCard({
         <StatusPill status={progress} />
         {!!(item.applyUrl || item.url) && (
           <Pressable
-            onPress={() => Linking.openURL((item.applyUrl || item.url) as string)}
+            onPress={() => { trackEvent('opp_apply_click'); Linking.openURL((item.applyUrl || item.url) as string); }}
             {...applyPop.handlers}
             style={[styles.applyBtn, applyPop.shadowStyle]}
           >

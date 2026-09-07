@@ -33,6 +33,7 @@ import { getLastCheckedLabel, setLastCheckedLabel as rememberLastChecked } from 
 import { addCatalogOpportunity, bucketForOpp } from '@/api/trackerAdd';
 import type { Opportunity } from '@/api/types';
 import { computeProgressStatus, earliestUpcoming } from '@/lib/status';
+import { trackEvent } from '@/lib/analytics';
 
 // The sync button's own spinner while a sync is in flight (the design's rotating refresh
 // glyph). useNativeDriver is off on web — RN-web's driver can't animate transforms there.
@@ -214,6 +215,7 @@ export default function Tracker() {
 
   async function checkForUpdates() {
     if (refreshing) return;
+    trackEvent('quest_deadline_refresh');
     const total = data ? Object.values(data).reduce((n, arr) => n + arr.length, 0) : 0;
     if (!total) {
       setLastCheckedLabel('Nothing tracked yet — add opportunities first.');
@@ -294,6 +296,7 @@ export default function Tracker() {
   }
   async function syncToCalendar() {
     if (syncing) return;
+    trackEvent('cal_sync_started');
     clearSyncTimers();
     syncLabelAnim.setValue(1);
     syncNoteAnim.setValue(1);
@@ -345,6 +348,7 @@ export default function Tracker() {
       }
       setSyncLink(out.calendarLink || null);
       setSyncState('done');
+      trackEvent('cal_sync_succeeded');
       fadeOutAfter(syncLabelAnim, 4000, () => setSyncState('idle'));
       fadeOutAfter(syncNoteAnim, 8000, () => setSyncNote(null));
     } catch (e) {
@@ -370,6 +374,7 @@ export default function Tracker() {
   }
 
   function openSearch() {
+    trackEvent('quest_add_drawer_opened');
     setSearchOpen(true);
     void ensureCatalog();
   }
@@ -423,6 +428,7 @@ export default function Tracker() {
   // named rather than silently dropped.
   async function addSelected() {
     if (adding || !selectedResults.size || !catalog) return;
+    trackEvent('opp_added_from_quest');
     const byId = new Map(catalog.map((o) => [o.id, o] as const));
     const ids = [...selectedResults];
     setAdding(true);
@@ -557,7 +563,7 @@ export default function Tracker() {
         >
           {syncNote}
           {syncState === 'done' && !!syncLink && (
-            <Text style={styles.syncLink} onPress={() => Linking.openURL(syncLink)}>
+            <Text style={styles.syncLink} onPress={() => { trackEvent('cal_open_clicked'); Linking.openURL(syncLink); }}>
               {'  Open calendar ›'}
             </Text>
           )}
@@ -574,7 +580,7 @@ export default function Tracker() {
         </View>
         <View style={styles.viewTabs}>
           {(['calendar', 'list'] as const).map((v) => (
-            <Pressable key={v} onPress={() => setView(v)} style={[styles.viewTab, view === v && styles.viewTabActive]}>
+            <Pressable key={v} onPress={() => { trackEvent('quest_view_toggled'); setView(v); }} style={[styles.viewTab, view === v && styles.viewTabActive]}>
               {v === 'calendar' ? (
                 <CalendarIcon size={16} color={view === v ? colors.white : '#5B6785'} />
               ) : (

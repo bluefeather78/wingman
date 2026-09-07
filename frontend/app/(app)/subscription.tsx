@@ -6,6 +6,7 @@ import { useAuth } from '@/auth/AuthContext';
 import { AiActionsBar, PopButton, Screen, SoftCard, usePopInteraction } from '@/ui/components';
 import { colors, fonts, popShadow, radius } from '@/ui/theme';
 import { isPaidTier, resetsInLabel } from '@/lib/tier';
+import { trackEvent, upgradeSession } from '@/lib/analytics';
 import type { AllowanceSnapshot } from '@/api/types';
 
 interface SubState {
@@ -84,6 +85,7 @@ export default function Subscription() {
   async function applyPromo() {
     const code = promo.trim();
     if (!code) return;
+    trackEvent('plan_promo_applied');
     setPromoStatus('Checking…');
     try {
       const v = await httpClient.validatePromo(code);
@@ -93,6 +95,7 @@ export default function Subscription() {
       }
       if (v.kind === 'grant') {
         const r = await httpClient.redeemPromo(code);
+        trackEvent('plan_promo_redeemed');
         setPromoStatus((r as { message?: string }).message || '✓ Code applied to your account!');
         httpClient.subscriptionStatus().then((s) => setSub(s as SubState)).catch(() => {});
       } else {
@@ -108,6 +111,7 @@ export default function Subscription() {
     setCancelStatus('');
     try {
       await httpClient.subscriptionCancel();
+      trackEvent('plan_canceled');
       setShowCancel(false);
       httpClient.subscriptionStatus().then((s) => setSub(s as SubState)).catch(() => {});
     } catch (e) {
@@ -126,6 +130,7 @@ export default function Subscription() {
       setExportStatus('Open Wingman in a web browser to download your data.');
       return;
     }
+    trackEvent('acct_data_exported');
     setExporting(true);
     setExportStatus('Preparing your file…');
     try {
@@ -147,6 +152,7 @@ export default function Subscription() {
   }
 
   function openDelete() {
+    trackEvent('acct_delete_opened');
     setDeletePassword('');
     setDeleteConfirm('');
     setDeleteStatus('');
@@ -158,6 +164,8 @@ export default function Subscription() {
     setDeleting(true);
     setDeleteStatus('');
     try {
+      trackEvent('acct_deleted');
+      upgradeSession('account_delete');
       await httpClient.deleteAccount({ password: deletePassword });
       // Success: the session is already dropped inside deleteAccount(). Leave the app.
       setShowDelete(false);
@@ -187,6 +195,8 @@ export default function Subscription() {
     try {
       const origin = (globalThis as { location: { origin: string } }).location.origin;
       const url = await httpClient.googleDeleteReauthUrl(`${origin}/subscription`);
+      trackEvent('acct_deleted');
+      upgradeSession('account_delete');
       (globalThis as { location: { href: string } }).location.href = url;
     } catch (e) {
       setDeleteStatus((e as Error).message || 'Could not start Google confirmation.');
@@ -215,10 +225,13 @@ export default function Subscription() {
   }, [router]);
 
   async function upgrade() {
+    trackEvent('plan_upgrade_click');
     setUpgradeStatus('Starting checkout…');
     try {
       const url = await httpClient.subscriptionCheckout(promo.trim());
       if (url) {
+        trackEvent('plan_checkout_started');
+        upgradeSession('checkout');
         setUpgradeStatus('Redirecting to checkout…');
         (globalThis as { location?: { href: string } }).location && ((globalThis as { location: { href: string } }).location.href = url);
       } else {
@@ -272,7 +285,7 @@ export default function Subscription() {
                   nothing to cancel (it lapses on its own), and a canceled-but-still-in-period
                   account has already cancelled. */}
               {status === 'active' && (
-                <Pressable style={styles.cancelLinkWrap} onPress={() => { setCancelStatus(''); setShowCancel(true); }}>
+                <Pressable style={styles.cancelLinkWrap} onPress={() => { trackEvent('plan_cancel_opened'); setCancelStatus(''); setShowCancel(true); }}>
                   <Text style={styles.cancelLink}>Cancel subscription</Text>
                 </Pressable>
               )}

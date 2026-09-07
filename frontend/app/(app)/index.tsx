@@ -43,6 +43,7 @@ import {
 import { colors, fonts, popShadow, radius, space } from '@/ui/theme';
 import { isPaidTier, subscriptionEnding } from '@/lib/tier';
 import { reopenAiLimitBanner } from '@/lib/aiLimit';
+import { trackEvent, setTag } from '@/lib/analytics';
 import { useAiGate } from '@/ui/AiLimitBanner';
 import type { AllowanceSnapshot } from '@/api/types';
 
@@ -76,7 +77,7 @@ function TaskRow({ ai, onPress, onDelete, compact = false }: {
     <Text style={[styles.taskText, compact && styles.taskTextCompact, ai.state === 'completed' && styles.taskDone]}>
       {ai.text}
       {!!linkUrl && (
-        <Text style={styles.taskStepLink} onPress={() => Linking.openURL(linkUrl)}>
+        <Text style={styles.taskStepLink} onPress={() => { trackEvent('task_step_link_clicked'); Linking.openURL(linkUrl); }}>
           {'  ↗'}
         </Text>
       )}
@@ -238,14 +239,22 @@ export default function Home() {
   const NEXT_STATE: Record<string, TaskStatus> = { not_started: 'in_progress', in_progress: 'completed', completed: 'not_started' };
   async function cycleActionItem(itemId: string, actionId: string) {
     if (!data) return;
+    trackEvent('task_status_cycled');
+    let becameCompleted = false;
     const next: TrackerData = { ...data };
     for (const bucket of Object.keys(next) as (keyof TrackerData)[]) {
       next[bucket] = next[bucket].map((it) =>
         it.id === itemId
-          ? { ...it, actionItems: (it.actionItems ?? []).map((ai) => (ai.id === actionId ? { ...ai, state: NEXT_STATE[ai.state] ?? 'not_started' } : ai)) }
+          ? { ...it, actionItems: (it.actionItems ?? []).map((ai) => {
+              if (ai.id !== actionId) return ai;
+              const nextState = NEXT_STATE[ai.state] ?? 'not_started';
+              if (nextState === 'completed') becameCompleted = true;
+              return { ...ai, state: nextState };
+            }) }
           : it,
       );
     }
+    if (becameCompleted) trackEvent('task_completed');
     setData(next);
     await saveTrackerData(next);
   }
@@ -255,10 +264,12 @@ export default function Home() {
   const [taskDrafts, setTaskDrafts] = useState<Record<string, string>>({});
 
   async function deleteTask(itemId: string, actionId: string) {
+    trackEvent('task_deleted');
     setData(await deleteTrackerTask(itemId, actionId));
   }
 
   async function restoreTasks(itemId: string) {
+    trackEvent('task_restored');
     setData(await restoreRemovedTasks(itemId));
     // The restored catalog tasks come back through the merge on the next task pull; force a
     // free sync now so the student watches them return instead of wondering if it worked.
@@ -271,7 +282,10 @@ export default function Home() {
     if (!text) return;
     const { data: next, added } = await addUserTask(itemId, text);
     setData(next);
-    if (added) setTaskDrafts((d) => ({ ...d, [itemId]: '' }));
+    if (added) {
+      trackEvent('task_added');
+      setTaskDrafts((d) => ({ ...d, [itemId]: '' }));
+    }
   }
 
   useFocusEffect(
@@ -285,7 +299,9 @@ export default function Home() {
         if (!alive) return;
         if (d) setData(d);
         setSaved(s);
+        const hasProfile = !!(p?.synthesized ?? '').trim();
         setProfile(p?.synthesized ?? '');
+        setTag('has_profile', hasProfile ? 'true' : 'false');
         setLoaded(true);
       });
       // Free catalog sync (throttled, shared with the Quest Log): Home Base also renders
@@ -354,9 +370,9 @@ export default function Home() {
           Hey <Text style={styles.greetingAccent}>{user?.firstName || 'there'}</Text>, ready?
         </Text>
         {ending ? (
-          <EndingPanel days={ending.days} onResubscribe={() => router.push('/(app)/subscription')} />
+          <EndingPanel days={ending.days} onResubscribe={() => { trackEvent('plan_upgrade_click'); router.push('/(app)/subscription'); }} />
         ) : !paid ? (
-          <FreePanel onUpgrade={() => router.push('/(app)/subscription')} />
+          <FreePanel onUpgrade={() => { trackEvent('plan_upgrade_click'); router.push('/(app)/subscription'); }} />
         ) : null}
         {/* The daily AI-actions meter is a Free-tier affordance — it counts down a cap that
             paid/Unlimited accounts don't have. Showing an "Unlimited" card to them is noise,
@@ -398,7 +414,7 @@ export default function Home() {
                 Every match in the Finder gets better once we know you. Takes 2 minutes — go build it now.
               </Txt>
             </View>
-            <PopButton label="Build my profile" variant="secondary" onPress={(e) => { stop(e); router.push({ pathname: '/(app)/profile', params: { chat: '1' } }); }} />
+            <PopButton label="Build my profile" variant="secondary" onPress={(e) => { stop(e); trackEvent('profile_build_started'); router.push({ pathname: '/(app)/profile', params: { chat: '1' } }); }} />
           </LinearGradient>
         </Pressable>
       )}
@@ -437,7 +453,7 @@ export default function Home() {
       </SoftCard>
 
       {/* Your Next Moves */}
-      <SoftCard style={{ gap: space.lg }} hoverTint onPress={upcoming.length ? () => setTasksOpen(true) : undefined}>
+      <SoftCard style={{ gap: space.lg }} hoverTint onPress={upcoming.length ? () => { trackEvent('task_view_all_opened'); setTasksOpen(true); } : undefined}>
         <View style={styles.rowBetween}>
           <Txt variant="h2" style={styles.cardTitle}>Your Next Moves</Txt>
           {!compact && (
@@ -480,7 +496,7 @@ export default function Home() {
                 label="See all tasks"
                 variant="secondary"
                 small
-                onPress={(e) => { stop(e); setTasksOpen(true); }}
+                onPress={(e) => { stop(e); trackEvent('task_view_all_opened'); setTasksOpen(true); }}
               />
             </View>
           </View>
@@ -538,7 +554,7 @@ export default function Home() {
                         <Text
                           style={[styles.taskCardName, compact && styles.taskCardNameCompact, styles.taskCardNameLink]}
                           numberOfLines={1}
-                          onPress={() => Linking.openURL(item.url as string)}
+                          onPress={() => { trackEvent('opp_link_click_task'); Linking.openURL(item.url as string); }}
                         >
                           {item.name}
                         </Text>

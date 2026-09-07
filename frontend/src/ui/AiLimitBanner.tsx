@@ -10,6 +10,7 @@ import {
   subscribeAiLimitBanner,
 } from '@/lib/aiLimit';
 import { APP_MAX_WIDTH, colors, fonts, radius } from './theme';
+import { trackEvent } from '@/lib/analytics';
 
 // The full-width "You're out of AI actions for today" bar (mockup: AI Limit Reached - Modal).
 // Mounted once, above the NavBar in (app)/_layout, so it shows on every tab. Visible only for a
@@ -56,6 +57,11 @@ export function AiLimitBanner() {
     return () => run.stop();
   }, [visible, anim]);
 
+  // Fire once each time the banner transitions into view.
+  useEffect(() => {
+    if (visible) trackEvent('plan_ai_limit_shown');
+  }, [visible]);
+
   if (!visible) return null;
 
   const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [-barH, 0] });
@@ -74,10 +80,10 @@ export function AiLimitBanner() {
         </View>
 
         <View style={styles.right}>
-          <Pressable style={styles.cta} onPress={() => router.push('/(app)/subscription' as never)}>
+          <Pressable style={styles.cta} onPress={() => { trackEvent('plan_ai_limit_cta_click'); router.push('/(app)/subscription' as never); }}>
             <Text style={styles.ctaText}>Go Unlimited, $9.99/mo</Text>
           </Pressable>
-          <Pressable onPress={dismissAiLimitBanner} hitSlop={10} accessibilityLabel="Dismiss">
+          <Pressable onPress={() => { trackEvent('plan_ai_limit_dismissed'); dismissAiLimitBanner(); }} hitSlop={10} accessibilityLabel="Dismiss">
             <Text style={styles.closeText}>✕</Text>
           </Pressable>
         </View>

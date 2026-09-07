@@ -323,6 +323,25 @@ def handle_db_health():
     return json_response(200, core.get_db_health(), default=str)
 
 
+@router.get("/api/agents/seo")
+def handle_seo_overview():
+    """SEO tab: how many opportunity pages exist, how many are indexed, and how many are
+    awaiting more information (with what each is missing). Read-only, FREE — reads the durable
+    seo_* columns. Localhost-gated like the rest of /api/agents/* (the payload names rows)."""
+    result = core.get_seo_overview()
+    return json_response(200 if result.get("ok") else 502, result, default=str)
+
+
+@router.post("/api/agents/seo/evaluate")
+def handle_seo_evaluate():
+    """Re-score every active opportunity against the composite index bar and write the durable
+    seo_* columns (assigning a stable slug to any row that lacks one). FREE — no model call.
+    This is the "publish / refresh the pages" action; the sitemap and dashboard read what it
+    writes."""
+    result = core.evaluate_seo_pages()
+    return json_response(200 if result.get("ok") else 502, result, default=str)
+
+
 @router.get("/api/agents/api-errors")
 def handle_api_errors(request: Request):
     """The API Errors tab: recent 5xx / unhandled exceptions the shipped service recorded, newest

@@ -331,6 +331,13 @@ OPPORTUNITIES_FIELDS = "id,name,org,summary,url,subject_tags,type,price,state,lo
 OPPORTUNITIES_CLIENT_STRIP_FIELDS = ("match_vector",)
 OPPORTUNITIES_CACHE_TTL = 300  # seconds
 
+# ---------- Public SEO pages (Layer-1 program pages, sitemap) ----------
+# Absolute origin used for canonical <link>, og:url, and the sitemap's <loc> entries. These
+# must be absolute and must be the PUBLIC domain, not the internal Render URL — a canonical
+# pointing at *.onrender.com would split ranking off the real domain. Overridable for a
+# staging host, defaulting to production.
+SEO_SITE_ORIGIN = (os.environ.get("SEO_SITE_ORIGIN") or "https://highschoolwingman.com").rstrip("/")
+
 # ---------- The vector cache's 24h backstop (Phase 2 item 5, decision 6) ----------
 # Embeddings change only when something is re-embedded offline, so refreshing them on the
 # catalog's 5-minute cadence pulled ~20MB from Supabase every five minutes to serve a column

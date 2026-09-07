@@ -1,0 +1,36 @@
+# robots.txt for Highschool Wingman — https://highschoolwingman.com
+# Goal: let search engines index the public marketing, legal, and opportunity
+# catalog pages (our programmatic-SEO surface) while keeping the API, the
+# authed app shell, and the local-only ops console out of the index.
+
+User-agent: *
+Allow: /
+
+# --- Never index the API or app internals ---
+Disallow: /api/
+Disallow: /admin
+Disallow: /admin/
+Disallow: /evals
+Disallow: /evals/
+Disallow: /google-auth
+Disallow: /login
+Disallow: /subscription
+
+# --- Query-string noise: keep canonical program URLs, drop tracking params ---
+Disallow: /*?*utm_
+Disallow: /*?*fbclid
+Disallow: /*?*ref=
+
+# --- Assets the crawler gains nothing from ---
+Disallow: /assets/
+Disallow: /_expo/
+
+# Be polite with aggressive crawlers, but don't slow Google/Bing.
+User-agent: AhrefsBot
+Crawl-delay: 10
+
+User-agent: SemrushBot
+Crawl-delay: 10
+
+# Point crawlers at the sitemap (generate this per-refresh from the catalog).
+Sitemap: https://highschoolwingman.com/sitemap.xml

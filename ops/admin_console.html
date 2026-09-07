@@ -489,6 +489,7 @@ tr.disabled-seed { opacity: .48; }
     <button class="vtab" data-view="comms">Comms<span class="count" id="emailTabCount"></span></button>
     <button class="vtab" data-view="health">Health<span class="count" id="healthTabCount"></span></button>
     <button class="vtab" data-view="apierrors">API Errors<span class="count" id="apiErrorsTabCount"></span></button>
+    <button class="vtab" data-view="seo">SEO Pages<span class="count" id="seoTabCount"></span></button>
   </div>
 
   <div id="globalNotice" class="notice err hidden" style="margin-bottom:24px"></div>
@@ -840,6 +841,29 @@ tr.disabled-seed { opacity: .48; }
       <span id="apiErrorsStamp" style="color:var(--text-3);font-size:12px"></span>
     </div>
     <div id="apiErrorsBody"><div class="empty">Loading&hellip;</div></div>
+  </div>
+
+  <!-- ==========================================================================
+       SEO Pages — Layer-1 public program pages. FREE: read-only counts plus a
+       re-evaluation that reads catalog data and writes derived seo_* flags; no
+       model call. loadSeo() reads GET /api/agents/seo; the button POSTs
+       /api/agents/seo/evaluate. The pages themselves ship from app/routes/seo_pages.py.
+  =========================================================================== -->
+  <div class="view hidden" id="view-seo">
+    <div class="view-lead">
+      One public, crawlable page per opportunity, generated from the catalog. A page is
+      <strong>indexed</strong> once it clears the content bar (a real summary plus at least two
+      of: a deadline, eligibility, cost/format, a 3+ step checklist); until then it is
+      <strong>awaiting more information</strong> and served <span class="mono">noindex</span>.
+      Re-evaluate is FREE &mdash; it reads the catalog and writes the durable
+      <span class="mono">seo_*</span> flags. Run <span class="mono">db/seo_pages_schema.sql</span> once first.
+    </div>
+    <div style="margin:8px 0 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <button class="btn" id="seoRefresh">Refresh</button>
+      <button class="btn btn-primary" id="seoEvaluate">Re-evaluate all pages</button>
+      <span id="seoStamp" style="color:var(--text-3);font-size:12px"></span>
+    </div>
+    <div id="seoBody"><div class="empty">Loading&hellip;</div></div>
   </div>
 
   <div class="view" id="view-metrics">
@@ -3411,6 +3435,7 @@ const VIEW_SUBTITLE = {
   comms:   'The three lifecycle emails — what they say, who is due one, and what went out',
   health:  'One read-only pass over the database — queues, coverage, freshness, and alerts',
   apierrors: 'Live 5xx responses and unhandled exceptions the API service recorded',
+  seo:     'Public program pages — how many exist, how many are indexed, and what the rest still need',
 };
 
 function showView(view) {
@@ -3421,6 +3446,7 @@ function showView(view) {
   if (view === 'comms') loadEmails();
   if (view === 'health') loadHealth();
   if (view === 'apierrors') loadApiErrors();
+  if (view === 'seo') loadSeo();
   document.querySelectorAll('#viewTabs .vtab').forEach(
     t => t.classList.toggle('active', t.dataset.view === view));
   document.querySelectorAll('.view').forEach(
@@ -6111,6 +6137,88 @@ function renderApiErrorsTable() {
 
 $('apiErrorsRefresh').onclick = () => loadApiErrors();
 $('apiErrorsRange').onchange = () => loadApiErrors();
+
+/* ===========================================================================
+   SEO Pages tab — Layer-1 public program pages. loadSeo() reads GET /api/agents/seo
+   (counts + the "awaiting info" drill-down); Re-evaluate POSTs /api/agents/seo/evaluate
+   to re-score every active row and write the durable seo_* flags. FREE: no model call.
+=========================================================================== */
+function seoStamp(iso) {
+  if (!iso) return 'Never evaluated';
+  return 'Last evaluated ' + new Date(iso).toLocaleString();
+}
+
+async function loadSeo() {
+  const body = $('seoBody');
+  body.innerHTML = '<div class="empty">Loading&hellip;</div>';
+  try {
+    renderSeo(await api('/api/agents/seo'));
+  } catch (e) {
+    body.innerHTML = `<div class="notice err">Could not load SEO status: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderSeo(d) {
+  const body = $('seoBody'), stamp = $('seoStamp'), tabCount = $('seoTabCount');
+  if (!d || !d.ok) {
+    body.innerHTML = `<div class="notice err">${esc((d && d.error) || 'Failed to read SEO status.')}</div>`;
+    return;
+  }
+  if (d.schema_ready === false) {
+    stamp.textContent = ''; tabCount.textContent = '';
+    body.innerHTML = `<div class="notice">One-time setup: run <span class="mono">${esc(d.setup_sql || 'db/seo_pages_schema.sql')}</span> in the Supabase SQL editor, then press Re-evaluate.</div>`;
+    return;
+  }
+  stamp.textContent = seoStamp(d.last_evaluated_at);
+  tabCount.textContent = (d.indexed != null) ? num(d.indexed) : '';
+
+  const tiles = [
+    ['Indexed pages', num(d.indexed)],
+    ['Awaiting info', num(d.awaiting)],
+    ['Not yet evaluated', num(d.not_evaluated)],
+    ['Active opportunities', num(d.total_active)],
+  ];
+  let html = `<div class="kpis">${tiles.map(([l, v]) =>
+    `<div class="kpi"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div></div>`).join('')}</div>`;
+
+  const rows = d.awaiting_rows || [];
+  html += `<div class="card"><div class="card-head"><h2>Awaiting more information<span class="count">${num(rows.length)}</span></h2><div class="spacer"></div></div>`;
+  if (!rows.length) {
+    html += `<div class="card-body"><div class="empty">Nothing waiting — every evaluated page cleared the bar.</div></div>`;
+  } else {
+    html += `<div class="card-body tight"><div class="hint" style="padding:10px 14px">Highest score first — closest to publishable. "Still needs" is what each row must gain to be indexed.</div>`
+         +  `<div class="tbl-wrap"><table><thead><tr><th>Program</th><th style="width:74px">Score</th><th>Still needs</th><th style="width:80px">Preview</th></tr></thead><tbody>`;
+    rows.forEach(r => {
+      const miss = (r.missing || []).map(m => `<span class="pill warn">${esc(m)}</span>`).join(' ');
+      const prev = r.slug
+        ? `<a href="/opportunities/${encodeURIComponent(r.slug)}" target="_blank" rel="noopener">view</a>`
+        : '—';
+      html += `<tr><td>${esc(r.name || r.id)}</td><td class="mono">${esc(r.score)}/${esc(r.max_score)}</td><td>${miss}</td><td>${prev}</td></tr>`;
+    });
+    html += `</tbody></table></div></div>`;
+  }
+  html += `</div>`;
+  body.innerHTML = html;
+}
+
+async function evaluateSeo() {
+  const btn = $('seoEvaluate'), prev = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Evaluating…';
+  try {
+    const d = await api('/api/agents/seo/evaluate', { method: 'POST' });
+    if (!d || !d.ok) notice((d && d.error) || 'Evaluation failed.');
+    else if (d.schema_ready === false) notice('Run ' + (d.setup_sql || 'db/seo_pages_schema.sql') + ' first.');
+    else notice('');
+    await loadSeo();
+  } catch (e) {
+    notice('Evaluation failed: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = prev;
+  }
+}
+
+$('seoRefresh').onclick = () => loadSeo();
+$('seoEvaluate').onclick = () => evaluateSeo();
 
 document.querySelectorAll('#viewTabs .vtab').forEach(t => t.onclick = () => showView(t.dataset.view));
 document.querySelectorAll('#metricTabs .tab').forEach(t => t.onclick = () => showMetricPanel(t.dataset.panel));

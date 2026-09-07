@@ -4987,3 +4987,131 @@ def send_test_lifecycle_email(kind, to_email, userid=None):
 def run_lifecycle_sweep(dry_run=False):
     from app.services import email as email_service
     return email_service.run_trial_sweep(dry_run=dry_run)
+
+
+# ---------- Layer-1 SEO program pages: evaluation + observability ----------
+# The public pages and /sitemap.xml live in app/routes/seo_pages.py (they ship); this is the
+# LOCAL half — the evaluator that scores every active row against the composite bar and stores
+# the durable seo_* columns, plus the read the console's SEO tab renders. Both use the SAME
+# pure verdict (wingman.seo_pages.evaluate_seo_page) the page route uses, so the dashboard can
+# never count a page as indexed that the crawler would see as noindex, and vice versa. FREE:
+# no model call anywhere in this path — it is a read of existing catalog data and a write of
+# derived flags.
+from wingman import seo_pages as _seo
+
+SEO_SETUP_SQL = "db/seo_pages_schema.sql"
+# The columns evaluate_seo_page needs, plus the current slug. Selecting seo_slug is also how a
+# missing migration is detected — the select 400s, which we classify into the setup notice.
+_SEO_EVAL_SELECT = ("id,name,summary,eligibility,grade_min,grade_max,price,state,location,"
+                    "important_dates,action_items,seo_slug")
+_SEO_OVERVIEW_SELECT = ("id,name,seo_slug,seo_status,seo_content_score,seo_missing_fields,"
+                        "seo_evaluated_at")
+_SEO_PAGE_SIZE = 500
+
+
+def _seo_paginated(select_fields):
+    """All active rows for `select_fields`, paging past PostgREST's 1000-row cap. Raises on
+    error so the caller can tell a missing-column (not migrated) apart from an outage."""
+    rows = []
+    offset = 0
+    while True:
+        page = _supabase_request_strict(
+            "opportunities",
+            params={"select": select_fields, "is_active": "eq.true", "order": "id"},
+            extra_headers={"Range": f"{offset}-{offset + _SEO_PAGE_SIZE - 1}"})
+        rows.extend(page or [])
+        if not page or len(page) < _SEO_PAGE_SIZE:
+            break
+        offset += _SEO_PAGE_SIZE
+    return rows
+
+
+def _seo_not_ready():
+    return {"ok": True, "schema_ready": False, "setup_sql": SEO_SETUP_SQL,
+            "total_active": 0, "indexed": 0, "awaiting": 0, "not_evaluated": 0,
+            "awaiting_rows": [], "last_evaluated_at": None, "max_score": _seo.MAX_SCORE}
+
+
+def evaluate_seo_pages():
+    """Score every active opportunity and upsert the durable seo_* columns. This is the
+    "create / update the pages" action: a slug is assigned (stable, unique) the first time a
+    row is seen and kept thereafter, so publishing a page never moves its URL. Returns a
+    summary. FREE."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
+    try:
+        rows = _seo_paginated(_SEO_EVAL_SELECT)
+    except Exception as e:
+        if _is_missing_column_error(e) or _missing_table_error(e):
+            return {"ok": True, "schema_ready": False, "setup_sql": SEO_SETUP_SQL}
+        return {"ok": False, "error": f"Could not read opportunities: {e}"}
+
+    taken = {r["seo_slug"] for r in rows if r.get("seo_slug")}
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    updates, indexed, awaiting = [], 0, 0
+    for r in rows:
+        verdict = _seo.evaluate_seo_page(r)
+        slug = r.get("seo_slug")
+        if not slug:
+            slug = _seo.assign_unique_slug(r.get("name"), r["id"], taken)
+            taken.add(slug)
+        indexed += 1 if verdict["indexable"] else 0
+        awaiting += 0 if verdict["indexable"] else 1
+        updates.append({
+            "id": r["id"], "seo_slug": slug, "seo_status": verdict["status"],
+            "seo_content_score": verdict["score"],
+            "seo_missing_fields": verdict["missing"], "seo_evaluated_at": now,
+        })
+    # Upsert, merging on id so only the seo_* columns of an existing row are touched.
+    try:
+        for i in range(0, len(updates), 200):
+            _supabase_request_strict(
+                "opportunities", method="POST", params={"on_conflict": "id"},
+                data=updates[i:i + 200],
+                extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+    except Exception as e:
+        if _is_missing_column_error(e) or _missing_table_error(e):
+            return {"ok": True, "schema_ready": False, "setup_sql": SEO_SETUP_SQL}
+        return {"ok": False, "error": f"Could not write seo_* columns: {e}"}
+    return {"ok": True, "schema_ready": True, "evaluated": len(updates),
+            "indexed": indexed, "awaiting": awaiting, "ran_at": now}
+
+
+def get_seo_overview(awaiting_limit=300):
+    """Counts + the "awaiting more information" drill-down for the console's SEO tab, read from
+    the durable seo_* columns. Degrades to a setup notice if the migration has not been run."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
+    try:
+        rows = _seo_paginated(_SEO_OVERVIEW_SELECT)
+    except Exception as e:
+        if _is_missing_column_error(e) or _missing_table_error(e):
+            return _seo_not_ready()
+        return {"ok": False, "error": f"Could not read opportunities: {e}"}
+
+    indexed = awaiting = not_evaluated = 0
+    last_eval = None
+    awaiting_rows = []
+    for r in rows:
+        status = r.get("seo_status")
+        if not r.get("seo_slug") or status is None:
+            not_evaluated += 1           # a row with no page published for it yet
+            continue
+        ev = r.get("seo_evaluated_at")
+        if ev and (last_eval is None or ev > last_eval):
+            last_eval = ev
+        if status == _seo.STATUS_INDEXED:
+            indexed += 1
+        else:
+            awaiting += 1
+            awaiting_rows.append({
+                "id": r["id"], "name": r.get("name"), "slug": r.get("seo_slug"),
+                "score": r.get("seo_content_score"), "max_score": _seo.MAX_SCORE,
+                "missing": r.get("seo_missing_fields") or [],
+            })
+    # Closest-to-publishable first: highest score, then name.
+    awaiting_rows.sort(key=lambda x: (-(x["score"] or 0), (x["name"] or "").lower()))
+    return {"ok": True, "schema_ready": True, "total_active": len(rows),
+            "indexed": indexed, "awaiting": awaiting, "not_evaluated": not_evaluated,
+            "last_evaluated_at": last_eval, "max_score": _seo.MAX_SCORE,
+            "awaiting_rows": awaiting_rows[:awaiting_limit]}

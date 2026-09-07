@@ -2,6 +2,8 @@
 the per-row PATCH builder, and the entry-shape reader. Hermetic — the paid embed call is injected."""
 import urllib.error
 
+import pytest
+
 from wingman import dedupe_embed_store as des
 from wingman import supabase_common
 
@@ -61,7 +63,9 @@ def test_reembeds_when_content_changed():
 
 def test_refresh_returns_patch_for_a_new_active_row():
     patch = des.refresh_row_dedupe_embedding(_row("ec1"), "key", embed_fn=_fake_embed)
-    assert patch["dedupe_vector"] == [0.1, 0.2, 0.3]
+    # Stored in the compact wire form, not a raw array; decode round-trips at float32.
+    assert isinstance(patch["dedupe_vector"], str) and patch["dedupe_vector"].startswith("f32:")
+    assert des.decode_dedupe_vector(patch["dedupe_vector"]) == pytest.approx([0.1, 0.2, 0.3])
     assert patch["dedupe_vector_hash"] == des.dedupe_content_hash(_row("ec1"))
     assert patch["dedupe_vector_computed_at"]
     assert patch["_cost_usd"] == 0.0001
@@ -86,14 +90,44 @@ def test_refresh_noops_on_empty_vector():
 # --- the entry-shape reader (what embed_common.nearest consumes) ----------------------
 
 def test_rows_to_dedupe_entries_shape():
+    # DUAL-READ: a legacy array (ec1) and the compact form (ec3) both decode; None is skipped.
     rows = [{"id": "ec1", "dedupe_vector": [0.1, 0.2], "dedupe_vector_computed_at": "2026-09-01"},
             {"id": "ec2", "dedupe_vector": None},           # not embedded yet -> skipped
-            {"id": "ec3", "dedupe_vector": [0.3, 0.4]}]
+            {"id": "ec3", "dedupe_vector": des.encode_dedupe_vector([0.3, 0.4])}]
     entries = des.rows_to_dedupe_entries(rows)
     assert [e["id"] for e in entries] == ["ec1", "ec3"]
     assert entries[0]["vector"] == [0.1, 0.2]
+    assert entries[1]["vector"] == pytest.approx([0.3, 0.4])
     assert entries[0]["rep"] == "fields" and entries[0]["source"] == "catalog"
     assert entries[0]["embedded_at"] == "2026-09-01"
+
+
+# --- the compact wire format (option C): encode/decode + dual-read ---------------------
+
+def test_encode_decode_round_trips_at_float32():
+    vec = [0.1, -0.2, 0.339999, 1.0, -1.5]
+    enc = des.encode_dedupe_vector(vec)
+    assert isinstance(enc, str) and enc.startswith("f32:")
+    assert des.decode_dedupe_vector(enc) == pytest.approx(vec, abs=1e-6)
+
+
+def test_encode_is_much_smaller_than_the_json_array():
+    import json
+    vec = [0.123456789] * 3072                       # a full gemini-embedding-001 vector
+    assert len(des.encode_dedupe_vector(vec)) < len(json.dumps(vec)) / 2
+
+
+def test_decode_accepts_a_legacy_array_and_rejects_junk():
+    assert des.decode_dedupe_vector([0.1, 0.2]) == [0.1, 0.2]     # legacy passthrough
+    assert des.decode_dedupe_vector(None) == []
+    assert des.decode_dedupe_vector("not-tagged") == []           # unknown string -> empty, skipped
+
+
+def test_is_legacy_stored_vector():
+    assert des.is_legacy_stored_vector([0.1, 0.2]) is True
+    assert des.is_legacy_stored_vector(des.encode_dedupe_vector([0.1])) is False
+    assert des.is_legacy_stored_vector(None) is False
+    assert des.is_legacy_stored_vector([]) is False
 
 
 # --- fetch_dedupe_index: the impure read, its paging and its degradation --------------

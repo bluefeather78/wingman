@@ -32,7 +32,7 @@ import sys
 
 from wingman import embed_common
 from wingman.dedupe_embed_store import (dedupe_representation, rows_needing_dedupe_embedding,
-                                DEDUPE_SELECT_FIELDS)
+                                DEDUPE_SELECT_FIELDS, encode_dedupe_vector)
 
 WRITE_CHUNK = 100  # embed + PATCH in chunks so a mid-run failure doesn't lose the whole pass
 
@@ -117,7 +117,7 @@ def main():
                 continue
             try:
                 supabase_patch(url, "opportunities", {"id": f"eq.{r['id']}"}, {
-                    "dedupe_vector": vec,
+                    "dedupe_vector": encode_dedupe_vector(vec),   # compact wire form (option C)
                     "dedupe_vector_hash": current_hash,
                     "dedupe_vector_computed_at": stamp,
                 }, key)

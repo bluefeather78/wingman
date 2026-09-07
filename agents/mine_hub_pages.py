@@ -1032,6 +1032,13 @@ def main():
     # process; a missing column / no embeddings degrades to an empty index and the hint is simply
     # off (no exception), exactly like the scraper's gate. gate_by_id enriches a hint with the
     # survivor's name/url for the queue back-link.
+    #
+    # ANNOUNCE IT FIRST. This is ~30-60s of SILENT blocking I/O (every active row's ~42KB vector,
+    # read in paginated chunks), and for a names-only --from-leads run it is the FIRST work after
+    # "lead(s) taken" — with no output the operator concludes the run is hung and kills it, which
+    # is what left unfinished agent_runs rows. The line below makes the wait visible.
+    print(f"[..] Loading the catalog dedupe index for the M9 gate "
+          f"(every active row's vector, ~30-60s)...", flush=True)
     gate_index = dedupe_embed_store.fetch_dedupe_index(supabase_url, service_key)
     gate_by_id = {r["id"]: r for r in (existing or []) if r.get("id")}
     print(f"[OK] Discovery gate ON (M9): classify pill + embedding dedupe per extracted row; "

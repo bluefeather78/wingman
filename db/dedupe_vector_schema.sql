@@ -5,7 +5,13 @@
 -- different embedding, computed from different fields, for a different job. The two live in
 -- separate columns and never mix (cosine between them is meaningless).
 --
---   dedupe_vector       jsonb        NULL   -- the embedding itself, as a plain float array
+--   dedupe_vector       jsonb        NULL   -- the embedding, stored as the compact string
+--                                           -- "f32:<base64 little-endian float32>" (~16KB/row vs
+--                                           -- ~42KB as a float array; ~2.6x less to transfer,
+--                                           -- lossless at float32). Still a jsonb value, so NO
+--                                           -- column-type change; the read path is dual-read and
+--                                           -- also accepts a legacy plain float array. Encode/
+--                                           -- decode live in wingman/dedupe_embed_store.py.
 --   dedupe_vector_hash  text         NULL   -- content hash of the fields it was computed from
 --   dedupe_vector_computed_at  timestamptz  NULL   -- when it was last (re)computed, for debugging
 --
@@ -27,8 +33,14 @@
 -- WHAT THIS IS NOT. Not a vector-search index — deliberately no `pgvector`, no `vector` column
 -- type. At this catalog size (~1,500 rows) brute-force cosine in plain Python is microseconds, and
 -- the dedupe query is "nearest existing row to ONE new candidate", a handful of dot products, not a
--- catalog-wide ANN search. `dedupe_vector` is plain `jsonb` so it reads with an ordinary `select=`,
--- the same as `match_vector`.
+-- catalog-wide ANN search. `dedupe_vector` stays plain `jsonb` so it reads with an ordinary
+-- `select=`, the same as `match_vector`. The COMPUTE was never the cost — the TRANSFER was: a
+-- float ARRAY as JSON text is ~42KB/row, so the whole index is ~70MB. The value is therefore
+-- stored as a compact base64-float32 STRING ("f32:...", see the column note above), ~2.6x smaller,
+-- read back via dedupe_embed_store.decode_dedupe_vector (dual-read: base64 OR legacy array). To
+-- re-encode rows written before this format, run the FREE, idempotent backfill (no model calls):
+--   python -c "from wingman import dedupe_embed_store as d, supabase_common as s; \
+--              u,k=s.require_service_key(); print(d.reencode_stored_vectors(u,k))"
 --
 -- WHEN THIS GETS WRITTEN. At activation (a human makes a scraped/queued row LIVE) and by the ad-hoc
 -- backfill. A row that stays inactive is skipped — a pending-review scrape/edit may never activate,

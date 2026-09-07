@@ -23,8 +23,10 @@ match_vector path; do not change the model / pricing / whether it spends without
 """
 from __future__ import annotations
 
+import base64
 import datetime
 import hashlib
+import struct
 
 from wingman import embed_common
 # The recompute rule is identical to the recall vector's (recompute iff the write leaves the row
@@ -47,6 +49,52 @@ DEDUPE_INDEX_SELECT = "id,dedupe_vector,dedupe_vector_computed_at"
 # ceiling is the DB STATEMENT timeout, not the client socket timeout — do not raise this without
 # re-measuring against the live payload.
 DEDUPE_INDEX_PAGE_SIZE = 200
+
+# --- Vector wire format (the "option C" transfer shrink) ------------------------------------
+# The vector is stored as base64 of little-endian float32 with an "f32:" tag, instead of a jsonb
+# float ARRAY. A 3072-float array as JSON text is ~42KB/row (each float is a dozen-plus chars);
+# the same numbers as float32 bytes are 4*N and base64 ~1.33x that — ~16KB/row, ~2.6x less to
+# transfer, and LOSSLESS at float32 (cosine changes in the ~6th decimal, and this vector only ever
+# powers a HINT). It is still stored in the SAME jsonb column, as a JSON string, so there is NO
+# column-type migration; the freshness hash is computed from the row's TEXT (not the vector), so
+# the encoding change never forces a re-embed. `decode_dedupe_vector` is DUAL-READ — it accepts
+# both the tagged base64 string and a legacy plain array — so a half-migrated catalog reads
+# correctly and old rows keep working until a free re-encode backfill rewrites them.
+_VEC_TAG = "f32:"
+
+
+def encode_dedupe_vector(vector) -> str:
+    """list[float] -> the compact "f32:<base64 little-endian float32>" wire form."""
+    floats = [float(x) for x in (vector or [])]
+    packed = struct.pack(f"<{len(floats)}f", *floats)
+    return _VEC_TAG + base64.b64encode(packed).decode("ascii")
+
+
+def decode_dedupe_vector(value) -> list:
+    """Stored dedupe vector -> list[float]. DUAL-READ, so a mixed catalog is safe:
+      * "f32:<base64>"      -> the new compact form (unpacked)
+      * [0.1, 0.2, ...]     -> a legacy plain float array (passed through)
+    Anything unrecognised (None, an empty/garbled value) -> [] so the row is simply skipped from
+    the index, exactly as an un-embedded row is."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        if value.startswith(_VEC_TAG):
+            raw = base64.b64decode(value[len(_VEC_TAG):])
+            n = len(raw) // 4
+            return list(struct.unpack(f"<{n}f", raw)) if n else []
+        return []
+    if isinstance(value, (list, tuple)):
+        return [float(x) for x in value]
+    return []
+
+
+def is_legacy_stored_vector(value) -> bool:
+    """True when a stored vector is present but NOT yet in the compact form — i.e. a plain array
+    the re-encode backfill should rewrite. A tagged string or an absent vector returns False."""
+    if isinstance(value, (list, tuple)):
+        return len(value) > 0
+    return False
 
 
 def dedupe_representation(row: dict) -> str:
@@ -92,7 +140,7 @@ def refresh_row_dedupe_embedding(row: dict, api_key: str, embed_fn=None):
         # the dedupe search as an all-zero row). Signal by returning None, exactly like the recall path.
         return None
     return {
-        "dedupe_vector": vector,
+        "dedupe_vector": encode_dedupe_vector(vector),   # compact wire form (see encode_dedupe_vector)
         "dedupe_vector_hash": current_hash,
         "dedupe_vector_computed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "_cost_usd": cost,
@@ -119,9 +167,10 @@ def rows_to_dedupe_entries(rows):
     for the JSONL, just sourced from the catalog instead of a sidecar file."""
     out = []
     for r in rows or []:
-        rid, vec = r.get("id"), r.get("dedupe_vector")
+        rid = r.get("id")
+        vec = decode_dedupe_vector(r.get("dedupe_vector"))   # dual-read: base64 or legacy array
         if rid and vec:
-            out.append({"id": rid, "vector": list(vec), "rep": "fields", "source": "catalog",
+            out.append({"id": rid, "vector": vec, "rep": "fields", "source": "catalog",
                         "embedded_at": r.get("dedupe_vector_computed_at")})
     return out
 
@@ -158,6 +207,37 @@ def fetch_dedupe_index(supabase_url, key, active_only=True, include_inactive=Fal
         print(f"[WARN] dedupe index read failed ({type(e).__name__}) — dedupe hint OFF this run.")
         return []
     return rows_to_dedupe_entries(rows)
+
+
+def reencode_stored_vectors(supabase_url, key, dry_run=False, page_size=DEDUPE_INDEX_PAGE_SIZE):
+    """FREE one-time backfill: rewrite any dedupe_vector still stored as a legacy float ARRAY into
+    the compact base64 form, so the ~2.6x transfer shrink also covers rows embedded before this
+    format existed. NO model calls — a pure re-encode of numbers already stored. Idempotent (an
+    already-compact row is skipped), so it is safe to run more than once. Reads the whole catalog
+    once (the legacy arrays are the heavy payload this exists to retire), paged below the statement
+    timeout. Returns {scanned, reencoded, skipped, errors}."""
+    from wingman.supabase_common import supabase_get, supabase_patch
+    stats = {"scanned": 0, "reencoded": 0, "skipped": 0, "errors": 0}
+    base = supabase_url.rstrip("/")
+    rows = supabase_get(base, "opportunities",
+                        {"select": "id,dedupe_vector", "dedupe_vector": "not.is.null"},
+                        key, page_size=page_size) or []
+    for r in rows:
+        stats["scanned"] += 1
+        raw = r.get("dedupe_vector")
+        if not is_legacy_stored_vector(raw):
+            stats["skipped"] += 1            # already compact (or empty) — nothing to do
+            continue
+        if dry_run:
+            stats["reencoded"] += 1
+            continue
+        try:
+            supabase_patch(base, "opportunities", {"id": f"eq.{r['id']}"},
+                           {"dedupe_vector": encode_dedupe_vector(raw)}, key)
+            stats["reencoded"] += 1
+        except Exception:                                               # noqa: BLE001
+            stats["errors"] += 1
+    return stats
 
 
 def fetch_dedupe_index_from_env(active_only=True, include_inactive=False):

@@ -27,10 +27,21 @@ RESULT_DISPLAY_FIELDS = (
 )
 
 # The fixed cosine cut for the "strong match" badge (docs/plans/RECALL_GRID_MERGE_PLAN.md decision 2).
-# PROVISIONAL — calibrate against the live gemini-embedding-001 score distribution before
-# trusting it (log real recall scores, pick the value that separates the on-lane cluster from
-# the tail). Env-tunable so calibration needs no code change. A fixed bar (not top-N%) means
-# "strong" has the same meaning on a broad profile and a thin one.
+# CALIBRATED 2026-09-07 against 342 real recall results from the golden-set eval
+# (eval/golden_matches_scored.csv, live gemini-embedding-001). 0.63 is the empirical
+# max-separation point: it is the Youden-J argmax against BOTH the LLM reranker's strong/look
+# tier (J peaks at t≈0.631) and the judge's good/loose verdict (J peaks at t≈0.634). The prior
+# 0.6 badged ~75% of shown rows "strong" — the "everything reads strong" failure the old
+# PROVISIONAL note warned about; 0.63 badges ~44% and 0.65 ~34% if a more selective bar is wanted.
+#
+# THE HONEST CAVEAT, measured: cosine magnitude is a WEAK discriminator of fit here — strong/look
+# score means differ by only ~0.015 (0.628 vs 0.613), best Youden J is ~0.19 — which is exactly
+# why the shipped finder drives its "Strong Fit" badge from the reranker TIER, not this cut
+# (finder.tsx maps `strong` from rz.tier, ignoring this field). So this governs the recall-grid
+# surface / the server `strong` field, not the finder badge; re-run the eval sweep if that
+# changes. Scope note: the sample is SHOWN (post-floor, post-curation) matches, so it calibrates
+# "which shown rows are strong", not the whole recall pool. Env-tunable so a re-calibration needs
+# no code change; a fixed bar (not top-N%) keeps "strong" meaning the same on a broad or thin profile.
 def _env_float(name: str, default: float) -> float:
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
@@ -41,7 +52,7 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-STRONG_MATCH_MIN = _env_float("WINGMAN_STRONG_MATCH_MIN", 0.6)
+STRONG_MATCH_MIN = _env_float("WINGMAN_STRONG_MATCH_MIN", 0.63)
 
 
 def theme_embed_text(theme) -> str:

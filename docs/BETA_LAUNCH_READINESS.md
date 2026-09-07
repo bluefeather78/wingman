@@ -170,10 +170,14 @@ only, `docs/CLAUDE-app.md:604`). Welcome + goodbye are event-driven and fire reg
   1,643 active rows, 1 missing** (a `backfill_match_vectors.py` run, or the next activation, clears it).
   **Two caveats keep it from being fully hands-off:** the hook is best-effort — it silently no-ops if
   `GEMINI_API_KEY` is unset (ties to §1a) or the migration/network fails, leaving the row for the next
-  backfill — and it only fires on **console activation**, not a direct-DB flip. **Still open:** calibrate
-  `WINGMAN_STRONG_MATCH_MIN` — the fixed cosine cut for the "Strong Fit" badge (`app/services/recall_query.py:44`,
-  default **0.6**, env-tunable, no code change), marked PROVISIONAL: log real recall scores and pick the
-  value separating the on-lane cluster from the tail (too low → every card reads "strong"; too high → none do).
+  backfill — and it only fires on **console activation**, not a direct-DB flip. **✅ `WINGMAN_STRONG_MATCH_MIN` calibrated 2026-09-07.** Default moved **0.6 → 0.63**
+  (`app/services/recall_query.py:44`), the empirical max-separation point over 342 real golden-set
+  recall results (`eval/golden_matches_scored.csv`): Youden-J argmax against both the reranker tier
+  (t≈0.631) and the good/loose verdict (t≈0.634). The old 0.6 badged ~75% of shown rows "strong"; 0.63
+  badges ~44%. **Measured caveat:** cosine is a weak fit discriminator (strong/look means differ ~0.015),
+  which is why the shipped finder badge is reranker-driven, not this cut — so this governs the recall-grid
+  surface / server `strong` field, not what the finder shows today. Env-tunable; re-run the eval sweep if
+  the finder is ever wired to the cosine badge.
 - **Synthesis failure persists the raw chat transcript as the profile** (`frontend_report.md` Med #10);
   malformed date can make a card read "Happening Now" (Med #11).
 - **School-domain email blind spot:** a student on a locked school domain silently receives no mail;
@@ -227,8 +231,8 @@ Not a blocker for a small beta, but know the ceiling:
 4. **Decide** the free-tier gate (§2a), Stripe/economics (§2b), and email cron (§2c).
 5. Read the `[client-ip]` log line post-deploy; set `CSP_ENFORCE=1` once you've checked the CSP report.
 6. (Optional, quality) grade-parser fix ✅ + eligibility-in-matching ✅ + `match_vector` backfill/hook ✅
-   (all done); remaining §3 quality items: calibrate `WINGMAN_STRONG_MATCH_MIN`, the "(verified)" deadline
-   copy, and the school-domain email blind spot.
+   (all done) + `WINGMAN_STRONG_MATCH_MIN` calibrated ✅ (0.6→0.63); remaining §3 quality items: the
+   "(verified)" deadline copy, and the school-domain email blind spot.
 
 _Security S0+S1: complete. Boot blocker (numpy): fixed. Nothing in this doc is a code emergency — it's
 config, decisions, and polish._

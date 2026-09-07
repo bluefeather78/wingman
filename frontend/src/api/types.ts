@@ -139,6 +139,20 @@ export interface MatchResponse {
   note?: string | null;
 }
 
+// POST /api/match/eligibility — gate an already-chosen candidate set (the finder's form/quiz
+// path, which never touches /api/match and so was never eligibility-gated server-side).
+export interface MatchEligibilityRequest {
+  candidate_ids: string[];
+  grade?: number | null;
+  location?: { state?: string };
+}
+
+export interface MatchEligibilityResponse {
+  excluded_ineligible: string[];
+  checked: number;
+  called: boolean;
+}
+
 // The opportunity catalog row shape (subset used by the client). Source of truth is
 // the Supabase `opportunities` table, proxied by GET /api/opportunities.
 export interface Opportunity {

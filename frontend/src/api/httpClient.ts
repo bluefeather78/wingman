@@ -12,6 +12,8 @@ import type {
   LoginResponse,
   MatchRequest,
   MatchResponse,
+  MatchEligibilityRequest,
+  MatchEligibilityResponse,
   Opportunity,
   RegisterInput,
   SessionUser,
@@ -788,6 +790,16 @@ export const httpClient: ApiClient = {
   // the finder maps each row (a flattened Opportunity + score/strong) into its Result grid.
   async match(blob: MatchRequest): Promise<MatchResponse> {
     return request<MatchResponse>('/api/match', {
+      method: 'POST',
+      body: JSON.stringify(blob),
+    });
+  },
+
+  // Eligibility-gate an already-chosen candidate set (the finder's form/quiz path). Returns
+  // the ids that verified as ineligible; the caller drops those and keeps the rest, so any
+  // degraded response (empty list) leaves the results untouched.
+  async matchEligibility(blob: MatchEligibilityRequest): Promise<MatchEligibilityResponse> {
+    return request<MatchEligibilityResponse>('/api/match/eligibility', {
       method: 'POST',
       body: JSON.stringify(blob),
     });

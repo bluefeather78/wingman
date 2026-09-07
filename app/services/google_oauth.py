@@ -266,9 +266,12 @@ def purge_google_calendar(userid, record=None):
     small status dict for the deletion report. Does NOT touch the DB columns: the whole row
     is about to be deleted, so nulling them would be redundant.
 
-    The calendar.app.created scope (MARQUEE M7) permits deleting a calendar the app itself
-    created, so DELETE /calendars/{id} removes the whole "Highschool Wingman" calendar and
-    every event on it in one call.
+    MARQUEE M7 (MARQUEE_DECISIONS.md), approved by Shama 2026-09-06. This is CONSISTENT with
+    M7, not a change to it: the calendar.app.created scope permits deleting a calendar the app
+    itself created, so DELETE /calendars/{id} removes the whole "Highschool Wingman" calendar
+    and every event on it in one call. It deletes ONLY Wingman's own app-created calendar and
+    revokes Wingman's own grant — it does NOT broaden the scope and NEVER reads or writes any
+    of the student's own calendars, which is exactly the guarantee M7 protects.
     """
     if record is None:
         record = select_user(

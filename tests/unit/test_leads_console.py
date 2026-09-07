@@ -118,11 +118,10 @@ def test_queued_leads_do_not_take_the_off_domain_flag():
     assert "--from-leads" in argv and "--off-domain" not in argv
 
 
-def test_a_single_url_still_honours_the_checkbox_and_the_ceiling():
-    argv = core.build_tool_args("minehub", {"url": "https://list.com/x", "offDomain": True,
+def test_a_single_url_still_honours_the_page_type_and_the_ceiling():
+    argv = core.build_tool_args("minehub", {"url": "https://list.com/x", "pageType": "listicle",
                                             "maxPages": "40", "mode": "run"})
-    assert argv[-4:] == ["--off-domain", "--max-pages", "40"] or (
-        "--off-domain" in argv and ["--max-pages", "40"] == argv[-2:])
+    assert "--off-domain" in argv and ["--max-pages", "40"] == argv[-2:]
     assert "--preview" not in argv
 
 

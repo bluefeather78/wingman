@@ -646,31 +646,39 @@ class TestMaintenanceTools:
         assert core.build_tool_args("export", {})[2:] == ["-m", "agents.export_json"]
 
     def test_paid_tools(self):
-        # The paid tools: the contact-email backfill, the dead-link re-finder, hub mining (its
-        # extraction call), name harvesting (a search per name), the queue classifier and queue
-        # embedder (both call Gemini), and the dedupe-embedding backfill (build_catalog_embeddings,
-        # a paid embed). Angle proposing and every PREVIEW are free. Pinned so a new tool cannot
-        # quietly join the list that spends.
+        # The paid tools: the contact-email backfill, the dead-link re-finder, hub mining (which
+        # since the 2026-09-07 merge also does name harvesting — a search per named program), the
+        # queue classifier and queue embedder (both call Gemini), and the dedupe-embedding
+        # backfill (build_catalog_embeddings, a paid embed). Angle proposing and every PREVIEW are
+        # free. Pinned so a new tool cannot quietly join the list that spends. `harvestnames` is
+        # gone — it folded into `minehub`.
         paid = {k for k, c in core.MAINTENANCE_TOOLS.items() if not c.get("free")}
-        assert paid == {"contactemail", "refind", "minehub", "harvestnames",
+        assert paid == {"contactemail", "refind", "minehub",
                         "classifyqueue", "dedupequeue", "embedindex"}
-
-    def test_harvestnames_args(self):
-        # Operator-pointed only — the router never sends work here. Free preview by default;
-        # a paid run drops --preview, and the name cap is a spend ceiling.
-        prev = core.build_tool_args("harvestnames", {"url": "https://x.edu/list"})
-        assert prev[2:] == ["-m", "agents.harvest_names", "--hubs", "https://x.edu/list", "--preview"]
-        run = core.build_tool_args("harvestnames", {"url": "https://x.edu/list", "mode": "run",
-                                                    "maxNames": "8"})
-        assert "--preview" not in run and run[-2:] == ["--max-names", "8"]
 
     def test_minehub_args(self):
         # Needs a url; defaults to the free preview; a paid run drops --preview.
         prev = core.build_tool_args("minehub", {"url": "https://x.edu/programs"})
         assert prev[2:] == ["-m", "agents.mine_hub_pages", "--hubs", "https://x.edu/programs", "--preview"]
-        run = core.build_tool_args("minehub", {"url": "https://x.edu/programs", "mode": "run",
-                                               "offDomain": True})
-        assert "--preview" not in run and "--off-domain" in run and "--hubs" in run
+        # An institution index (default page type) follows own-site links: no routing flag.
+        run = core.build_tool_args("minehub", {"url": "https://x.edu/programs", "mode": "run"})
+        assert "--preview" not in run and "--off-domain" not in run and "--names" not in run
+        # A listicle follows off-site links.
+        listicle = core.build_tool_args("minehub", {"url": "https://list.com/x", "mode": "run",
+                                                    "pageType": "listicle"})
+        assert "--off-domain" in listicle and "--names" not in listicle
+
+    def test_minehub_names_mode_args(self):
+        # A names-only page is routed with --names and takes the names spend ceiling — the former
+        # harvestnames card, now folded into minehub.
+        run = core.build_tool_args("minehub", {"url": "https://x.edu/list", "mode": "run",
+                                               "pageType": "names", "maxNames": "8"})
+        assert run[2:5] == ["-m", "agents.mine_hub_pages", "--hubs"]
+        assert "--names" in run and "--off-domain" not in run
+        assert run[-2:] == ["--max-names", "8"] and "--preview" not in run
+        # Free preview still the default.
+        prev = core.build_tool_args("minehub", {"url": "https://x.edu/list", "pageType": "names"})
+        assert prev[-1] == "--preview"
 
     def test_proposeangles_args(self):
         assert core.build_tool_args("proposeangles", {})[2:] == [

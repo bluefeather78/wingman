@@ -39,6 +39,17 @@ hub-miner run only READS the dedupe index for a hint, it does not write either v
     python -m agents.mine_hub_pages --hubs https://ceismc.gatech.edu/programs --preview   # FREE
     python -m agents.mine_hub_pages --hubs-file seattle_hubs.json --preview               # FREE
     python -m agents.mine_hub_pages --hubs https://ceismc.gatech.edu/programs             # PAID (gated)
+
+NAMES MODE (merged in 2026-09-07). A page that LISTS programs by name without linking them — a
+JS-built national directory, a library event calendar — cannot be link-mined; the name-harvest
+logic (agents/harvest_names.py, now an imported helper library) reads the names, resolves each to
+its own title-proven page, and extracts it through the SAME downstream a followed hub link gets:
+the classify pill and the embedding-dedupe hint. `--names` forces a manual --hubs URL down that
+path; a `names` lead from `--from-leads` takes it automatically. Everything logs as one
+`hub_miner` run.
+
+    python -m agents.mine_hub_pages --hubs https://collegetransitions.com/dataverse/ --names  # PAID
+    python -m agents.mine_hub_pages --from-leads 8                                        # both kinds
 """
 import argparse
 import datetime
@@ -634,16 +645,167 @@ def hubs_from_leads(leads):
             for l in (leads or []) if l.get("url")]
 
 
+def _finalize_extracted(cand, classification, dup_hints, source_flags, mint, source, url,
+                        hub_url, existing, gate_by_id):
+    """The SHARED downstream for a followed hub link AND a resolved name, so both reach the
+    review queue identically. Returns (row|None, review|None, (status, reason)).
+
+    `source_flags` are computed by the CALLER because they legitimately differ by source: a hub
+    link is real by construction (never an off-site flag), a searched name is not (keeps the
+    domain/self-promotion flags). Everything after that is one code path:
+      1. the discontinuation gate (queue_flags.is_not_running) — a dead program never reaches a
+         reviewer; it is returned as status='not_running' so the caller can record it as rejected.
+      2. build_row + found_via.
+      3. the classify pill — the SAME `classify:` string the scraper's discovery gate writes,
+         upserted so a row can never carry two.
+      4. dup_candidates — url_dedupe's name/URL hints merged with the embedding-dedupe hint via
+         the SAME gate_dup_candidates helper the scraper uses. This is the dedupe the name path
+         did not previously get (it only ran url_dedupe); the embedding hint catches a twin at a
+         DIFFERENT URL that a name/URL match cannot see.
+    """
+    if queue_flags.is_not_running(cand.get("running")):
+        return None, None, ("not_running", queue_flags.not_running_reason(cand.get("running_reason")))
+    row = build_row(cand, next(mint), source, url, [])
+    if not row:
+        return None, None, ("norow", None)
+    row["found_via"] = hub_url
+    flags = list(source_flags or [])
+    if classification and classification.flag():
+        flags = queue_flags.upsert_flag(flags, queue_flags.CLASSIFY_PREFIX, classification.flag())
+    name = row.get("name")
+    _exact, dup_cands = url_dedupe.find_duplicates(url, name, existing, include_weak=False)
+    if _exact and not any(c.get("id") == _exact.get("id") for c in dup_cands):
+        dup_cands = [{"id": _exact.get("id"), "name": _exact.get("name"),
+                      "url": _exact.get("url"),
+                      "reason": "identical URL and matching name",
+                      "confidence": "strong"}] + dup_cands
+    dup_cands = gate_dup_candidates(dup_hints, gate_by_id, dup_cands)
+    review = {"moderation_status": "pending_review",
+              "dup_candidates": (dup_cands or None),
+              "quality_flags": flags or None}
+    return row, review, ("made", None)
+
+
+def _run_names_page(hub_url, gemini_key, existing, gate_index, gate_by_id, mint, today, args,
+                    seen_this_run):
+    """PAID: a `names` page — one that LISTS programs by name without linking them. Reads the
+    names (harvest_names' free gates + one naming call), resolves each to its own title-proven
+    page, and extracts it through `extract_opportunity` WITH the dedupe index and then the SAME
+    `_finalize_extracted` tail a hub link gets. This is where the name harvester gained the hub
+    miner's downstream — the classify pill and the embedding-dedupe hint.
+
+    Returns (rows, review_by_id, rejected, cost, errors, named, searched).
+    """
+    from agents import harvest_names as nh
+    from agents import scrape_opportunities as so
+    rows, review_by_id, rejected = [], {}, []
+    cost, errors, named, searched = 0.0, 0, 0, 0
+    dom = url_dedupe.registrable_domain(urllib.parse.urlsplit(hub_url).netloc) or "page"
+    source = f"names-{dom}-{today}"
+
+    class _A:                                   # minimal args shim for research_seed
+        timeout = args.timeout
+        max_searches = args.max_searches
+
+    try:
+        raw_names, text, c = nh.harvest_names(hub_url, gemini_key, timeout=args.timeout,
+                                              min_delay=args.min_delay)
+        cost += c
+    except Exception as e:
+        print(f"[WARN] naming call failed for {hub_url}: {str(e)[:120]}")
+        return rows, review_by_id, rejected, cost, 1, named, searched
+    if not raw_names:
+        print(f"[HUB names] {hub_url}: named nothing (or page unfetchable) — nothing to resolve.")
+        return rows, review_by_id, rejected, cost, errors, named, searched
+    named += len(raw_names)
+    keep, dropped = nh.select_names(raw_names, text, existing, cap=args.max_names,
+                                    source_url=hub_url, min_score=args.min_score)
+    print(f"[HUB names] {hub_url}: named {len(raw_names)}, resolving {len(keep)}. "
+          + ", ".join(f"{k}={len(v)}" for k, v in dropped.items() if v))
+    for reason, names in dropped.items():
+        for n in names:
+            print(f"    dropped ({reason}): {n}")
+    for name in keep:
+        try:
+            _notes, _usage, grounding, c, _att = so.research_seed(
+                nh.resolve_angle(name), "", today, gemini_key, _A, system=so.RESOLVE_SYSTEM)
+            cost += c
+            searched += 1
+            resolved = [x["url"] for x in url_validate.resolve_grounding_chunks(grounding)
+                        if x.get("url")]
+            url = nh.best_resolved_url(resolved, name, timeout=url_validate.DEFAULT_TIMEOUT)
+        except Exception as e:
+            errors += 1
+            print(f"  [WARN] resolve failed for {name!r}: {str(e)[:120]}")
+            continue
+        if not url:
+            print(f"  [UNPROVEN] {name}  — no grounding page whose title proves it; wrote nothing.")
+            continue
+        try:
+            if url_dedupe.match_key(url) in seen_this_run:
+                print(f"  [SEEN] {name} -> {url} already handled this run.")
+                continue
+        except ValueError:
+            continue
+        exact, _dc = url_dedupe.find_duplicates(url, name, existing, include_weak=False)
+        if exact:
+            print(f"  [DUPE] {name} -> {url} already in the catalog as {exact}.")
+            continue
+        try:
+            cand, c, classification, dup_hints = extract_opportunity(
+                url, gemini_key, index=gate_index, timeout=args.timeout, min_delay=args.min_delay)
+            cost += c
+        except Exception as e:
+            errors += 1
+            print(f"  [WARN] extract failed for {url}: {str(e)[:120]}")
+            continue
+        if not cand:
+            print(f"  [REFUSED] {name} -> {url}: not a single high-school program.")
+            continue
+        # The page proved the NAME; keep the page's own name only if it also proves. The
+        # harvested name is the fallback, never overwritten by an unproven one.
+        cand = dict(cand or {})
+        cand.setdefault("name", name)
+        src_flags = nh._row_flags(url, cand.get("name") or name, cand.get("org"), cand,
+                                  source_url=hub_url)
+        row, review, (status, reason) = _finalize_extracted(
+            cand, classification, dup_hints, src_flags, mint, source, url, hub_url,
+            existing, gate_by_id)
+        if status == "not_running":
+            print(f"  [DROP not-running] {(cand.get('name') or url)[:60]}: {reason[:90]}")
+            rejected.append({**cand, "url": url, "found_via": hub_url, "source": source,
+                             "reject_reason": reason})
+            continue
+        if not row:
+            continue
+        review_by_id[row["id"]] = review
+        rows.append(row)
+        existing.append({"id": row["id"], "name": row["name"], "url": row["url"]})
+        try:
+            seen_this_run.add(url_dedupe.match_key(url))
+        except ValueError:
+            pass
+        print(f"  [RESOLVED] {name} -> {url}")
+    return rows, review_by_id, rejected, cost, errors, named, searched
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hubs", nargs="+", help="Hub page URL(s).")
     ap.add_argument("--hubs-file", help="JSON file: [{\"url\":..., \"off_domain\": bool}, ...].")
     ap.add_argument("--from-leads", type=int, nargs="?", const=5, metavar="N",
-                    help="Take up to N hub leads (default 5) that a search run captured for "
-                         "free — see wingman/discovered_leads.py. The search already paid to consult "
-                         "those pages; this is what stops them being discarded.")
+                    help="Take up to N leads (default 5) of ANY kind that a search run captured "
+                         "for free — see wingman/discovered_leads.py. A `hub` lead is mined by "
+                         "following its links; a `names` lead is name-harvested. Each self-routes "
+                         "on its stored kind, so this one run does both. The search already paid "
+                         "to consult those pages; this is what stops them being discarded.")
     ap.add_argument("--off-domain", action="store_true",
-                    help="Treat hubs as listicles: follow OFF-domain links, not same-domain.")
+                    help="Treat a manual --hubs page as a listicle: follow OFF-domain links.")
+    ap.add_argument("--names", action="store_true",
+                    help="Treat a manual --hubs page as a NAMES page — one that lists programs "
+                         "without linking them (a JS-built directory, a library calendar). Reads "
+                         "the names free, then searches for each one's own page. `names` leads "
+                         "from --from-leads take this path automatically.")
     ap.add_argument("--preview", action="store_true",
                     help="FREE: discover + dedup against the catalog, print candidates, make NO "
                          "model call and write nothing.")
@@ -653,42 +815,70 @@ def main():
     ap.add_argument("--max-pages", type=int, default=None, metavar="N",
                     help="Hard ceiling on how many pages this run may EXTRACT (i.e. pay for), "
                          "across every hub. What it skips is reported, never dropped silently.")
+    ap.add_argument("--max-names", type=int, default=None, metavar="N",
+                    help="Names-page spend CEILING on names resolved per page (default "
+                         "harvest_names.DEFAULT_MAX_NAMES). --min-score does the choosing.")
+    ap.add_argument("--min-score", type=int, default=None, metavar="N",
+                    help="Names-page minimum rank score worth a paid search (default "
+                         "harvest_names.DEFAULT_MIN_SCORE). Pass a very low number to search "
+                         "every eligible name.")
+    ap.add_argument("--max-searches", type=int, default=1,
+                    help="Names-page cap on web searches per resolved name (default 1).")
     ap.add_argument("--mode", default="national")
     ap.add_argument("--min-delay", type=int, default=5)
     ap.add_argument("--timeout", type=int, default=40)
     ap.add_argument("--dry-run", action="store_true",
                     help="PAID (extracts at full cost) but writes NO rows — logs the run + a snapshot.")
     args = ap.parse_args()
+    # Names-page defaults live in harvest_names, so the two agents cannot drift on the numbers.
+    from agents import harvest_names as _nh
+    if args.max_names is None:
+        args.max_names = _nh.DEFAULT_MAX_NAMES
+    if args.min_score is None:
+        args.min_score = _nh.DEFAULT_MIN_SCORE
     safe_console()   # model output can carry characters a cp1252 console cannot encode
 
-    hubs = []
+    # Two work lists. A `hub` entry is (url, off_domain) and is mined by following links; a
+    # `names` entry is a URL whose programs are named but not linked, and is name-harvested.
+    hub_entries, names_entries = [], []
     if args.hubs_file:
         with open(args.hubs_file, encoding="utf-8") as f:
-            hubs = [(h["url"], bool(h.get("off_domain"))) for h in json.load(f)]
-    hubs += [(u, args.off_domain) for u in (args.hubs or [])]
+            for h in json.load(f):
+                if h.get("kind") == "names":
+                    names_entries.append(h["url"])
+                else:
+                    hub_entries.append((h["url"], bool(h.get("off_domain"))))
+    for u in (args.hubs or []):
+        (names_entries.append(u) if args.names
+         else hub_entries.append((u, args.off_domain)))
     lead_urls = []
     if args.from_leads:
         from wingman import discovered_leads
-        queued = discovered_leads.pending(discovered_leads.KIND_HUB, limit=args.from_leads)
-        lead_urls = [l["url"] for l in queued]
-        # Each lead says which way it must be mined, and this is load-bearing. The router
-        # qualifies a lead by counting the distinct OTHER sites it links (>= 6), so its programs
-        # are on those sites and it is mined OFF-domain; mining it same-domain would follow
-        # precisely the links the router did not count, i.e. the page's own navigation. A
-        # walk-up lead is the opposite case -- proven by linking a program on its OWN site -- so
-        # it is mined same-domain. The direction travels ON the lead rather than being decided
-        # here, because only whatever qualified the page knows it. (This was a flat `True` for
-        # every lead, and before that a flat `False`; both were wrong for half the queue.)
-        hubs += hubs_from_leads(queued)
-        by_scope = {}
+        # ANY kind, in queue order — the merged agent handles both. Each lead self-routes on its
+        # stored kind: a `hub` lead carries which way it must be mined (the router qualifies a
+        # round-up by the distinct OTHER sites it links, so its programs are on those sites and
+        # it is mined OFF-domain; a walk-up index is proven by linking a program on its OWN site,
+        # so same-domain). A `names` lead names programs without linking them, so it is
+        # name-harvested. The direction travels ON the lead because only whatever qualified the
+        # page knows it.
+        queued = discovered_leads.pending_any(limit=args.from_leads)
         for l in queued:
-            by_scope[discovered_leads.lead_scope(l)] = by_scope.get(
-                discovered_leads.lead_scope(l), 0) + 1
-        print(f"[OK] {len(lead_urls)} hub lead(s) taken from the queue"
-              + (" (" + ", ".join(f"{k}={v}" for k, v in sorted(by_scope.items())) + ")"
-                 if by_scope else "") + ".")
-    if not hubs:
-        print("[ERROR] Give --hubs or --hubs-file.")
+            if not l.get("url"):
+                continue
+            lead_urls.append(l["url"])
+            if l.get("kind") == discovered_leads.KIND_NAMES:
+                names_entries.append(l["url"])
+            else:
+                off = discovered_leads.lead_scope(l) == discovered_leads.SCOPE_OFF_DOMAIN
+                hub_entries.append((l["url"], off))
+        by_kind = {}
+        for l in queued:
+            by_kind[l.get("kind") or "?"] = by_kind.get(l.get("kind") or "?", 0) + 1
+        print(f"[OK] {len(lead_urls)} lead(s) taken from the queue"
+              + (" (" + ", ".join(f"{k}={v}" for k, v in sorted(by_kind.items())) + ")"
+                 if by_kind else "") + ".")
+    if not hub_entries and not names_entries:
+        print("[ERROR] Give --hubs, --hubs-file, or --from-leads.")
         raise SystemExit(1)
 
     from wingman.supabase_common import require_service_key, supabase_get
@@ -728,10 +918,11 @@ def main():
     seen_this_run = set()
 
     # ---- PREVIEW (free): no model call, no writes. An institutional hub reports the scoped page
-    # list the LLM WOULD classify; an off-domain listicle uses the anchor miner as before.
+    # list the LLM WOULD classify; an off-domain listicle uses the anchor miner; a names page
+    # reports only that it is fetchable (the real names need the paid naming call).
     if args.preview:
         would_classify = 0
-        for hub_url, off_domain in hubs:
+        for hub_url, off_domain in hub_entries:
             if not off_domain:
                 scoped, tr = sitemap_hub.program_candidates(hub_url, classify=None,
                                                             timeout=args.timeout)
@@ -751,9 +942,23 @@ def main():
                 print(f"[HUB] {hub_url} (off-domain listicle): {len(fresh)} candidate(s).")
                 for u in fresh:
                     print(f"    candidate: {u}")
-        print(f"\n[PREVIEW] institutional hubs would classify ~{would_classify} in-scope page(s) "
-              f"(~$0.001/hub) then extract only the pages the LLM calls a program. No model call, "
-              f"no writes. A live run needs approval.")
+        names_reachable = 0
+        for hub_url in names_entries:
+            text, reason = page_text.fetch_page_text(hub_url, args.timeout)
+            if not text:
+                print(f"[HUB names] {hub_url}: NOT FETCHABLE ({reason}) — costs nothing, "
+                      f"harvests nothing.")
+                continue
+            names_reachable += 1
+            print(f"[HUB names] {hub_url}: fetched {len(text)} chars. A live run makes 1 naming "
+                  f"call (~$0.001), then up to {args.max_names} searches (~$0.02-0.05 each) for "
+                  f"names that pass all three free gates.")
+            # The excerpt is the point of a free preview: a 200 with a cookie banner and a 200
+            # with a program list are the same char count until you look at one.
+            print(f"    text starts: {text[:280].strip()!r}")
+        print(f"\n[PREVIEW] {len(hub_entries)} hub page(s) would classify ~{would_classify} "
+              f"in-scope page(s) (~$0.001/hub); {len(names_entries)} names page(s), "
+              f"{names_reachable} fetchable. No model call, no writes. A live run needs approval.")
         return
 
     if not gemini_key:
@@ -766,10 +971,11 @@ def main():
     # anchor-rules recursive miner, so recall is never worse than before. An off-domain listicle's
     # programs live on OTHER sites, which the same-domain enumeration cannot see, so those stay on
     # the anchor miner. Validated across 22 real hubs 2026-08-28 (~$0.0009/hub). See sitemap_hub.
-    classify = sitemap_hub.make_gemini_classifier(gemini_key, timeout=args.timeout,
-                                                  min_delay=args.min_delay)
     all_new, select_cost = [], 0.0
-    for hub_url, off_domain in hubs:
+    classify = (sitemap_hub.make_gemini_classifier(gemini_key, timeout=args.timeout,
+                                                   min_delay=args.min_delay)
+                if hub_entries else None)
+    for hub_url, off_domain in hub_entries:
         if not off_domain:
             urls, tr = sitemap_hub.program_candidates(hub_url, classify=classify,
                                                       timeout=args.timeout)
@@ -863,28 +1069,7 @@ def main():
             if not cand:
                 refused_in_a_row += 1
                 continue
-            # Discontinuation gate (shared, free): the extractor READ the page and may report the
-            # program is no longer offered (`running`: false). A dead program must never reach the
-            # reviewer, so DROP it here rather than insert it — but record the full candidate in the
-            # rejected snapshot so nothing vanishes silently. A dropped page produced no row, so it
-            # counts toward the give-up streak exactly like a refusal: a hub that is all dead
-            # programs should stop costing money. queue_flags is the single interpreter of the
-            # signal, so every review-queue writer drops identically; only `running is False` drops.
-            if queue_flags.is_not_running(cand.get("running")):
-                reason = queue_flags.not_running_reason(cand.get("running_reason"))
-                print(f"  [DROP not-running] {(cand.get('name') or u)[:60]}: {reason[:90]}")
-                rejected.append({**cand, "url": u, "found_via": hub_url, "source": source,
-                                 "reject_reason": reason})
-                refused_in_a_row += 1
-                continue
-            row = build_row(cand, next(mint), source, u, [])
-            if not row:
-                refused_in_a_row += 1
-                continue
-            refused_in_a_row = 0
-            made += 1
-            row["found_via"] = hub_url
-            # Honest, free flags — but NOT the same set as the scraper, and that is the point.
+            # Honest, free flags — but NOT the same set the name path uses, and that is the point.
             # FLAG_OFFSITE asks "did a model type a URL that belongs to somebody else?" Here the
             # URL was FOLLOWED FROM A LINK, so it is real by construction and the question does
             # not apply. Measured on the 43-hub run: 16 of the 17 rows it flagged were false
@@ -892,52 +1077,60 @@ def main():
             # for Syracuse four times, medschool.uci.edu for UC Irvine, caes.uga.edu for the
             # University of Georgia, internships.fnal.gov for Fermilab, and three CMU departments
             # whose org name carries a school suffix the acronym rule cannot see. A flag that is
-            # wrong 94% of the time teaches the reviewer to ignore flags.
-            #
-            # A CONTENT MILL still flags: that is a fact about the destination, not about who
-            # typed it, and a mill can be linked from anywhere.
-            name, org = row.get("name"), row.get("org")
-            flags = []
+            # wrong 94% of the time teaches the reviewer to ignore flags. A CONTENT MILL still
+            # flags: that is a fact about the destination, not about who typed it.
+            src_flags = []
             if url_validate.is_bare_domain(u):
-                flags.append(FLAG_BARE_DOMAIN)
+                src_flags.append(FLAG_BARE_DOMAIN)
             if url_validate.is_content_mill(u):
-                flags.append(FLAG_OFFSITE)
+                src_flags.append(FLAG_OFFSITE)
             if url_dedupe.is_low_value_path(u):
-                flags.append(FLAG_LOW_VALUE)
+                src_flags.append(FLAG_LOW_VALUE)
             if cand.get("type") not in VALID_TYPES:
-                flags.append(FLAG_NO_TYPE)
-            # The classify pill — the ONE thing that now makes a hub-mined row indistinguishable
-            # from a scraper row in the review queue. Same `classify:` prefix, same string
-            # (classify_page.Classification.flag()), so the console's flag_class() reads it the
-            # same way and renders the same pill, staleness included. upsert (not append) so a
-            # later change here can never leave two classify pills on one row.
-            if classification and classification.flag():
-                flags = queue_flags.upsert_flag(flags, queue_flags.CLASSIFY_PREFIX,
-                                                classification.flag())
-            # fresh_candidates already dropped every EXACT-URL catalog match before we paid to
-            # extract, so the risk that remains is the SAME program at a DIFFERENT URL (the
-            # 2026-08-28 audit's Cut 2 — a rename, a second departmental path, a slug change).
-            # find_duplicates is free (pure, no network) and surfaces those as name/domain
-            # hints; without this the row reached the queue with no link to its twin. Hints
-            # only — the hub miner never auto-rejects, so an exact hit (should not occur here)
-            # is downgraded to a strong candidate rather than dropping the row.
-            _exact, dup_cands = url_dedupe.find_duplicates(u, name, existing, include_weak=False)
-            if _exact and not any(c.get("id") == _exact.get("id") for c in dup_cands):
-                dup_cands = [{"id": _exact.get("id"), "name": _exact.get("name"),
-                              "url": _exact.get("url"),
-                              "reason": "identical URL and matching name",
-                              "confidence": "strong"}] + dup_cands
-            # Merge the embedding dedupe hints (dedupe_vector cosine) on top of url_dedupe's
-            # name/URL hints, via the SAME helper the scraper uses — so both sources produce the
-            # same `dup_candidates` shape and the same queue back-links. Catches the twin at a
-            # DIFFERENT URL that a name/URL match cannot see. A no-op when the index is empty.
-            dup_cands = gate_dup_candidates(dup_hints, gate_by_id, dup_cands)
-            review_by_id[row["id"]] = {"moderation_status": "pending_review",
-                                       "dup_candidates": (dup_cands or None),
-                                       "quality_flags": flags or None}
+                src_flags.append(FLAG_NO_TYPE)
+            # The SHARED downstream: the discontinuation gate, build_row, the classify pill and the
+            # merged (url_dedupe + embedding) dup_candidates. See _finalize_extracted — the name
+            # path calls the identical tail, which is what makes a hub-mined and a name-harvested
+            # row indistinguishable in the review queue.
+            row, review, (status, reason) = _finalize_extracted(
+                cand, classification, dup_hints, src_flags, mint, source, u, hub_url,
+                existing, gate_by_id)
+            if status == "not_running":
+                # A dead program must never reach the reviewer. Recorded in the rejected snapshot
+                # so nothing vanishes silently, and it counts toward the give-up streak like a
+                # refusal — a hub that is all dead programs should stop costing money.
+                print(f"  [DROP not-running] {(cand.get('name') or u)[:60]}: {reason[:90]}")
+                rejected.append({**cand, "url": u, "found_via": hub_url, "source": source,
+                                 "reject_reason": reason})
+                refused_in_a_row += 1
+                continue
+            if not row:
+                refused_in_a_row += 1
+                continue
+            refused_in_a_row = 0
+            made += 1
+            review_by_id[row["id"]] = review
             rows.append(row)
             existing.append({"id": row["id"], "name": row["name"], "url": row["url"]})
         yield_by_hub[hub_url] = (made, tried)
+
+    # NAMES pages: a page that lists programs by name without linking them. Each runs through the
+    # name harvester's own free gates and paid resolve, then the SAME _finalize_extracted tail as
+    # a hub link — so a name-harvested row carries the classify pill and the embedding-dedupe hint
+    # just like a hub-mined one. Counts fold into this one hub_miner run.
+    names_named, names_searched = 0, 0
+    for hub_url in names_entries:
+        n_rows, n_review, n_rej, n_cost, n_err, n_named, n_searched = _run_names_page(
+            hub_url, gemini_key, existing, gate_index, gate_by_id, mint, today, args,
+            seen_this_run)
+        rows.extend(n_rows)
+        review_by_id.update(n_review)
+        rejected.extend(n_rej)
+        cost += n_cost
+        errors += n_err
+        names_named += n_named
+        names_searched += n_searched
+        yield_by_hub[hub_url] = (len(n_rows), n_searched)
 
     # Collapse in-run twins to their best-URL copy, exactly as the search scraper does. A
     # program index links the program AND its sub-pages, so one hub legitimately yields the
@@ -969,32 +1162,37 @@ def main():
     else:
         print("[OK] No rows extracted — nothing to insert.")
 
+    n_pages = len(hub_entries) + len(names_entries)
+    processed_items = total + names_searched
     if run_id is not None:
         supabase_patch(supabase_url, "agent_runs", {"id": f"eq.{run_id}"}, {
             "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "items_processed": total,
+            "items_processed": processed_items,
             "items_added": 0 if args.dry_run else len(rows),
             "errors": errors,
             "cost_usd": round(cost, 4),
-            "notes": (f"hubs={len(hubs)}, candidates={total}, extracted={len(rows)}, "
+            "notes": (f"pages={n_pages} (hubs={len(hub_entries)}, names={len(names_entries)}), "
+                      f"hub_candidates={total}, names_named={names_named}, "
+                      f"names_searched={names_searched}, extracted={len(rows)}, "
                       f"dropped_not_running={len(rejected)}, source-date={today}"
                       + (f", would_have_added={len(rows)}" if args.dry_run else "")),
         }, service_key)
 
-    # Mark every hub we actually mined, not only the ones taken off the queue. The CMU pilot was
+    # Mark every page we actually mined, not only the ones taken off the queue. The CMU pilot was
     # run with --hubs while its lead sat in the queue as "new", so the next --from-leads run would
-    # have re-mined and re-PAID for the same 14 pages. marking a URL that is not in the file is a
-    # no-op, so this is safe for a hub that was never a lead.
-    # A hub the ceiling truncated is NOT finished -- marking it processed would drop the rest of
-    # its candidates out of the queue silently, which is the failure the ceiling exists to avoid.
-    lead_urls = [u for u in dict.fromkeys(lead_urls + [h for h, _off in hubs])
-                 if u not in capped_hubs]
+    # have re-mined and re-PAID for the same 14 pages. Marking a URL that is not in the queue is a
+    # no-op, so this is safe for a page that was never a lead. A hub the ceiling truncated is NOT
+    # finished -- marking it processed would drop the rest of its candidates out of the queue
+    # silently, which is the failure the ceiling exists to avoid. Names pages are never capped.
+    mined_urls = ([h for h, _off in hub_entries if h not in capped_hubs]
+                  + list(names_entries))
+    lead_urls = [u for u in dict.fromkeys(lead_urls + mined_urls) if u not in capped_hubs]
     if lead_urls and not args.dry_run and not args.preview:
         # Stamped only on a real run: a dry run proved the extraction works but wrote nothing,
         # so the lead still has work left in it and must stay in the queue.
         from wingman import discovered_leads
         n = discovered_leads.mark_processed(lead_urls)
-        print(f"[OK] Marked {n} hub lead(s) processed.")
+        print(f"[OK] Marked {n} lead(s) processed.")
 
     if yield_by_hub:
         print("[YIELD] rows made / pages read, per hub — worst first:")
@@ -1005,10 +1203,11 @@ def main():
             print(f"    {made:3} / {tried:3}  ({rate:3.0f}%)  {hub_url[:76]}")
         dud = [u for u, (made, tried) in yield_by_hub.items() if tried and not made]
         if dud:
-            print(f"    {len(dud)} hub(s) produced NOTHING and are worth retiring by hand.")
-    print(f"[SUMMARY] {total} candidate page(s) across {len(hubs)} hub(s) -> extracted "
-          f"{len(rows)} row(s), errors {errors}, cost ${cost:.4f}. Wrote {review_path}.")
-    print(f"[DONE] Review before activating anything from a source='hub-*-{today}' row.")
+            print(f"    {len(dud)} page(s) produced NOTHING and are worth retiring by hand.")
+    print(f"[SUMMARY] {total} hub candidate(s) + {names_searched} name search(es) across "
+          f"{n_pages} page(s) -> extracted {len(rows)} row(s), errors {errors}, "
+          f"cost ${cost:.4f}. Wrote {review_path}.")
+    print(f"[DONE] Review before activating anything from a source='hub-*/names-*-{today}' row.")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,19 @@
 #!/usr/bin/env python3
 """Phase 4N — turn the program NAMES a page mentions into title-proven catalog rows. PAID (gated).
 
-Hub mining (`agents/mine_hub_pages.py`) can only follow an `<a>` tag. Two large classes of page NAME
+HELPER LIBRARY, NOT A RUNNABLE AGENT (as of the 2026-09-07 merge). The name-harvest CAPABILITY
+now lives inside `agents/mine_hub_pages.py` — the one hub-discovery agent — which drives the
+functions below for a `names` lead (a page that NAMES programs without linking them) so that a
+name-harvested row gets the SAME downstream as a hub-mined one: the classify pill and the
+embedding-dedupe hint. This file keeps every pure gate, the naming call and the resolver's
+evidence bar; it no longer has its own `main()`, argparse or run lock. Run it via the hub miner:
+
+    python -m agents.mine_hub_pages --hubs <names-page-url> --names       # PAID (gated)
+    python -m agents.mine_hub_pages --from-leads N                        # both kinds, gated
+
+The rationale below is unchanged — the page, never the model, is what vouches a program exists:
+
+Hub mining can only follow an `<a>` tag. Two large classes of page NAME
 many real programs without linking them, and both are invisible to link-harvest:
 
   * **JS-rendered national directories.** Measured 2026-08-27 on College Transitions' Dataverse:
@@ -35,35 +47,28 @@ spent on a name that could never produce a provable row:
 
 COST: fetching the page and all three gates are FREE. One no-search model call per hub reads the
 names (~$0.001). Then per surviving name: one search (~$0.02-0.05, the per-search fee dominates)
-plus one no-search extraction (~$0.003). `--preview` stops before ANY model call and prints what
-would be harvested. Rows land is_active=false / pending_review, `found_via` = the page that named
-the program; nothing reaches students without a human yes. Like every paid agent here, a live run
-needs fresh explicit approval.
+plus one no-search extraction (~$0.003). The hub miner's `--preview` stops before ANY model call
+and prints what would be harvested. Rows land is_active=false / pending_review, `found_via` = the
+page that named the program; nothing reaches students without a human yes. Like every paid agent
+here, a live run needs fresh explicit approval.
 
-    python -m agents.harvest_names --hubs https://www.collegetransitions.com/dataverse/... --preview
-    python -m agents.harvest_names --hubs-file data/hub_pilot_national.json --preview   # FREE
-    python -m agents.harvest_names --hubs URL --max-names 10                       # PAID (gated)
+    python -m agents.mine_hub_pages --hubs https://www.collegetransitions.com/dataverse/... --preview
+    python -m agents.mine_hub_pages --hubs URL --names --max-names 10          # PAID (gated)
 """
-import argparse
-import datetime
-import json
-import os
 import re
 import urllib.parse
 
-from agents import mine_hub_pages
 from wingman import page_text
 from wingman import url_dedupe
 from wingman import url_repair
 from wingman import url_validate
 from wingman import agent_common
-from wingman.agent_common import safe_console, snapshot_stamp
 # From the SHARED layer, not from the runnable agent: importing agents/scrape_opportunities.py
 # to borrow build_row dragged in its prompts, its argparse and its module state (CLAUDE.md's
-# agents/-runs vs wingman/-imports rule). Same functions, moved.
-from wingman.scrape_common import (build_row, next_id_generator, insert_rows, VALID_TYPES,
+# agents/-runs vs wingman/-imports rule). Same functions, moved. `_row_flags` needs the flag
+# constants and the valid-type set; the merged runner in mine_hub_pages owns build_row/insert.
+from wingman.scrape_common import (VALID_TYPES,
                                    FLAG_BARE_DOMAIN, FLAG_LOW_VALUE, FLAG_OFFSITE, FLAG_NO_TYPE)
-from wingman import REPO_ROOT   # the repo root, defined once (see wingman/__init__.py)
 
 # At most this many grounding siblings are fetched while proving one name. The same cap
 # refind_dead_links uses: the answer is in the first few results or it is not there.
@@ -472,223 +477,7 @@ def _row_flags(url, name, org, cand, source_url=""):
     return flags
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--hubs", nargs="+", help="Page URL(s) that NAME opportunities.")
-    ap.add_argument("--hubs-file", help='JSON file: [{"url": ...}, ...] (same shape as the hub registry).')
-    ap.add_argument("--from-leads", type=int, nargs="?", const=3, metavar="N",
-                    help="Take up to N listicle leads (default 3) that a search run captured "
-                         "for free — see wingman/discovered_leads.py. A listicle names many programs "
-                         "and links none of them, which is exactly this agent's case.")
-    ap.add_argument("--preview", action="store_true",
-                    help="FREE: fetch the page(s) and report what would be harvested. No model "
-                         "call, no search, no writes.")
-    ap.add_argument("--max-names", type=int, default=DEFAULT_MAX_NAMES,
-                    help=f"Spend CEILING on names resolved per page (default "
-                         f"{DEFAULT_MAX_NAMES}). Rarely binds — --min-score does the choosing.")
-    ap.add_argument("--min-score", type=int, default=DEFAULT_MIN_SCORE,
-                    help=f"Minimum rank score worth a paid search (default {DEFAULT_MIN_SCORE}). "
-                         f"Measured: score >= 1 resolved 3 of 5, score <= 0 resolved 0 of 3. "
-                         f"Pass a very low number to search every eligible name.")
-    ap.add_argument("--mode", default="national")
-    ap.add_argument("--min-delay", type=int, default=5)
-    ap.add_argument("--timeout", type=int, default=40)
-    ap.add_argument("--max-searches", type=int, default=1)
-    ap.add_argument("--dry-run", action="store_true",
-                    help="PAID (searches at full cost) but writes NO rows — logs the run + a snapshot.")
-    args = ap.parse_args()
-    safe_console()   # model output can carry characters a cp1252 console cannot encode
-
-    hubs = []
-    if args.hubs_file:
-        with open(args.hubs_file, encoding="utf-8") as f:
-            hubs = [h["url"] for h in json.load(f)]
-    hubs += list(args.hubs or [])
-    lead_urls = []
-    if args.from_leads:
-        from wingman import discovered_leads
-        lead_urls = [l["url"] for l in discovered_leads.pending(discovered_leads.KIND_NAMES,
-                                                               limit=args.from_leads)]
-        hubs += lead_urls
-        print(f"[OK] {len(lead_urls)} listicle lead(s) taken from the queue.")
-    if not hubs:
-        print("[ERROR] Give --hubs or --hubs-file.")
-        raise SystemExit(1)
-
-    from wingman.supabase_common import require_service_key, supabase_get
-    # Service key REQUIRED: `existing` is the dedupe set and must include inactive rows (4.13).
-    supabase_url, service_key = require_service_key()
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    existing = supabase_get(supabase_url, "opportunities", {"select": "id,name,url"},
-                            service_key) if supabase_url else []
-
-    if args.preview:
-        # FREE: prove the page is fetchable and show what the name gates would do to a
-        # stand-in list — the page's own text, not a model's reading of it. This cannot show
-        # the real names (that needs the model call), so it reports reach, not yield.
-        reachable = 0
-        for hub_url in hubs:
-            text, reason = page_text.fetch_page_text(hub_url, args.timeout)
-            if not text:
-                print(f"[HUB] {hub_url}: NOT FETCHABLE ({reason}) — costs nothing, harvests nothing.")
-                continue
-            reachable += 1
-            print(f"[HUB] {hub_url}: fetched {len(text)} chars of text. A live run makes 1 "
-                  f"naming call (~$0.001), then up to {args.max_names} searches "
-                  f"(~$0.02-0.05 each) for names that pass all three free gates.")
-            # The excerpt is the point of a free preview: a 200 with a cookie banner and a
-            # 200 with a program list are the same char count until you look at one.
-            print(f"    text starts: {text[:280].strip()!r}")
-        # Price the run over the pages that can actually be harvested, not over every page
-        # asked for. An unfetchable page makes no model call at all, so quoting for it inflates
-        # the figure the operator is being asked to approve — the same way the agent-cost
-        # estimator's failed runs deflated it, in the other direction.
-        print(f"\n[PREVIEW] {len(hubs)} page(s), {reachable} fetchable. No model call, no writes. "
-              f"Worst case for a live run over the fetchable ones: "
-              f"~${(0.001 + 0.05 * args.max_names) * reachable:.2f} "
-              f"({reachable} naming call(s) + up to {args.max_names * reachable} searches).")
-        return
-
-    if not gemini_key:
-        print("[ERROR] GEMINI_API_KEY not set — cannot harvest. (Preview is free without it.)")
-        raise SystemExit(1)
-
-    # PAID PATH — reached only on an explicit (approved) live run.
-    from wingman.supabase_common import supabase_insert_one, supabase_patch
-    from agents import scrape_opportunities as so
-    today = datetime.date.today().strftime("%Y%m%d")
-    mint = next_id_generator({r["id"] for r in (existing or [])}, supabase_url, service_key)
-    run_row = supabase_insert_one(supabase_url, "agent_runs", {
-        "agent": "name_harvester",
-        "mode": "names" + ("-dryrun" if args.dry_run else ""),
-        "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-    }, service_key)
-    run_id = run_row["id"] if run_row else None
-
-    class _A:                                   # minimal args shim for research_seed
-        timeout = args.timeout
-        max_searches = args.max_searches
-
-    rows, review_by_id, cost, errors, searched, named = [], {}, 0.0, 0, 0, 0
-    for hub_url in hubs:
-        dom = url_dedupe.registrable_domain(urllib.parse.urlsplit(hub_url).netloc) or "page"
-        source = f"names-{dom}-{today}"
-        try:
-            raw_names, text, c = harvest_names(hub_url, gemini_key, timeout=args.timeout,
-                                               min_delay=args.min_delay)
-            cost += c
-        except Exception as e:
-            errors += 1
-            print(f"[WARN] naming call failed for {hub_url}: {str(e)[:120]}")
-            continue
-        if not raw_names:
-            print(f"[HUB] {hub_url}: named nothing (or page unfetchable) — nothing to resolve.")
-            continue
-        named += len(raw_names)
-        keep, dropped = select_names(raw_names, text, existing, cap=args.max_names,
-                                     source_url=hub_url, min_score=args.min_score)
-        print(f"[HUB] {hub_url}: named {len(raw_names)}, resolving {len(keep)}. "
-              + ", ".join(f"{k}={len(v)}" for k, v in dropped.items() if v))
-        # Every dropped name is printed, never a head slice. This list IS the record of what a
-        # run chose not to look for; truncating it reads as "the page named that many", which is
-        # the same silent-cap failure the repo's other reports are careful to avoid. In
-        # particular `unprovable` is where a single-token brand name lands (measured on the
-        # College Transitions table: CyberPatriot, DECA, iGEM, Model UN) — `title_proves` needs
-        # two identity words, so those cannot be verified here and must be visible to a person.
-        for reason, names in dropped.items():
-            for n in names:
-                print(f"    dropped ({reason}): {n}")
-
-        for name in keep:
-            try:
-                notes, _usage, grounding, c, _att = so.research_seed(
-                    resolve_angle(name), "", today, gemini_key, _A, system=so.RESOLVE_SYSTEM)
-                cost += c
-                searched += 1
-                resolved = [x["url"] for x in url_validate.resolve_grounding_chunks(grounding)
-                            if x.get("url")]
-                url = best_resolved_url(resolved, name, timeout=url_validate.DEFAULT_TIMEOUT)
-            except Exception as e:
-                errors += 1
-                print(f"  [WARN] resolve failed for {name!r}: {str(e)[:120]}")
-                continue
-            if not url:
-                print(f"  [UNPROVEN] {name}  — no grounding page whose title proves it; wrote nothing.")
-                continue
-            exact, dup_candidates = url_dedupe.find_duplicates(url, name, existing,
-                                                               include_weak=False)
-            if exact:
-                print(f"  [DUPE] {name} -> {url} already in the catalog as {exact}.")
-                continue
-            try:
-                cand, c = mine_hub_pages.extract_opportunity(url, gemini_key, timeout=args.timeout,
-                                                             min_delay=args.min_delay)
-                cost += c
-            except Exception as e:
-                errors += 1
-                print(f"  [WARN] extract failed for {url}: {str(e)[:120]}")
-                continue
-            # The page proved the NAME; keep the page's own name only if it also proves. The
-            # harvested name is the fallback, never overwritten by an unproven one.
-            cand = dict(cand or {})
-            cand.setdefault("name", name)
-            row = build_row(cand, next(mint), source, url, [])
-            if not row:
-                continue
-            row["found_via"] = hub_url
-            review_by_id[row["id"]] = {
-                "moderation_status": "pending_review",
-                "quality_flags": _row_flags(url, row.get("name"), row.get("org"), cand,
-                                            source_url=hub_url) or None,
-                "dup_candidates": (dup_candidates or None)}
-            rows.append(row)
-            existing.append({"id": row["id"], "name": row["name"], "url": row["url"]})
-            print(f"  [RESOLVED] {name} -> {url}")
-
-    stamp = snapshot_stamp()
-    review_path = os.path.join(REPO_ROOT,
-                               f"names_review_{args.mode}_{stamp}.json")
-    with open(review_path, "w", encoding="utf-8") as f:
-        json.dump({"inserted": [{**r, "review": review_by_id.get(r["id"], {})} for r in rows],
-                   "rejected": [], "merged": []}, f, indent=2, ensure_ascii=False)
-
-    if args.dry_run:
-        print(f"[DRY RUN] Resolved {len(rows)} row(s); NOTHING written. The run is still logged "
-              f"to agent_runs (it cost real money).")
-    elif rows:
-        tier = insert_rows(supabase_url, service_key, rows, review_by_id)
-        print(f"[OK] Inserted {len(rows)} row(s) into opportunities "
-              f"(is_active=false, pending_review, tier={tier}).")
-    else:
-        print("[OK] No name resolved to a proven page — nothing to insert.")
-
-    if run_id is not None:
-        supabase_patch(supabase_url, "agent_runs", {"id": f"eq.{run_id}"}, {
-            "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "items_processed": searched,
-            "items_added": 0 if args.dry_run else len(rows),
-            "errors": errors,
-            "cost_usd": round(cost, 4),
-            "notes": (f"pages={len(hubs)}, named={named}, searched={searched}, "
-                      f"resolved={len(rows)}, source-date={today}"
-                      + (f", would_have_added={len(rows)}" if args.dry_run else "")),
-        }, service_key)
-
-    if lead_urls and not args.dry_run:
-        # Real runs only — a dry run read the names but wrote no rows, so the lead is not done.
-        from wingman import discovered_leads
-        n = discovered_leads.mark_processed(lead_urls)
-        print(f"[OK] Marked {n} listicle lead(s) processed.")
-
-    print(f"[SUMMARY] {len(hubs)} page(s) named {named}, searched {searched}, resolved "
-          f"{len(rows)} row(s), errors {errors}, cost ${cost:.4f}. Wrote {review_path}.")
-    print(f"[DONE] Review before activating anything from a source='names-*-{today}' row.")
-
-
-if __name__ == "__main__":
-    # The catalog-insert lock (audit 4.2). This agent mints `ec<max+1>` ids from a
-    # snapshot taken at run start, so a second inserting agent running alongside it
-    # mints the SAME ids. Held here rather than inside main() so the one guard covers
-    # both a hand-run and the console subprocess. See wingman/run_lock.py.
-    from wingman.run_lock import guard_catalog_writes
-    guard_catalog_writes("name_harvester", main)
+# The runnable entry point (main / argparse / run lock) moved to agents/mine_hub_pages.py in the
+# 2026-09-07 merge. That module imports the helpers above and drives the names pipeline through
+# the SAME downstream — classify pill + embedding-dedupe hint — as a hub-mined row. This file is
+# imported, never executed; there is deliberately no `main()` and no `__main__` guard here.

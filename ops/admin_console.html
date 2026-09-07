@@ -4737,7 +4737,7 @@ async function loadLeads() {
       const scope = l.kind === 'hub'
         ? `<span class="pill">${l.scope === 'same-domain' ? 'own site' : 'off-site'}</span>` : '';
       const kind = l.kind === 'names'
-        ? '<span class="pill warn">names only — you must point the harvester at it</span>' : '';
+        ? '<span class="pill warn">names-only page — name-harvested (search per name)</span>' : '';
       return `<div style="padding:7px 0;border-top:1px solid var(--border)">
         <div>${scope}${kind} <span class="mono" title="${esc(l.url || '')}">${esc((l.url || '').slice(0, 96))}</span></div>
         <div style="font-size:12px;color:var(--text-3)">${esc(l.signal || '')}</div>

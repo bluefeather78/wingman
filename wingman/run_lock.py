@@ -1,9 +1,10 @@
 """The cross-process mutex that stops two catalog agents running at once, plus id minting.
 
-Audit finding 4.2 / PRODUCTION_READINESS_PLAN.md Phase 3. Four agents INSERT into
-`opportunities` — scrape_opportunities, mine_hub_pages, harvest_names, refind_dead_links —
-and each mints ids as `ec<max+1>` from a snapshot taken at run start. Two overlapping runs
-mint the SAME ids and the second POST dies on the primary key.
+Audit finding 4.2 / PRODUCTION_READINESS_PLAN.md Phase 3. Three agents INSERT into
+`opportunities` — scrape_opportunities, mine_hub_pages (which since the 2026-09-07 merge also
+does name harvesting, the former harvest_names agent), refind_dead_links — and each mints ids as
+`ec<max+1>` from a snapshot taken at run start. Two overlapping runs mint the SAME ids and the
+second POST dies on the primary key.
 
 Nothing stopped the overlap. `gemini_common`'s `.gemini_web_search.lock` is (a) local to one
 machine and (b) taken at the first SEARCH call, so mine_hub_pages — which never searches —

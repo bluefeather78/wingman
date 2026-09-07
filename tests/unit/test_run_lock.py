@@ -258,8 +258,10 @@ def test_mint_ids_falls_back_on_a_short_result(monkeypatch):
 # the wiring itself — an unwired agent is the whole bug back again
 # --------------------------------------------------------------------------------------
 
+# agents/harvest_names.py dropped in the 2026-09-07 merge: it is now an imported helper library,
+# not a runnable inserting agent — mine_hub_pages.py holds the lock for the names inserts too.
 _INSERTING_AGENTS = ["agents/scrape_opportunities.py", "agents/mine_hub_pages.py",
-                     "agents/harvest_names.py", "agents/refind_dead_links.py"]
+                     "agents/refind_dead_links.py"]
 
 
 @pytest.mark.parametrize("path", _INSERTING_AGENTS)

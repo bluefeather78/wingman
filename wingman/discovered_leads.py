@@ -12,9 +12,14 @@ programs. That is hundreds of leads discarded per run, on pages we had already p
 
 So: classify what the run did NOT use, and write it down.
 
-    content mill / listicle   ->  a NAME-HARVEST lead   (agents/harvest_names.py --from-leads)
-    links >= N HS programs    ->  a HUB-MINING lead     (agents/mine_hub_pages.py --from-leads)
+    content mill / listicle   ->  a NAME-HARVEST lead   (kind=names)
+    links >= N HS programs    ->  a HUB-MINING lead     (kind=hub)
     anything else             ->  ignored
+
+Both kinds are worked by the ONE agent now: `python -m agents.mine_hub_pages --from-leads` takes
+leads of either kind in queue order and routes each on its stored kind (a `names` page is
+name-harvested, a `hub` page is link-mined). The name-harvest LOGIC lives in agents/harvest_names.py,
+which is now an imported helper library rather than its own runnable agent.
 
 **Capture, never inline-process.** Classifying is free; acting on a lead is paid. Keeping those
 apart is what lets a search run stay one approved expense instead of quietly becoming three, and
@@ -682,6 +687,30 @@ def pending(kind, path=None, limit=None, require_db=False):
     return out[:limit] if limit else out
 
 
+def pending_any(limit=None, path=None, require_db=False):
+    """The unprocessed leads of EVERY kind, oldest first — what the merged hub miner works on.
+
+    Same contract as `pending` minus the kind filter, so one `--from-leads N` run picks up the
+    top N leads regardless of whether each is a `hub` or a `names` page; the caller routes each
+    on its stored kind. A `not-a-lead` remembered NO has status != STATUS_NEW, so it is excluded
+    here exactly as it is from `pending`.
+    """
+    if require_db:
+        if path is not None:
+            raise LeadQueueUnavailable("require_db is for the shared table; drop the explicit path=")
+        return _strict_db(lambda: _db_load(status=STATUS_NEW, limit=limit))
+    if path is None and _db_on():
+        try:
+            return _db_load(status=STATUS_NEW, limit=limit)
+        except Exception as e:                                        # noqa: BLE001
+            if _is_missing(e):
+                _fall_back(str(e)[:80])
+            else:
+                raise
+    out = [l for l in load_leads(path) if l.get("status", STATUS_NEW) == STATUS_NEW]
+    return out[:limit] if limit else out
+
+
 def _db_mark_processed(keys):
     """The table half of mark_processed: an RPC taking an array, not a PATCH with
     url_key=in.(...) — a url_key can contain a comma or a parenthesis, and building that
@@ -914,8 +943,10 @@ def main():
         scope = f" [{lead_scope(lead)}]" if lead.get("kind") == KIND_HUB else ""
         print(f"  {(lead.get('kind') or '--'):5}{scope}  {lead.get('url')}{note}")
         print(f"         seed={lead.get('seed_id')}  {lead.get('signal')}")
-    print(f"\n  {KIND_HUB:5} leads -> python -m agents.mine_hub_pages --from-leads   (PAID extraction)")
-    print(f"  {KIND_NAMES:5} leads -> python -m agents.harvest_names --from-leads    (PAID search)")
+    # Both kinds are now worked by the ONE agent — a `hub` lead is mined by following its links,
+    # a `names` lead is name-harvested — and --from-leads takes them in queue order regardless.
+    print(f"\n  {KIND_HUB} + {KIND_NAMES} leads -> python -m agents.mine_hub_pages --from-leads   "
+          f"(PAID; each self-routes on its kind)")
 
 
 if __name__ == "__main__":

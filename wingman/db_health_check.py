@@ -72,8 +72,10 @@ CHECK_AGENTS = [
     ("action_item_generator", "Action items (tasks)"),
     ("metadata_refresher", "Metadata refresh"),
     ("scraper", "New-opportunity scrape"),
-    ("hub_miner", "Hub mining"),
-    ("name_harvester", "Name harvest"),
+    # hub_miner absorbed name harvesting in the 2026-09-07 merge, so its runs now cover both
+    # link-mining and name-harvesting; the standalone "name_harvester" row was removed here (no
+    # new runs write that literal). Historical name_harvester runs remain in agent_runs.
+    ("hub_miner", "Hub mining & name harvest"),
     ("mailing_list_finder", "Mailing-list finder"),
     ("contact_email_finder", "Contact-email backfill"),
 ]

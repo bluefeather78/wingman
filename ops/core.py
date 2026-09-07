@@ -3546,8 +3546,10 @@ def is_agent_running(agent_name):
 # run lock (audit 4.2). Only `scraper` is a console card; the other three are hand-run, which
 # is exactly why the lock lives in the agents rather than only here — the console can refuse
 # what it launches itself, it cannot refuse what somebody types in another terminal.
+# agents/harvest_names.py is no longer here: as of the 2026-09-07 merge it is an imported helper
+# library, not a runnable agent — mine_hub_pages.py owns its inserts and holds the lock for them.
 CATALOG_INSERT_SCRIPTS = ("agents/scrape_opportunities.py", "agents/mine_hub_pages.py",
-                          "agents/harvest_names.py", "agents/refind_dead_links.py")
+                          "agents/refind_dead_links.py")
 
 
 def catalog_lock_holder():
@@ -4120,13 +4122,19 @@ MAINTENANCE_TOOLS = {
     # which not only lists suspected pairs but lets a human flag them in place — a superset of
     # the report-only card. wingman/find_catalog_dups.py is still imported by duplicate_report_pairs.
     "minehub": {
-        # Hub-first discovery: one page that LISTS many programs yields many real rows without
-        # a per-search fee. Preview (discover + dedup) is free; extraction is one no-search
-        # model call per surviving page (~$0.003) and inserts inactive rows for review.
+        # Hub-first discovery, now the ONE agent for BOTH page shapes (merged 2026-09-07):
+        #  - a HUB page LINKS many programs (a university index, a city teen page, a listicle) ->
+        #    follow the links, one no-search model call per surviving page (~$0.003).
+        #  - a NAMES page LISTS programs by name without linking them (a JS directory, a library
+        #    calendar) -> read the names free, then one search per name (~$0.02) to find its own
+        #    page. Same downstream either way: classify pill + embedding-dedupe hint.
+        # Preview is free for both. A --from-leads run takes leads of EITHER kind, each routing
+        # on its stored kind, so the page-type control is ignored for them.
         "name": "Mine Hub Pages",
-        "description": "Discover programs by mining a hub page that lists many — a university "
-                       "pre-college index, a city teen page, a listicle. Preview is free; a real "
-                       "run extracts (~$0.003/page) and inserts inactive rows for review.",
+        "description": "Discover programs from a page that lists many — whether it LINKS them "
+                       "(a university index, a listicle) or only NAMES them (a JS directory, a "
+                       "library calendar). Preview is free; a real run extracts and inserts "
+                       "inactive rows for review (~$0.003/linked page, ~$0.02/named program).",
         "script": "agents/mine_hub_pages.py",
         "free": False, "writes": True,
         "params": [
@@ -4134,38 +4142,24 @@ MAINTENANCE_TOOLS = {
              "placeholder": "5",
              "help": "Leave the URL blank and set this to mine the top N queued leads. Each "
                      "carries its own direction (a round-up is mined off-site, an institution\u2019s "
-                     "own index on-site), so the checkbox below is ignored for them."},
-            {"key": "url", "label": "Hub page URL",
+                     "own index on-site, a names-only page name-harvested), so the page-type "
+                     "control below is ignored for them."},
+            {"key": "url", "label": "Page URL",
              "placeholder": "https://ceismc.gatech.edu/programs"},
-            {"key": "offDomain", "type": "check",
-             "label": "Listicle — follow off-site links, not same-domain"},
-            {"key": "maxPages", "label": "Spend ceiling — pages this run may extract",
+            {"key": "pageType", "type": "select", "label": "Page type (for a URL above)",
+             "options": [
+                ["index", "Institution index — follow its own-site links"],
+                ["listicle", "Listicle / round-up — follow off-site links"],
+                ["names", "Names-only — read names, search each one's own page"]]},
+            {"key": "maxPages", "label": "Hub ceiling — linked pages this run may extract",
              "placeholder": "50",
              "help": "Spread evenly across hubs, so a ceiling never silently starves whichever "
-                     "hubs came last. A hub it truncates stays queued."},
+                     "hubs came last. A hub it truncates stays queued. (Hub pages only.)"},
+            {"key": "maxNames", "label": "Names ceiling — names per names-page",
+             "placeholder": "20", "help": "Names-only pages only."},
             {"key": "mode", "type": "select", "label": "Mode", "options": [
                 ["preview", "Preview — free, no model call, no writes"],
                 ["run", "Run — PAID: extracts and inserts rows for review"]]},
-        ],
-    },
-    "harvestnames": {
-        # The counterpart to Mine Hub Pages, for a page that NAMES programs without linking
-        # them — a JS-built directory, a library calendar. Operator-pointed only: the router
-        # never sends work here on its own, because a page that names without linking is far
-        # more often one we simply could not read. Preview is free and prices the run.
-        "name": "Harvest Names From a Page",
-        "description": "For a page that LISTS programs by name but does not link them. Reads "
-                       "the names free, then searches for each one's own page. Preview is free; "
-                       "a real run is PAID (~$0.02/name) and inserts inactive rows for review.",
-        "script": "agents/harvest_names.py",
-        "free": False, "writes": True,
-        "params": [
-            {"key": "url", "label": "Page URL", "required": True,
-             "placeholder": "https://www.collegetransitions.com/dataverse/..."},
-            {"key": "maxNames", "label": "Spend ceiling — names per page", "placeholder": "20"},
-            {"key": "mode", "type": "select", "label": "Mode", "options": [
-                ["preview", "Preview — free, no model call, no writes"],
-                ["run", "Run — PAID: searches each name and inserts rows for review"]]},
         ],
     },
     "proposeangles": {
@@ -4347,24 +4341,24 @@ def build_tool_args(tool_key, params):
         n = _int_or_none(params.get("fromLeads"))
         if url:
             args += ["--hubs", url]
-            if params.get("offDomain"):
+            # The page-type control maps to the agent's routing flags. A URL is same-domain
+            # (institution index) by default; "listicle" follows off-site links; "names" reads
+            # the names and searches each one's own page.
+            page_type = str(params.get("pageType") or "index")
+            if page_type == "listicle":
                 args.append("--off-domain")
+            elif page_type == "names":
+                args.append("--names")
         if n:
-            # Queued leads carry their own direction, so --off-domain is deliberately NOT passed
-            # with them: it is a property of how each lead qualified, not of the run.
+            # Queued leads carry their own kind and direction, so the page-type flags are
+            # deliberately NOT passed with them: they are properties of how each lead qualified.
             args += ["--from-leads", str(n)]
         cap = _int_or_none(params.get("maxPages"))
         if cap:
             args += ["--max-pages", str(cap)]
-        if str(params.get("mode") or "preview") != "run":
-            args.append("--preview")
-    elif tool_key == "harvestnames":
-        url = str(params.get("url") or "").strip()
-        if url:
-            args += ["--hubs", url]
-        cap = _int_or_none(params.get("maxNames"))
-        if cap:
-            args += ["--max-names", str(cap)]
+        names_cap = _int_or_none(params.get("maxNames"))
+        if names_cap:
+            args += ["--max-names", str(names_cap)]
         if str(params.get("mode") or "preview") != "run":
             args.append("--preview")
     elif tool_key == "proposeangles":

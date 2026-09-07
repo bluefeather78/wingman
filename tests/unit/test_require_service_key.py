@@ -43,8 +43,10 @@ def test_names_every_missing_variable(monkeypatch):
 
 # The seven scripts finding 4.13 named. A regrown `or ...ANON_KEY` in any of them restores the
 # silent-truncation bug, so assert on the source rather than trusting review to catch it.
+# agents.harvest_names dropped from this list in the 2026-09-07 merge: it no longer reads the
+# catalog or has a main() — mine_hub_pages owns that read and still requires the service key.
 _MUST_REQUIRE_SERVICE_KEY = [
-    "agents.mine_hub_pages", "agents.harvest_names", "wingman.walk_up_hubs",
+    "agents.mine_hub_pages", "wingman.walk_up_hubs",
     "agents.classify_queue", "agents.dedupe_queue", "agents.refind_dead_links",
     "wingman.discovered_leads",
 ]

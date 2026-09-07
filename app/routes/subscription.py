@@ -109,11 +109,14 @@ def handle_subscription_cancel(user: AuthedUser = Depends(get_current_user)):
                                      "Please try again.",
                                 RuntimeError(error), op="subscription.cancel")
 
-        period_end = (result or {}).get("current_period_end")
+        # current_period_end moved onto subscription items in Stripe 2025-03-31.basil+ — read
+        # it via _sub_period_end, not off the top level, or a cancel records no end date and
+        # access is revoked immediately instead of at period end. See _sub_period_end.
+        period_end = _sub_period_end(result or {})
         updates = {"subscription_status": "canceled"}
-        if period_end:
-            updates["subscription_end_at"] = datetime.datetime.fromtimestamp(
-                period_end, datetime.timezone.utc).isoformat()
+        end_iso = _period_end_iso(period_end)
+        if end_iso:
+            updates["subscription_end_at"] = end_iso
         update_subscription(userid, updates)
 
         # Cancellation confirmation. Sent from the record we already have, merged with the
@@ -280,6 +283,27 @@ def _period_end_iso(period_end):
         return None
 
 
+def _sub_period_end(sub):
+    """The unix `current_period_end` for a Stripe subscription object, or None.
+
+    Stripe API version 2025-03-31.basil (and every version after, including the
+    2026-08-26.dahlia this account runs on) REMOVED `current_period_end` from the
+    Subscription object and moved it onto the subscription ITEMS
+    (`items.data[].current_period_end`). Reading only the top-level field silently
+    returned None on those versions, so a cancel-at-period-end never recorded the real
+    end date and `subscription_state()` then revoked a paying user's access immediately —
+    the opposite of the cancel-at-period-end promise. Read the item first, fall back to the
+    legacy top-level field so older API versions (and any single-value payloads) still work.
+    """
+    if not isinstance(sub, dict):
+        return None
+    for item in ((sub.get("items") or {}).get("data") or []):
+        pe = item.get("current_period_end")
+        if pe:
+            return pe
+    return sub.get("current_period_end")
+
+
 def _updates_from_subscription(sub):
     """The users-row updates implied by a Stripe subscription object.
 
@@ -297,7 +321,7 @@ def _updates_from_subscription(sub):
     sub_id = sub.get("id")
     if sub_id:
         updates["stripe_subscription_id"] = sub_id
-    end_iso = _period_end_iso(sub.get("current_period_end"))
+    end_iso = _period_end_iso(_sub_period_end(sub))
     if status in ("active", "trialing"):
         if sub.get("cancel_at_period_end"):
             updates["subscription_status"] = "canceled"

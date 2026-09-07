@@ -346,12 +346,31 @@ def collect_health(supabase_url=None, key=None):
                 {"key": "metadata", "label": "Activated rows awaiting metadata refresh",
                  "count": refresh_q, "severity": _sev(refresh_q, 200, 600),
                  "note": "Activated rows the Update Opportunity agent has not enriched yet."})
-    # ACTION NEEDED: any queue with a non-zero depth needs a person, EXCEPT `rejected` — those
-    # are already adjudicated and kept only for reference (operator directive, 2026-09-07). A
-    # None count (an un-migrated column) is unknown, not work, so it never flags.
+    # Live rows the M1 refresh can never fetch: >= 3 CONSECUTIVE page-fetch failures
+    # (403/anti-bot, TLS, JS-only/PDF shells). LIVE and correct — check_links keeps them, since a
+    # 403 is our client being blocked, not a dead page — they just can't be re-read, so the
+    # refresh skips (and now quarantines) them. Surfaced as a DISTINCT state so the ~80 of them are
+    # visible at a glance rather than found by accident. The `>= 3` matches
+    # refresh_opportunities.QUARANTINE_AFTER_FAILURES (duplicated per this file's stdlib-only rule —
+    # keep them in step). Absent (—) until db/refresh_health_schema.sql is run.
+    if out["supabase_configured"]:
+        unrefreshable = _count(supabase_url, key, "opportunities",
+                               {"is_active": "eq.true", "refresh_fetch_attempts": "gte.3"})
+        if unrefreshable is not None:
+            queues.append(
+                {"key": "unrefreshable",
+                 "label": "Live rows the refresh can't fetch (403/anti-bot)",
+                 "count": unrefreshable, "severity": _sev(unrefreshable, 60, 200),
+                 "note": "Live, correct rows whose page blocks our fetcher (403/TLS/JS-only), so "
+                         "metadata refresh can't re-read them. Not dead — no action clears these "
+                         "short of the site changing; run --include-unfetchable to retry."})
+    # ACTION NEEDED: any queue with a non-zero depth needs a person, EXCEPT `rejected` (already
+    # adjudicated, kept for reference — operator directive 2026-09-07) and `unrefreshable` (a known
+    # live-but-blocked state with no action that clears it). A None count (an un-migrated column)
+    # is unknown, not work, so it never flags.
     for q in queues:
         c = q.get("count")
-        q["action_needed"] = bool(c) and c > 0 and q.get("key") != "rejected"
+        q["action_needed"] = bool(c) and c > 0 and q.get("key") not in ("rejected", "unrefreshable")
     out["queues"] = queues
 
     # --- Embedding coverage: two separate vectors on `opportunities`, same coverage shape --------

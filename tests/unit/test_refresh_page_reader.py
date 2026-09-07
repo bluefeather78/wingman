@@ -25,8 +25,9 @@ def _no_gemini(*a, **k):
 def test_unfetchable_page_skips_and_never_calls_the_model(monkeypatch):
     monkeypatch.setattr(r, "call_gemini", _no_gemini)
     fetch = lambda url: (None, "http-403")
-    info, cost, reason = r.check_one(OPP, "gk", fetch=fetch)
+    info, cost, reason, detail = r.check_one(OPP, "gk", fetch=fetch)
     assert reason == "no-fetch"
+    assert detail == "http-403"   # the specific reason is preserved for the skip record
     assert info == {}
     assert cost == 0.0   # a failed fetch is free — no model call was made
 
@@ -36,8 +37,9 @@ def test_blank_shell_is_treated_as_no_fetch(monkeypatch):
     # failure, not a page — skip, never let the model "quote" from nothing.
     monkeypatch.setattr(r, "call_gemini", _no_gemini)
     fetch = lambda url: (None, "empty-or-js")
-    info, cost, reason = r.check_one(OPP, "gk", fetch=fetch)
+    info, cost, reason, detail = r.check_one(OPP, "gk", fetch=fetch)
     assert reason == "no-fetch" and info == {}
+    assert detail == "empty-or-js"
 
 
 def test_page_text_is_handed_to_the_model_and_parsed(monkeypatch):
@@ -52,9 +54,10 @@ def test_page_text_is_handed_to_the_model_and_parsed(monkeypatch):
 
     monkeypatch.setattr(r, "call_gemini", fake_gemini)
     fetch = lambda url: ("Open to students in grades 9-12. Free of charge.", "ok")
-    info, cost, reason = r.check_one(OPP, "gk", fetch=fetch)
+    info, cost, reason, detail = r.check_one(OPP, "gk", fetch=fetch)
 
     assert reason == "ok"
+    assert detail is None
     assert info["eligibility"] == "grades 9-12"
     # The actual page text must be in the prompt — this is what "reads the page" means.
     assert "grades 9-12" in seen["user"]
@@ -69,8 +72,8 @@ def test_unreadable_model_output_is_unparsed_not_a_write(monkeypatch):
     monkeypatch.setattr(r, "call_gemini",
                         lambda *a, **k: ("not json at all", {"input_tokens": 5, "output_tokens": 5}))
     fetch = lambda url: ("some real page text", "ok")
-    info, cost, reason = r.check_one(OPP, "gk", fetch=fetch)
-    assert reason == "unparsed" and info is None
+    info, cost, reason, detail = r.check_one(OPP, "gk", fetch=fetch)
+    assert reason == "unparsed" and info is None and detail is None
 
 
 def test_extracted_url_is_dropped_by_clean_update_dict():
@@ -148,3 +151,58 @@ def test_activation_queue_fetch_reraises_unrelated_400(monkeypatch):
     monkeypatch.setattr(r, "_queue_col_enabled", True)
     with pytest.raises(urllib.error.HTTPError):
         r._get_opportunities("http://x", {"select": "id,name"}, "k")  # no queue col -> reraise
+
+
+# --- fetch-health tracking: skip record + quarantine (db/refresh_health_schema.sql) -------------
+
+def test_drop_quarantined_excludes_only_the_repeatedly_failed():
+    rows = [
+        {"id": "a"},                                          # never failed (absent) -> keep
+        {"id": "b", r.REFRESH_FETCH_ATTEMPTS_COLUMN: 0},      # recovered -> keep
+        {"id": "c", r.REFRESH_FETCH_ATTEMPTS_COLUMN: 2},      # under the bar -> keep
+        {"id": "d", r.REFRESH_FETCH_ATTEMPTS_COLUMN: 3},      # at the bar -> drop
+        {"id": "e", r.REFRESH_FETCH_ATTEMPTS_COLUMN: 9},      # well over -> drop
+    ]
+    kept, dropped = r._drop_quarantined(rows)
+    assert [o["id"] for o in kept] == ["a", "b", "c"]
+    assert dropped == 2
+
+
+def test_record_fetch_result_bumps_the_count_and_stores_the_reason(monkeypatch):
+    monkeypatch.setattr(r, "_refresh_health_enabled", True)
+    seen = {}
+    monkeypatch.setattr(r, "supabase_patch",
+                        lambda url, table, match, payload, key: seen.update(payload))
+    r._record_fetch_result("http://x", "k", {"id": "z", r.REFRESH_FETCH_ATTEMPTS_COLUMN: 2},
+                           ok=False, detail="http-403", dry_run=False)
+    assert seen[r.REFRESH_FETCH_ATTEMPTS_COLUMN] == 3          # 2 -> 3, consecutive
+    assert seen[r.REFRESH_FETCH_STATUS_COLUMN] == "http-403"   # the specific reason
+    assert seen[r.REFRESH_FETCH_FAILED_AT_COLUMN]             # a timestamp was set
+
+
+def test_record_fetch_result_clears_on_a_successful_read_but_only_if_it_was_failing(monkeypatch):
+    monkeypatch.setattr(r, "_refresh_health_enabled", True)
+    calls = []
+    monkeypatch.setattr(r, "supabase_patch",
+                        lambda url, table, match, payload, key: calls.append(payload))
+    # Was failing -> a good read clears all three.
+    r._record_fetch_result("http://x", "k", {"id": "z", r.REFRESH_FETCH_ATTEMPTS_COLUMN: 4},
+                           ok=True, detail=None, dry_run=False)
+    assert calls[-1] == {r.REFRESH_FETCH_STATUS_COLUMN: None,
+                         r.REFRESH_FETCH_ATTEMPTS_COLUMN: 0,
+                         r.REFRESH_FETCH_FAILED_AT_COLUMN: None}
+    # Healthy row (count 0) -> no needless write.
+    r._record_fetch_result("http://x", "k", {"id": "z", r.REFRESH_FETCH_ATTEMPTS_COLUMN: 0},
+                           ok=True, detail=None, dry_run=False)
+    assert len(calls) == 1
+
+
+def test_record_fetch_result_is_a_noop_when_disabled_or_dry_run(monkeypatch):
+    calls = []
+    monkeypatch.setattr(r, "supabase_patch",
+                        lambda *a, **k: calls.append(1))
+    monkeypatch.setattr(r, "_refresh_health_enabled", False)   # migration not run
+    r._record_fetch_result("http://x", "k", {"id": "z"}, ok=False, detail="http-403", dry_run=False)
+    monkeypatch.setattr(r, "_refresh_health_enabled", True)
+    r._record_fetch_result("http://x", "k", {"id": "z"}, ok=False, detail="http-403", dry_run=True)
+    assert calls == []                                         # never writes in either case

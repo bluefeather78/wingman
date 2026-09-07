@@ -123,6 +123,79 @@ VALID_SEASON = {'Summer', 'Year-Long', 'Spring', 'Fall', 'Winter'}
 ACTIVATION_REFRESH_COLUMN = "activation_refresh_queued_at"
 _queue_col_enabled = True
 
+# db/refresh_health_schema.sql: a per-row record of the M1 page fetch WHEN IT FAILS. The refresh
+# never invents from memory, so a page it cannot read is skipped every run — and, until these
+# columns existed, silently, so ~80 live-but-unfetchable rows (403/anti-bot, TLS, PDF/JS shells)
+# were walked and re-skipped on every pass with nothing recorded and no way to find them.
+#   refresh_fetch_status     the specific last failure reason (http-403 / error-URLError / ...)
+#   refresh_fetch_attempts   CONSECUTIVE failures — reset to 0 the moment the page reads again
+#   refresh_fetch_failed_at  when it last failed
+# A successful read clears all three (see _record_fetch_result).
+REFRESH_FETCH_STATUS_COLUMN = "refresh_fetch_status"
+REFRESH_FETCH_ATTEMPTS_COLUMN = "refresh_fetch_attempts"
+REFRESH_FETCH_FAILED_AT_COLUMN = "refresh_fetch_failed_at"
+# A row with this many CONSECUTIVE fetch failures is "quarantined": dropped from the default
+# whole-catalog and awaiting-refresh selections so a normal pass stops re-walking pages it has
+# never once been able to read. --include-unfetchable overrides. This changes NO paid behaviour:
+# a quarantined row only ever fetch-FAILED, which is free (no model call is made on a failed
+# fetch), so nothing billable is added or removed — it just stops the noise. Not MARQUEE M9.
+QUARANTINE_AFTER_FAILURES = 3
+_refresh_health_enabled = None   # None until _probe_refresh_health() runs; False if migration absent
+
+
+def _probe_refresh_health(supabase_url, service_key):
+    """Set _refresh_health_enabled by reading the refresh-health columns once. When
+    db/refresh_health_schema.sql has not been run they 400 and the whole feature (the skip record
+    AND the quarantine filter) stays OFF, so the agent behaves exactly as it did before — the same
+    one-probe degradation the activation-refresh queue column uses."""
+    global _refresh_health_enabled
+    try:
+        supabase_get(supabase_url, "opportunities",
+                     {"select": f"id,{REFRESH_FETCH_ATTEMPTS_COLUMN}", "limit": "1"}, service_key)
+        _refresh_health_enabled = True
+    except urllib.error.HTTPError as e:
+        if e.code == 400:
+            _refresh_health_enabled = False
+        else:
+            raise
+    return _refresh_health_enabled
+
+
+def _drop_quarantined(rows):
+    """(kept, dropped_count): rows minus those with >= QUARANTINE_AFTER_FAILURES consecutive fetch
+    failures. A row with no/absent count (None -> 0) is always kept, so this is a safe no-op when
+    the migration has not been run or the caller passes --include-unfetchable."""
+    kept = [o for o in rows
+            if (o.get(REFRESH_FETCH_ATTEMPTS_COLUMN) or 0) < QUARANTINE_AFTER_FAILURES]
+    return kept, len(rows) - len(kept)
+
+
+def _record_fetch_result(supabase_url, service_key, opp, ok, detail, dry_run):
+    """Stamp the row with the outcome of the M1 page fetch. On FAILURE: bump the consecutive count
+    and record the reason + time. On a SUCCESSFUL read: clear all three, but only if the row was
+    carrying a failure, so a healthy row is never needlessly re-written. No-op when the columns are
+    absent or in a dry run. FREE — a plain PATCH, never a model call, and it writes only the
+    refresh_fetch_* telemetry, never a metadata field or a staleness stamp, so MARQUEE M1 stands."""
+    if not _refresh_health_enabled or dry_run:
+        return
+    prev = opp.get(REFRESH_FETCH_ATTEMPTS_COLUMN) or 0
+    if not ok:
+        payload = {
+            REFRESH_FETCH_STATUS_COLUMN: detail,
+            REFRESH_FETCH_ATTEMPTS_COLUMN: prev + 1,
+            REFRESH_FETCH_FAILED_AT_COLUMN: datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+    elif prev:
+        payload = {REFRESH_FETCH_STATUS_COLUMN: None, REFRESH_FETCH_ATTEMPTS_COLUMN: 0,
+                   REFRESH_FETCH_FAILED_AT_COLUMN: None}
+    else:
+        return
+    try:
+        supabase_patch(supabase_url, "opportunities", {"id": f"eq.{opp['id']}"}, payload, service_key)
+    except Exception as e:
+        # Telemetry, not the job — never let a health-stamp write break a refresh run.
+        print(f"[WARN] could not record fetch health for {opp.get('id')}: {str(e)[:120]}")
+
 
 def _get_opportunities(supabase_url, params, service_key):
     """supabase_get for the opportunities table, tolerant of db/activation_refresh_schema.sql
@@ -246,7 +319,7 @@ def check_one(opp, gemini_key, fetch=None):
     """MARQUEE M1 (MARQUEE_DECISIONS.md): read the program's LIVE page and extract metadata
     FROM IT. Never from model memory.
 
-    Returns (info, cost, reason):
+    Returns (info, cost, reason, fetch_detail):
       reason == 'ok'       -> info is the parsed dict; the caller may write validated fields.
       reason == 'no-fetch' -> the page could not be read; info is {}. The caller MUST skip:
                               no write, no stamp, retry next run. NEVER fall back to memory —
@@ -254,6 +327,10 @@ def check_one(opp, gemini_key, fetch=None):
                               an invented one is not.
       reason == 'unparsed' -> the page was read but the model's JSON was unreadable; info is
                               None. The caller keeps existing values and does not stamp.
+      fetch_detail is the SPECIFIC page-fetch reason on a 'no-fetch' (http-403 / error-URLError /
+                              not-html / empty-or-js / no-url), else None. It is what lets the
+                              caller record WHY a page was skipped, not merely that it was — the
+                              record that makes the stuck set findable (db/refresh_health_schema.sql).
 
     The fetch is a FREE plain-HTTP GET (page_text.fetch_page_text): it returns the page's real
     bytes, so we hold the text — proof the page was read, and the option to code-verify. A
@@ -266,9 +343,12 @@ def check_one(opp, gemini_key, fetch=None):
     """
     if fetch is None:
         fetch = _default_fetch
-    page, reason = fetch(opp.get("url"))
-    if reason != "ok" or not (page or "").strip():
-        return {}, 0.0, "no-fetch"
+    page, fetch_reason = fetch(opp.get("url"))
+    if fetch_reason != "ok" or not (page or "").strip():
+        # Preserve the specific reason so the caller can record WHY. A reason of 'ok' with an
+        # empty body is a JS/blank shell — page_text's own name for that is 'empty-or-js'.
+        detail = fetch_reason if fetch_reason != "ok" else "empty-or-js"
+        return {}, 0.0, "no-fetch", detail
 
     system = build_system(opp)
     user_content = (f"Program: {opp['name']} ({opp.get('org') or 'unknown org'})\n"
@@ -286,10 +366,10 @@ def check_one(opp, gemini_key, fetch=None):
     try:
         info = extract_json(text)
     except (ValueError, json.JSONDecodeError):
-        return None, cost, "unparsed"
+        return None, cost, "unparsed", None
     if not isinstance(info, dict):
-        return None, cost, "unparsed"
-    return info, cost, "ok"
+        return None, cost, "unparsed", None
+    return info, cost, "ok", None
 
 
 def clean_update_dict(info):
@@ -380,6 +460,12 @@ def main():
                              "module's docstring for why this agent's own Gemini call "
                              "essentially never knows a program's contact address from "
                              "training data alone.")
+    parser.add_argument("--include-unfetchable", action="store_true",
+                        help=f"Include rows quarantined after {QUARANTINE_AFTER_FAILURES}+ "
+                             "consecutive page-fetch failures (403/anti-bot, TLS, JS-only). Off by "
+                             "default so a normal pass stops re-walking pages it has never once "
+                             "been able to read. Ignored for --ids/--pending (explicit targets) "
+                             "and when db/refresh_health_schema.sql has not been run.")
     add_agent_args(parser, default_timeout=120)
     args = parser.parse_args()
     apply_timing(args, gemini=True)
@@ -396,9 +482,18 @@ def main():
     # contact-email fallback is Gemini too — so a multi-candidate contact page always resolves
     # rather than being left unresolved for want of a second key.
 
+    # Probe the refresh-health columns once. If the migration is absent the feature (skip record
+    # + quarantine) stays off and everything below no-ops cleanly.
+    _probe_refresh_health(supabase_url, service_key)
+    quarantined_excluded = 0
+
     select = ("id,name,org,url,summary,type,price,location,intl,season,eligibility,"
               "grade_min,grade_max,cost,subject_tags,contact_email,is_active,"
               + ACTIVATION_REFRESH_COLUMN)
+    # Attempts count comes along only when the columns exist, so the client-side quarantine
+    # filter and the per-row increment have it to read.
+    if _refresh_health_enabled:
+        select += "," + REFRESH_FETCH_ATTEMPTS_COLUMN
 
     # --ids / --pending target queued or just-activated rows (they ignore the is_active
     # filter), which is how the new-angle pipeline enriches a scraped batch from its live
@@ -442,6 +537,8 @@ def main():
                 sys.exit(1)
             raise
         mode = "awaiting"
+        if _refresh_health_enabled and not args.include_unfetchable:
+            items, quarantined_excluded = _drop_quarantined(items)
         all_active = items
         print(f"[OK] {len(items)} row(s) awaiting refresh.")
     else:
@@ -452,11 +549,19 @@ def main():
         all_active = _get_opportunities(supabase_url, params, service_key)
         filter_note = f" (excluding source='{args.exclude_source}')" if args.exclude_source else ""
         print(f"[OK] {len(all_active)} active rows{filter_note}.")
+        # Drop quarantined rows BEFORE the sample is drawn, so both --all and --sample respect it.
+        if _refresh_health_enabled and not args.include_unfetchable:
+            all_active, quarantined_excluded = _drop_quarantined(all_active)
         mode = "all"
         items = all_active
         if args.sample:
             mode = "sample"
             items = random.sample(all_active, min(args.sample, len(all_active)))
+
+    if quarantined_excluded:
+        print(f"[OK] Skipping {quarantined_excluded} quarantined row(s) with "
+              f">={QUARANTINE_AFTER_FAILURES} consecutive fetch failures — live but un-refreshable "
+              f"(403/anti-bot, TLS, JS-only). Pass --include-unfetchable to retry them.")
 
     # Preview: scope is now fully resolved, so report it and stop before the first
     # (paid) Gemini call. Nothing below this line runs.
@@ -508,15 +613,24 @@ def main():
         opp_name = opp['name'][:60]
         print(f"[{i + 1}/{len(items)}] {opp_name}...", end=" ")
         try:
-            info, cost, reason = check_one(opp, gemini_key)
+            info, cost, reason, fetch_detail = check_one(opp, gemini_key)
             total_cost += cost
 
+            # Record the fetch outcome on the row (db/refresh_health_schema.sql): a failure bumps
+            # the consecutive-failure count and stores the reason; a successful read clears it.
+            # This is the skip RECORD — pure telemetry, never a metadata field or staleness stamp,
+            # so MARQUEE M1 stands. It is also what eventually quarantines a hopeless row.
+            _record_fetch_result(supabase_url, service_key, opp,
+                                 ok=(reason != "no-fetch"), detail=fetch_detail,
+                                 dry_run=args.dry_run)
+
             # MARQUEE M1: a page we could not read is SKIPPED — never written from memory and
-            # never stamped, so the row stays due and the next run retries it. A page read but
-            # unreadable is likewise skipped (keep whatever curated values are already there).
+            # never stamped, so the row stays due and the next run retries it (until it has failed
+            # enough consecutive times to be quarantined out of the default selection above). A
+            # page read but unreadable is likewise skipped (keep whatever curated values exist).
             if reason == "no-fetch":
                 skipped_unfetchable += 1
-                print(f"unfetchable page — skipped (no write), ${cost:.4f}")
+                print(f"unfetchable page ({fetch_detail}) — skipped (no write), ${cost:.4f}")
                 continue
             if reason == "unparsed":
                 unparsed += 1
@@ -605,6 +719,7 @@ def main():
 
     print(f"\n[SUMMARY] checked: {len(items)}, pages read: {fetched}, updated: {updated}, "
           f"unfetchable(skipped): {skipped_unfetchable}, unreadable(skipped): {unparsed}, "
+          f"quarantined(excluded): {quarantined_excluded}, "
           f"errors: {errors}, contact emails found: {contact_found} "
           f"({contact_model_calls} model call(s)), activation-queue drained: {dequeued}, "
           f"re-embedded(changed): {reembedded}, "
@@ -637,6 +752,7 @@ def main():
             "total_web_searches": total_searches,
             "silent_search_count": silent_search_count,
             "notes": f"pages_read={fetched}, unfetchable={skipped_unfetchable}, "
+                     f"quarantined_excluded={quarantined_excluded}, "
                      f"unparsed={unparsed}, contact_emails_found={contact_found}, "
                      f"contact_model_calls={contact_model_calls}, "
                      f"activation_queue_drained={dequeued}, reembedded={reembedded}",

@@ -249,10 +249,15 @@ _client_ip_logged = False
 async def log_first_client_ip(request: Request, call_next):
     global _client_ip_logged
     if not _client_ip_logged:
-        _client_ip_logged = True
         peer = request.client.host if request.client else "(none)"
-        xff = request.headers.get("x-forwarded-for") or "(absent)"
-        print(f"[client-ip] resolved={peer} x-forwarded-for={xff!r} path={request.url.path}")
+        xff = request.headers.get("x-forwarded-for")
+        # Render's health probe reaches the app over loopback with no X-Forwarded-For and always
+        # wins the race to be the first request — latching on it tells us nothing about how a real
+        # visitor's IP resolves. Skip it; latch on the first request that came through the proxy
+        # (XFF present) or from a non-loopback peer.
+        if xff is not None or peer not in ("127.0.0.1", "::1", "(none)"):
+            _client_ip_logged = True
+            print(f"[client-ip] resolved={peer} x-forwarded-for={xff!r} path={request.url.path}")
     return await call_next(request)
 
 

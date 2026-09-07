@@ -5062,17 +5062,21 @@ def evaluate_seo_pages():
             "seo_content_score": verdict["score"],
             "seo_missing_fields": verdict["missing"], "seo_evaluated_at": now,
         })
-    # Upsert, merging on id so only the seo_* columns of an existing row are touched.
+    # Per-row PATCH (a pure UPDATE), NOT a bulk upsert. An upsert POST builds an INSERT that
+    # Postgres validates against the table's NOT NULL columns (name, url, ...) BEFORE it reaches
+    # ON CONFLICT, so a partial-column upsert 23502s even though every id already exists. PATCH
+    # touches only the seo_* columns of the matched row and never hits that. Slower (one request
+    # per row, ~1-3 min for the full catalog) but correct — and still FREE, no model call.
+    written = 0
     try:
-        for i in range(0, len(updates), 200):
-            _supabase_request_strict(
-                "opportunities", method="POST", params={"on_conflict": "id"},
-                data=updates[i:i + 200],
-                extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+        for u in updates:
+            patch = {k: v for k, v in u.items() if k != "id"}
+            _commit_patch(u["id"], patch)
+            written += 1
     except Exception as e:
         if _is_missing_column_error(e) or _missing_table_error(e):
             return {"ok": True, "schema_ready": False, "setup_sql": SEO_SETUP_SQL}
-        return {"ok": False, "error": f"Could not write seo_* columns: {e}"}
+        return {"ok": False, "error": f"Wrote {written}/{len(updates)} rows, then failed: {e}"}
     return {"ok": True, "schema_ready": True, "evaluated": len(updates),
             "indexed": indexed, "awaiting": awaiting, "ran_at": now}
 

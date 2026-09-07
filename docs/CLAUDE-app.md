@@ -503,7 +503,7 @@ pureCompetitions, conferences, journals.
 **not wired** — the drawer calls the live 3-question path on every open, so the old
 `starterPool` cache is currently unused. The finder **reads** `filterTags.enrichedTags`
 off the stored profile but never regenerates them (no writer for that slot in RN).
-Clear-profile is a visual stub. Payments are deferred by the plan: the subscription screen
+Clear-profile is fully implemented (`frontend/app/(app)/profile.tsx:294`). Payments are deferred by the plan: the subscription screen
 shows status and runs the promo flow, and Upgrade surfaces whatever the unconfigured
 Stripe backend answers — which is the one sharp edge of the access gate above. **A lapsed
 account is now correctly locked out of the app and, with Stripe unconfigured, has no way

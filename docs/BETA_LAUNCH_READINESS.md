@@ -190,8 +190,10 @@ then set the three `STRIPE_*` vars in Render and confirm the Price is $4.99/mo r
   path), costed/gated like `/api/match`, not metered as a second Free-tier action
   (`app/routes/matching.py`, `frontend/app/(app)/finder.tsx` `gateFormEligibility`).
 - **"(verified)" deadlines can be confidently wrong on JS-heavy sites** — a stale pre-JS page fetch
-  reads as verified (`docs/plans/DEADLINE_AND_TASK_PLAN.md:360`, G6b, open). Trust risk for a deadline
-  product; consider softening the "verified" label copy until mitigated.
+  reads as verified (`docs/plans/DEADLINE_AND_TASK_PLAN.md:360`, G6b, open). **⚠️ ACCEPTED FOR BETA
+  2026-09-07 (not code-fixed).** The G6b mitigation is unbuilt; the operator accepts the residual
+  trust risk at beta scale, where the affected JS-heavy sites are a minority and the deadline check is
+  student-triggered. Revisit post-launch: either soften the "verified" label copy or land G6b.
 - ~~**Matching recall decay:** new catalog rows only become matchable after a manual `match_vector`
   backfill — no activation re-embed hook.~~ **✅ Hook exists + coverage verified 2026-09-07.** The
   `RECALL_GRID_MERGE_PLAN.md:210` line is stale: `activate_opportunities()` now calls
@@ -210,14 +212,26 @@ then set the three `STRIPE_*` vars in Render and confirm the Price is $4.99/mo r
   which is why the shipped finder badge is reranker-driven, not this cut — so this governs the recall-grid
   surface / server `strong` field, not what the finder shows today. Env-tunable; re-run the eval sweep if
   the finder is ever wired to the cosine badge.
-- **Synthesis failure persists the raw chat transcript as the profile** (`frontend_report.md` Med #10);
-  malformed date can make a card read "Happening Now" (Med #11).
+- ~~Synthesis failure persists the raw chat transcript; malformed date reads "Happening Now".~~
+  **✅ Resolved 2026-09-07.** **Med #11 FIXED:** `daysUntil` now guards with `isValidDateISO` and
+  returns `null` for a bad date (callers treat it as absent, never "Happening Now"), and ingest filters
+  on `isValidDateISO(d?.date_iso)` (`frontend/src/lib/status.ts:35-36`, `frontend/src/api/trackerStore.ts:375`).
+  **Med #10 handled + accepted:** the synthesis-failure path no longer silently succeeds — it flags
+  `synthFailed`, skips the highlight, and skips the ~5 derivation calls, offering "Tidy it up"
+  (`frontend/app/(app)/profile.tsx:236-273`); the residual (raw text still persisted so input isn't lost)
+  is an **accepted corner case** now that the token ceiling is 16,000, which makes the double-truncation
+  trigger rare.
 - **School-domain email blind spot:** a student on a locked school domain silently receives no mail;
-  there's no editable alert-address field (`docs/CLAUDE-app.md:685`).
+  there's no editable alert-address field (`docs/CLAUDE-app.md:685`). **⚠️ ACCEPTED FOR BETA 2026-09-07
+  (not code-fixed).** `email_sends.email` already records the address actually used, so a "nothing
+  arrived" report is diagnosable; an editable alert-address field is a post-beta add.
 - **Frontend has zero automated tests** and only ~5 accessibility labels app-wide
-  (`frontend_report.md:247,239`) — relevant if any beta user relies on assistive tech.
-- **Cosmetic doc drift:** `docs/CLAUDE-app.md:508` still calls clear-profile a "visual stub" — it's
-  actually fully implemented (`frontend/app/(app)/profile.tsx:294`). No code action; fix the note.
+  (`frontend_report.md:247,239`). **⚠️ PARTIALLY ADDRESSED / ACCEPTED FOR BETA 2026-09-07.** A frontend
+  vitest suite now exists (**138 tests green** — grade, status, tracker-merge, session, auth-refresh,
+  paid-calls, request-timeout), so "zero tests" is stale; **accessibility labelling remains thin and is
+  an accepted beta risk** — revisit before onboarding any user who relies on assistive tech.
+- ~~**Cosmetic doc drift:** clear-profile called a "visual stub".~~ **✅ FIXED 2026-09-07** — the note in
+  `docs/CLAUDE-app.md:506` now says clear-profile is fully implemented (`frontend/app/(app)/profile.tsx:294`).
 
 ---
 
@@ -279,9 +293,12 @@ Not a blocker for a small beta, but know the ceiling:
 3. ~~**Fix Terms §3**, re-run `build_legal.py` (§1c).~~ **✅ DONE** — already resolved; rebuild is a no-op.
 4. **Decide** the free-tier gate (§2a), Stripe/economics (§2b), and email cron (§2c).
 5. Read the `[client-ip]` log line post-deploy; set `CSP_ENFORCE=1` once you've checked the CSP report.
-6. (Optional, quality) grade-parser fix ✅ + eligibility-in-matching ✅ + `match_vector` backfill/hook ✅
-   (all done) + `WINGMAN_STRONG_MATCH_MIN` calibrated ✅ (0.6→0.63); remaining §3 quality items: the
-   "(verified)" deadline copy, and the school-domain email blind spot.
+6. **§3 fully dispositioned 2026-09-07.** FIXED: grade-parser ✅, eligibility-in-matching ✅, recall
+   decay/re-embed hook ✅, `WINGMAN_STRONG_MATCH_MIN` calibrated ✅ (0.6→0.63), malformed-date "Happening
+   Now" ✅, clear-profile doc note ✅, and a 138-test frontend suite now exists ✅. ACCEPTED FOR BETA
+   (not code-fixed, revisit post-launch): the "(verified)" deadline copy on JS-heavy sites, the
+   school-domain email blind spot, thin accessibility labelling, and the synthesis raw-transcript
+   residual (rare at the 16k token ceiling).
 
 _Security S0+S1: complete. Boot blocker (numpy): fixed. Nothing in this doc is a code emergency — it's
 config, decisions, and polish._

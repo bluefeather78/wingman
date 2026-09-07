@@ -125,6 +125,31 @@ dollar cap (removed in favour of the actions model, `app/config.py:258`).
   `TWO_TIER_AI_PLAN.md:26`), or consciously accept global-breaker-only and watch the console.
 
 ### 2b. Beta economics — Stripe + the Upgrade path
+> **✅ RESOLVED 2026-09-07 — real payments CHOSEN and LIVE-VALIDATED.** All three `STRIPE_*`
+> vars are set on Render in **live** mode (live key, the $4.99 recurring Price, live webhook
+> `whsec_`); the webhook endpoint `https://highschoolwingman.com/api/webhook/stripe` is
+> registered with 5 events (`checkout.session.completed`, `customer.subscription.updated`,
+> `customer.subscription.deleted`, `invoice.payment_succeeded`, `invoice.payment_failed` —
+> `customer.subscription.created` was unavailable in the Stripe UI and is safely redundant).
+> Validated end-to-end on a fresh account (`sidharthbildikar`): real-card subscribe → row went
+> `active` with new `stripe_customer_id`/`stripe_subscription_id`; cancel → `canceled` with a
+> **future** `subscription_end_at` (2026-10-07, ~30 days out). Test charge refunded.
+>
+> **Bug found + fixed during this validation** (commit `0a584bf`, on `main`): Stripe API
+> version 2025-03-31.basil+ (this account runs 2026-08-26.dahlia) moved `current_period_end`
+> off the Subscription object onto its ITEMS. The cancel handler and `_updates_from_subscription`
+> read the old top-level field → returned None → a cancel recorded **no** `subscription_end_at`,
+> and `subscription_state()` then revoked a paying user's access immediately instead of at
+> period end. Fixed via `_sub_period_end()` (item-first, legacy fallback) at both call sites,
+> plus `tests/unit/test_subscription_period_end.py`. This was caught before any real user hit it.
+>
+> **Cosmetic "Renews " blank — FIXED (commit `8e823e2`).** The subscription screen showed
+> "Renews " with no date for an *active* sub because `subscription_end_at` was only written on
+> cancel. Now the period end is captured on the active path too — from `invoice.payment_succeeded`
+> (via `_invoice_period_end()`, reading the invoice line period) and in `_updates_from_subscription`'s
+> active branch. Display-only; `subscription_state()` grants active accounts access unconditionally,
+> so gating is untouched. Unit-tested; the next subscriber sees "Renews {date}".
+
 With Stripe unconfigured, `/api/subscription/checkout` errors and Upgrade surfaces that gracefully
 (`frontend/app/(app)/subscription.tsx:227`); the **only** way to become Paid is a `grant` promo code
 (`BETAUSER`). Combined with 2a (gate off), that means **effectively everyone is unlimited-free during
@@ -132,11 +157,18 @@ beta**. Decide: (i) intentional free beta (leave as-is, hand out `BETAUSER`), or
 then set the three `STRIPE_*` vars in Render and confirm the Price is $4.99/mo recurring.
 
 ### 2c. Arm the deadline/trial reminder emails?
-The lifecycle-email **cron is DISARMED** (`.github/workflows/lifecycle-emails.yml` is `workflow_dispatch`
-only, `docs/CLAUDE-app.md:604`). Welcome + goodbye are event-driven and fire regardless; only the
-**trial-ending / deadline reminders** are held. To arm: run `email_schema.sql`, set `EMAIL_CRON_SECRET`
-(Render + GitHub Actions) and `WINGMAN_API_BASE`, uncomment the schedule. _(Deadline-alert P5 is
-"ready, held until beta ship" — `docs/plans/DEADLINE_EMAIL_ALERTS_PLAN.md:384`.)_
+> **✅ RESOLVED 2026-09-07 — deadline cron ARMED, trial reminder intentionally OFF.**
+> `.github/workflows/lifecycle-emails.yml` (commit `072055f`) now runs on a daily 15:00 UTC
+> `schedule:` and posts `{"kind":"deadline"}`, so **only** the deadline-approaching digest
+> sends; the trial-ending reminder is deliberately not armed (no free trial in the two-tier
+> model → nobody due). Welcome + goodbye stay event-driven. Prerequisites confirmed:
+> `db/email_schema.sql` applied (§1b), `RESEND_API_KEY` set on Render + `highschoolwingman.com`
+> verified as a sending domain, `EMAIL_POSTAL_ADDRESS` set. **Remaining one-time manual config**
+> (the cron is inert until done): set `EMAIL_CRON_SECRET` in Render **and** as a GitHub Actions
+> repository secret (same value), set `WINGMAN_API_BASE=https://highschoolwingman.com` as a
+> GitHub secret, then run one `workflow_dispatch` **dry-run** (Actions → "Deadline alert emails"
+> → Run workflow → dry_run=true) to confirm the wiring before the first scheduled send. To
+> disarm, re-comment the two `schedule:` lines. _(Deadline-alert P5, `DEADLINE_EMAIL_ALERTS_PLAN.md:384`.)_
 
 ---
 

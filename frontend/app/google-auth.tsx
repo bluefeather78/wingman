@@ -138,19 +138,24 @@ export default function GoogleAuth() {
         </View>
 
         <View style={styles.card}>
-          <ConsentRow label="I'm 18 or older" value={isAdult} onValueChange={setIsAdult} />
-          <ConsentRow
-            label="If under 18, I have a parent/guardian's permission (Terms §2)"
-            value={parentalConsent}
-            onValueChange={setParentalConsent}
-          />
+          {/* Consent wording is kept identical to the password-registration form (login.tsx):
+              same three items, and the parental-consent row shown only when the account holder
+              is not an adult. The server gate (_check_signup_consent) is the same for both paths. */}
+          <ConsentRow label="I am 18 years of age or older." value={isAdult} onValueChange={setIsAdult} />
+          {!isAdult && (
+            <ConsentRow
+              label="I am at least 13, and my parent or legal guardian has given me permission to use Wingman and agrees to the Terms of Use on my behalf."
+              value={parentalConsent}
+              onValueChange={setParentalConsent}
+            />
+          )}
           <ConsentRow
             label={
               <>
-                I accept the{' '}
-                <Text style={styles.legalLink} onPress={openLink('/terms.html')}>Terms</Text>
-                {' '}and{' '}
-                <Text style={styles.legalLink} onPress={openLink('/privacy.html')}>Privacy Policy</Text>
+                I have read and agree to the{' '}
+                <Text style={styles.legalLink} onPress={openLink('/terms.html')}>Terms of Use</Text>
+                {' '}and the{' '}
+                <Text style={styles.legalLink} onPress={openLink('/privacy.html')}>Privacy Policy</Text>.
               </>
             }
             value={acceptedTerms}

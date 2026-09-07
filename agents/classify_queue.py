@@ -33,8 +33,8 @@ _QUEUE_STATUSES = (None, "", "pending_review")
 _PER_ROW_EST = 0.004
 
 # A hub classified here is a page whose PROGRAMS should be mined, not a row of its own. First-party
-# hubs list their OWN programs (mine same-domain, the walk_up_hubs shape); third-party hubs list
-# others' (mine off-domain, the round-up shape). Feed both into the hub-mining work-list.
+# hubs list their OWN programs (mine same-domain); third-party hubs list others' (mine off-domain,
+# the round-up shape). Feed both into the hub-mining work-list.
 _HUB_SCOPE = {classify_page.CLASS_FIRST_PARTY_HUB: dl.SCOPE_SAME_DOMAIN,
               classify_page.CLASS_THIRD_PARTY_HUB: dl.SCOPE_OFF_DOMAIN}
 

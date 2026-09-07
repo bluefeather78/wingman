@@ -46,7 +46,7 @@ def test_names_every_missing_variable(monkeypatch):
 # agents.harvest_names dropped from this list in the 2026-09-07 merge: it no longer reads the
 # catalog or has a main() — mine_hub_pages owns that read and still requires the service key.
 _MUST_REQUIRE_SERVICE_KEY = [
-    "agents.mine_hub_pages", "wingman.walk_up_hubs",
+    "agents.mine_hub_pages",
     "agents.classify_queue", "agents.dedupe_queue", "agents.refind_dead_links",
     "wingman.discovered_leads",
 ]

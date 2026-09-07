@@ -632,9 +632,9 @@ def hubs_from_leads(leads):
 
     The direction travels ON the lead rather than being decided here, because only whatever
     qualified the page knows it. The router qualifies a round-up by the distinct OTHER sites it
-    links (>= 6), so its programs are on those sites and it is mined OFF-domain; `walk_up_hubs`
-    qualifies an institution's own index by proving it links a program on ITS OWN site, so that
-    one is mined same-domain. Mining either the wrong way round follows exactly the links that
+    links (>= 6), so its programs are on those sites and it is mined OFF-domain; the page
+    classifier qualifies an institution's own first-party index, so that one is mined
+    same-domain. Mining either the wrong way round follows exactly the links that
     did not qualify it -- for a round-up, the page's own navigation.
 
     This was a flat `True` for every lead, and before that a flat `False`. Both were right for

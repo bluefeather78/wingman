@@ -41,7 +41,7 @@ non-atomically. A second machine — or a fresh clone — is simply a different 
 The file is not deleted and not deprecated. It is the fallback whenever the table is absent,
 which is the state of every checkout until somebody opens the Supabase SQL editor, and every
 function here still takes an explicit `path=` for a caller that genuinely means one file
-(wingman/walk_up_hubs.py --path, and the tests). What changed is the DEFAULT: `path=None` now
+(the tests). What changed is the DEFAULT: `path=None` now
 means "the shared queue", which is the table if there is one.
 
     python -m wingman.discovered_leads --list              # FREE: what is queued, by kind
@@ -852,7 +852,7 @@ def main():
                          "(the default) means the shared Supabase table when it is configured, "
                          "falling back to the local file only when there is no table — so an "
                          "ordinary run writes where the console reads, never a laptop-only file. "
-                         "Pass a path only when you genuinely mean one file (e.g. walk_up_hubs).")
+                         "Pass a path only when you genuinely mean one file (e.g. the tests).")
     ap.add_argument("--from-rejects", action="store_true",
                     help="FREE: queue the rows you rejected AS ROUND-UPS. This is the catch-up "
                          "for rows rejected before the live hook existed — new ones are queued "

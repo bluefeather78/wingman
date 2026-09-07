@@ -453,23 +453,23 @@
     <figure class="panel">
       <div class="diagram-head"><span class="figref">FIG. 02B — WHERE THE DISCOVERY QUEUE COMES FROM</span></div>
       <div class="diagram-holder">
-        <svg viewBox="0 0 900 360" role="img" aria-label="Three free feeders fill the discovery lead queue (discovered_leads.jsonl): a paid search run's discarded pages, classified by the router; walk-up starting from a trusted catalog row; and an operator rejecting a round-up in the review queue. Two paid drains empty it: Mine Hub Pages for hub leads and Harvest Names for name leads.">
+        <svg viewBox="0 0 900 360" role="img" aria-label="Three feeders fill the discovery lead queue (discovered_leads.jsonl): a paid search run's discarded pages sorted by the router; a fetched page the classify pill tags a first-party hub, queued as a same-domain lead; and an operator rejecting a round-up in the review queue. One paid drain empties it: Mine Hub Pages, which turns hub leads into program rows and name leads into per-name searches.">
           <defs>
             <marker id="dq-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
             </marker>
           </defs>
 
-          <!-- feeders (left, all FREE) -->
-          <text x="140" y="24" text-anchor="middle" class="path-eyebrow">FREE FEEDERS</text>
+          <!-- feeders (left) -->
+          <text x="140" y="24" text-anchor="middle" class="path-eyebrow">LEAD FEEDERS</text>
           <rect x="20" y="34" width="240" height="66" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
           <text x="140" y="60" text-anchor="middle" class="box-title">A paid search's discards</text>
           <text x="140" y="78" text-anchor="middle" class="box-sub">~71 pages/run it didn't keep</text>
           <g transform="translate(140,90)" class="badge-pill"><rect x="-26" y="-9" width="52" height="17" rx="8.5" fill="#2F7D5A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">FREE</text></g>
 
           <rect x="20" y="140" width="240" height="66" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
-          <text x="140" y="166" text-anchor="middle" class="box-title">Walk-up from a trusted row</text>
-          <text x="140" y="184" text-anchor="middle" class="box-sub">parent must link back</text>
+          <text x="140" y="166" text-anchor="middle" class="box-title">A first-party hub page</text>
+          <text x="140" y="184" text-anchor="middle" class="box-sub">classify pill → same-domain</text>
           <g transform="translate(140,196)" class="badge-pill"><rect x="-26" y="-9" width="52" height="17" rx="8.5" fill="#2F7D5A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">FREE</text></g>
 
           <rect x="20" y="246" width="240" height="66" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
@@ -490,38 +490,33 @@
           <line x1="260" y1="279" x2="348" y2="210" stroke="currentColor" stroke-width="1.5" marker-end="url(#dq-arrow)"/>
           <text x="305" y="270" text-anchor="middle" class="arrow-label">confirmed round-up</text>
 
-          <!-- drains (right, PAID) -->
-          <text x="760" y="24" text-anchor="middle" class="path-eyebrow">PAID DRAINS</text>
-          <rect x="640" y="90" width="240" height="66" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
-          <text x="760" y="116" text-anchor="middle" class="box-title">Mine Hub Pages</text>
-          <text x="760" y="134" text-anchor="middle" class="box-sub">hub leads &#8594; program rows</text>
-          <g transform="translate(760,146)" class="badge-pill"><rect x="-30" y="-9" width="60" height="17" rx="8.5" fill="#B8791A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">PAID</text></g>
+          <!-- drain (right, PAID) — ONE agent since the 2026-09-07 merge -->
+          <text x="760" y="24" text-anchor="middle" class="path-eyebrow">PAID DRAIN</text>
+          <rect x="640" y="120" width="240" height="94" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <text x="760" y="149" text-anchor="middle" class="box-title">Mine Hub Pages</text>
+          <text x="760" y="167" text-anchor="middle" class="box-sub">hub leads &#8594; program rows</text>
+          <text x="760" y="182" text-anchor="middle" class="box-sub">name leads &#8594; search each</text>
+          <g transform="translate(760,200)" class="badge-pill"><rect x="-30" y="-9" width="60" height="17" rx="8.5" fill="#B8791A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">PAID</text></g>
 
-          <rect x="640" y="196" width="240" height="66" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
-          <text x="760" y="222" text-anchor="middle" class="box-title">Harvest Names</text>
-          <text x="760" y="240" text-anchor="middle" class="box-sub">name leads &#8594; search each</text>
-          <g transform="translate(760,252)" class="badge-pill"><rect x="-30" y="-9" width="60" height="17" rx="8.5" fill="#B8791A"/><text x="0" y="2.5" text-anchor="middle" fill="#fff">PAID</text></g>
-
-          <line x1="550" y1="150" x2="638" y2="123" stroke="currentColor" stroke-width="1.5" marker-end="url(#dq-arrow)"/>
-          <text x="595" y="126" text-anchor="middle" class="arrow-label">drain</text>
-          <line x1="550" y1="200" x2="638" y2="229" stroke="currentColor" stroke-width="1.5" marker-end="url(#dq-arrow)"/>
-          <text x="595" y="226" text-anchor="middle" class="arrow-label">drain</text>
+          <line x1="550" y1="175" x2="638" y2="169" stroke="currentColor" stroke-width="1.5" marker-end="url(#dq-arrow)"/>
+          <text x="595" y="162" text-anchor="middle" class="arrow-label">drain</text>
         </svg>
       </div>
       <figcaption>&ldquo;Mine Hub Pages&rdquo; (Fig. 02) drains this queue — this is how it fills, and
         it is nearly all FREE. <strong>The router</strong> (<code>wingman/discovered_leads.py</code>) is the
         largest feeder: a paid search consults ~660 pages and keeps ~126 as programs; the router
         catches what it <em>discards</em> and, by plain HTTP + a title check, sorts each — a page that
-        <strong>links programs on &ge; 6 distinct off-domain sites</strong> becomes a <em>hub</em> lead
-        (mined off-domain), one that <strong>names programs in prose</strong> becomes a
+        <strong>links programs on &ge; 6 distinct off-domain sites</strong> becomes an off-domain
+        <em>hub</em> lead, one that <strong>names programs in prose</strong> becomes a
         <em>name-harvest</em> lead. It never uses a model, and distinct <em>domains</em> (not link
-        count) is what stops a jobs page that links 10 sites from passing. <strong>Walk-up</strong>
-        adds same-domain hub leads from rows the catalog already trusts, and a <strong>round-up you
-        reject</strong> in the queue is captured too. The <em>scope</em> (off-domain vs same-domain)
-        travels on each lead, because that is the one thing only whatever qualified the page knows —
-        mining it the wrong way follows exactly the links that did <em>not</em> qualify it. Capturing a
-        lead is free; draining it is paid — keeping those apart is what lets one approved search stay
-        one expense instead of quietly becoming three.
+        count) is what stops a jobs page that links 10 sites from passing. <strong>Same-domain</strong>
+        leads — a university's <em>own</em> pre-college index — come from the paid <strong>classify
+        pill</strong> instead: when it tags a fetched page a <em>first-party hub</em>, that page is
+        queued as a same-domain lead to mine on-site. And a <strong>round-up you reject</strong> in the
+        queue is captured too. The <em>scope</em> (off-domain vs same-domain) travels on each lead,
+        because that is the one thing only whatever qualified the page knows — mining it the wrong way
+        follows exactly the links that did <em>not</em> qualify it. Capturing a lead is free; draining
+        it is paid — keeping those apart is what lets one approved search stay one expense.
         <br><br>
         <strong>Not the same classifier as the <code>classify:</code> pill in Fig. 02.</strong> This
         router is deliberately FREE (HTTP + a title check + the &ge; 6-domains rule); the pill is a
@@ -558,7 +553,9 @@
             gate</strong> — the same <strong>refresh_opportunities</strong> extraction for the fields,
             the <strong>classify</strong> label, and the <strong>embedding-dedupe</strong> check — so a
             hub-mined row now arrives just as richly filled <em>and</em> just as labelled as a Scraper
-            row. Nothing separate to run afterward.</p>
+            row. Nothing separate to run afterward. It drains <strong>both</strong> kinds of discovery
+            lead in one run — hub pages <em>and</em> name-only pages — since the old separate
+            <em>Harvest Names</em> card was merged into it (2026-09-07).</p>
           <span class="breadcrumb">Console → Run → New Opportunities → Mine Hub Pages</span>
         </div>
       </div>
@@ -610,19 +607,21 @@
       page it refuses pays for nothing after the first call.
     </aside>
     <aside class="note">
-      <strong>How hub leads are found (free):</strong> two blind spots, two finders, one queue.
-      <strong>The router</strong> spots a <em>round-up</em> because it links <em>outward</em> — a page
-      linking ≥ 6 distinct other sites is almost always a listicle, so its programs are on those other
-      sites and it is mined <em>off-domain</em>. That is blind to a university's <em>own</em>
+      <strong>How hub leads are found:</strong> two shapes of hub, two sources, one queue.
+      <strong>The router</strong> (<code>wingman/discovered_leads.py</code>, free — plain HTTP + a
+      title check) spots a <em>round-up</em> because it links <em>outward</em>: a page linking ≥ 6
+      distinct other sites is almost always a listicle, so its programs are on those other sites and
+      it is queued as an <em>off-domain</em> lead. That test is blind to a university's <em>own</em>
       pre-college index, which links its programs on its <em>own</em> domain and looks like every other
-      page on the site. <strong>Walk-up</strong> (<code>wingman/walk_up_hubs.py</code>, free) fills that half:
-      starting from a program the catalog <em>already trusts</em>, it fetches the page's parent URL and
-      asks one question — <em>does the parent link back to the child?</em> If yes, the parent is proven
-      to be that program's index (never guessed from the URL's shape), and it is queued as a
-      <em>same-domain</em> hub lead. It never walks up to a bare domain (a homepage is a site, not an
-      index). Both finders write to the same discovery queue step 2 drains; the lead carries which
-      <em>direction</em> to mine, because mining a same-domain index off-domain (or vice-versa) follows
-      exactly the links that did <em>not</em> qualify it.
+      page on the site — so those come from the other direction: when the paid <strong>classify
+      pill</strong> (Fig. 02) tags a fetched page a <em>first-party hub</em>, it is queued as a
+      <em>same-domain</em> lead. Both write to the one discovery queue that Mine Hub Pages drains, and
+      each lead carries which <em>direction</em> to mine, because mining a same-domain index off-domain
+      (or vice-versa) follows exactly the links that did <em>not</em> qualify it.
+      <br><br>
+      <em>A separate <code>wingman/walk_up_hubs.py</code> finder used to derive same-domain indexes by
+      walking up from a trusted catalog row and demanding the parent link back; it was retired
+      2026-09-07 as redundant with the first-party-hub verdict above.</em>
     </aside>
 
     <figure class="panel">

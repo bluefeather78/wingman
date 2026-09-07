@@ -10,9 +10,8 @@ What these pin:
 
   * with the table, two machines share ONE queue: what one marks processed, the other does not
     re-pay for. That is the finding.
-  * an EXPLICIT path= still means that one file. wingman/walk_up_hubs.py --path and the tests
-    genuinely mean a file, and silently redirecting them at a database would be a nasty
-    surprise.
+  * an EXPLICIT path= still means that one file. A --path caller and the tests genuinely mean
+    a file, and silently redirecting them at a database would be a nasty surprise.
   * a missing table FALLS BACK to the file and warns once, because that is the state of every
     checkout — Phase 3's lesson was that "the migration has not been run yet" is the case
     nothing tests.
@@ -179,7 +178,7 @@ def test_the_row_columns_win_over_a_stale_status_inside_the_blob(db):
 # ---------- an explicit path still means a file ----------
 
 def test_an_explicit_path_bypasses_the_table_entirely(db, leadfile):
-    """walk_up_hubs --path and the tests mean one file. Redirecting them at the database
+    """A --path caller and the tests mean one file. Redirecting them at the database
     would be a nasty surprise, and it would make an operator's --path silently a no-op."""
     dl.append_leads([_lead("https://file.edu/p")], leadfile)
     assert [l["url"] for l in dl.load_leads(leadfile)] == ["https://file.edu/p"]

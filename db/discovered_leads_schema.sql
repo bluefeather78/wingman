@@ -18,8 +18,7 @@
 --
 -- THE FILE IS NOT DELETED. wingman/discovered_leads.py falls back to it whenever this table is
 -- absent, which is the state of every checkout until this is run, and every function still
--- takes an explicit `path=` for callers that genuinely mean one file (wingman/walk_up_hubs.py's
--- --path, and the tests).
+-- takes an explicit `path=` for callers that genuinely mean one file (the tests).
 --
 -- Run this once in the Supabase SQL editor. Safe to run more than once.
 

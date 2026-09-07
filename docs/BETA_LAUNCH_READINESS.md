@@ -223,21 +223,38 @@ then set the three `STRIPE_*` vars in Render and confirm the Price is $4.99/mo r
 
 ## 4. SCALING — Render Free is the binding constraint
 
+> **DECIDED 2026-09-07: operator will upgrade to a paid Render instance before real load.**
+> Carry one code-side caveat into that upgrade (per §2a): keep it **single-worker /
+> single-instance**, or move the in-process AI-action ledger + rate limiters to a shared store
+> FIRST — each process keeps its own counters otherwise and the per-user cap multiplies. The
+> `$25` global money breaker is DB-backed and unaffected. Raising `AI_MAX_CONCURRENCY` above 12
+> is safe once on the bigger host (its comment calls it a launch-gate task).
+
 Not a blocker for a small beta, but know the ceiling:
 - **Render Free = 0.1 CPU, single worker** (`render.yaml`). `AI_MAX_CONCURRENCY = 12` of 40 threadpool
   slots — deliberately conservative; comment: "raise once the tier is known and the host is paid — a
   launch-gate task" (`app/config.py:150`). A classroom opening Home Base together can hit shedding (503s).
 - The 2026-09-02 perf review concluded **50 RPS is unreachable on Free regardless of code**
   (`docs/review-2026-09-02/perf_report.md:496`). Plan a paid instance before any real load / a class demo.
-- **M5:** a process-wide 5s sleep before every interactive Gemini call caps throughput ~5 RPS
-  (`perf_report.md:372`; the only security/perf item deliberately left for Phase 2,
-  `SECURITY_HARDENING_PLAN.md:246`). Fine for a trickle of beta users; revisit before scale.
+- ~~**M5:** a process-wide 5s sleep before every interactive Gemini call caps throughput ~5 RPS.~~
+  **✅ Corrected 2026-09-07 — already fixed, this bullet was stale.** `app/main.py:41` calls
+  `gemini_common.set_interactive_process(True)`, and `_enforce_rate_limit()` returns immediately
+  when set (`wingman/gemini_common.py:180`), so the **web service takes no 5s delay** — it only
+  ever throttled the batch agents, which run as subprocesses and never share this process's state.
+  Interactive AI throughput is bounded by CPU + `AI_MAX_CONCURRENCY`, not by this sleep.
 - If you ever add `--workers > 1`, the in-process rate limiters and budget ledger multiply per worker
   (`app/auth/ratelimit.py:6`) — coordinate that with a shared store first.
 
 ---
 
 ## 5. DEFERRED — safe to leave for after beta
+
+> **Reviewed 2026-09-07 — all genuinely deferrable; two concrete sub-items spot-checked clean:**
+> (1) this checkout's git `origin` is `https://github.com/bluefeather78/wingman` with **no
+> embedded PAT** — the `HANDOFF.md:112` rotation flag refers to a different worktree/clone, not
+> this repo; (2) `account_deletions` table **EXISTS** (deletion audit tombstone works — the §5
+> data-delete concern is applied). The only genuinely-remaining store step is listing a public
+> account-deletion URL when native apps are submitted to Play/App Store — not applicable to a web beta.
 
 - **Catalog pipeline / scraper** work (`docs/plans/HANDOFF.md`): the review-queue drain workflow, the
   discovery gate, hub-mining — ops-side catalog quality, doesn't gate signup. Note two **unpushed

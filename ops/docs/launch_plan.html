@@ -267,9 +267,9 @@
   <section>
     <div class="sec-head"><span class="no">01</span><h2>The honest starting line</h2></div>
     <div class="card" style="border-left:3px solid var(--teal);background:var(--teal-wash);margin-bottom:22px">
-      <span class="tag" style="color:var(--teal)">Product update · 2026-09-07 · reconciled to the code</span>
-      <h3>The monetization model changed: two-tier freemium, no trial</h3>
-      <p>This plan was drafted around a <b>7-day free trial → single $9.99/mo plan → lockout on expiry</b>. The product now ships a <b>two-tier freemium model</b> (<code>TWO_TIER_AI_PLAN.md</code>): every signed-in account has full app access, and the only thing that varies is the AI tier — a metered <b>Free</b> tier (a daily AI-action allowance) versus <b>Unlimited</b> at <b>$4.99/mo</b>. There is <b>no trial</b> and <b>no app-access lockout</b> — a lapsing or free account simply becomes a normal metered Free user. (The free-tier AI meter currently ships in observe-mode, not yet enforced.) Prices below are corrected to $4.99; the trial-era <em>tactics</em> — the trial-ending email, the "trial → paid" funnel — are kept as written and should be re-read as <b>free → paid</b>. A fuller freemium rewrite of the funnel and lifecycle messaging is a strategic call still to make.</p>
+      <span class="tag" style="color:var(--teal)">The model · 2026-09-07 · reconciled to the code</span>
+      <h3>Two-tier freemium — a permanent free tier, no trial, no lockout</h3>
+      <p>This plan is written for the model the product actually ships (<code>TWO_TIER_AI_PLAN.md</code>): a new account lands directly on a <b>permanent Free tier</b> — full app access, metered to a <b>daily AI-action allowance</b> (10 actions/day, 20 on day one; same-class calls collapse inside a 5-minute window) — and the only upgrade is <b>Unlimited</b> at <b>$4.99/mo</b>, which lifts the cap. There is <b>no 7-day trial</b> and <b>no app-access lockout</b>: a lapsing or free account simply stays a normal metered Free user. The conversion engine is therefore <b>the free AI ceiling</b>, not a countdown — a student who leans on matching, deadline checks and profile chat hits the limit and upgrades. Three build items gate turning that engine on, and they recur below: <b>(1)</b> wire Stripe so Unlimited can be sold; <b>(2)</b> build the limit-hit upgrade nudge (the dormant <code>trial_ending</code> email, repurposed to fire on <code>ai_limit_hit</code>) and re-arm the sweep; <b>(3)</b> flip <code>FREE_TIER_AI_GATE_ENFORCED</code> on once the console histogram confirms 10/day is right (today the meter runs in observe-mode, so nobody is capped yet).</p>
     </div>
     <p class="sec-intro">A go-to-market plan is worthless if it front-runs the product's readiness. Three things must be true before a single paid dollar of acquisition is spent — two are blockers.</p>
     <div class="grid-3">
@@ -281,7 +281,7 @@
       <div class="card" style="border-color: var(--coral);">
         <span class="tag" style="color: var(--coral);">Blocker · retention</span>
         <h3>Lifecycle email is dormant</h3>
-        <p>Welcome, trial-ending and goodbye emails exist but the daily sweep is disarmed and the sending domain isn't verified. For a deadline product, the reminder <em>is</em> the retention loop. Arm the cron, verify DKIM/SPF, send one real welcome.</p>
+        <p>Welcome and goodbye emails exist, but the sweep is disarmed, the sending domain isn't verified, and the <em>conversion</em> email — the limit-hit upgrade nudge — isn't built yet (the dormant <code>trial_ending</code> template has to be repointed at <code>ai_limit_hit</code>). For a freemium deadline product the nudge and the deadline reminder <em>are</em> the retention-and-conversion loop. Build the nudge, verify DKIM/SPF, arm the cron, send one real welcome.</p>
       </div>
       <div class="card">
         <span class="tag">Gate · distribution</span>
@@ -312,12 +312,12 @@
         <ul>
           <li>Anchors price against a single summer program that costs thousands</li>
           <li>Needs to trust where their kid's data goes</li>
-          <li>Approves the trial, gets the trial-ending email, taps upgrade</li>
+          <li>Sees the kid using it daily (or hitting the free AI ceiling), gets the upgrade nudge, taps $4.99</li>
           <li>Is reachable through parent Facebook groups and school newsletters</li>
         </ul>
       </div>
     </div>
-    <p class="sec-intro" style="margin-top:20px;margin-bottom:0;">The pricing story writes itself: <b>one missed fee-waiver deadline or one program you never heard of costs more than a year of Wingman.</b> Lead with that math on the paywall and in the trial-ending email.</p>
+    <p class="sec-intro" style="margin-top:20px;margin-bottom:0;">The pricing story writes itself: <b>one missed fee-waiver deadline or one program you never heard of costs more than a year of Wingman.</b> Lead with that math on the Home Base upsell banner, the upgrade nudge, and the Manage Plan screen.</p>
   </section>
 
   <!-- 3. POSITIONING & BEACHHEAD -->
@@ -440,12 +440,12 @@
       <div class="card">
         <span class="tag">Creative &amp; message</span>
         <h3>Two ads, two audiences</h3>
-        <p>Parent creative: the value math and the trust/privacy stance. Student-facing creator content: discovery FOMO ("programs nobody tells you about") and deadline urgency. Every ad routes to a "start your free trial" or "send this to a parent" flow — never a dead end for a user with no card.</p>
+        <p>Parent creative: the value math and the trust/privacy stance. Student-facing creator content: discovery FOMO ("programs nobody tells you about") and deadline urgency. Every ad routes to a "start free" or "send this to a parent" flow — never a dead end for a user with no card.</p>
       </div>
       <div class="card">
         <span class="tag">Budget &amp; discipline</span>
         <h3>Buy payback, spend seasonally</h3>
-        <p>Concentrate spend in the Nov–Feb deadline peak when intent is highest. Cap early tests at a few hundred dollars per channel, measure <b>cost per activated trial</b> against the $4.99 LTV, and only scale the channel with the shortest payback. Kill anything that can't beat organic.</p>
+        <p>Concentrate spend in the Nov–Feb deadline peak when intent is highest. Cap early tests at a few hundred dollars per channel, measure <b>cost per activated free user</b> against the $4.99 Unlimited LTV (activated × free→paid rate), and only scale the channel with the shortest payback. Kill anything that can't beat organic.</p>
       </div>
     </div>
   </section>
@@ -464,8 +464,9 @@
         <div>
           <h3>Make it launchable</h3>
           <ul>
-            <li><b>Wire Stripe</b> and put a real trial through checkout to conversion.</li>
-            <li><b>Verify the sending domain</b> (SPF/DKIM/DMARC) and arm the lifecycle sweep; test welcome + trial-ending against a real inbox.</li>
+            <li><b>Wire Stripe</b> and put a real Free&rarr;Unlimited upgrade through checkout end-to-end.</li>
+            <li><b>Build the limit-hit upgrade nudge</b> (repoint <code>trial_ending</code> at <code>ai_limit_hit</code>), <b>verify the sending domain</b> (SPF/DKIM/DMARC), arm the sweep, and test welcome + nudge against a real inbox.</li>
+            <li><b>Flip the free-tier AI meter to enforced</b> once the console histogram confirms 10/day — until then there is no ceiling to convert against.</li>
             <li><b>Ship the app-store builds</b> and pass review with the parental-consent flow.</li>
             <li>Freeze the catalog quality bar — dead links and bad deadlines are the fastest way to lose a first-time user.</li>
           </ul>
@@ -480,7 +481,7 @@
         <div>
           <h3>Closed beta — 50–100 real students</h3>
           <ul>
-            <li>Recruit from <b>one</b> channel (a counselor cohort or a single subject community). Hand out <b>BETAUSER</b> grants.</li>
+            <li>Recruit from <b>one</b> channel (a counselor cohort or a single subject community). Hand out <b>BETAUSER</b> grants — they comp Unlimited for a window, so cohort testers see the full product with no cap.</li>
             <li>Watch the activation funnel you already instrument: signup → meaningful profile → first tracked program → came back.</li>
             <li>Interview the students who <em>didn't</em> come back. Fix the drop-off before scaling it.</li>
             <li>Collect 5–10 quotable testimonials and 3 before/after stories for launch.</li>
@@ -498,7 +499,7 @@
           <ul>
             <li>Open signups. Turn on programmatic SEO pages and the Reddit + short-form push together.</li>
             <li>Lean into urgency: "summer program deadlines are closing" is true and it's the exact moment the product is most valuable.</li>
-            <li>Launch a <b>referral loop</b> — a student who invites a friend extends their access; both win.</li>
+            <li>Launch a <b>referral loop</b> — a student who invites a friend unlocks a stretch of Unlimited for both; both win.</li>
             <li>Measure free → paid conversion against <em>activated</em> free users (profile built, something tracked), never against all signups. (Under freemium there is no trial to "end" — the conversion trigger is hitting the free AI ceiling, once that meter is enforced.)</li>
           </ul>
         </div>
@@ -540,7 +541,7 @@
       <div class="card">
         <span class="tag">Referral loop</span>
         <h3>Student → friend → both extend</h3>
-        <p>Extracurriculars are social and competitive — students compare notes constantly. A grant-based referral (extend both accounts) rides that behavior instead of fighting it, and costs nothing but access.</p>
+        <p>Extracurriculars are social and competitive — students compare notes constantly. A grant-based referral (a stretch of Unlimited for both) rides that behavior instead of fighting it, costs nothing but AI headroom, and doubles as a taste of the paid tier.</p>
       </div>
     </div>
   </section>
@@ -571,7 +572,7 @@
         <div class="target">~20%+</div>
       </div>
     </div>
-    <p class="sec-intro" style="margin-top:22px;margin-bottom:0;">North-star: <b>activated, retained students per week</b> (profile built + a tracked deadline they came back to). It captures value the $0 mock-mode and free-trial users create long before the revenue line moves — and it's the number that predicts paid conversion.</p>
+    <p class="sec-intro" style="margin-top:22px;margin-bottom:0;">North-star: <b>activated, retained students per week</b> (profile built + a tracked deadline they came back to). It captures value the free-tier users create long before the revenue line moves — and it's the number that predicts free&rarr;paid conversion.</p>
   </section>
 
   <!-- 10. RISKS -->
@@ -581,7 +582,7 @@
     <div class="risks">
       <div class="risk">
         <div class="name"><span class="sev hi"></span>Payment friction (teens have no card)</div>
-        <div class="mit">The buyer isn't the user. <b>Make the parent hand-off explicit</b> — a "send this to a parent" flow and a trial-ending email addressed to the person with the card, not the kid.</div>
+        <div class="mit">The buyer isn't the user. <b>Make the parent hand-off explicit</b> — a "send this to a parent" flow and an upgrade nudge addressed to the person with the card, not the kid.</div>
       </div>
       <div class="risk">
         <div class="name"><span class="sev hi"></span>Minors &amp; privacy / COPPA-FERPA</div>
@@ -607,13 +608,13 @@
     <div class="sec-head"><span class="no">11</span><h2>Do this next — the 30-day list</h2></div>
     <p class="sec-intro">Two critical items gate everything. Start there.</p>
     <div class="todo">
-      <div class="item crit"><div class="box"></div><div class="t">Configure Stripe &amp; run one real trial to conversion<small>Critical — nothing monetizes until this is true</small></div></div>
-      <div class="item crit"><div class="box"></div><div class="t">Verify sending domain &amp; arm the lifecycle email sweep<small>Critical — the retention loop is off until this is on</small></div></div>
+      <div class="item crit"><div class="box"></div><div class="t">Configure Stripe &amp; run one real Free&rarr;Unlimited upgrade<small>Critical — nothing monetizes until this is true</small></div></div>
+      <div class="item crit"><div class="box"></div><div class="t">Build the limit-hit upgrade nudge, verify the domain &amp; arm the sweep<small>Critical — the conversion loop is off until this is on</small></div></div>
       <div class="item"><div class="box"></div><div class="t">Submit iOS / Android builds with the consent flow<small>Long review lead time — start early</small></div></div>
       <div class="item"><div class="box"></div><div class="t">Stand up 10–20 programmatic SEO pages from the catalog<small>Compounding; start indexing now</small></div></div>
       <div class="item"><div class="box"></div><div class="t">Recruit one beta cohort (a counselor or one community)<small>50–100 students, BETAUSER grants</small></div></div>
-      <div class="item"><div class="box"></div><div class="t">Write the paywall &amp; trial-ending "$4.99 vs. one program" story<small>Same message, two audiences</small></div></div>
-      <div class="item"><div class="box"></div><div class="t">Draft the referral grant mechanic<small>Extend both accounts on a successful invite</small></div></div>
+      <div class="item"><div class="box"></div><div class="t">Write the upsell banner &amp; upgrade-nudge "$4.99 vs. one program" story<small>Same message, two audiences</small></div></div>
+      <div class="item"><div class="box"></div><div class="t">Draft the referral grant mechanic<small>A stretch of Unlimited for both on a successful invite</small></div></div>
       <div class="item"><div class="box"></div><div class="t">Set the funnel dashboard as the weekly review ritual<small>Watch drop-off, interview the churned</small></div></div>
     </div>
   </section>

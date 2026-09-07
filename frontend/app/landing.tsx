@@ -19,6 +19,7 @@ const WALKTHROUGH_URL = backendUrl('/walkthrough.html');
 const NAV_LINKS = [
   { label: 'Pricing', path: '/pricing.html' },
   { label: 'How we use AI', path: '/how-we-use-ai.html' },
+  { label: 'FAQ', path: '/faq.html' },
   { label: 'About', path: '/about.html' },
   { label: 'Terms', path: '/terms.html' },
   { label: 'Privacy', path: '/privacy.html' },
@@ -332,14 +333,20 @@ export default function Landing() {
                   accessibilityRole="button"
                   accessibilityLabel="Play the Wingman walkthrough"
                 >
-                  <View style={styles.filmTitleRow}>
-                    <Logo size={30} />
-                    <Text style={styles.filmTitle}>Wingman, in 47 seconds</Text>
+                  {/* Poster mirrors the film's closing frame, so it never reads as a blank
+                      screen before play — the end-card content sits behind the play chip. */}
+                  <View style={styles.posterBrandRow}>
+                    <Logo size={28} />
+                    <Text style={styles.posterBrand}>Wingman</Text>
                   </View>
+                  <Text style={styles.posterHeadline}>Find opportunities. Never miss a deadline.</Text>
+                  <Text style={styles.posterBody}>
+                    Wingman helps high schoolers discover opportunities that fit who they are, while keeping every
+                    deadline in view. For parents, it's peace of mind. For students, it's someone who's got their back.
+                  </Text>
                   <View style={styles.playChip}>
                     <View style={{ marginLeft: 3 }}><PlayIcon size={22} color={colors.white} /></View>
                   </View>
-                  <Text style={styles.filmNote}>No sound. Nothing to sign up for.</Text>
                 </Pressable>
               )}
             </View>
@@ -493,12 +500,13 @@ const styles = StyleSheet.create({
   sectionTitle: { fontFamily: fonts.display, fontSize: 32, color: colors.navy, textAlign: 'center', marginBottom: 8 },
   sectionTitleTight: { marginBottom: 32 },
   filmFrame: { borderWidth: 3, borderColor: colors.navy, borderRadius: radius.lg, overflow: 'hidden' },
-  filmStage: { width: '100%', aspectRatio: 16 / 9, backgroundColor: '#0A0A0A' },
-  filmStagePressable: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', gap: 16 },
-  filmTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  filmTitle: { fontFamily: fonts.display, fontSize: 20, color: colors.white },
+  filmStage: { width: '100%', aspectRatio: 16 / 9, backgroundColor: colors.cream },
+  filmStagePressable: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', gap: 16, paddingHorizontal: 32 },
+  posterBrandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  posterBrand: { fontFamily: fonts.display, fontSize: 26, color: colors.navy },
+  posterHeadline: { fontFamily: fonts.display, fontSize: 26, lineHeight: 32, color: colors.navy, textAlign: 'center' },
+  posterBody: { fontFamily: fonts.bodyMed, fontSize: 14, lineHeight: 22, color: colors.slate500, textAlign: 'center', maxWidth: 520 },
   playChip: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.orangeDeep, alignItems: 'center', justifyContent: 'center' },
-  filmNote: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.muted },
   // Top-right so it stays clear of the film's own transport controls along the bottom.
   fsToggle: { position: 'absolute', top: 12, right: 12, zIndex: 10, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(10, 10, 10, 0.65)', borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 8 },
   fsToggleText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.white },

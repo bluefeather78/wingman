@@ -304,6 +304,26 @@ def _sub_period_end(sub):
     return sub.get("current_period_end")
 
 
+def _invoice_period_end(invoice):
+    """The unix period end (next renewal) for a paid subscription invoice, or None.
+
+    invoice.payment_succeeded is the event that reliably fires on the FIRST charge (and every
+    renewal), so it — not the Subscription events — is what populates the "Renews {date}" line
+    on an active row. Each invoice line carries `period.end`; take the latest across lines
+    (a proration invoice can carry more than one), falling back to the invoice-level
+    `period_end`. Unlike the Subscription object, invoice lines kept `period` through the
+    basil/dahlia field move, so this needs no items-vs-top-level dance.
+    """
+    if not isinstance(invoice, dict):
+        return None
+    ends = [(line.get("period") or {}).get("end")
+            for line in ((invoice.get("lines") or {}).get("data") or [])]
+    ends = [e for e in ends if e]
+    if ends:
+        return max(ends)
+    return invoice.get("period_end")
+
+
 def _updates_from_subscription(sub):
     """The users-row updates implied by a Stripe subscription object.
 
@@ -315,6 +335,11 @@ def _updates_from_subscription(sub):
     Mirrors the app's cancel-at-period-end model (see cancel_subscription): a subscription
     still active at Stripe but flagged `cancel_at_period_end` is written 'canceled' with the
     period-end date, so subscription_state() keeps access until that date — they paid for it.
+
+    `subscription_end_at` is written for an ACTIVE sub too (the current period end), because the
+    subscription screen renders it as the "Renews {date}" line; the field is dual-purpose
+    (renewal date while active, access-ends date once canceled). It is display-only for an
+    active row — subscription_state() grants an active account access unconditionally.
     """
     status = sub.get("status")
     updates = {}
@@ -329,6 +354,8 @@ def _updates_from_subscription(sub):
                 updates["subscription_end_at"] = end_iso
         else:
             updates["subscription_status"] = "active"
+            if end_iso:
+                updates["subscription_end_at"] = end_iso
     elif status == "past_due":
         updates["subscription_status"] = "past_due"
     elif status in ("canceled", "unpaid", "incomplete_expired"):
@@ -396,9 +423,16 @@ def handle_stripe_webhook(request: Request, payload: bytes = Depends(_stripe_raw
                                         _updates_from_subscription(obj))
 
         elif event_type == "invoice.payment_succeeded":
-            # A renewal cleared — restore/confirm access.
-            _apply_updates_for_customer(obj.get("customer"),
-                                        {"subscription_status": "active"})
+            # The first charge and every renewal cleared — confirm access AND record the new
+            # period end, which is what the subscription screen shows as "Renews {date}". This
+            # is the event that reliably carries the period end on the initial subscribe (the
+            # checkout.session object does not, and customer.subscription.created is not among
+            # the endpoint's selected events).
+            updates = {"subscription_status": "active"}
+            end_iso = _period_end_iso(_invoice_period_end(obj))
+            if end_iso:
+                updates["subscription_end_at"] = end_iso
+            _apply_updates_for_customer(obj.get("customer"), updates)
 
         elif event_type == "invoice.payment_failed":
             _apply_updates_for_customer(obj.get("customer"),

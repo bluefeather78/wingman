@@ -10,7 +10,8 @@ Pure functions, no Supabase / network seam.
 """
 import datetime
 
-from app.routes.subscription import _sub_period_end, _updates_from_subscription, _period_end_iso
+from app.routes.subscription import (
+    _sub_period_end, _updates_from_subscription, _period_end_iso, _invoice_period_end)
 
 # 2026-10-07T00:00:00Z, a plausible next-cycle end for a sub started ~2026-09-07.
 FUTURE_TS = 1791331200
@@ -68,9 +69,43 @@ def test_canceled_status_records_date_from_items():
     assert updates["subscription_end_at"] == _iso(FUTURE_TS)
 
 
-def test_active_not_canceling_leaves_no_end_date():
+def test_active_records_renewal_date_for_the_renews_line():
+    """An active (not-canceling) sub records the period end too — the subscription screen
+    renders it as "Renews {date}". Display-only: subscription_state grants an active account
+    access unconditionally, so this cannot affect gating."""
     sub = {"id": "sub_x", "status": "active",
            "items": {"data": [{"current_period_end": FUTURE_TS}]}}
     updates = _updates_from_subscription(sub)
     assert updates["subscription_status"] == "active"
+    assert updates["subscription_end_at"] == _iso(FUTURE_TS)
+
+
+def test_active_with_no_period_end_writes_only_status():
+    sub = {"id": "sub_x", "status": "active", "items": {"data": [{}]}}
+    updates = _updates_from_subscription(sub)
+    assert updates["subscription_status"] == "active"
     assert "subscription_end_at" not in updates
+
+
+# ---------- _invoice_period_end (the "Renews" source on subscribe/renewal) ----------
+
+def test_invoice_period_end_from_line_period():
+    invoice = {"lines": {"data": [{"period": {"start": 1, "end": FUTURE_TS}}]}}
+    assert _invoice_period_end(invoice) == FUTURE_TS
+
+
+def test_invoice_period_end_takes_latest_line():
+    invoice = {"lines": {"data": [
+        {"period": {"end": 111}}, {"period": {"end": FUTURE_TS}}]}}
+    assert _invoice_period_end(invoice) == FUTURE_TS
+
+
+def test_invoice_period_end_falls_back_to_invoice_level():
+    invoice = {"lines": {"data": []}, "period_end": FUTURE_TS}
+    assert _invoice_period_end(invoice) == FUTURE_TS
+
+
+def test_invoice_period_end_none_when_absent():
+    assert _invoice_period_end({"lines": {"data": [{}]}}) is None
+    assert _invoice_period_end({}) is None
+    assert _invoice_period_end(None) is None

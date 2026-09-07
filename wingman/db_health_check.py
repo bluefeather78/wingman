@@ -316,20 +316,21 @@ def collect_health(supabase_url=None, key=None):
              "note": "Not deleted — the URL keeps blocking re-submission and a mistake is reversible."},
         ]
 
-    # Lead queues live in a repo-root JSONL, not Supabase — this is why a SQL-only check misses them.
+    # Discovery leads live in a repo-root JSONL, not Supabase — this is why a SQL-only check
+    # misses them. ONE queue now (merged 2026-09-07): the hub miner absorbed name harvesting, so
+    # `hub` and `names` leads are drained by the one agent (each self-routes on its kind). They are
+    # reported as a single row with the split in the note, rather than two rows for one queue.
     try:
         lead_counts = discovered_leads.summarize(discovered_leads.load_leads())
         hub_n = lead_counts.get(discovered_leads.KIND_HUB, 0)
         names_n = lead_counts.get(discovered_leads.KIND_NAMES, 0)
-        queues += [
-            {"key": "hub_leads", "label": "Hub-mining leads queued", "count": hub_n,
-             "severity": _sev(hub_n, 40, None),
-             "note": "Pages that LINK many programs. Drain with Mine Hub Pages (PAID). "
-                     "Nothing drains them automatically."},
-            {"key": "name_leads", "label": "Name-harvest leads queued", "count": names_n,
-             "severity": _sev(names_n, 40, None),
-             "note": "Pages that NAME programs without linking them. Drain with Harvest Names (PAID)."},
-        ]
+        leads_n = hub_n + names_n
+        queues.append(
+            {"key": "discovery_leads", "label": "Discovery leads queued (hub + name-harvest)",
+             "count": leads_n, "severity": _sev(leads_n, 40, None),
+             "note": f"{_fmt(hub_n)} hub (link-mined), {_fmt(names_n)} names-only (name-harvested). "
+                     "One queue now — drain with Mine Hub Pages (PAID); each lead self-routes. "
+                     "Nothing drains them automatically."})
     except Exception as e:                                      # noqa: BLE001
         out["errors"].append(f"Could not read discovered_leads.jsonl: {e}")
 
@@ -345,6 +346,12 @@ def collect_health(supabase_url=None, key=None):
                 {"key": "metadata", "label": "Activated rows awaiting metadata refresh",
                  "count": refresh_q, "severity": _sev(refresh_q, 200, 600),
                  "note": "Activated rows the Update Opportunity agent has not enriched yet."})
+    # ACTION NEEDED: any queue with a non-zero depth needs a person, EXCEPT `rejected` — those
+    # are already adjudicated and kept only for reference (operator directive, 2026-09-07). A
+    # None count (an un-migrated column) is unknown, not work, so it never flags.
+    for q in queues:
+        c = q.get("count")
+        q["action_needed"] = bool(c) and c > 0 and q.get("key") != "rejected"
     out["queues"] = queues
 
     # --- Embedding coverage: two separate vectors on `opportunities`, same coverage shape --------

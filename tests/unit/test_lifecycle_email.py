@@ -305,14 +305,15 @@ def test_unsubscribe_link_is_an_unsubscribe_not_a_login(kind):
     assert "/api/email/unsubscribe" in text
 
 
-@pytest.mark.parametrize("kind", ["welcome", "trial_ending", "goodbye"])
-def test_no_placeholder_survives_into_a_rendered_email(kind, postal_address):
+@pytest.mark.parametrize("kind", ["welcome", "trial_ending", "subscribed", "goodbye"])
+def test_no_placeholder_survives_into_a_rendered_email(kind, legal_footer):
     _, html, text = es.render_for(kind, _record())
     for blob in (html, text):
         assert "{{" not in blob, "an unsubstituted mustache token reached a real email"
         assert "[Add your" not in blob
         assert "SET EMAIL_POSTAL_ADDRESS" not in blob
-        assert postal_address in blob, "the configured postal address never reached the footer"
+        assert legal_footer in blob, "the legal-entity line never reached the footer"
+        assert "All rights reserved" in blob
 
 
 def test_welcome_states_the_free_allowance_not_a_trial():

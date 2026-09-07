@@ -1085,6 +1085,22 @@ def create_user(userid, first_name, last_name, email, password_hash, location=""
 # gets Postgres's own 42703 (undefined_column), while a write is rejected earlier, by
 # PostgREST's schema cache, as PGRST204. Both mean "run the migration".
 _MISSING_COLUMN_CODES = {"42703", "PGRST204"}
+# The unknown-TABLE codes: Postgres's 42P01 and PostgREST's PGRST205. Kept as a named set so a
+# caller that must read an HTTPError body ONCE (flush_api_errors) can classify from a single
+# read instead of calling _missing_table_error and _is_missing_column_error in turn, which would
+# each try to re-read the exhausted body. See _api_error_code below.
+_MISSING_TABLE_CODES = {"PGRST205", "42P01"}
+
+
+def _api_error_code(exc):
+    """The PostgREST error code on an exception, or None — reading the body at most once.
+
+    _error_body consumes the response stream, so the value must be captured a single time and
+    branched on; calling the boolean classifiers repeatedly on one exception gets {} after the
+    first and misclassifies it. Non-HTTPError exceptions have no code."""
+    if not isinstance(exc, urllib.error.HTTPError):
+        return None
+    return (_error_body(exc) or {}).get("code")
 
 # Name of the unique index on lower(email) — see db/users_email_unique_schema.sql. Matched
 # against the constraint Postgres names in a 23505, to tell an email collision apart from
@@ -1842,6 +1858,11 @@ def flush_user_events():
 _api_errors_lock = threading.Lock()
 _api_errors_buffer = []          # list of ready-to-insert row dicts
 _api_errors_available = True     # latched off if the table/columns aren't there
+# The `userid` column arrived after the table (db/api_errors_schema.sql). Latched off — and the
+# offending batch retried WITHOUT userid — the first time a flush hits a missing-column error,
+# so adding the column is optional: error capture keeps working (just without the user) until
+# the migration is re-run. Without this, one un-migrated column would turn ALL capture off.
+_api_errors_userid_ok = True
 _api_errors_flusher = None
 API_ERRORS_FLUSH_SECONDS = 15.0
 API_ERRORS_MAX_BUFFER = 2000     # backstop: a wedged flush can't grow memory without bound
@@ -1849,13 +1870,19 @@ _API_ERROR_MSG_MAX = 2000        # message/traceback are truncated so one crash 
 _API_ERROR_TRACE_MAX = 8000
 
 
-def record_api_error(method, path, status, error_type, message=None, traceback_text=None):
+def record_api_error(method, path, status, error_type, message=None, traceback_text=None,
+                     userid=None):
     """Buffer one server-side API error for the admin dashboard. Never raises, never blocks.
 
     Called from the capture middleware (app/main.py) for every unhandled exception (with a
     traceback) and every 5xx response (status only). Returns True if buffered, False if capture
     is off. The path has its query string stripped by the caller — it can carry PII and is not
     needed to group by endpoint.
+
+    `userid` is the account the failing request was for, when it can be resolved (the middleware
+    decodes the bearer; the AI route already knows). It is stored so the console can name WHO hit
+    the error, which is far more actionable than an anonymous 500. Only the id is stored, never a
+    name/email — the console resolves the display name at read time, so the log is not a roster.
     """
     if not _api_errors_available:
         return False
@@ -1870,6 +1897,11 @@ def record_api_error(method, path, status, error_type, message=None, traceback_t
             "traceback": (str(traceback_text)[:_API_ERROR_TRACE_MAX]
                           if traceback_text not in (None, "") else None),
         }
+        # Only add the key when we have a value AND the column is known to exist — a bare
+        # {"userid": None} would still make PostgREST reject the whole insert if the column is
+        # absent, and flush's degrade only fires once.
+        if _api_errors_userid_ok and userid:
+            row["userid"] = str(userid)[:120]
         with _api_errors_lock:
             overflow = len(_api_errors_buffer) + 1 - API_ERRORS_MAX_BUFFER
             if overflow > 0:
@@ -1906,7 +1938,7 @@ def _api_errors_flush_loop():
 
 def flush_api_errors():
     """Drain the error buffer into api_errors in one batch INSERT. Called on a timer."""
-    global _api_errors_available
+    global _api_errors_available, _api_errors_userid_ok
     with _api_errors_lock:
         pending = list(_api_errors_buffer)
         _api_errors_buffer.clear()
@@ -1916,7 +1948,26 @@ def flush_api_errors():
         _supabase_request_strict("api_errors", method="POST", data=pending,
                                  extra_headers={"Prefer": "return=minimal"})
     except Exception as e:
-        if _missing_table_error(e) or _is_missing_column_error(e):
+        # Classify from the error code read ONCE — an HTTPError body is readable a single time,
+        # so calling _is_missing_column_error / _missing_table_error on the same exception twice
+        # gets {} on the second call and misclassifies it (the exact trap _claim documents).
+        code = _api_error_code(e)
+        # The `userid` column may not be migrated in yet. Rather than turning ALL error capture
+        # off, strip userid and retry once — capture keeps working without the user until the
+        # migration is re-run. Only fires while the flag is still set and a row carried userid.
+        if (code in _MISSING_COLUMN_CODES and _api_errors_userid_ok
+                and any("userid" in r for r in pending)):
+            _api_errors_userid_ok = False
+            stripped = [{k: v for k, v in r.items() if k != "userid"} for r in pending]
+            try:
+                _supabase_request_strict("api_errors", method="POST", data=stripped,
+                                         extra_headers={"Prefer": "return=minimal"})
+                print("[WARN] api_errors.userid column missing — recording errors WITHOUT the "
+                      f"user. Re-run {API_ERRORS_SETUP_SQL} to capture it.")
+                return
+            except Exception as e2:
+                code = _api_error_code(e2)
+        if code in _MISSING_TABLE_CODES or code in _MISSING_COLUMN_CODES:
             _api_errors_available = False
             print(f"[WARN] api_errors table unavailable - API error capture is off. "
                   f"Run {API_ERRORS_SETUP_SQL} in the Supabase SQL editor.")

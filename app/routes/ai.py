@@ -172,17 +172,18 @@ def _provider_detail(body):
             return str(body)[:500]
 
 
-def _record_provider_failure(provider, path, status, detail):
+def _record_provider_failure(provider, path, status, detail, userid=None):
     """One api_errors row for an AI provider failure. `error_type` embeds the provider and the
     upstream status (gemini_http_429, anthropic_http_529, gemini_error for a network/timeout),
     so the dashboard groups them apart from ordinary 5xx and shows exactly what failed and why.
     Records a provider 429 too — passed straight through to the client, it is under 500 and the
-    middleware never sees it, yet a rate-limit wall is the single most common real AI failure."""
+    middleware never sees it, yet a rate-limit wall is the single most common real AI failure.
+    `userid` is the account that hit the wall, so the console can name who it happened to."""
     kind = f"{provider}_http_{status}" if status else f"{provider}_error"
     msg = f"{provider} API {('returned ' + str(status)) if status else 'call failed'}"
     if detail:
         msg += f": {detail}"
-    record_api_error("POST", path, status or 502, kind, message=msg)
+    record_api_error("POST", path, status or 502, kind, message=msg, userid=userid)
 
 
 def _envelope(text, stop_reason=None, allowance=None):
@@ -228,10 +229,10 @@ def _proxy_to_gemini(system, user_content, max_tokens, userid, cost_feature, all
         )
     except urllib.error.HTTPError as e:
         body = e.read()
-        _record_provider_failure("gemini", "/api/ai", e.code, _provider_detail(body))
+        _record_provider_failure("gemini", "/api/ai", e.code, _provider_detail(body), userid=userid)
         return _provider_error_response(e.code)
     except Exception as e:
-        _record_provider_failure("gemini", "/api/ai", 0, str(e))
+        _record_provider_failure("gemini", "/api/ai", 0, str(e), userid=userid)
         return _mark_logged(json_error(502, _PROVIDER_DEFAULT))
     record_interactive_cost_async("interactive_gemini", usage, MESSAGES_MODEL,
                                   userid=userid, feature=cost_feature)
@@ -294,10 +295,10 @@ def _proxy_to_anthropic(feature, system, user_content, max_tokens, userid, cost_
         except urllib.error.HTTPError as e:
             body = e.read()
             _record_provider_failure("anthropic", "/api/ai", e.code,
-                                     _provider_detail(body))
+                                     _provider_detail(body), userid=userid)
             return _provider_error_response(e.code)
         except Exception as e:
-            _record_provider_failure("anthropic", "/api/ai", 0, str(e))
+            _record_provider_failure("anthropic", "/api/ai", 0, str(e), userid=userid)
             return _mark_logged(json_error(502, _PROVIDER_DEFAULT))
         # Each attempt is a real, billed call, so each is attributed. Best-effort, after
         # the body is in hand.

@@ -352,7 +352,17 @@ def handle_stripe_webhook(request: Request, payload: bytes = Depends(_stripe_raw
             sub_id = obj.get("subscription")
             if sub_id:
                 updates["stripe_subscription_id"] = sub_id
-            _apply_updates_for_customer(obj.get("customer"), updates)
+            customer_id = obj.get("customer")
+            _apply_updates_for_customer(customer_id, updates)
+            # Welcome-to-paid email. checkout.session.completed is exactly the free -> paid
+            # moment (renewals arrive as invoice.payment_succeeded, not this), so it fires here
+            # and not on the subscription.updated stream. Deduped on the subscription id, so
+            # repeated deliveries of this event send once and a genuine re-subscribe (new id)
+            # correctly earns a fresh welcome. Async + never-raises, like every lifecycle send.
+            userid = get_userid_by_stripe_customer(customer_id)
+            if userid:
+                send_lifecycle_email_async(userid, "subscribed",
+                                           dedupe_key=(sub_id or obj.get("id") or ""))
 
         elif event_type in ("customer.subscription.created",
                             "customer.subscription.updated",

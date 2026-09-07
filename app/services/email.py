@@ -150,6 +150,10 @@ def build_context(kind, record):
     elif kind == "trial_ending":
         ctx["days_left"] = state.get("days_left")
         ctx["trial_ends_display"] = _safe_display_date(state.get("trial_ends_at"))
+    elif kind == "subscribed":
+        # Free -> paid upgrade. An active subscription usually carries no end date (that is set
+        # only on cancel), so the renewal line is optional — the template omits it when absent.
+        ctx["renews_display"] = _safe_display_date(state.get("subscription_end_at"))
     elif kind == "goodbye":
         ctx["access_ends_display"] = _safe_display_date(state.get("subscription_end_at"))
     elif kind == "deadline_alert":
@@ -902,6 +906,17 @@ def _sample_record(kind=None):
     """
     if kind == "deadline_alert":
         return _sample_deadline_record()
+    if kind == "subscribed":
+        # An ACTIVE paid account — the state a free user lands in after checkout. A renewal
+        # date a month out so the optional renews-on line previews in place.
+        return {
+            "userid": "sample-student",
+            "first_name": "Sample",
+            "last_name": "Student",
+            "email": "sample@example.com",
+            "subscription_status": "active",
+            "subscription_end_at": (_now() + datetime.timedelta(days=30)).isoformat(),
+        }
     if kind == "trial_ending":
         trial_days = TRIAL_REMINDER_DAYS
     else:

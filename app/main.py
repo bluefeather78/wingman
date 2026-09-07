@@ -282,7 +282,7 @@ async def capture_api_errors(request: Request, call_next):
     except Exception as exc:  # noqa: BLE001 - truly unhandled: log it, don't let it escape silently
         import traceback as _tb
         record_api_error(method, path, 500, type(exc).__name__, str(exc),
-                         traceback_text=_tb.format_exc())
+                         traceback_text=_tb.format_exc(), userid=_userid_for_error(request))
         return JSONResponse(status_code=500, content={"error": "Internal server error."},
                             headers={"Cache-Control": "no-store"})
     # A route that already recorded its own failure (the AI proxies, with the provider's real
@@ -291,8 +291,26 @@ async def capture_api_errors(request: Request, call_next):
     if already_logged:
         del response.headers["x-wingman-error-logged"]        # internal marker, never shipped
     if response.status_code >= 500 and not already_logged:
-        record_api_error(method, path, response.status_code, "server_error")
+        record_api_error(method, path, response.status_code, "server_error",
+                         userid=_userid_for_error(request))
     return response
+
+
+def _userid_for_error(request):
+    """Best-effort: the account this failing request was for, from its bearer token, or None.
+
+    Runs ONLY on the error path (rare), decodes the same access token every route already
+    trusts, and swallows everything — a signed-out request, an expired/garbage token, or an
+    unconfigured secret all resolve to None. It must never be the reason an error response is
+    delayed or itself fails, so it takes no I/O and cannot raise."""
+    try:
+        from app.auth.tokens import verify_access_token
+        auth = request.headers.get("authorization") or ""
+        if not auth.lower().startswith("bearer "):
+            return None
+        return verify_access_token(auth[7:].strip()) or None
+    except Exception:  # noqa: BLE001 - any failure just means "unknown user"
+        return None
 
 
 @app.exception_handler(StarletteHTTPException)

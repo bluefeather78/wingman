@@ -1421,10 +1421,22 @@ tr.disabled-seed { opacity: .48; }
       tab, split by who triggered it &mdash; never additional spend.
     </div>
 
-  <!-- Cost per user -->
+  <!-- Cost per user (the whole-account picture) -->
   <div class="card">
     <div class="card-head">
       <h2>Cost per user</h2>
+    </div>
+    <div class="card-body" id="userCostSummary"><div class="empty">Loading&hellip;</div></div>
+  </div>
+
+  <!-- Break it down — its OWN card (operator directive, 2026-09-07). Everything above is the
+       whole-account picture; this is one cut through the SAME money, split by provider / model
+       / feature / user. It pages rather than stacks so you don't scroll past two tables to
+       reach the one you want. The sort select and the hint belong here (they act on the Users
+       cut), not on the summary card above. -->
+  <div class="card">
+    <div class="card-head">
+      <h2>Break it down</h2>
       <div class="spacer"></div>
       <div class="hint" id="userPanelHint"></div>
       <select id="userCostSort" class="hidden">
@@ -1434,13 +1446,6 @@ tr.disabled-seed { opacity: .48; }
         <option value="last_at">Sort by last active</option>
       </select>
     </div>
-    <div class="card-body" id="userCostSummary"><div class="empty">Loading&hellip;</div></div>
-
-    <!-- Everything above is the whole-account picture; everything below is one cut through
-         it. Four cuts of the same money, so they page rather than stack: reading them as
-         one column meant scrolling past two tables to reach the one you wanted. The double
-         rule marks that shift — a single hairline reads as another row of the same thing. -->
-    <div class="panel-break"><span>Break it down</span></div>
     <div class="card-body tight" id="userCostPanels">
       <div class="tabs" id="userCostTabs" style="padding:0 14px 12px">
         <button class="tab active" data-panel="provider">By provider</button>
@@ -5811,15 +5816,24 @@ function renderHealth(h) {
   html += `</div></div>`;
 
   // --- Work queues ---
+  // Any non-zero queue needs a person, EXCEPT `rejected` (already adjudicated). The backend
+  // sets q.action_needed for exactly that; the Action column badges it so the tab shows at a
+  // glance what is waiting, not just how deep each queue is.
+  const actionCount = (h.queues || []).filter(q => q.action_needed).length;
   html += `<div class="card"><div class="card-head"><h2>Work queues</h2>
-    <span class="hint">How much is waiting for a human or a paid agent</span></div>
+    <span class="hint">${actionCount ? actionCount + ' queue' + (actionCount === 1 ? '' : 's') + ' need a human'
+      : 'Nothing waiting on a human'}</span></div>
     <div class="tbl-wrap"><table><thead><tr>
-      <th>Queue</th><th style="text-align:right">Count</th><th>Status</th><th>What it is</th>
+      <th>Queue</th><th style="text-align:right">Count</th><th>Action</th><th>Status</th><th>What it is</th>
     </tr></thead><tbody>`;
   (h.queues || []).forEach(q => {
     const sevText = q.severity === 'alert' ? 'high' : q.severity === 'warn' ? 'watch' : 'ok';
+    const action = q.action_needed
+      ? '<span class="pill warn">Action needed</span>'
+      : '<span style="color:var(--text-3)">—</span>';
     html += `<tr><td><strong>${esc(q.label)}</strong></td>
       <td style="text-align:right" class="mono">${num(q.count)}</td>
+      <td>${action}</td>
       <td>${healthPill(q.severity, sevText)}</td>
       <td style="color:var(--text-2);font-size:12px">${esc(q.note || '')}</td></tr>`;
   });
@@ -6121,6 +6135,14 @@ function renderApiErrorsTable() {
         <td class="mono" style="font-size:12px;word-break:break-all">${esc(r.path || '')}</td>
         <td class="mono" style="font-size:12px">${esc(r.error_type || '')}</td>
         <td style="font-size:12px">${msg}</td></tr>`;
+      // The human-readable diagnosis (what failed, likely what triggered it, and for whom),
+      // full-width under the technical row. The server builds it from the error class/path and
+      // resolves the user id to a name; a signed-out request reads as "unidentified visitor".
+      if (r.diagnostic) {
+        html += `<tr><td colspan="7" style="padding:0 10px 8px">
+          <div style="font-size:12.5px;color:var(--text-2);line-height:1.5">
+            <strong style="color:var(--text-1)">Diagnosis:</strong> ${esc(r.diagnostic)}</div></td></tr>`;
+      }
       if (r.traceback) {
         html += `<tr><td colspan="7" style="padding:0 0 8px">
           <details><summary style="cursor:pointer;font-size:12px;color:var(--accent);padding:2px 0">

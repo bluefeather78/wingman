@@ -36,7 +36,14 @@ create table if not exists api_errors (
     message     text,
     -- The formatted traceback for an unhandled exception, truncated to a few KB. NULL for a
     -- returned 5xx (no exception was raised). This is what makes a crash actionable.
-    traceback   text
+    traceback   text,
+    -- The account the failing request was for, when it can be resolved from the request's bearer
+    -- token (NULL for a signed-out request or an unreadable token). Only the id is stored, never a
+    -- name/email — the console resolves the display name at read time, so this log is not a roster.
+    -- OPTIONAL: capture degrades to recording errors WITHOUT this column if the migration has not
+    -- been run (app/core.flush_api_errors strips it and retries once), so a stale table never
+    -- turns error capture off — it just omits the user until this is re-run.
+    userid      text
 );
 
 -- The two reads the dashboard makes: "recent errors, newest first" (the detail tab) and
@@ -67,3 +74,4 @@ alter table api_errors add column if not exists status     integer not null defa
 alter table api_errors add column if not exists error_type text not null default '';
 alter table api_errors add column if not exists message    text;
 alter table api_errors add column if not exists traceback  text;
+alter table api_errors add column if not exists userid     text;

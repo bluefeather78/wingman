@@ -32,9 +32,14 @@ and each is a correctness issue rather than a matter of taste:
      feature is measured against. It now carries the HMAC token
      app/routes/email.py verifies.
 
-  4. NO IMAGES, AND THE POSTAL ADDRESS IS REAL. `[Add your company name and postal address
-     here]` is replaced by EMAIL_POSTAL_ADDRESS. Remote images are blocked by default in
-     most clients, so nothing here loads an external asset.
+  4. NO IMAGES, AND THE FOOTER NAMES THE LEGAL ENTITY. `[Add your company name and postal
+     address here]` is replaced by a copyright + DBA line (Blufeather Labs LLC, doing
+     business as Highschool Wingman — see _legal_line_html / legal/*.md), NOT a postal
+     address (operator directive, 2026-09-07). Remote images are blocked by default in most
+     clients, so nothing here loads an external asset. NOTE: a postal address is CAN-SPAM's
+     belt-and-braces for commercial mail; these are transactional, so dropping it is a
+     defensible call the operator made, but if a marketing email is ever added it must carry
+     one again.
 
 KNOWN DEGRADATION, ACCEPTED. The feature-card icons are inline `<svg>`, which Gmail and
 Outlook.com strip. The 40px icon column then renders empty and the card's text is
@@ -54,16 +59,36 @@ OTHER RULES THAT STILL APPLY:
   * The unsubscribe link is in the footer of ALL THREE, including the two that are
     defensibly transactional. See db/email_schema.sql.
 """
+import datetime
 import html
 
-from app.config import EMAIL_APP_URL, EMAIL_POSTAL_ADDRESS
+from app.config import EMAIL_APP_URL
 
 
 # The lifecycle kinds. app/services/email.py validates against this, so an unknown kind is
 # refused by name rather than silently producing an empty email. `deadline_alert` is a
-# DIGEST (a list of a student's own tracked deadlines), unlike the other three, which are
-# single-fact account-lifecycle notices — see _deadline_alert below.
-EMAIL_KINDS = ("welcome", "trial_ending", "goodbye", "deadline_alert")
+# DIGEST (a list of a student's own tracked deadlines); `subscribed` fires when a free user
+# upgrades to the paid plan; the rest are single-fact account-lifecycle notices.
+EMAIL_KINDS = ("welcome", "trial_ending", "subscribed", "goodbye", "deadline_alert")
+
+# The operating entity, from legal/terms.md §22 and legal/privacy.md. Highschool Wingman is a
+# trade name (DBA) of Blufeather Labs LLC — the footer names the legal entity and asserts
+# copyright rather than carrying a postal address (operator directive, 2026-09-07). If the
+# legal entity or DBA changes, change it in legal/*.md (re-run agents/build_legal.py) and here.
+LEGAL_ENTITY = "Blufeather Labs LLC"
+LEGAL_DBA = "Highschool Wingman"
+
+
+def _legal_line_html():
+    year = datetime.datetime.now().year
+    return (f"&copy; {year} {LEGAL_ENTITY} &middot; {LEGAL_DBA} is a trade name (DBA) of "
+            f"{LEGAL_ENTITY}. All rights reserved.")
+
+
+def _legal_line_text():
+    year = datetime.datetime.now().year
+    return (f"(c) {year} {LEGAL_ENTITY} - {LEGAL_DBA} is a trade name (DBA) of "
+            f"{LEGAL_ENTITY}. All rights reserved.")
 
 # Palette, from the source files (which track frontend/src/ui/theme.ts).
 CREAM = "#FBF8F3"
@@ -280,7 +305,7 @@ def _footer(reason, unsubscribe_url):
       &nbsp;&middot;&nbsp;
       <a href="{_e(EMAIL_APP_URL)}/terms.html" style="color:{NAVY};text-decoration:underline">Terms</a>
       <br><br>
-      {_e(EMAIL_POSTAL_ADDRESS)}
+      {_legal_line_html()}
     </td>
   </tr>"""
 
@@ -371,7 +396,7 @@ def _footer_text(reason, unsubscribe_url):
         f"Unsubscribe: {unsubscribe_url}\n"
         f"Privacy: {EMAIL_APP_URL}/privacy.html\n"
         f"Terms: {EMAIL_APP_URL}/terms.html\n\n"
-        f"{EMAIL_POSTAL_ADDRESS}\n")
+        f"{_legal_line_text()}\n")
 
 
 _WELCOME_REASON = "You&rsquo;re receiving this because you created a Wingman account."
@@ -505,6 +530,68 @@ def _trial_ending(ctx, unsubscribe_url):
     return (f"Your Wingman trial ends {when}",
             f"Your Wingman trial ends {when} &mdash; keep your matches and deadlines by subscribing.",
             content, text, _WELCOME_REASON, unsubscribe_url)
+
+
+# ---------------- subscribed (free -> paid upgrade) ----------------
+
+_SUBSCRIBED_REASON = "You&rsquo;re receiving this because you subscribed to Wingman."
+_SUBSCRIBED_REASON_TXT = "You're receiving this because you subscribed to Wingman."
+
+
+def _subscribed(ctx, unsubscribe_url):
+    """Fires when a free user upgrades to the paid plan (Stripe checkout completed). Confirms
+    the upgrade, thanks them, and points at the app — never asks for a card again."""
+    name = ctx.get("first_name") or "there"
+    renews_on = ctx.get("renews_display")
+    app = EMAIL_APP_URL
+
+    renew_note = (f"Your plan renews on <strong>{_e(renews_on)}</strong>. " if renews_on else "")
+
+    content = "".join([
+        _hero(
+            badge="You&rsquo;re subscribed", badge_fg=ORANGE, badge_bg=ORANGE_SOFT,
+            heading=f"Thanks for going Pro, {_e(name)} &#127775;",
+            body=("Your Wingman subscription is active &mdash; every match, deadline reminder, "
+                  "and profile tool is now unlocked without a daily cap. " + renew_note
+                  + "Thank you for backing a small team building this for students."),
+            cta_url=app, cta_label="Jump back in →", cta_width=240,
+            subnote="$4.99/month &mdash; cancel anytime from Manage Plan."),
+        _gap(32),
+        _section("What&rsquo;s unlocked"),
+        _cards([
+            (_ICON_SEARCH, "Unlimited Fresh Finds",
+             "Match-finding and profile chats with no daily allowance to watch &mdash; explore "
+             "as much as you want."),
+            (_ICON_CALENDAR, "Deadline reminders",
+             "Every deadline you&rsquo;re tracking keeps its reminders, synced to your calendar."),
+            (_ICON_PROFILE, "My Vibe",
+             "Keep refining your profile so your matches get sharper over time."),
+        ]),
+        _gap(32),
+        _banner("Manage your plan anytime",
+                "Update payment, view your renewal date, or cancel &mdash; all from one place.",
+                f"{app}/subscription", "Manage plan"),
+    ])
+
+    text = (
+        f"Thanks for going Pro, {name}!\n\n"
+        "Your Wingman subscription is active — every match, deadline reminder, and profile\n"
+        "tool is now unlocked without a daily cap.\n"
+        + (f"Your plan renews on {renews_on}.\n" if renews_on else "")
+        + "Thank you for backing a small team building this for students.\n\n"
+        f"Jump back in: {app}\n\n"
+        "WHAT'S UNLOCKED\n\n"
+        "  Unlimited Fresh Finds — match-finding and profile chats with no daily allowance.\n"
+        "  Deadline reminders — every tracked deadline keeps its reminders.\n"
+        "  My Vibe — keep refining your profile so matches get sharper.\n\n"
+        "$4.99/month — cancel anytime from Manage Plan.\n"
+        f"{app}/subscription\n"
+        + _footer_text(_SUBSCRIBED_REASON_TXT, unsubscribe_url)
+    )
+
+    return ("You&rsquo;re subscribed to Wingman",
+            "Your Wingman subscription is active &mdash; everything is unlocked.",
+            content, text, _SUBSCRIBED_REASON, unsubscribe_url)
 
 
 # ---------------- goodbye ----------------
@@ -761,6 +848,7 @@ def _deadline_alert(ctx, unsubscribe_url):
 _BUILDERS = {
     "welcome": _welcome,
     "trial_ending": _trial_ending,
+    "subscribed": _subscribed,
     "goodbye": _goodbye,
     "deadline_alert": _deadline_alert,
 }

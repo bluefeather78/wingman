@@ -37,7 +37,8 @@ from app.config import *  # noqa: F401,F403
 from app import config
 from app.core import (
     _supabase_headers, _supabase_request, _supabase_request_strict, _users_request,
-    _is_missing_column_error, _missing_table_error, _runs_cache, _runs_cache_lock,
+    _is_missing_column_error, _missing_table_error, _api_error_code,
+    _MISSING_COLUMN_CODES, _MISSING_TABLE_CODES, _runs_cache, _runs_cache_lock,
     RUNS_CACHE_TTL, RECENT_RUNS_LIMIT, invalidate_runs_cache, flush_user_activity,
     INTERACTIVE_AGENTS, FEATURE_LABELS, PROVIDER_LABELS, provider_for_model,
     subscription_state, ai_tier,
@@ -4634,7 +4635,105 @@ def list_recent_merges(limit=50):
 
 # ---------- API errors: the live server-error log ----------
 
-_API_ERRORS_SELECT = "id,ts,method,path,status,error_type,message,traceback"
+_API_ERRORS_SELECT_BASE = "id,ts,method,path,status,error_type,message,traceback"
+# `userid` is a later column (db/api_errors_schema.sql). The read falls back to the base select
+# if it is not migrated in, so the tab keeps working (without the WHO half) rather than 400ing.
+_API_ERRORS_SELECT = _API_ERRORS_SELECT_BASE + ",userid"
+
+
+# Path -> the plain-English thing a student (or the system) was doing when the error fired. The
+# capture middleware stores the REAL path (with the id filled in), while a route that logs its
+# own failure may store a templated one, so these are matched as substrings, most-specific first.
+_API_ERROR_ACTION_HINTS = [
+    ("/api/ai", "a student sending an AI request (profile chat, match-finding, or a deadline check)"),
+    ("/api/messages", "a student sending an AI chat request"),
+    ("/deadline", "a student opening an opportunity to check its deadline"),
+    ("/action-items", "a student opening an opportunity's application checklist"),
+    ("/extract-from-resume", "a student importing a resume or LinkedIn profile"),
+    ("/calendar/sync", "a student syncing their Quest Log to Google Calendar"),
+    ("/api/mailing-list", "a student joining a program's mailing list"),
+    ("/subscribe", "a student joining a program's mailing list"),
+    ("/api/data", "a student's app loading or saving their profile and tracker"),
+    ("/api/webhook/stripe", "a Stripe billing webhook"),
+    ("/api/subscription", "a student viewing or changing their subscription"),
+    ("/api/register", "someone creating an account"),
+    ("/api/login", "someone signing in"),
+    ("/api/auth", "a session-token refresh"),
+    ("/api/opportunities", "a student loading the opportunity catalog"),
+    ("/api/account", "a student updating their account settings"),
+    ("/api/email", "the lifecycle-email pipeline"),
+]
+
+
+def _api_error_action(path):
+    p = (path or "").lower()
+    for needle, action in _API_ERROR_ACTION_HINTS:
+        if needle in p:
+            return action
+    return f"a request to {path}" if path else "an unidentified request"
+
+
+def _api_error_cause(row):
+    """One plain sentence for WHAT went wrong, from the error class / type / status."""
+    cls = _api_error_class(row.get("error_type"))
+    et = (row.get("error_type") or "").strip()
+    status = row.get("status") or 0
+    if cls == "provider":
+        prov = ("Anthropic" if et.startswith("anthropic")
+                else "Gemini" if et.startswith("gemini") else "the AI provider")
+        if status == 429:
+            return f"{prov} rate-limited the request (HTTP 429)"
+        if status and status >= 500:
+            return f"{prov} returned a server error (HTTP {status})"
+        if status:
+            return f"{prov} rejected the request (HTTP {status})"
+        return f"the call to {prov} failed before a reply (network or timeout)"
+    if cls == "degraded":
+        return "an AI call failed, so a cached/fallback answer was served instead of a fresh one"
+    if status == 502:
+        return "the server could not reach a dependency (usually Supabase)"
+    if status == 503:
+        return "the server was overloaded and shed the request"
+    if et and et != "server_error":
+        return f"an unhandled {et} crashed the request (HTTP {status or 500})"
+    return f"the server returned HTTP {status or 500}"
+
+
+def _user_display(u):
+    name = " ".join(x for x in [(u.get("first_name") or "").strip(),
+                                (u.get("last_name") or "").strip()] if x).strip()
+    return name or (u.get("email") or "").strip() or u.get("userid")
+
+
+def _resolve_error_users(rows):
+    """{userid: display name} for the userids on these error rows. One batched read; a failure
+    (or an un-migrated userid column, i.e. all-None) just yields {} and the diagnostic says
+    'unidentified'. Only ids of a safe shape are looked up — a stray comma/paren would corrupt
+    the PostgREST in.() list, and a userid is a lowercased handle or email, so that never drops a
+    real one."""
+    ids = sorted({(r.get("userid") or "").strip() for r in rows if (r.get("userid") or "").strip()})
+    ids = [i for i in ids if not any(c in i for c in ",()")]
+    out = {}
+    for i in range(0, len(ids), 100):
+        chunk = ids[i:i + 100]
+        try:
+            got = _supabase_request_strict("users", params={
+                "select": "userid,first_name,last_name,email",
+                "userid": f"in.({','.join(chunk)})"}) or []
+        except Exception:                                             # noqa: BLE001
+            continue
+        for u in got:
+            out[u.get("userid")] = _user_display(u)
+    return out
+
+
+def _api_error_diagnostic(row, user_display):
+    """A human-readable line: what failed, likely what triggered it, and for whom."""
+    cause = _api_error_cause(row)
+    action = _api_error_action(row.get("path"))
+    who = (f" for {user_display}" if user_display
+           else " for a signed-out or unidentified visitor")
+    return f"{cause[0].upper()}{cause[1:]}. Likely triggered by {action}{who}."
 
 
 def _api_error_class(error_type):
@@ -4676,26 +4775,55 @@ def get_api_errors(days=7, limit=500, include_rows=True):
     empty = {"ok": True, "available": True, "error": None, "days": days,
              "generated_at": generated_at, "capped": False,
              "summary": _summarize_api_errors([]), "errors": []}
-    try:
-        rows = _supabase_request_strict("api_errors", params={
-            "select": _API_ERRORS_SELECT,
-            "ts": f"gte.{since}",
-            "order": "ts.desc",
+    def _read(select):
+        return _supabase_request_strict("api_errors", params={
+            "select": select, "ts": f"gte.{since}", "order": "ts.desc",
             "limit": str(limit)}) or []
-    except Exception as e:                                          # noqa: BLE001
-        if _missing_table_error(e) or _is_missing_column_error(e):
-            # Not an outage — the migration has not been run. The tab shows a setup step.
-            return {"ok": True, "available": False, "days": days, "generated_at": generated_at,
-                    "capped": False, "summary": _summarize_api_errors([]), "errors": [],
-                    "error": f"The api_errors table does not exist yet. Run "
-                             f"{API_ERRORS_SETUP_SQL} in the Supabase SQL editor."}
+
+    def _setup_notice():
+        # Not an outage — the migration has not been run. The tab shows a setup step.
+        return {"ok": True, "available": False, "days": days, "generated_at": generated_at,
+                "capped": False, "summary": _summarize_api_errors([]), "errors": [],
+                "error": f"The api_errors table does not exist yet. Run "
+                         f"{API_ERRORS_SETUP_SQL} in the Supabase SQL editor."}
+
+    def _read_error(exc):
         return {"ok": False, "available": True, "days": days, "generated_at": generated_at,
                 "capped": False, "summary": _summarize_api_errors([]), "errors": [],
-                "error": f"Could not read api_errors: {str(e)[:200]}"}
+                "error": f"Could not read api_errors: {str(exc)[:200]}"}
+
+    try:
+        rows = _read(_API_ERRORS_SELECT)
+    except Exception as e:                                          # noqa: BLE001
+        # Classify from the code read ONCE (an HTTPError body is readable a single time).
+        code = _api_error_code(e)
+        if code in _MISSING_COLUMN_CODES:
+            # A column is missing — most likely just the newer `userid`. Retry with the base
+            # select so the tab still works (without the WHO half) rather than 400ing.
+            try:
+                rows = _read(_API_ERRORS_SELECT_BASE)
+            except Exception as e2:                                # noqa: BLE001
+                code2 = _api_error_code(e2)
+                if code2 in _MISSING_TABLE_CODES or code2 in _MISSING_COLUMN_CODES:
+                    return _setup_notice()
+                return _read_error(e2)
+        elif code in _MISSING_TABLE_CODES:
+            return _setup_notice()
+        else:
+            return _read_error(e)
     if not rows:
         return empty
     for r in rows:                                # annotate so the tab can badge each row's source
         r["error_class"] = _api_error_class(r.get("error_type"))
+    # The human-friendly half: resolve each row's user to a display name (one batched read) and
+    # attach a plain-English diagnostic — what failed, likely what triggered it, and for whom.
+    # Only for the detail tab (include_rows); the Health summary card does not need per-row text.
+    if include_rows:
+        users = _resolve_error_users(rows)
+        for r in rows:
+            disp = users.get((r.get("userid") or "").strip()) if r.get("userid") else None
+            r["user_display"] = disp
+            r["diagnostic"] = _api_error_diagnostic(r, disp)
     return {"ok": True, "available": True, "error": None, "days": days,
             "generated_at": generated_at, "capped": len(rows) >= limit,
             "summary": _summarize_api_errors(rows),

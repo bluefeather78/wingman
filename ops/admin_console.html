@@ -6143,6 +6143,8 @@ $('apiErrorsRange').onchange = () => loadApiErrors();
    (counts + the "awaiting info" drill-down); Re-evaluate POSTs /api/agents/seo/evaluate
    to re-score every active row and write the durable seo_* flags. FREE: no model call.
 =========================================================================== */
+let _seoPollTimer = null;
+
 function seoStamp(iso) {
   if (!iso) return 'Never evaluated';
   return 'Last evaluated ' + new Date(iso).toLocaleString();
@@ -6150,26 +6152,39 @@ function seoStamp(iso) {
 
 async function loadSeo() {
   const body = $('seoBody');
-  body.innerHTML = '<div class="empty">Loading&hellip;</div>';
+  if (!_seoPollTimer) body.innerHTML = '<div class="empty">Loading&hellip;</div>';
   try {
     renderSeo(await api('/api/agents/seo'));
   } catch (e) {
-    body.innerHTML = `<div class="notice err">Could not load SEO status: ${esc(e.message)}</div>`;
+    clearTimeout(_seoPollTimer); _seoPollTimer = null;
+    body.innerHTML = `<div class="notice err">Could not load SEO status: ${esc(e.message)}. If you just deployed, restart the server so the /api/agents/seo route loads.</div>`;
   }
 }
 
 function renderSeo(d) {
   const body = $('seoBody'), stamp = $('seoStamp'), tabCount = $('seoTabCount');
+  const btn = $('seoEvaluate');
   if (!d || !d.ok) {
+    clearTimeout(_seoPollTimer); _seoPollTimer = null;
     body.innerHTML = `<div class="notice err">${esc((d && d.error) || 'Failed to read SEO status.')}</div>`;
     return;
   }
+  // Reflect a background evaluation: disable the button, show progress, and keep polling.
+  const evaluating = !!d.evaluating;
+  btn.disabled = evaluating;
+  btn.textContent = evaluating ? 'Evaluating…' : 'Re-evaluate all pages';
+  if (d.last_eval_result && d.last_eval_result.ok === false) {
+    notice('Last evaluation failed: ' + (d.last_eval_result.error || 'unknown error'));
+  }
+  clearTimeout(_seoPollTimer); _seoPollTimer = null;
+  if (evaluating) _seoPollTimer = setTimeout(loadSeo, 4000);
+
   if (d.schema_ready === false) {
     stamp.textContent = ''; tabCount.textContent = '';
     body.innerHTML = `<div class="notice">One-time setup: run <span class="mono">${esc(d.setup_sql || 'db/seo_pages_schema.sql')}</span> in the Supabase SQL editor, then press Re-evaluate.</div>`;
     return;
   }
-  stamp.textContent = seoStamp(d.last_evaluated_at);
+  stamp.textContent = evaluating ? 'Evaluating in the background…' : seoStamp(d.last_evaluated_at);
   tabCount.textContent = (d.indexed != null) ? num(d.indexed) : '';
 
   const tiles = [
@@ -6202,18 +6217,17 @@ function renderSeo(d) {
 }
 
 async function evaluateSeo() {
-  const btn = $('seoEvaluate'), prev = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Evaluating…';
+  const btn = $('seoEvaluate');
+  btn.disabled = true; btn.textContent = 'Starting…';
   try {
     const d = await api('/api/agents/seo/evaluate', { method: 'POST' });
-    if (!d || !d.ok) notice((d && d.error) || 'Evaluation failed.');
-    else if (d.schema_ready === false) notice('Run ' + (d.setup_sql || 'db/seo_pages_schema.sql') + ' first.');
-    else notice('');
-    await loadSeo();
+    if (!d || !d.ok) { notice((d && d.error) || 'Could not start evaluation.'); btn.disabled = false; return; }
+    if (d.schema_ready === false) { notice('Run ' + (d.setup_sql || 'db/seo_pages_schema.sql') + ' first.'); btn.disabled = false; return; }
+    notice('');
+    loadSeo();   // renders the "evaluating" state and starts polling until it finishes
   } catch (e) {
-    notice('Evaluation failed: ' + e.message);
-  } finally {
-    btn.disabled = false; btn.textContent = prev;
+    notice('Could not start evaluation: ' + e.message);
+    btn.disabled = false; btn.textContent = 'Re-evaluate all pages';
   }
 }
 

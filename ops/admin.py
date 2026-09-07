@@ -334,11 +334,11 @@ def handle_seo_overview():
 
 @router.post("/api/agents/seo/evaluate")
 def handle_seo_evaluate():
-    """Re-score every active opportunity against the composite index bar and write the durable
-    seo_* columns (assigning a stable slug to any row that lacks one). FREE — no model call.
-    This is the "publish / refresh the pages" action; the sitemap and dashboard read what it
-    writes."""
-    result = core.evaluate_seo_pages()
+    """Start a re-score of every active opportunity against the composite index bar, writing the
+    durable seo_* columns (and a stable slug for any row that lacks one). FREE — no model call.
+    Runs in the BACKGROUND (a full pass is ~5 min) and returns at once; the tab polls
+    /api/agents/seo for progress. A no-op if a run is already in flight."""
+    result = core.start_seo_evaluation()
     return json_response(200 if result.get("ok") else 502, result, default=str)
 
 

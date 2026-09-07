@@ -5008,6 +5008,50 @@ _SEO_OVERVIEW_SELECT = ("id,name,seo_slug,seo_status,seo_content_score,seo_missi
                         "seo_evaluated_at")
 _SEO_PAGE_SIZE = 500
 
+# Background-run state for the evaluator. A full pass is ~1300+ per-row PATCHes (~5 min), far
+# too long to hold an HTTP request open, so the console POST starts it on a daemon thread and
+# returns immediately; the tab polls get_seo_overview() (which carries `evaluating`) until it
+# finishes. One run at a time — a second POST while one is in flight is a no-op.
+_seo_eval_lock = threading.Lock()
+_seo_eval_state = {"running": False, "started_at": None, "finished_at": None,
+                   "last_result": None}
+
+
+def _seo_eval_snapshot():
+    with _seo_eval_lock:
+        return {"evaluating": _seo_eval_state["running"],
+                "eval_started_at": _seo_eval_state["started_at"],
+                "eval_finished_at": _seo_eval_state["finished_at"],
+                "last_eval_result": _seo_eval_state["last_result"]}
+
+
+def _run_seo_eval_bg():
+    try:
+        result = evaluate_seo_pages()
+    except Exception as e:                       # a thread must never die silently
+        result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    with _seo_eval_lock:
+        _seo_eval_state["running"] = False
+        _seo_eval_state["finished_at"] = datetime.datetime.now(
+            datetime.timezone.utc).isoformat()
+        _seo_eval_state["last_result"] = result
+
+
+def start_seo_evaluation():
+    """Kick off evaluate_seo_pages() on a background thread and return at once. A no-op (but a
+    success) if a run is already in flight, so a double-click cannot start two."""
+    with _seo_eval_lock:
+        if _seo_eval_state["running"]:
+            return {"ok": True, "already_running": True,
+                    "started_at": _seo_eval_state["started_at"]}
+        _seo_eval_state["running"] = True
+        _seo_eval_state["started_at"] = datetime.datetime.now(
+            datetime.timezone.utc).isoformat()
+        _seo_eval_state["finished_at"] = None
+        _seo_eval_state["last_result"] = None
+    threading.Thread(target=_run_seo_eval_bg, name="seo-eval", daemon=True).start()
+    return {"ok": True, "started": True, "started_at": _seo_eval_state["started_at"]}
+
 
 def _seo_paginated(select_fields):
     """All active rows for `select_fields`, paging past PostgREST's 1000-row cap. Raises on
@@ -5029,7 +5073,8 @@ def _seo_paginated(select_fields):
 def _seo_not_ready():
     return {"ok": True, "schema_ready": False, "setup_sql": SEO_SETUP_SQL,
             "total_active": 0, "indexed": 0, "awaiting": 0, "not_evaluated": 0,
-            "awaiting_rows": [], "last_evaluated_at": None, "max_score": _seo.MAX_SCORE}
+            "awaiting_rows": [], "last_evaluated_at": None, "max_score": _seo.MAX_SCORE,
+            **_seo_eval_snapshot()}
 
 
 def evaluate_seo_pages():
@@ -5118,4 +5163,4 @@ def get_seo_overview(awaiting_limit=300):
     return {"ok": True, "schema_ready": True, "total_active": len(rows),
             "indexed": indexed, "awaiting": awaiting, "not_evaluated": not_evaluated,
             "last_evaluated_at": last_eval, "max_score": _seo.MAX_SCORE,
-            "awaiting_rows": awaiting_rows[:awaiting_limit]}
+            "awaiting_rows": awaiting_rows[:awaiting_limit], **_seo_eval_snapshot()}

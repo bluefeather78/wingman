@@ -322,7 +322,7 @@ export default function Landing() {
               <Bullet color={colors.orange} text="Peace of mind from not having to do it all yourself" />
             </View>
             <View style={styles.audFoot}>
-              <Text style={styles.audFootText}>Peace of mind for $4.99/month — less than a Netflix subscription.</Text>
+              <Text style={styles.audFootText}>Peace of mind for $4.99/month — less than a cup of coffee.</Text>
             </View>
           </PopCard>
         </View>

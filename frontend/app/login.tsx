@@ -1,77 +1,32 @@
 import { useRouter } from 'expo-router';
-import { useState, type ReactNode } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { openBackendPage } from '@/ui/openPage';
-import { useAuth } from '@/auth/AuthContext';
 import { beginGoogleSignIn } from '@/auth/googleSignIn';
-import { Field, Logo, PopButton, Txt } from '@/ui/components';
+import { Logo } from '@/ui/components';
 import { colors, fonts, radius, softShadow, space } from '@/ui/theme';
 
-// The shortest password a new account may have. S1-11: the server only ever sees
-// sha256(password), so it cannot tell a passphrase from a single letter — the length rule
-// has to live here, and the field's placeholder was already promising it.
-const MIN_PASSWORD_LENGTH = 8;
-
-// Login / Register — ported from the live app's #page-login: centered card-soft (max-w-sm),
-// favicon + Wingman + BETA, tagline, beta notice, back-to-home, Google row above the form,
-// then the form and the register link. The Google button was styled "COMING SOON" (grayed
-// out) while the flow was being built; it is live now, so it carries the active card look
-// (white fill, slate900 ink border, full-strength text and "G").
+// Sign in — Google is the ONLY path. The userid/password form (login + register + the signup
+// consent checkboxes) was removed by operator directive 2026-09-07; consent is now collected
+// exclusively in the Google flow (google-auth.tsx), whose wording mirrors what the form used
+// to ask. The backend /api/register and /api/login endpoints and the AuthContext
+// login/register methods are deliberately left in place (dormant) so existing password
+// accounts and dev tooling still work — only the UI entry point is gone.
 export default function Login() {
   const router = useRouter();
-  const { login, register } = useAuth();
-  const [mode, setMode] = useState<'login' | 'register'>('login');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [userid, setUserid] = useState('');
-  const [password, setPassword] = useState('');
-  const [passwordConfirm, setPasswordConfirm] = useState('');
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [email, setEmail] = useState('');
-  const [isAdult, setIsAdult] = useState(false);
-  const [parentalConsent, setParentalConsent] = useState(false);
-  const [acceptedTerms, setAcceptedTerms] = useState(false);
-
-  const isRegister = mode === 'register';
-
-  async function submit() {
-    setError(null);
-    // S1-11: there was no minimum anywhere — not here, not on the server, which only ever
-    // sees sha256(password) and so cannot tell a 20-character passphrase from one letter.
-    // The placeholder said "At least 8 characters" and nothing enforced it.
-    if (isRegister && password.length < MIN_PASSWORD_LENGTH) {
-      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
-      return;
-    }
-    if (isRegister && password !== passwordConfirm) {
-      setError('Passwords do not match.');
-      return;
-    }
-    setBusy(true);
-    try {
-      if (isRegister) {
-        await register({ firstName: firstName.trim(), lastName: lastName.trim(), email: email.trim(), userid: userid.trim().toLowerCase(), password, isAdult, parentalConsent, acceptedTerms });
-      } else {
-        await login(userid.trim().toLowerCase(), password);
-      }
-      router.replace('/(app)');
-    } catch (e) {
-      setError((e as Error).message || 'Something went wrong.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function google() {
     setError(null);
+    setBusy(true);
     try {
       const handoff = await beginGoogleSignIn();
       if (Platform.OS !== 'web' && handoff) router.replace({ pathname: '/google-auth', params: { google_token: handoff } });
     } catch (e) {
       setError((e as Error).message || 'Google sign-in failed.');
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -101,78 +56,17 @@ export default function Login() {
             </Pressable>
           </View>
 
-          {/* Google sign-in row. */}
+          {/* Google sign-in — the only way in. */}
           <View style={{ gap: 12 }}>
             <Pressable onPress={google} style={styles.googleBtn} disabled={busy}>
               <GoogleG />
               <Text style={styles.googleText}>Continue with Google</Text>
             </Pressable>
-            <View style={styles.orRow}>
-              <View style={styles.rule} />
-              <Text style={styles.orText}>OR</Text>
-              <View style={styles.rule} />
-            </View>
-          </View>
-
-          <View style={{ gap: 16 }}>
-            {isRegister && (
-              <>
-                <View style={styles.twoCol}>
-                  <View style={styles.col}>
-                    <Field label="First name" value={firstName} onChangeText={setFirstName} />
-                  </View>
-                  <View style={styles.col}>
-                    <Field label="Last name" value={lastName} onChangeText={setLastName} />
-                  </View>
-                </View>
-                <Field label="Email" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" placeholder="you@example.com" />
-                <Field label="User ID" value={userid} onChangeText={setUserid} autoCapitalize="none" placeholder="Pick a user ID" />
-                <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="At least 8 characters" />
-                <Field label="Confirm password" value={passwordConfirm} onChangeText={setPasswordConfirm} secureTextEntry placeholder="••••••••" />
-                <View style={styles.consentBox}>
-                  <ConsentRow label="I am 18 years of age or older." value={isAdult} onValueChange={setIsAdult} />
-                  {!isAdult && (
-                    <ConsentRow
-                      label="I am at least 13, and my parent or legal guardian has given me permission to use Wingman and agrees to the Terms of Use on my behalf."
-                      value={parentalConsent}
-                      onValueChange={setParentalConsent}
-                    />
-                  )}
-                  <ConsentRow
-                    value={acceptedTerms}
-                    onValueChange={setAcceptedTerms}
-                    label={
-                      <>
-                        I have read and agree to the{' '}
-                        <Text style={styles.legalLink} onPress={() => openBackendPage('/terms.html')}>Terms of Use</Text>
-                        {' '}and the{' '}
-                        <Text style={styles.legalLink} onPress={() => openBackendPage('/privacy.html')}>Privacy Policy</Text>.
-                      </>
-                    }
-                  />
-                </View>
-                <Text style={styles.trialNote}>
-                  Every account is <Text style={styles.bold}>free to start</Text>, with a daily allowance of AI actions. No card required.
-                </Text>
-              </>
-            )}
-
-            {!isRegister && (
-              <>
-                <Field label="User ID" value={userid} onChangeText={setUserid} autoCapitalize="none" placeholder="wingman2028" />
-                <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="••••••••" />
-              </>
-            )}
 
             {!!error && <Text style={styles.error}>{error}</Text>}
 
-            <PopButton label={isRegister ? 'Create Account' : 'Sign In'} onPress={submit} loading={busy} full textStyle={styles.submitText} />
-
-            <Text style={styles.switchText}>
-              {isRegister ? 'Already have an account? ' : "Don't have an account? "}
-              <Text style={styles.switchLink} onPress={() => { setError(null); setMode(isRegister ? 'login' : 'register'); }}>
-                {isRegister ? 'Sign In' : 'Register'}
-              </Text>
+            <Text style={styles.trialNote}>
+              Every account is <Text style={styles.bold}>free to start</Text>, with a daily allowance of AI actions. No card required.
             </Text>
           </View>
         </View>
@@ -187,15 +81,6 @@ function GoogleG() {
     <View style={styles.gWrap}>
       <Text style={styles.gText}>G</Text>
     </View>
-  );
-}
-
-function ConsentRow({ label, value, onValueChange }: { label: ReactNode; value: boolean; onValueChange: (v: boolean) => void }) {
-  return (
-    <Pressable style={styles.consentRow} onPress={() => onValueChange(!value)}>
-      <Switch value={value} onValueChange={onValueChange} trackColor={{ true: colors.indigo600, false: colors.slate200 }} thumbColor={colors.white} style={styles.switch} />
-      <Text style={styles.consentText}>{label}</Text>
-    </Pressable>
   );
 }
 
@@ -229,23 +114,8 @@ const styles = StyleSheet.create({
   googleText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.slate900 },
   gWrap: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center' },
   gText: { fontFamily: fonts.bodyXBold, fontSize: 13, color: '#4285F4' },
-  orRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  rule: { flex: 1, height: 1, backgroundColor: colors.slate200 },
-  orText: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.slate400 },
 
-  // Each column must flex — a bare Field keeps its intrinsic width and overflows the card.
-  twoCol: { flexDirection: 'row', gap: 12 },
-  col: { flex: 1, minWidth: 0 },
-  consentBox: { borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, padding: 12, gap: 10, backgroundColor: colors.slate50 },
-  consentRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  switch: Platform.OS === 'web' ? ({ transform: [{ scale: 0.8 }] } as object) : {},
-  consentText: { fontFamily: fonts.bodyMed, fontSize: 12, lineHeight: 17, color: colors.slate900, flex: 1 },
-  legalLink: { fontFamily: fonts.bodyBold, color: colors.indigo600, textDecorationLine: 'underline' },
   trialNote: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500, textAlign: 'center' },
   bold: { fontFamily: fonts.bodyBold },
-
-  submitText: { fontFamily: fonts.bodyXBold },
   error: { fontFamily: fonts.bodyBold, fontSize: 12, color: colors.rose600 },
-  switchText: { fontFamily: fonts.bodyMed, fontSize: 12, color: colors.slate500, textAlign: 'center' },
-  switchLink: { fontFamily: fonts.bodyBold, color: colors.indigo600 },
 });

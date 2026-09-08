@@ -301,7 +301,7 @@ export default function Landing() {
             <View style={[styles.audPill, { backgroundColor: colors.navy }]}>
               <Text style={styles.audPillText}>FOR STUDENTS</Text>
             </View>
-            <Text style={styles.audTitle}>Four years. Three summers. Make them count.</Text>
+            <Text style={styles.audTitle}>High school goes fast. Make every year count.</Text>
             <View style={styles.bullets}>
               <Bullet color={colors.teal} text="Discovery matched to who you are — not another database to search" />
               <Bullet color={colors.teal} text="Opportunities you'd never find on your own: local, niche, overlooked" />

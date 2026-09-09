@@ -451,8 +451,11 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: 24,
     paddingTop: 16,
-    zIndex: 50,
-    ...(Platform.OS === 'web' ? ({ position: 'sticky', top: 16 } as object) : null),
+    // zIndex is web-only: it keeps the position:sticky header above the scrolled content on
+    // web. On native the header is not sticky (it scrolls away), so zIndex serves no purpose —
+    // and a zIndex'd child inside a ScrollView triggers an iOS compositing bug that ghosts /
+    // overlaps scrolled sections on top of each other (the "broken landing" native report).
+    ...(Platform.OS === 'web' ? ({ position: 'sticky', top: 16, zIndex: 50 } as object) : null),
   },
   headerBar: {
     flexDirection: 'row',

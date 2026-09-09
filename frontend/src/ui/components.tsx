@@ -16,6 +16,7 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Rect } from 'react-native-svg';
 import { APP_MAX_WIDTH, colors, fonts, popShadow, radius, softShadow, space, type } from './theme';
 
@@ -603,6 +604,10 @@ export function RightDrawer({
   children: ReactNode;
 }) {
   const [mounted, setMounted] = useState(open);
+  // The panel is a full-height Modal (top:0 → bottom:0), so on a notched iPhone its header
+  // would sit under the status bar and its footer under the home indicator. Pad by the safe
+  // insets. On web these are 0, so web is unaffected.
+  const insets = useSafeAreaInsets();
   const slide = useRef(new Animated.Value(open ? 0 : 1)).current; // 0 = shown, 1 = off-screen
 
   const animateTo = useCallback(
@@ -637,7 +642,7 @@ export function RightDrawer({
       <Animated.View style={[styles.drawerScrim, { opacity: scrimOpacity }]}>
         <Pressable style={styles.drawerScrimPress} onPress={onClose} />
       </Animated.View>
-      <Animated.View style={[styles.drawerPanel, { width }, { transform: [{ translateX }] }, panelStyle]}>
+      <Animated.View style={[styles.drawerPanel, { width, paddingTop: insets.top, paddingBottom: insets.bottom }, { transform: [{ translateX }] }, panelStyle]}>
         {children}
       </Animated.View>
     </Modal>

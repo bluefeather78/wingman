@@ -1013,6 +1013,19 @@ def get_user_by_google_id(google_id):
     return rows[0] if rows else None
 
 
+def get_user_by_apple_id(apple_id):
+    """The account linked to this Apple account's `sub`, or None.
+
+    Parallel to get_user_by_google_id — Sign in with Apple (App Store 4.8). Requires
+    db/apple_auth_schema.sql (the users.apple_id column) to have been run.
+    """
+    if not apple_id:
+        return None
+    query = "?" + urllib.parse.urlencode({"apple_id": f"eq.{apple_id}", "select": "*"})
+    rows = _users_request("GET", query)
+    return rows[0] if rows else None
+
+
 class DuplicateEmail(Exception):
     """The email is already on another account.
 
@@ -1031,14 +1044,15 @@ class MissingUserColumns(Exception):
 
 
 def create_user(userid, first_name, last_name, email, password_hash, location="",
-                is_adult=False, parental_consent=False, google_id=None):
+                is_adult=False, parental_consent=False, google_id=None, apple_id=None):
     """Insert a new account on the permanent Free tier, recording signup consent.
 
     is_adult / parental_consent come from the registration checkboxes; the caller
     (handle_register / handle_google_finish) is what enforces them, this just records
     what was agreed to. Every column past `data` requires db/subscription_schema.sql to
     have been run; google_id additionally requires db/google_auth_schema.sql (password_hash
-    is None for a Google-only account — that schema also drops the NOT NULL on it).
+    is None for a Google-only account — that schema also drops the NOT NULL on it), and
+    apple_id requires db/apple_auth_schema.sql (Sign in with Apple is likewise password-less).
     """
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     row = {
@@ -1069,6 +1083,11 @@ def create_user(userid, first_name, last_name, email, password_hash, location=""
     # would be exactly that until the migration lands.
     if google_id is not None:
         row["google_id"] = google_id
+    # Same omit-not-None discipline as google_id above: the column exists only after
+    # db/apple_auth_schema.sql, and PostgREST 400s the whole insert on an unknown column, so a
+    # password/Google signup must not carry the key at all.
+    if apple_id is not None:
+        row["apple_id"] = apple_id
     try:
         _users_request("POST", "", data=[row])
     except urllib.error.HTTPError as e:

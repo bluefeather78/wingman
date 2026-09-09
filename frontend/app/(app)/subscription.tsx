@@ -37,6 +37,11 @@ function fmtDate(iso: string | null | undefined): string {
 export default function Subscription() {
   const { user, allowance: liveAllowance } = useAuth();
   const router = useRouter();
+  // App Store 3.1.1: on iOS we may not surface any external-purchase path for a digital
+  // subscription. So the "Go Unlimited" checkout CTA and the Billing block (which describes
+  // the external Stripe flow) are web-only. The promo-code box stays on every platform —
+  // redeeming a grant code is not a purchase. Unlimited is sold on the web.
+  const isWeb = Platform.OS === 'web';
   const [sub, setSub] = useState<SubState | null>((user?.subscription as SubState) ?? null);
   const [promo, setPromo] = useState('');
   const [promoStatus, setPromoStatus] = useState('');
@@ -346,9 +351,9 @@ export default function Subscription() {
                 <View style={[styles.badge, { backgroundColor: '#D1FAE5' }]}>
                   <Text style={[styles.badgeText, { color: '#065F46' }]}>Current</Text>
                 </View>
-              ) : (
+              ) : isWeb ? (
                 <PopButton label="Go Unlimited" small square onPress={upgrade} />
-              )}
+              ) : null}
             </View>
             <View style={{ gap: 4, marginTop: 8 }}>
               <Text style={styles.featureLine}>✓ Everything in Free</Text>
@@ -378,17 +383,19 @@ export default function Subscription() {
           {!!promoStatus && <Text style={styles.promoStatus}>{promoStatus}</Text>}
         </View>
 
-        {/* Billing */}
-        <View style={styles.plansBox}>
-          <View style={styles.plansHead}>
-            <Text style={styles.plansHeadText}>Billing</Text>
+        {/* Billing — describes the external Stripe checkout, so it is web-only (App Store 3.1.1). */}
+        {isWeb && (
+          <View style={styles.plansBox}>
+            <View style={styles.plansHead}>
+              <Text style={styles.plansHeadText}>Billing</Text>
+            </View>
+            <View style={styles.plansBody}>
+              <Text style={styles.billingLine}>Wingman Unlimited is $4.99/month, billed when you upgrade. Cancel anytime.</Text>
+              <Text style={styles.billingLine}>Payment method: Add during checkout</Text>
+              <Text style={styles.billingLine}>Receipts will be sent to your email</Text>
+            </View>
           </View>
-          <View style={styles.plansBody}>
-            <Text style={styles.billingLine}>Wingman Unlimited is $4.99/month, billed when you upgrade. Cancel anytime.</Text>
-            <Text style={styles.billingLine}>Payment method: Add during checkout</Text>
-            <Text style={styles.billingLine}>Receipts will be sent to your email</Text>
-          </View>
-        </View>
+        )}
 
         {/* Your data — export + delete (DATA_DELETION_EXPORT_PLAN.md). */}
         <View style={styles.plansBox}>

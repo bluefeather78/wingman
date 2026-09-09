@@ -296,7 +296,7 @@ export default function Landing() {
         </View>
 
         {/* Audience cards */}
-        <View style={[styles.section, styles.cardsRow]}>
+        <View style={[styles.section, styles.cardsRow, compactNav && styles.cardsColumn]}>
           <PopCard style={[styles.audCard]} offset={4}>
             <View style={[styles.audPill, { backgroundColor: colors.navy }]}>
               <Text style={styles.audPillText}>FOR STUDENTS</Text>
@@ -375,7 +375,7 @@ export default function Landing() {
         </View>
 
         {/* Feature cards */}
-        <View style={[styles.section, styles.featRow]}>
+        <View style={[styles.section, styles.featRow, compactNav && styles.cardsColumn]}>
           <SoftCard style={styles.featCard}>
             <Text style={styles.featTitle}>Find What Fits</Text>
             <Text style={styles.featBody}>
@@ -518,6 +518,11 @@ const styles = StyleSheet.create({
   privacyBullets: { gap: 10, marginTop: 4 },
 
   cardsRow: { flexDirection: 'row', gap: 24, flexWrap: 'wrap' },
+  // Narrow screens: stack the cards vertically instead of a wrapped row. A wrapped row
+  // stretched the two audience cards to equal height, and audFoot's marginTop:'auto' then
+  // pinned the footer to the bottom, leaving a large empty gap in the shorter card. Stacked,
+  // each card sizes to its own content. Auto-height column, so the cards' flex:1 is inert.
+  cardsColumn: { flexDirection: 'column' },
   audCard: { flex: 1, minWidth: 300, borderRadius: radius.lg, padding: 32, gap: 16 },
   audPill: { borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 4, alignSelf: 'flex-start' },
   audPillText: { fontFamily: fonts.bodyXBold, fontSize: 11, color: colors.white, letterSpacing: 0.5 },

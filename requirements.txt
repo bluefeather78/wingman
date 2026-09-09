@@ -19,6 +19,12 @@ uvicorn[standard]==0.52.4
 PyJWT==2.13.0
 argon2-cffi==25.1.0
 
+# Sign in with Apple (App Store 4.8, app/routes/apple_oauth.py). PyJWT can verify the HS256
+# session tokens above without it, but Apple's identity token is RS256 — jwt.decode(...,
+# algorithms=["RS256"]) and PyJWKClient (which fetches Apple's JWKS) both require cryptography
+# or they raise at verify time. abi3 wheel, so Render installs it without a compiler.
+cryptography==46.0.7
+
 # PyPDF2: the resume/LinkedIn import endpoint AND the action-item substrate's capture layer
 # (wingman/source_capture.py — decodes the base64 PDF bytes Claude web_fetch returns, so a program's
 # guidelines PDF can be read and verified). Both degrade gracefully if it is missing (resume

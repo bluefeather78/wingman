@@ -10,7 +10,8 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.highschoolwingman.app",
-      "buildNumber": "2",
+      "buildNumber": "3",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -36,7 +37,8 @@
       "expo-status-bar",
       "expo-secure-store",
       "expo-web-browser",
-      "expo-font"
+      "expo-font",
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": true

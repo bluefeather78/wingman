@@ -7,6 +7,8 @@ import type {
   AiResponse,
   AiResult,
   AllowanceSnapshot,
+  AppleCredential,
+  AppleSessionResult,
   GoogleFinishInput,
   GoogleSessionResult,
   LoginResponse,
@@ -590,6 +592,30 @@ export const httpClient: ApiClient = {
     );
     if (!res.ok) throw new Error(await errorMessage(res));
     return applyTokens((await res.json()) as LoginResponse);
+  },
+
+  // --- Sign in with Apple (native iOS) ---
+  async appleNative(cred: AppleCredential, consent?: GoogleFinishInput): Promise<AppleSessionResult> {
+    // snake_case keys to match app/routes/apple_oauth.py. The backend decides session vs
+    // pending by whether the consent booleans are PRESENT — so they are spread in only when
+    // `consent` is supplied (the second, account-creating call), and omitted on the first.
+    const body: Record<string, unknown> = {
+      identity_token: cred.identityToken,
+      first_name: cred.firstName,
+      last_name: cred.lastName,
+      ...(consent ?? {}),
+    };
+    const res = await rawFetch(
+      '/api/auth/apple/native',
+      { method: 'POST', body: JSON.stringify(body) },
+      false,
+    );
+    if (!res.ok) throw new Error(await errorMessage(res));
+    const data = (await res.json()) as LoginResponse & { pending?: boolean };
+    if (data.pending) {
+      return { status: 'pending', firstName: data.firstName, lastName: data.lastName, email: data.email };
+    }
+    return { status: 'session', user: await applyTokens(data) };
   },
 
   // --- Gated user data ---

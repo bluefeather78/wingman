@@ -2,7 +2,10 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { beginGoogleSignIn } from '@/auth/googleSignIn';
+import { beginAppleSignIn, stashApplePending } from '@/auth/appleSignIn';
+import { useAuth } from '@/auth/AuthContext';
 import { Logo } from '@/ui/components';
 import { colors, fonts, radius, softShadow, space } from '@/ui/theme';
 
@@ -14,6 +17,7 @@ import { colors, fonts, radius, softShadow, space } from '@/ui/theme';
 // accounts and dev tooling still work — only the UI entry point is gone.
 export default function Login() {
   const router = useRouter();
+  const { appleSignIn } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,6 +29,35 @@ export default function Login() {
       if (Platform.OS !== 'web' && handoff) router.replace({ pathname: '/google-auth', params: { google_token: handoff } });
     } catch (e) {
       setError((e as Error).message || 'Google sign-in failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Sign in with Apple — native iOS only (App Store 4.8). The token is resolved right here: an
+  // existing/linked account enters the app immediately, and only a new account is handed to the
+  // /apple-auth consent screen (carrying the SAME credential, which appleFinish re-sends).
+  async function apple() {
+    if (busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const cred = await beginAppleSignIn();
+      if (!cred) return; // cancelled, or no identity token
+      const result = await appleSignIn(cred);
+      if (result.status === 'session') {
+        router.replace('/(app)');
+      } else {
+        stashApplePending({
+          credential: cred,
+          firstName: result.firstName ?? cred.firstName,
+          lastName: result.lastName ?? cred.lastName,
+          email: result.email,
+        });
+        router.replace('/apple-auth');
+      }
+    } catch (e) {
+      setError((e as Error).message || 'Apple sign-in failed.');
     } finally {
       setBusy(false);
     }
@@ -56,8 +89,19 @@ export default function Login() {
             </Pressable>
           </View>
 
-          {/* Google sign-in — the only way in. */}
+          {/* Google sign-in, plus Sign in with Apple on iOS (required by App Store 4.8 for a
+              social-login-only app). Apple's official button is used for review compliance and
+              is iOS-only — web and Android see just the Google button. */}
           <View style={{ gap: 12 }}>
+            {Platform.OS === 'ios' && (
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                cornerRadius={radius.md}
+                style={styles.appleBtn}
+                onPress={apple}
+              />
+            )}
             <Pressable onPress={google} style={styles.googleBtn} disabled={busy}>
               <GoogleG />
               <Text style={styles.googleText}>Continue with Google</Text>
@@ -111,6 +155,7 @@ const styles = StyleSheet.create({
     padding: 12,
     backgroundColor: colors.white,
   },
+  appleBtn: { width: '100%', height: 48 },
   googleText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.slate900 },
   gWrap: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center' },
   gText: { fontFamily: fonts.bodyXBold, fontSize: 13, color: '#4285F4' },

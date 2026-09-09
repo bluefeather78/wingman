@@ -389,6 +389,23 @@ GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 GOOGLE_TOKEN_TTL_SECONDS = 5 * 60
 
 
+# ---------- Sign in with Apple (native, iOS only) ----------
+# App Store Guideline 4.8: an app that offers only a third-party social login (we are
+# Google-only) MUST also offer Sign in with Apple. Unlike Google's browser-redirect flow, the
+# native Apple flow (expo-apple-authentication) returns a signed identity-token JWT ON DEVICE,
+# so there is no code exchange and no one-time-nonce handoff: the app POSTs the token to
+# /api/auth/apple/native and the backend verifies it directly. See app/routes/apple_oauth.py
+# and db/apple_auth_schema.sql (the users.apple_id column, parallel to google_id).
+#
+# The identity token's `aud` is this app's bundle identifier for a native sign-in (NOT an
+# OAuth client id / Services ID — those are only needed for the web redirect flow we don't
+# use). Defaulted so it works with no extra env; override APPLE_CLIENT_ID only if the bundle
+# id ever changes.
+APPLE_CLIENT_ID = os.environ.get("APPLE_CLIENT_ID", "com.highschoolwingman.app")
+APPLE_ISSUER = "https://appleid.apple.com"
+APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
+
+
 # ---------- Google Calendar sync ----------
 # A separate, additional OAuth grant from Google Sign-In above: sign-in only ever asks for
 # "openid email profile", so an existing signed-in session (password or Google) has no

@@ -532,8 +532,18 @@ const styles = StyleSheet.create({
   sectionTitle: { fontFamily: fonts.display, fontSize: 32, color: colors.navy, textAlign: 'center', marginBottom: 8 },
   sectionTitleTight: { marginBottom: 32 },
   filmFrame: { borderWidth: 3, borderColor: colors.navy, borderRadius: radius.lg, overflow: 'hidden' },
-  filmStage: { width: '100%', aspectRatio: 16 / 9, backgroundColor: colors.cream },
-  filmStagePressable: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', gap: 16, paddingHorizontal: 32 },
+  // Web keeps the 16:9 box (it holds the walkthrough iframe, whose player needs that ratio).
+  // Native has NO iframe — just a tap-to-open poster — and on a narrow phone the poster content
+  // is far taller than a 16:9 box, so forcing the ratio made it overflow and spill its text over
+  // the neighbouring sections (Fabric doesn't honour overflow:hidden here). On native the stage
+  // therefore sizes to its content instead.
+  filmStage: { width: '100%', backgroundColor: colors.cream, ...(Platform.OS === 'web' ? { aspectRatio: 16 / 9 } : null) },
+  filmStagePressable: {
+    width: '100%', alignItems: 'center', justifyContent: 'center', gap: 16, paddingHorizontal: 32,
+    // height:100% fills the fixed 16:9 box on web; on native there is no fixed height to fill, so
+    // the pressable sizes to the poster content (with vertical padding for breathing room).
+    ...(Platform.OS === 'web' ? { height: '100%' } : { paddingVertical: 40 }),
+  },
   posterBrandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   posterBrand: { fontFamily: fonts.display, fontSize: 26, color: colors.navy },
   posterHeadline: { fontFamily: fonts.display, fontSize: 26, lineHeight: 32, color: colors.navy, textAlign: 'center' },

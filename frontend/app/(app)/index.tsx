@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import {
   addUserTask,
@@ -369,10 +369,16 @@ export default function Home() {
         <Text style={styles.greetingText}>
           Hey <Text style={styles.greetingAccent}>{user?.firstName || 'there'}</Text>, ready?
         </Text>
-        {ending ? (
-          <EndingPanel days={ending.days} onResubscribe={() => { trackEvent('plan_upgrade_click'); router.push('/(app)/subscription'); }} />
-        ) : !paid ? (
-          <FreePanel onUpgrade={() => { trackEvent('plan_upgrade_click'); router.push('/(app)/subscription'); }} />
+        {/* App Store 3.1.1: the upgrade/resubscribe strips carry the $4.99 price and a CTA that
+            routes to external Stripe checkout. Apple forbids surfacing external purchase on iOS,
+            so both are web-only. The AI-actions meter below is a usage display, not a CTA, and
+            stays on every platform. Unlimited is still sold on the web. */}
+        {Platform.OS === 'web' ? (
+          ending ? (
+            <EndingPanel days={ending.days} onResubscribe={() => { trackEvent('plan_upgrade_click'); router.push('/(app)/subscription'); }} />
+          ) : !paid ? (
+            <FreePanel onUpgrade={() => { trackEvent('plan_upgrade_click'); router.push('/(app)/subscription'); }} />
+          ) : null
         ) : null}
         {/* The daily AI-actions meter is a Free-tier affordance — it counts down a cap that
             paid/Unlimited accounts don't have. Showing an "Unlimited" card to them is noise,

@@ -2,6 +2,8 @@ import type { RawActionItem, TrackerInfo } from '@/lib/tracker';
 import type {
   AiResult,
   AllowanceSnapshot,
+  AppleCredential,
+  AppleSessionResult,
   GoogleFinishInput,
   GoogleSessionResult,
   MatchRequest,
@@ -126,6 +128,12 @@ export interface ApiClient {
   googleSession(handoff: string): Promise<GoogleSessionResult>;
   // Complete a pending Google account with consent + location.
   googleFinish(handoff: string, consent: GoogleFinishInput): Promise<SessionUser>;
+
+  // --- Sign in with Apple (native iOS, App Store 4.8) ---
+  // POST the on-device identity token. Without consent it either resolves a full session
+  // (existing/linked account) or reports `pending` (new account); passing consent creates the
+  // account. The SAME credential is re-sent on the consent call, so it takes the token both times.
+  appleNative(cred: AppleCredential, consent?: GoogleFinishInput): Promise<AppleSessionResult>;
 
   // --- Gated user data (Bearer token; identity from token, body userid ignored) ---
   loadData<T = unknown>(key: string): Promise<T | null>;

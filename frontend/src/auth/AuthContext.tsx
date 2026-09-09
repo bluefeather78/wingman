@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { httpClient } from '@/api/httpClient';
 import { syncTrackerFromCatalog } from '@/api/trackerStore';
 import { identify, setTag } from '@/lib/analytics';
-import type { AllowanceSnapshot, GoogleFinishInput, GoogleSessionResult, RegisterInput, SessionUser } from '@/api/types';
+import type { AllowanceSnapshot, AppleCredential, AppleSessionResult, GoogleFinishInput, GoogleSessionResult, RegisterInput, SessionUser } from '@/api/types';
 
 // App-wide auth state, backed by the ApiClient. `ready` is false until the persisted token
 // pair has been loaded/validated on startup, so the router can avoid flashing the wrong
@@ -20,6 +20,10 @@ interface AuthState {
   // a pending new account for the caller to complete via googleFinish.
   googleSession: (handoff: string) => Promise<GoogleSessionResult>;
   googleFinish: (handoff: string, consent: GoogleFinishInput) => Promise<void>;
+  // Sign in with Apple (native iOS). appleSignIn resolves the identity token — a full session
+  // (user is set) or a pending new account for the caller to complete via appleFinish.
+  appleSignIn: (cred: AppleCredential) => Promise<AppleSessionResult>;
+  appleFinish: (cred: AppleCredential, consent: GoogleFinishInput) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -108,6 +112,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       async googleFinish(handoff, consent) {
         setUser(await httpClient.googleFinish(handoff, consent));
+      },
+      async appleSignIn(cred) {
+        const result = await httpClient.appleNative(cred);
+        if (result.status === 'session') setUser(result.user);
+        return result;
+      },
+      async appleFinish(cred, consent) {
+        const result = await httpClient.appleNative(cred, consent);
+        // With consent the backend creates (or logs into) the account and returns a session;
+        // a lingering `pending` here would mean the consent was not accepted server-side.
+        if (result.status !== 'session') {
+          throw new Error('Apple sign-in could not be completed. Please try again.');
+        }
+        setUser(result.user);
       },
     }),
     [ready, user, allowance],

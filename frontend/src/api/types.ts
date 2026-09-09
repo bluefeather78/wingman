@@ -102,6 +102,20 @@ export interface GoogleFinishInput {
   acceptedTerms: boolean;
 }
 
+// Sign in with Apple (native iOS, App Store 4.8). Unlike Google's redirect, the signed identity
+// token is returned on-device; the app POSTs it to /api/auth/apple/native, which either resolves
+// a full session (existing/linked account) or reports `pending` (new account), in which case the
+// app collects consent and re-POSTs the SAME token with the consent booleans (GoogleFinishInput).
+export interface AppleCredential {
+  identityToken: string;
+  // Apple returns the name only on the FIRST authorization, so both are optional.
+  firstName?: string;
+  lastName?: string;
+}
+
+// Same shape as GoogleSessionResult — session-or-pending — named apart for the Apple call site.
+export type AppleSessionResult = GoogleSessionResult;
+
 // --- POST /api/match (semantic recall + eligibility) -----------------------
 // The trimmed recall endpoint the Fresh Finds "suggest" path posts to. It embeds the
 // student's selected profile themes (+ any highlight projects), recalls the top rows by

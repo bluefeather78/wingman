@@ -2,6 +2,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { httpClient } from '@/api/httpClient';
 import {
   addUserTask,
@@ -219,6 +220,7 @@ export default function Home() {
   // two (and clipping). Desktop keeps them inline in the card header.
   const { width: winW } = useWindowDimensions();
   const compact = winW > 0 && winW < 768;
+  const insets = useSafeAreaInsets();
   // Seed from whatever the client already has. This screen is remounted by expo-router on
   // every visit, so without it a tab switch back to Home Base showed a full-screen spinner
   // for a round trip it had already paid for once. The fetch below still runs and still
@@ -511,7 +513,7 @@ export default function Home() {
 
       {/* "All Your Tasks" modal — ported from the live app's #todoModal. */}
       <Modal visible={tasksOpen} transparent animationType="fade" onRequestClose={() => setTasksOpen(false)}>
-        <Pressable style={[styles.modalScrim, compact && styles.modalScrimCompact]} onPress={() => setTasksOpen(false)}>
+        <Pressable style={[styles.modalScrim, compact && styles.modalScrimCompact, { paddingTop: Math.max(insets.top, compact ? 32 : 40) }]} onPress={() => setTasksOpen(false)}>
           <Pressable style={[styles.modalPanel, compact && styles.modalPanelCompact]} onPress={(e) => e.stopPropagation()}>
             <ScrollView contentContainerStyle={[styles.modalScroll, compact && styles.modalScrollCompact]} showsVerticalScrollIndicator={false}>
               <View style={styles.modalHead}>

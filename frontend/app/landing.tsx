@@ -296,7 +296,7 @@ export default function Landing() {
         </View>
 
         {/* Audience cards */}
-        <View style={[styles.section, styles.cardsRow]}>
+        <View style={[styles.section, styles.cardsRow, compactNav && styles.cardsColumn]}>
           <PopCard style={[styles.audCard]} offset={4}>
             <View style={[styles.audPill, { backgroundColor: colors.navy }]}>
               <Text style={styles.audPillText}>FOR STUDENTS</Text>
@@ -375,7 +375,7 @@ export default function Landing() {
         </View>
 
         {/* Feature cards */}
-        <View style={[styles.section, styles.featRow]}>
+        <View style={[styles.section, styles.featRow, compactNav && styles.cardsColumn]}>
           <SoftCard style={styles.featCard}>
             <Text style={styles.featTitle}>Find What Fits</Text>
             <Text style={styles.featBody}>
@@ -451,8 +451,11 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: 24,
     paddingTop: 16,
-    zIndex: 50,
-    ...(Platform.OS === 'web' ? ({ position: 'sticky', top: 16 } as object) : null),
+    // zIndex is web-only: it keeps the position:sticky header above the scrolled content on
+    // web. On native the header is not sticky (it scrolls away), so zIndex serves no purpose —
+    // and a zIndex'd child inside a ScrollView triggers an iOS compositing bug that ghosts /
+    // overlaps scrolled sections on top of each other (the "broken landing" native report).
+    ...(Platform.OS === 'web' ? ({ position: 'sticky', top: 16, zIndex: 50 } as object) : null),
   },
   headerBar: {
     flexDirection: 'row',
@@ -515,6 +518,11 @@ const styles = StyleSheet.create({
   privacyBullets: { gap: 10, marginTop: 4 },
 
   cardsRow: { flexDirection: 'row', gap: 24, flexWrap: 'wrap' },
+  // Narrow screens: stack the cards vertically instead of a wrapped row. A wrapped row
+  // stretched the two audience cards to equal height, and audFoot's marginTop:'auto' then
+  // pinned the footer to the bottom, leaving a large empty gap in the shorter card. Stacked,
+  // each card sizes to its own content. Auto-height column, so the cards' flex:1 is inert.
+  cardsColumn: { flexDirection: 'column' },
   audCard: { flex: 1, minWidth: 300, borderRadius: radius.lg, padding: 32, gap: 16 },
   audPill: { borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 4, alignSelf: 'flex-start' },
   audPillText: { fontFamily: fonts.bodyXBold, fontSize: 11, color: colors.white, letterSpacing: 0.5 },
@@ -529,8 +537,18 @@ const styles = StyleSheet.create({
   sectionTitle: { fontFamily: fonts.display, fontSize: 32, color: colors.navy, textAlign: 'center', marginBottom: 8 },
   sectionTitleTight: { marginBottom: 32 },
   filmFrame: { borderWidth: 3, borderColor: colors.navy, borderRadius: radius.lg, overflow: 'hidden' },
-  filmStage: { width: '100%', aspectRatio: 16 / 9, backgroundColor: colors.cream },
-  filmStagePressable: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', gap: 16, paddingHorizontal: 32 },
+  // Web keeps the 16:9 box (it holds the walkthrough iframe, whose player needs that ratio).
+  // Native has NO iframe — just a tap-to-open poster — and on a narrow phone the poster content
+  // is far taller than a 16:9 box, so forcing the ratio made it overflow and spill its text over
+  // the neighbouring sections (Fabric doesn't honour overflow:hidden here). On native the stage
+  // therefore sizes to its content instead.
+  filmStage: { width: '100%', backgroundColor: colors.cream, ...(Platform.OS === 'web' ? { aspectRatio: 16 / 9 } : null) },
+  filmStagePressable: {
+    width: '100%', alignItems: 'center', justifyContent: 'center', gap: 16, paddingHorizontal: 32,
+    // height:100% fills the fixed 16:9 box on web; on native there is no fixed height to fill, so
+    // the pressable sizes to the poster content (with vertical padding for breathing room).
+    ...(Platform.OS === 'web' ? { height: '100%' } : { paddingVertical: 40 }),
+  },
   posterBrandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   posterBrand: { fontFamily: fonts.display, fontSize: 26, color: colors.navy },
   posterHeadline: { fontFamily: fonts.display, fontSize: 26, lineHeight: 32, color: colors.navy, textAlign: 'center' },

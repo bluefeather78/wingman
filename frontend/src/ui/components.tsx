@@ -16,6 +16,7 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Rect } from 'react-native-svg';
 import { APP_MAX_WIDTH, colors, fonts, popShadow, radius, softShadow, space, type } from './theme';
 
@@ -94,18 +95,28 @@ export function SoftCard({
   onPress?: PressableProps['onPress'];
 }) {
   const [hovered, setHovered] = useState(false);
+  const cardStyle = [
+    styles.softCard,
+    { backgroundColor: hoverTint && hovered ? '#FBF3E9' : color },
+    softShadow(),
+    onPress ? styles.clickable : null,
+    style,
+  ];
+  // A card with no press action and no web-hover tint must NOT be a Pressable. On native,
+  // Pressable installs a start-responder UNCONDITIONALLY (it keys off `disabled`, not off
+  // whether any handler exists), so it claims the touch and steals the pan from a nested
+  // horizontal ScrollView — that is exactly why the Quest Log calendar strip could not be
+  // swiped on iOS. A plain View has no responder, so the inner ScrollView wins. Interactive
+  // and hover-tinted cards keep the Pressable (hover is web-only and harmless on native).
+  if (!onPress && !hoverTint) {
+    return <View style={cardStyle} onLayout={onLayout}>{children}</View>;
+  }
   return (
     <Pressable
       onHoverIn={hoverTint ? () => setHovered(true) : undefined}
       onHoverOut={hoverTint ? () => setHovered(false) : undefined}
       onPress={onPress}
-      style={[
-        styles.softCard,
-        { backgroundColor: hoverTint && hovered ? '#FBF3E9' : color },
-        softShadow(),
-        onPress ? styles.clickable : null,
-        style,
-      ]}
+      style={cardStyle}
       onLayout={onLayout}
     >
       {children}
@@ -603,6 +614,10 @@ export function RightDrawer({
   children: ReactNode;
 }) {
   const [mounted, setMounted] = useState(open);
+  // The panel is a full-height Modal (top:0 → bottom:0), so on a notched iPhone its header
+  // would sit under the status bar and its footer under the home indicator. Pad by the safe
+  // insets. On web these are 0, so web is unaffected.
+  const insets = useSafeAreaInsets();
   const slide = useRef(new Animated.Value(open ? 0 : 1)).current; // 0 = shown, 1 = off-screen
 
   const animateTo = useCallback(
@@ -637,7 +652,7 @@ export function RightDrawer({
       <Animated.View style={[styles.drawerScrim, { opacity: scrimOpacity }]}>
         <Pressable style={styles.drawerScrimPress} onPress={onClose} />
       </Animated.View>
-      <Animated.View style={[styles.drawerPanel, { width }, { transform: [{ translateX }] }, panelStyle]}>
+      <Animated.View style={[styles.drawerPanel, { width, paddingTop: insets.top, paddingBottom: insets.bottom }, { transform: [{ translateX }] }, panelStyle]}>
         {children}
       </Animated.View>
     </Modal>

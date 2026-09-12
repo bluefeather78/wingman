@@ -159,7 +159,24 @@
   var errMsg = document.getElementById('err-msg');
 
   // Best-effort correlation only — see app/services/survey.py. Never blocks the survey if
-  // no token is present or the storage read fails.
+  // neither is present or a lookup fails.
+  //
+  // The signed ?u=&t= pair (set by app/services/email.survey_invite_url when this page was
+  // reached via the emailed link) is preferred: it identifies the recipient even when the
+  // survey is opened in a mail app's browser with no session at all, which is the common
+  // case. The localStorage token only helps when the link happens to be opened in the same
+  // browser the visitor is already signed into Wingman with.
+  function urlUserId() {
+    try {
+      var params = new URLSearchParams(window.location.search);
+      var u = params.get('u');
+      var t = params.get('t');
+      return (u && t) ? { userid: u, t: t } : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function storedUserId() {
     try {
       var raw = localStorage.getItem('wingman-auth') || localStorage.getItem('auth');
@@ -183,13 +200,15 @@
       return;
     }
 
+    var urlId = urlUserId();
     var payload = {
       first_impression: Number(firstImpression),
       recommend_score: data.get('recommend_score') != null && data.get('recommend_score') !== ''
         ? Number(data.get('recommend_score')) : null,
       most_useful: data.get('most_useful') || '',
       missing: data.get('missing') || '',
-      userid: storedUserId(),
+      userid: urlId ? urlId.userid : storedUserId(),
+      t: urlId ? urlId.t : null,
     };
 
     submitBtn.disabled = true;

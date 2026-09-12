@@ -117,6 +117,37 @@ def unsubscribe_url(userid):
     return f"{EMAIL_APP_URL}/api/email/unsubscribe?{query}"
 
 
+# ---------------- Survey attribution ----------------
+#
+# public/survey.html needs no login, so most visitors carry no session to read a userid
+# from — see db/survey_responses_schema.sql. Since survey_invite is sent one named account
+# at a time (there is no bulk trigger), the CTA link can carry that account's id and still
+# answer "who wrote this" days later. Signed the same way as the unsubscribe link (an HMAC
+# under JWT_SECRET, not a JWT — this never expires either) so a forwarded or guessed link
+# cannot misattribute someone else's feedback to a real student.
+
+def survey_token(userid):
+    if not JWT_SECRET:
+        return ""
+    return hmac.new(JWT_SECRET.encode("utf-8"),
+                    f"survey:{userid}".encode("utf-8"),
+                    hashlib.sha256).hexdigest()[:32]
+
+
+def verify_survey_token(userid, token):
+    expected = survey_token(userid)
+    if not expected or not token:
+        return False
+    return hmac.compare_digest(expected.encode("utf-8"), str(token).encode("utf-8"))
+
+
+def survey_invite_url(userid):
+    if not userid:
+        return f"{EMAIL_APP_URL}/survey.html"
+    query = urllib.parse.urlencode({"u": userid, "t": survey_token(userid)})
+    return f"{EMAIL_APP_URL}/survey.html?{query}"
+
+
 # ---------------- Context: the numbers the templates display ----------------
 
 def _safe_display_date(value):
@@ -165,6 +196,11 @@ def build_context(kind, record):
         today = _now().date()
         units, _stats = _da.extract_deadline_units(record or {}, today)
         ctx["alerts"] = _format_deadline_alerts(_da.due_alerts(units))
+    elif kind == "survey_invite":
+        # Signed so the console preview and the real send show the exact link a recipient
+        # would click, and so an operator sending this by hand (there is no automatic
+        # trigger) gets a link that still identifies them days later.
+        ctx["survey_url"] = survey_invite_url(ctx.get("userid"))
     return ctx
 
 

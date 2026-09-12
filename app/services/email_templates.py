@@ -860,8 +860,10 @@ _SURVEY_REASON_TXT = "You're receiving this because you created a Wingman accoun
 
 def _survey_invite(ctx, unsubscribe_url):
     name = ctx.get("first_name") or "there"
-    app = EMAIL_APP_URL
-    survey_url = f"{app}/survey.html"
+    # Signed in build_context so the link identifies the recipient later (userid is
+    # otherwise usually absent — see db/survey_responses_schema.sql). Falls back to a bare
+    # link only if ctx was built without it, e.g. a hand-built preview.
+    survey_url = ctx.get("survey_url") or f"{EMAIL_APP_URL}/survey.html"
 
     content = "".join([
         _hero(

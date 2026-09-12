@@ -1,9 +1,12 @@
 """The initial-impressions survey: one INSERT into survey_responses, no auth required.
 
 This is deliberately NOT wired into any account or lifecycle-email machinery — it exists so
-public/survey.html has somewhere to POST to. `userid` is accepted but optional and unverified
-(the caller could put in anything); it is a correlation hint for reading responses later, not
-an identity check, so nothing here trusts it for access control.
+public/survey.html has somewhere to POST to. `userid` is a correlation hint for reading
+responses later, not an identity check, so nothing here trusts it for access control — but
+it IS verified (against the `t` HMAC from app.services.email.survey_invite_url) before being
+stored, so a forwarded or hand-edited link cannot misattribute someone else's feedback to a
+real student. An absent or failed token just means the response is stored anonymous, same as
+if userid had never been sent at all.
 """
 from app.config import SURVEY_SETUP_SQL
 from app.core import _supabase_request_strict, _missing_table_error
@@ -39,8 +42,13 @@ def submit_response(body):
     if first_impression is None:
         return 400, {"error": "first_impression must be a number from 1 to 5"}
 
+    from app.services.email import verify_survey_token
+    userid = _clamp_text((body or {}).get("userid"))
+    if userid and not verify_survey_token(userid, (body or {}).get("t")):
+        userid = None
+
     row = {
-        "userid": _clamp_text((body or {}).get("userid")),
+        "userid": userid,
         "first_impression": first_impression,
         "recommend_score": _clamp_int((body or {}).get("recommend_score"), 0, 10),
         "most_useful": _clamp_text((body or {}).get("most_useful")),

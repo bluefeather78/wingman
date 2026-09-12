@@ -3,7 +3,9 @@ import {
   ActivityIndicator,
   Animated,
   Easing,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -653,7 +655,12 @@ export function RightDrawer({
         <Pressable style={styles.drawerScrimPress} onPress={onClose} />
       </Animated.View>
       <Animated.View style={[styles.drawerPanel, { width, paddingTop: insets.top, paddingBottom: insets.bottom }, { transform: [{ translateX }] }, panelStyle]}>
-        {children}
+        <KeyboardAvoidingView
+          style={styles.drawerKav}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          {children}
+        </KeyboardAvoidingView>
       </Animated.View>
     </Modal>
   );
@@ -771,6 +778,7 @@ const styles = StyleSheet.create({
   drawerScrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15,23,42,0.4)' },
   drawerScrimPress: { flex: 1 },
   drawerPanel: { position: 'absolute', top: 0, bottom: 0, right: 0, backgroundColor: colors.white, maxWidth: '100%' },
+  drawerKav: { flex: 1 },
 
   vibeField: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.lavender, borderRadius: radius.lg, paddingVertical: 14, paddingHorizontal: 16 },
   vibeLabel: { fontFamily: fonts.bodyXBold, fontSize: 10, color: colors.muted, letterSpacing: 0.3, textTransform: 'uppercase', marginBottom: 6 },

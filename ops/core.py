@@ -1082,9 +1082,18 @@ def _fetch_all_accounts():
     """
     page_size, offset, out = 1000, 0, []
     while True:
-        batch = _users_request("GET", "?" + urllib.parse.urlencode({
-            "select": "*", "order": "created_at.asc",
-            "limit": str(page_size), "offset": str(offset)})) or []
+        try:
+            batch = _users_request("GET", "?" + urllib.parse.urlencode({
+                "select": "*", "order": "created_at.asc",
+                "limit": str(page_size), "offset": str(offset)})) or []
+        except Exception as e:
+            # Unlike _supabase_request, _users_request raises rather than swallowing —
+            # auth/register/token-refresh call sites need that to classify a missing-
+            # migration column. This reporting-only path has no such need: a transient
+            # Supabase blip (timeout, DNS hiccup) must degrade to "partial roster",
+            # never crash the whole Metrics view with an unhandled URLError/HTTPError.
+            print(f"[WARN] Could not fetch accounts page (offset={offset}): {e}")
+            return out
         for row in batch:
             for column in _ACCOUNT_SECRET_COLUMNS:
                 row.pop(column, None)

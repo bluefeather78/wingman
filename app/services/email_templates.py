@@ -69,7 +69,8 @@ from app.config import EMAIL_APP_URL
 # refused by name rather than silently producing an empty email. `deadline_alert` is a
 # DIGEST (a list of a student's own tracked deadlines); `subscribed` fires when a free user
 # upgrades to the paid plan; the rest are single-fact account-lifecycle notices.
-EMAIL_KINDS = ("welcome", "trial_ending", "subscribed", "goodbye", "deadline_alert")
+EMAIL_KINDS = ("welcome", "trial_ending", "subscribed", "goodbye", "deadline_alert",
+               "survey_invite")
 
 # The operating entity, from legal/terms.md §22 and legal/privacy.md. Highschool Wingman is a
 # trade name (DBA) of Blufeather Labs LLC — the footer names the legal entity and asserts
@@ -845,12 +846,55 @@ def _deadline_alert(ctx, unsubscribe_url):
     return subject, preheader, content, text, _DEADLINE_REASON, unsubscribe_url
 
 
+# ---------------- survey_invite ----------------
+#
+# A one-off "how's it going so far" nudge, not an account-lifecycle notice — nothing in
+# app/routes/*.py triggers this automatically the way "welcome" fires at signup. It exists so
+# it can be sent deliberately (console send_test, or a small one-off broadcast script) to
+# early users, whenever that batch is decided on. The CTA points at public/survey.html, a
+# static page with no login requirement, so the link works for whoever opens the email.
+
+_SURVEY_REASON = "You&rsquo;re receiving this because you created a Wingman account."
+_SURVEY_REASON_TXT = "You're receiving this because you created a Wingman account."
+
+
+def _survey_invite(ctx, unsubscribe_url):
+    name = ctx.get("first_name") or "there"
+    app = EMAIL_APP_URL
+    survey_url = f"{app}/survey.html"
+
+    content = "".join([
+        _hero(
+            badge="Quick favor?", badge_fg=ORANGE, badge_bg=ORANGE_SOFT,
+            heading=f"Thanks for joining Wingman, {_e(name)} &#128075;",
+            body=("You&rsquo;re one of our very first users, and we&rsquo;d love to know how "
+                  "it&rsquo;s going. Got 2 minutes for a short survey? It&rsquo;s four "
+                  "questions, and every answer goes straight to the small team building this."),
+            cta_url=survey_url, cta_label="Share your feedback →", cta_width=260,
+            subnote="Takes about 2 minutes &mdash; skip anything you don&rsquo;t want to answer."),
+    ])
+
+    text = (
+        f"Thanks for joining Wingman, {name}!\n\n"
+        "You're one of our very first users, and we'd love to know how it's going. Got 2\n"
+        "minutes for a short survey? It's four questions, and every answer goes straight to\n"
+        "the small team building this.\n\n"
+        f"Share your feedback: {survey_url}\n"
+        + _footer_text(_SURVEY_REASON_TXT, unsubscribe_url)
+    )
+
+    return ("Got 2 minutes for Wingman?",
+            "We&rsquo;d love to hear your first impressions &mdash; a quick 4-question survey.",
+            content, text, _SURVEY_REASON, unsubscribe_url)
+
+
 _BUILDERS = {
     "welcome": _welcome,
     "trial_ending": _trial_ending,
     "subscribed": _subscribed,
     "goodbye": _goodbye,
     "deadline_alert": _deadline_alert,
+    "survey_invite": _survey_invite,
 }
 
 

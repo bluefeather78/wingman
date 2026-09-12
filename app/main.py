@@ -23,7 +23,7 @@ from wingman import gemini_common
 from app.core import record_api_error
 from app.routes import (
     ai, opportunities, account, account_data, user_data, google_oauth, apple_oauth,
-    mailing_list, subscription, resume, auth, email, events, matching, seo_pages,
+    mailing_list, subscription, resume, auth, email, events, matching, seo_pages, survey,
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -333,7 +333,7 @@ async def http_exception_as_error(request: Request, exc: StarletteHTTPException)
 # ---------------- Public API routers ----------------
 for module in (ai, opportunities, account, account_data, user_data, google_oauth,
                apple_oauth, mailing_list, subscription, resume, auth, email, events,
-               matching, seo_pages):
+               matching, seo_pages, survey):
     app.include_router(module.router)
 
 

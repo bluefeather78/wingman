@@ -592,6 +592,7 @@ DEADLINE_ALERT_MAX_ITEMS = 10
 EMAIL_CRON_SECRET = os.environ.get("EMAIL_CRON_SECRET", "")
 
 EMAIL_SETUP_SQL = "db/email_schema.sql"
+SURVEY_SETUP_SQL = "db/survey_responses_schema.sql"
 
 # ---------- Ops console (S1-8) ----------
 # The local-only console's ONLY protection used to be `request.client.host in

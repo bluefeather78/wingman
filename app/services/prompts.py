@@ -280,7 +280,33 @@ def _profile_chat(inputs):
         and len(student_messages) % WRAP_CHECK_EVERY_STUDENT_TURNS == 0
         and not wrap_recently_offered)
 
-    if force_wrap_check:
+    # Was the turn we're replying to itself a wrap-up check-in? Recompute the same trigger
+    # one student-reply earlier, over the bot messages that existed at that point, rather
+    # than pattern-matching the model's own (variably worded) wrap-up phrasing.
+    prev_student_count = len(student_messages) - 1
+    prev_wrap_recently_offered = any(
+        "find your matches" in m.lower()
+        for m in bot_messages[:-1][-WRAP_CHECK_EVERY_STUDENT_TURNS:])
+    previous_turn_was_wrap_check = (
+        prev_student_count > 0
+        and prev_student_count % WRAP_CHECK_EVERY_STUDENT_TURNS == 0
+        and not prev_wrap_recently_offered)
+
+    if previous_turn_was_wrap_check and student_messages:
+        turn_directive = (
+            "\n\nDIRECTIVE FOR THIS TURN — this overrides every other rule above: your last "
+            "message asked the student whether they want to keep going or close out to Find "
+            f"your matches. Their reply was: \"{student_messages[-1]}\". Silently judge that "
+            "reply for intent, then output ONLY your resulting chat message — never any "
+            "explanation, labels, or reasoning about how you judged it. If it clearly reads "
+            "as wanting to stop and go find matches (mentions matches, done, that's enough, "
+            "or similar), do NOT ask a question — your whole output should be a short "
+            "friendly sign-off telling them to close the chat with the X button, which folds "
+            "everything into their profile. If it's anything else — wanting to continue, "
+            "ambiguous, or a generic \"sure\"/\"ok\" — treat it as continuing and your whole "
+            "output should be a normal next question, exactly as if this directive didn't "
+            "exist.")
+    elif force_wrap_check:
         turn_directive = (
             "\n\nDIRECTIVE FOR THIS TURN — this overrides every rule above about asking a "
             f"question: the student has now answered {len(student_messages)} times and "
@@ -332,18 +358,16 @@ def _profile_chat(inputs):
         "and casual, like a clever friend riffing with them, not a form — but every question "
         "must serve a real purpose in understanding this student for "
         "extracurricular/college-application matching.\n\n"
-        "If they say they're done in response to a wrap-up check-in, reply with a short "
-        "friendly sign-off pointing them to the X button to close the chat, which folds "
-        "everything into their profile.\n\n"
-        "No lists, no markdown, no preamble. On a turn that ends in a question, keep any "
-        "acknowledgment of their last answer to at most a few words folded into the same "
-        "sentence, never a standalone \"Great!\" — save the fuller reaction for the "
-        "no-question turns above." + turn_directive)
+        "No lists, no markdown, no preamble, and no explanation, labels, or reasoning about "
+        "how you chose your response — output ONLY the chat message itself, nothing else. On "
+        "a turn that ends in a question, keep any acknowledgment of their last answer to at "
+        "most a few words folded into the same sentence, never a standalone \"Great!\" — save "
+        "the fuller reaction for the no-question turns above." + turn_directive)
     user_content = (f"CURRENT PROFILE SUMMARY:\n{profile_text or '(empty)'}\n\n"
                     f"CONVERSATION SO FAR:\n{transcript}\n\n"
                     "Respond with your next single turn — a question, a reaction with no "
                     "question mark, or a short wrap-up check-in, per the conditions above — "
-                    "no preamble, no quotes around it.")
+                    "no preamble, no quotes around it, no explanation of your reasoning.")
     return system, user_content
 
 

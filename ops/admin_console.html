@@ -1379,6 +1379,7 @@ tr.disabled-seed { opacity: .48; }
           <button class="tab" data-kind="subscribed">Subscribed</button>
           <button class="tab" data-kind="goodbye">Goodbye</button>
           <button class="tab" data-kind="deadline_alert">Deadline alert</button>
+          <button class="tab" data-kind="survey_invite">Survey invite</button>
         </div>
         <div class="spacer"></div>
         <input id="emailPreviewUser" placeholder="mimic a userid (optional)"
@@ -1386,6 +1387,7 @@ tr.disabled-seed { opacity: .48; }
         <button class="btn btn-sm" id="emailPreviewBtn">Preview</button>
         <input id="emailTestTo" placeholder="send a copy to&hellip;" style="width:210px">
         <button class="btn" id="emailTestBtn">Send to me</button>
+        <button class="btn btn-danger" id="emailRealSendBtn">Send real email&hellip;</button>
       </div>
       <div class="card-body tight">
         <div class="hint" style="padding:10px 14px" id="emailPreviewMeta">
@@ -5783,6 +5785,34 @@ async function sendEmailTest() {
   }
 }
 
+async function sendEmailReal() {
+  const userid = ($('emailPreviewUser').value || '').trim();
+  if (!userid) { notice('Enter the userid to send to, in the field above.'); return; }
+  const warn = `Send the REAL ${S.emailKind} email to ${userid}?`
+    + '\n\nThis is not a test: it sends to their actual account email, is recorded in '
+    + 'email_sends, and honours their unsubscribe status. It cannot be sent to this same '
+    + `(userid, kind) again — email_sends dedupes it.`;
+  if (!confirm(warn)) return;
+  try {
+    const d = await api('/api/agents/emails/send', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: S.emailKind, userid }),
+    });
+    if (d.state === 'mock') {
+      notice('Mock mode: nothing was sent (RESEND_API_KEY is not set).');
+    } else if (d.state === 'skipped') {
+      notice(d.reason || 'Nothing sent for that user.');
+    } else if (d.state === 'sent') {
+      notice(`Sent to ${d.to || userid}.`);
+      loadEmails();
+    } else {
+      notice(d.reason || 'Send failed.');
+    }
+  } catch (e) {
+    notice('Send failed: ' + e.message);
+  }
+}
+
 async function runEmailSweep(dryRun) {
   const warn = 'Run the trial-ending sweep now?'
     + '\n\nThis sends real email to everyone whose trial ends soon and who has not already '
@@ -5811,6 +5841,7 @@ document.querySelectorAll('#emailKindTabs .tab').forEach(t => t.onclick = () => 
 });
 $('emailPreviewBtn').onclick = () => loadEmailPreview();
 $('emailTestBtn').onclick = () => sendEmailTest();
+$('emailRealSendBtn').onclick = () => sendEmailReal();
 $('emailSweepPreview').onclick = () => runEmailSweep(true);
 $('emailSweepRun').onclick = () => runEmailSweep(false);
 

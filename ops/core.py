@@ -5320,6 +5320,25 @@ def run_lifecycle_sweep(dry_run=False):
     return email_service.run_trial_sweep(dry_run=dry_run)
 
 
+def send_real_lifecycle_email(kind, userid):
+    """Send an actual, deduped, recorded lifecycle email to one named account.
+
+    Unlike send_test_lifecycle_email this is not a mimic to an operator's own address — it
+    is the same claim/send/record path as an automatic trigger (signup, sweep), just fired
+    by hand for one user instead of a lifecycle event. Exists for kinds like survey_invite
+    that have no automatic trigger by design; reusing send_lifecycle_email means this stays
+    subject to the same opt-out and email_sends dedupe as every other real send.
+    """
+    from app.services import email as email_service
+    from app.services.email_templates import EMAIL_KINDS
+    userid = (userid or "").strip()
+    if kind not in EMAIL_KINDS:
+        return {"state": "failed", "reason": f"unknown kind {kind!r}"}
+    if not userid:
+        return {"state": "failed", "reason": "no userid given"}
+    return email_service.send_lifecycle_email(userid, kind)
+
+
 # ---------- Layer-1 SEO program pages: evaluation + observability ----------
 # The public pages and /sitemap.xml live in app/routes/seo_pages.py (they ship); this is the
 # LOCAL half — the evaluator that scores every active row against the composite bar and stores

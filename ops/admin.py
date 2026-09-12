@@ -608,6 +608,19 @@ async def handle_email_test(request: Request):
                          result, default=str)
 
 
+@router.post("/api/agents/emails/send")
+async def handle_email_send(request: Request):
+    """Send a REAL email to one named account — deduped and recorded in email_sends, exactly
+    like an automatic trigger. For kinds with no automatic trigger (survey_invite), this is
+    the only way a real send happens; unlike /test it is not a mimic and is not repeatable
+    for the same (userid, kind)."""
+    body = await read_json_body(request)
+    result = core.send_real_lifecycle_email(
+        (body.get("kind") or "").strip(), (body.get("userid") or "").strip())
+    return json_response(200 if result.get("state") in ("sent", "mock") else 400,
+                         result, default=str)
+
+
 @router.post("/api/agents/emails/sweep")
 async def handle_email_sweep_manual(request: Request):
     """A manual catch-up run of the trial sweep, for when the scheduler was down. Safe to

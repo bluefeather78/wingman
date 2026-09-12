@@ -235,16 +235,68 @@ def _chat_starters(inputs):
     return system, user_content
 
 
+MIC_NUDGE_SHORT_ANSWER_WORD_LIMIT = 3
+MIC_NUDGE_TRIGGER_RUN = 2
+WRAP_CHECK_EVERY_STUDENT_TURNS = 5
+
+
 def _profile_chat(inputs):
     profile_text = _text(inputs, "profileText")
     chat_rounds = _int(inputs, "chatRounds")
     lines = []
+    bot_messages = []
+    student_messages = []
     for message in _list(inputs, "history"):
         if not isinstance(message, dict):
             continue
-        who = "You" if message.get("role") == "bot" else "Student"
-        lines.append(f"{who}: {_text(message, 'text')}")
+        text = _text(message, "text")
+        if message.get("role") == "bot":
+            lines.append(f"You: {text}")
+            bot_messages.append(text)
+        else:
+            lines.append(f"Student: {text}")
+            student_messages.append(text)
     transcript = "\n".join(lines) or "(nothing yet)"
+
+    # Haiku doesn't reliably self-count turns buried in a long system prompt (verified by
+    # simulation: the prose-only "after two short answers" / "every 5-6 questions" rules
+    # below silently never fired). Compute the triggers in code instead and hand the model a
+    # single unambiguous directive for THIS turn rather than a rule to apply by itself.
+    trailing_short_run = 0
+    for text in reversed(student_messages):
+        if len(text.split()) <= MIC_NUDGE_SHORT_ANSWER_WORD_LIMIT:
+            trailing_short_run += 1
+        else:
+            break
+    mic_recently_mentioned = any("mic" in m.lower() for m in bot_messages[-4:])
+    force_mic_nudge = (trailing_short_run >= MIC_NUDGE_TRIGGER_RUN
+                       and not mic_recently_mentioned)
+
+    wrap_recently_offered = any(
+        "find your matches" in m.lower()
+        for m in bot_messages[-WRAP_CHECK_EVERY_STUDENT_TURNS:])
+    force_wrap_check = (
+        len(student_messages) > 0
+        and len(student_messages) % WRAP_CHECK_EVERY_STUDENT_TURNS == 0
+        and not wrap_recently_offered)
+
+    if force_wrap_check:
+        turn_directive = (
+            "\n\nDIRECTIVE FOR THIS TURN — this overrides every rule above about asking a "
+            f"question: the student has now answered {len(student_messages)} times and "
+            "shared real substance. Do NOT ask a new question. Instead, in one short casual "
+            "line, tell them they've shared a lot of good stuff, and ask whether they want to "
+            "keep going or close this out and head to Find your matches.")
+    elif force_mic_nudge:
+        turn_directive = (
+            f"\n\nDIRECTIVE FOR THIS TURN: the student's last {trailing_short_run} answers "
+            "were all very short. Still ask your next question as normal, but open your "
+            "message by gently inviting more detail first, e.g. \"No worries if it's easier "
+            "to talk it out — hit the mic button and just ramble, I'll catch the details.\" "
+            "then ask the question.")
+    else:
+        turn_directive = ""
+
     system = (
         _CHAT_PREAMBLE + " You'll be given their CURRENT PROFILE SUMMARY (may be empty) and "
         "the CONVERSATION SO FAR in this session. Reply with exactly ONE short turn.\n\n"
@@ -280,27 +332,13 @@ def _profile_chat(inputs):
         "and casual, like a clever friend riffing with them, not a form — but every question "
         "must serve a real purpose in understanding this student for "
         "extracurricular/college-application matching.\n\n"
-        "IF THE STUDENT KEEPS ANSWERING IN ONE WORD OR A SHORT PHRASE (e.g. \"No idea\", "
-        "\"Plankton\", \"Size\"): after at least two such short answers in a row (never after "
-        "just one), gently invite more detail as a natural part of your next message — e.g. "
-        "\"No worries if it's easier to talk it out — hit the mic button and just ramble, "
-        "I'll catch the details.\" Mention the mic/voice feature by name this way at most once "
-        "every few turns, never every turn.\n\n"
-        "BE PROACTIVE ABOUT WRAPPING UP — don't wait for the student to get bored. Roughly "
-        "every 5-6 questions, or as soon as the CURRENT PROFILE SUMMARY plus this "
-        "conversation together already cover several distinct, substantive details about the "
-        "student (real interests, activities, motivations, or plans — not just trivia), stop "
-        "asking a new question and instead check in: in one short casual line, tell them "
-        "they've shared a lot of good stuff, and ask whether they want to keep going or close "
-        "this out and head to Find your matches. If they say they're done, reply with a short "
+        "If they say they're done in response to a wrap-up check-in, reply with a short "
         "friendly sign-off pointing them to the X button to close the chat, which folds "
-        "everything into their profile. A wrap-up check-in replaces your turn instead of "
-        "asking a fact-finding question, and doesn't count toward the two-follow-ups-per-"
-        "example cap above.\n\n"
+        "everything into their profile.\n\n"
         "No lists, no markdown, no preamble. On a turn that ends in a question, keep any "
         "acknowledgment of their last answer to at most a few words folded into the same "
         "sentence, never a standalone \"Great!\" — save the fuller reaction for the "
-        "no-question turns above.")
+        "no-question turns above." + turn_directive)
     user_content = (f"CURRENT PROFILE SUMMARY:\n{profile_text or '(empty)'}\n\n"
                     f"CONVERSATION SO FAR:\n{transcript}\n\n"
                     "Respond with your next single turn — a question, a reaction with no "

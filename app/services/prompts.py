@@ -235,40 +235,139 @@ def _chat_starters(inputs):
     return system, user_content
 
 
+MIC_NUDGE_SHORT_ANSWER_WORD_LIMIT = 3
+MIC_NUDGE_TRIGGER_RUN = 2
+WRAP_CHECK_EVERY_STUDENT_TURNS = 5
+
+
 def _profile_chat(inputs):
     profile_text = _text(inputs, "profileText")
     chat_rounds = _int(inputs, "chatRounds")
     lines = []
+    bot_messages = []
+    student_messages = []
     for message in _list(inputs, "history"):
         if not isinstance(message, dict):
             continue
-        who = "You" if message.get("role") == "bot" else "Student"
-        lines.append(f"{who}: {_text(message, 'text')}")
+        text = _text(message, "text")
+        if message.get("role") == "bot":
+            lines.append(f"You: {text}")
+            bot_messages.append(text)
+        else:
+            lines.append(f"Student: {text}")
+            student_messages.append(text)
     transcript = "\n".join(lines) or "(nothing yet)"
+
+    # Haiku doesn't reliably self-count turns buried in a long system prompt (verified by
+    # simulation: the prose-only "after two short answers" / "every 5-6 questions" rules
+    # below silently never fired). Compute the triggers in code instead and hand the model a
+    # single unambiguous directive for THIS turn rather than a rule to apply by itself.
+    trailing_short_run = 0
+    for text in reversed(student_messages):
+        if len(text.split()) <= MIC_NUDGE_SHORT_ANSWER_WORD_LIMIT:
+            trailing_short_run += 1
+        else:
+            break
+    mic_recently_mentioned = any("mic" in m.lower() for m in bot_messages[-4:])
+    force_mic_nudge = (trailing_short_run >= MIC_NUDGE_TRIGGER_RUN
+                       and not mic_recently_mentioned)
+
+    wrap_recently_offered = any(
+        "find your matches" in m.lower()
+        for m in bot_messages[-WRAP_CHECK_EVERY_STUDENT_TURNS:])
+    force_wrap_check = (
+        len(student_messages) > 0
+        and len(student_messages) % WRAP_CHECK_EVERY_STUDENT_TURNS == 0
+        and not wrap_recently_offered)
+
+    # Was the turn we're replying to itself a wrap-up check-in? Recompute the same trigger
+    # one student-reply earlier, over the bot messages that existed at that point, rather
+    # than pattern-matching the model's own (variably worded) wrap-up phrasing.
+    prev_student_count = len(student_messages) - 1
+    prev_wrap_recently_offered = any(
+        "find your matches" in m.lower()
+        for m in bot_messages[:-1][-WRAP_CHECK_EVERY_STUDENT_TURNS:])
+    previous_turn_was_wrap_check = (
+        prev_student_count > 0
+        and prev_student_count % WRAP_CHECK_EVERY_STUDENT_TURNS == 0
+        and not prev_wrap_recently_offered)
+
+    if previous_turn_was_wrap_check and student_messages:
+        turn_directive = (
+            "\n\nDIRECTIVE FOR THIS TURN — this overrides every other rule above: your last "
+            "message asked the student whether they want to keep going or close out to Find "
+            f"your matches. Their reply was: \"{student_messages[-1]}\". Silently judge that "
+            "reply for intent, then output ONLY your resulting chat message — never any "
+            "explanation, labels, or reasoning about how you judged it. If it clearly reads "
+            "as wanting to stop and go find matches (mentions matches, done, that's enough, "
+            "or similar), do NOT ask a question — your whole output should be a short "
+            "friendly sign-off telling them to close the chat with the X button, which folds "
+            "everything into their profile. If it's anything else — wanting to continue, "
+            "ambiguous, or a generic \"sure\"/\"ok\" — treat it as continuing and your whole "
+            "output should be a normal next question, exactly as if this directive didn't "
+            "exist.")
+    elif force_wrap_check:
+        turn_directive = (
+            "\n\nDIRECTIVE FOR THIS TURN — this overrides every rule above about asking a "
+            f"question: the student has now answered {len(student_messages)} times and "
+            "shared real substance. Do NOT ask a new question. Instead, in one short casual "
+            "line, tell them they've shared a lot of good stuff, and ask whether they want to "
+            "keep going or close this out and head to Find your matches.")
+    elif force_mic_nudge:
+        turn_directive = (
+            f"\n\nDIRECTIVE FOR THIS TURN: the student's last {trailing_short_run} answers "
+            "were all very short. Still ask your next question as normal, but open your "
+            "message by gently inviting more detail first, e.g. \"No worries if it's easier "
+            "to talk it out — hit the mic button and just ramble, I'll catch the details.\" "
+            "then ask the question.")
+    else:
+        turn_directive = ""
+
     system = (
         _CHAT_PREAMBLE + " You'll be given their CURRENT PROFILE SUMMARY (may be empty) and "
-        "the CONVERSATION SO FAR in this session. Ask exactly ONE short, fun, "
-        "wacky-but-meaningful question. If their last answer introduced something specific — a "
-        "project, a role, a place, a result — follow up on THAT rather than changing the "
-        "subject: ask what exactly they did, what their part in it was, what surprised them, "
-        "or what they'd change. Only open a new topic when the last answer was thin or the "
-        "thread is genuinely exhausted, and then favour ground the profile hasn't covered "
-        "(music, sports/athletics, hobbies, family or community involvement, leadership "
-        "moments, part-time jobs, quirks of personality). Your question must be ONE short, "
-        "plain sentence — never a run-on, never two questions joined with \"and\"/\"or\"/a "
-        "semicolon. Draw on at most 2-3 specific details at a time — don't try to connect four "
-        f"or more dots into one elaborate question. This is chat round {chat_rounds + 1} of "
-        "them returning to this page — the more rounds, the more specific and creative your "
-        "questions should get; don't repeat ground already covered earlier in this "
-        "conversation. Keep your tone playful and casual, like a clever friend riffing with "
-        "them, not a form — but every question must serve a real purpose in understanding this "
-        "student for extracurricular/college-application matching. No lists, no markdown, no "
-        "preamble, and no \"Great!\" acknowledgment beyond at most a few words of playful "
-        "reaction folded into the same sentence.")
+        "the CONVERSATION SO FAR in this session. Reply with exactly ONE short turn.\n\n"
+        "VARY THE TURN TYPE — don't make every single turn a question, that reads like an "
+        "interrogation. Most turns should still be a fun, wacky-but-meaningful question, but "
+        "roughly one turn in three or four should instead be a short, genuine reaction or "
+        "observation about what they just said, with NO question mark at all, that implicitly "
+        "invites them to keep going rather than explicitly asking them to. Example: instead of "
+        "\"What made you want to count them?\", say something like \"Whoa, plankton math nerd "
+        "— most people wouldn't even think to count them.\" and stop there. Never do this two "
+        "turns in a row, never as your very first turn of the session, and never right after a "
+        "wrap-up check-in — those moments need a real question to keep the conversation moving. "
+        "When the conditions further down say so, reply with a short wrap-up check-in instead "
+        "of a question or reaction.\n\n"
+        "WHAT COUNTS AS A GOOD FOLLOW-UP: only follow up on something the student just said "
+        "if the answer would reveal their interests, motivations, choices, skills, or plans — "
+        "not just a physical or procedural detail of the story. Good example: they mention "
+        "looking at plankton under a microscope -> ask what made them want to look closer "
+        "instead of just moving on, or whether it's nudging them toward a specific kind of "
+        "science. Bad example: asking what ruler they used, how big the plankton were, or "
+        "other measurement/equipment trivia that teaches you nothing new about THEM. If your "
+        "best next question is the bad kind, pivot instead to a completely different, "
+        "uncovered area of their life (music, sports/athletics, hobbies, family or community "
+        "involvement, leadership moments, part-time jobs, quirks of personality). Never spend "
+        "more than two questions in a row drilling into the same specific example — after "
+        "that, pivot even if it feels unfinished.\n\n"
+        "Your question must be ONE short, plain sentence — never a run-on, never two "
+        "questions joined with \"and\"/\"or\"/a semicolon. Draw on at most 2-3 specific "
+        "details at a time — don't try to connect four or more dots into one elaborate "
+        f"question. This is chat round {chat_rounds + 1} of them returning to this page — "
+        "the more rounds, the more specific and creative your questions should get; don't "
+        "repeat ground already covered earlier in this conversation. Keep your tone playful "
+        "and casual, like a clever friend riffing with them, not a form — but every question "
+        "must serve a real purpose in understanding this student for "
+        "extracurricular/college-application matching.\n\n"
+        "No lists, no markdown, no preamble, and no explanation, labels, or reasoning about "
+        "how you chose your response — output ONLY the chat message itself, nothing else. On "
+        "a turn that ends in a question, keep any acknowledgment of their last answer to at "
+        "most a few words folded into the same sentence, never a standalone \"Great!\" — save "
+        "the fuller reaction for the no-question turns above." + turn_directive)
     user_content = (f"CURRENT PROFILE SUMMARY:\n{profile_text or '(empty)'}\n\n"
                     f"CONVERSATION SO FAR:\n{transcript}\n\n"
-                    "Respond with your next single question only — no preamble, no quotes "
-                    "around it.")
+                    "Respond with your next single turn — a question, a reaction with no "
+                    "question mark, or a short wrap-up check-in, per the conditions above — "
+                    "no preamble, no quotes around it, no explanation of your reasoning.")
     return system, user_content
 
 

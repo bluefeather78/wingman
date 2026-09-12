@@ -147,6 +147,7 @@ export default function Profile() {
   const [highlightSet, setHighlightSet] = useState<Set<string> | null>(null);
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+  const chatScrollRef = useRef<ScrollView>(null);
   const cardY = useRef(0);
   const sectionsY = useRef(0);
   const fieldY = useRef<Record<string, number>>({});
@@ -179,6 +180,13 @@ export default function Profile() {
   useEffect(() => () => {
     if (clearArmTimer.current) clearTimeout(clearArmTimer.current);
   }, []);
+
+  // Keep the newest bot question in view — without this the drawer's inner ScrollView stays
+  // scrolled wherever the student left it as new messages (and the "thinking…" bubble) get
+  // appended below the fold.
+  useEffect(() => {
+    chatScrollRef.current?.scrollToEnd({ animated: true });
+  }, [history, busy]);
 
   // Open the chat drawer once, after the profile has loaded, when arriving via ?chat=1. Runs
   // through the AI gate like the on-screen buttons, so a free-tier student who's out of AI
@@ -746,7 +754,7 @@ export default function Profile() {
               </Pressable>
             </View>
           </View>
-          <ScrollView style={styles.drawerBody} contentContainerStyle={styles.drawerBodyContent}>
+          <ScrollView ref={chatScrollRef} style={styles.drawerBody} contentContainerStyle={styles.drawerBodyContent}>
             {!starters && history.length === 0 && !startersLoading && <Text style={styles.emptyState}>Cooking up a few conversation starters…</Text>}
             {startersLoading && !starters && <ActivityIndicator color={colors.navy} />}
             {starters && history.length === 0 && (

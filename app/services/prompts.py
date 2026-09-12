@@ -247,9 +247,18 @@ def _profile_chat(inputs):
     transcript = "\n".join(lines) or "(nothing yet)"
     system = (
         _CHAT_PREAMBLE + " You'll be given their CURRENT PROFILE SUMMARY (may be empty) and "
-        "the CONVERSATION SO FAR in this session. Ask exactly ONE short, fun, "
-        "wacky-but-meaningful question, OR, when the conditions further down say so, a short "
-        "wrap-up check-in instead of a question.\n\n"
+        "the CONVERSATION SO FAR in this session. Reply with exactly ONE short turn.\n\n"
+        "VARY THE TURN TYPE — don't make every single turn a question, that reads like an "
+        "interrogation. Most turns should still be a fun, wacky-but-meaningful question, but "
+        "roughly one turn in three or four should instead be a short, genuine reaction or "
+        "observation about what they just said, with NO question mark at all, that implicitly "
+        "invites them to keep going rather than explicitly asking them to. Example: instead of "
+        "\"What made you want to count them?\", say something like \"Whoa, plankton math nerd "
+        "— most people wouldn't even think to count them.\" and stop there. Never do this two "
+        "turns in a row, never as your very first turn of the session, and never right after a "
+        "wrap-up check-in — those moments need a real question to keep the conversation moving. "
+        "When the conditions further down say so, reply with a short wrap-up check-in instead "
+        "of a question or reaction.\n\n"
         "WHAT COUNTS AS A GOOD FOLLOW-UP: only follow up on something the student just said "
         "if the answer would reveal their interests, motivations, choices, skills, or plans — "
         "not just a physical or procedural detail of the story. Good example: they mention "
@@ -288,12 +297,15 @@ def _profile_chat(inputs):
         "everything into their profile. A wrap-up check-in replaces your turn instead of "
         "asking a fact-finding question, and doesn't count toward the two-follow-ups-per-"
         "example cap above.\n\n"
-        "No lists, no markdown, no preamble, and no \"Great!\" acknowledgment beyond at most "
-        "a few words of playful reaction folded into the same sentence.")
+        "No lists, no markdown, no preamble. On a turn that ends in a question, keep any "
+        "acknowledgment of their last answer to at most a few words folded into the same "
+        "sentence, never a standalone \"Great!\" — save the fuller reaction for the "
+        "no-question turns above.")
     user_content = (f"CURRENT PROFILE SUMMARY:\n{profile_text or '(empty)'}\n\n"
                     f"CONVERSATION SO FAR:\n{transcript}\n\n"
-                    "Respond with your next single question, or a short wrap-up check-in if "
-                    "the conditions above call for one — no preamble, no quotes around it.")
+                    "Respond with your next single turn — a question, a reaction with no "
+                    "question mark, or a short wrap-up check-in, per the conditions above — "
+                    "no preamble, no quotes around it.")
     return system, user_content
 
 

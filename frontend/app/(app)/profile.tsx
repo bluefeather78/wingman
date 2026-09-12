@@ -949,7 +949,10 @@ const styles = StyleSheet.create({
   bubbleUser: { backgroundColor: '#E0E7FF', alignSelf: 'flex-end', borderTopLeftRadius: 14, borderTopRightRadius: 14, borderBottomRightRadius: 2, borderBottomLeftRadius: 14 },
   bubbleText: { fontFamily: fonts.bodySemi, fontSize: 13, lineHeight: 18, color: colors.slate900 },
   drawerFoot: { padding: 20, paddingTop: 14, borderTopWidth: 2, borderTopColor: colors.lavender, flexDirection: 'row', gap: 8 },
-  chatInput: { flex: 1, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, paddingVertical: 12, paddingHorizontal: 12, fontFamily: fonts.bodyMed, fontSize: 13, color: colors.slate900, backgroundColor: colors.white },
+  // 16px, not the bubbleText/13 the rest of the drawer uses: iOS Safari auto-zooms the whole
+  // page on focus for any text input under 16px, which is what threw the header and Send
+  // button out of view when the keyboard opened (recorded on a real iPhone, 2026-09-11).
+  chatInput: { flex: 1, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, paddingVertical: 12, paddingHorizontal: 12, fontFamily: fonts.bodyMed, fontSize: 16, color: colors.slate900, backgroundColor: colors.white },
   voiceBtn: { backgroundColor: colors.white, borderWidth: 2, borderColor: colors.slate900, borderRadius: radius.md, width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   voiceBtnOn: { backgroundColor: '#E0E7FF' },
   voiceBtnText: { fontSize: 15 },

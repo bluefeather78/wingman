@@ -622,6 +622,29 @@ export function RightDrawer({
   const insets = useSafeAreaInsets();
   const slide = useRef(new Animated.Value(open ? 0 : 1)).current; // 0 = shown, 1 = off-screen
 
+  // KeyboardAvoidingView below only fires on native — it listens for RN's Keyboard module
+  // events, which web never emits. Most students hit this drawer in mobile Safari/Chrome
+  // (Platform.OS is 'web' there too, even on an iPhone, so the 'ios' behavior branch never
+  // ran for them), where the on-screen keyboard shrinks window.visualViewport instead of
+  // firing any RN event. Track that shrink directly and pad the panel by it so the footer
+  // (Send/close) stays above the keyboard there too.
+  const [webKeyboardInset, setWebKeyboardInset] = useState(0);
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined' || !window.visualViewport) return;
+    const vv = window.visualViewport;
+    const update = () => {
+      const inset = window.innerHeight - vv.height - vv.offsetTop;
+      setWebKeyboardInset(Math.max(0, Math.round(inset)));
+    };
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
+  }, []);
+
   const animateTo = useCallback(
     (to: number, done?: () => void) => {
       Animated.timing(slide, {
@@ -654,7 +677,7 @@ export function RightDrawer({
       <Animated.View style={[styles.drawerScrim, { opacity: scrimOpacity }]}>
         <Pressable style={styles.drawerScrimPress} onPress={onClose} />
       </Animated.View>
-      <Animated.View style={[styles.drawerPanel, { width, paddingTop: insets.top, paddingBottom: insets.bottom }, { transform: [{ translateX }] }, panelStyle]}>
+      <Animated.View style={[styles.drawerPanel, { width, paddingTop: insets.top, paddingBottom: insets.bottom + webKeyboardInset }, { transform: [{ translateX }] }, panelStyle]}>
         <KeyboardAvoidingView
           style={styles.drawerKav}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}

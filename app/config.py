@@ -162,11 +162,18 @@ AI_SHED_RETRY_AFTER_SECONDS = int(os.environ.get("AI_SHED_RETRY_AFTER_SECONDS", 
 # many could run at once. A class opening the Quest Log together could hold most of the 40
 # shared slots in paid checks while the catalog stopped answering.
 #
-# 4, from the plan, and unlike the AI lane there is no reason to argue with it: this work is
-# far slower and far more expensive per call than an /api/ai request, it is never on the
-# app-open path (the cross-user 7-day cache serves that), and four concurrent fresh checks is
-# already more than this catalog's real traffic produces.
-PAID_CHECK_MAX_CONCURRENCY = int(os.environ.get("PAID_CHECK_MAX_CONCURRENCY", "") or 4)
+# Raised from 4 to 20 on 2026-09-12 (operator decision, informed by the impact review in that
+# session). The client add flow now fans out fresh checks for never-checked rows in PARALLEL
+# under a per-user bound (~3-4 in flight), rather than the old serial one-at-a-time add — so
+# this lane is what lets SEVERAL students' bursts run concurrently instead of serialising at 4
+# (roughly five users' batches at once). It stays a hard ceiling and a 503+Retry-After shed, so
+# the guard against a spend spike / threadpool starvation is intact — only the headroom moved.
+# Still overridable via the env var, and still worth revisiting against the (unconfirmed)
+# Anthropic tier and the eventual paid host: 20 of ~40 shared slots leaves 20 for data routes,
+# and Render Free's 0.1 CPU cannot truly drive 20 slow calls at once, so the real limiter under
+# load may be CPU/tier before this number. The per-user client bound is what keeps a single
+# batch from ever needing all 20.
+PAID_CHECK_MAX_CONCURRENCY = int(os.environ.get("PAID_CHECK_MAX_CONCURRENCY", "") or 20)
 PAID_CHECK_SHED_RETRY_AFTER_SECONDS = int(
     os.environ.get("PAID_CHECK_SHED_RETRY_AFTER_SECONDS", "") or 10)
 

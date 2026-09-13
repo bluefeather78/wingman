@@ -24,6 +24,7 @@ Talks to the LOCAL ops server (localhost-gated, like every /api/agents/* route).
 import argparse
 import json
 import os
+import urllib.error
 import urllib.request
 
 from wingman import queue_flags
@@ -90,14 +91,42 @@ def plan_triage(rows, *, reject_hubs=False, reject_none=False, reject_stale=Fals
 
 # --- I/O (the only impure part) -------------------------------------------------------
 
+def _ops_token():
+    """The ops token to authenticate /api/agents/* (S1-8), from the env or .env (same order
+    server.py uses). Every ops route fails closed with 403 without a matching X-Ops-Token."""
+    tok = os.environ.get("WINGMAN_OPS_TOKEN")
+    if tok:
+        return tok
+    try:
+        env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+        with open(env_path) as fh:
+            for line in fh:
+                key, _, value = line.partition("=")
+                if key.strip() == "WINGMAN_OPS_TOKEN" and value.strip():
+                    return value.strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
+
+
+def _ops_headers(extra=None):
+    headers = dict(extra or {})
+    tok = _ops_token()
+    if tok:
+        headers["X-Ops-Token"] = tok
+    return headers
+
+
 def _get_json(url, timeout=60):
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
+    req = urllib.request.Request(url, headers=_ops_headers(), method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.load(resp)
 
 
 def _post_json(url, body, timeout=60):
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+                                 headers=_ops_headers({"Content-Type": "application/json"}),
+                                 method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.load(resp)
 
@@ -122,6 +151,15 @@ def main():
     base = args.api_base.rstrip("/")
     try:
         data = _get_json(f"{base}/api/agents/pending?status=queue&limit=2000")
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            raise SystemExit(
+                f"[ERROR] Ops server refused the request (403) at {base}. The /api/agents/* routes "
+                f"require WINGMAN_OPS_TOKEN in an X-Ops-Token header (S1-8). Set WINGMAN_OPS_TOKEN in "
+                f".env to the value the server is using (python server.py prints it if it minted one) "
+                f"and re-run.")
+        raise SystemExit(f"[ERROR] Could not read the queue from {base}: {e}. Is the ops server up "
+                         f"(python server.py)?")
     except Exception as e:
         raise SystemExit(f"[ERROR] Could not read the queue from {base}: {e}. Is the ops server up "
                          f"(python server.py)?")

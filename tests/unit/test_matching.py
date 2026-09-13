@@ -175,6 +175,33 @@ def test_recall_applies_grade_and_geo():
     assert [r["id"] for r in out] == ["ok"]
 
 
+def test_recall_excludes_tracked_ids_before_the_cut():
+    # exclude_ids (rows the student already tracks) are dropped BEFORE the top-`limit` cut, so the
+    # pool is `limit` FRESH rows — a tracked top match does not consume a slot.
+    themes = [[1.0, 0.0]]
+    rows = [
+        _row("tracked", [1.0, 0.0]),   # best cosine, but already in the Quest Log
+        _row("fresh1", [0.9, 0.1]),
+        _row("fresh2", [0.8, 0.2]),
+    ]
+    out = m.recall(rows, themes, limit=2, exclude_ids={"tracked"})
+    assert [r["id"] for r in out] == ["fresh1", "fresh2"]
+
+
+def test_recall_exclude_ids_none_keeps_everything():
+    themes = [[1.0, 0.0]]
+    rows = [_row("a", [1.0, 0.0]), _row("b", [0.9, 0.1])]
+    assert [r["id"] for r in m.recall(rows, themes, exclude_ids=None)] == ["a", "b"]
+    assert [r["id"] for r in m.recall(rows, themes, exclude_ids=set())] == ["a", "b"]
+
+
+def test_recall_excludes_tracked_on_thin_profile_too():
+    # The exclusion is an objective filter, so it applies on the unscored (thin-profile) path.
+    rows = [_row("tracked", [1.0, 0.0]), _row("fresh", [0.0, 1.0])]
+    out = m.recall(rows, [], limit=10, exclude_ids={"tracked"})
+    assert [r["id"] for r in out] == ["fresh"]
+
+
 def test_recall_drops_rows_without_vectors_when_scoring():
     themes = [[1.0, 0.0]]
     rows = [_row("has", [1.0, 0.0]), {"id": "novec", "status": "running"}]

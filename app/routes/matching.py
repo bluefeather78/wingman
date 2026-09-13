@@ -52,7 +52,8 @@ def handle_match(body: dict = Depends(json_body),
     """Recall + eligibility over the whole catalog for one student.
 
     Body: {grade, location:{state,...}, profile_themes:[{theme,intent,next_steps}|str],
-           highlight_projects:[str], funnel_answers:{citizenship?,gender?}}.
+           highlight_projects:[str], funnel_answers:{citizenship?,gender?},
+           exclude_ids:[str] (rows the student already tracks — dropped from the pool)}.
     Returns: {results:[{...row, score, strong, }...], pool_size, excluded_ineligible:[ids],
               embed_cost_usd, checked}.
 
@@ -90,12 +91,17 @@ def handle_match(body: dict = Depends(json_body),
         return opaque_error(502, DB_UNAVAILABLE, e, op="matching.db")
 
     student = _student_from_body(body)
+    # Rows the student already tracks (Quest Log), dropped before the top-`limit` cut so the pool
+    # is `limit` FRESH opportunities — the finder paginates the reranking over this pool, so a
+    # repeat would waste a page slot on a card the student already has.
+    exclude_ids = {str(i) for i in (body.get("exclude_ids") or []) if i is not None}
 
     if not live:
         # Mock/offline (no key, or the spend circuit breaker is open): no embeddings (recall
         # returns the filtered set unscored), no eligibility model call. Honest degraded list
         # rather than a broken screen.
-        pool, _cost, scores = recall_pool(rows, student, lambda texts: ([], 0.0))
+        pool, _cost, scores = recall_pool(rows, student, lambda texts: ([], 0.0),
+                                          exclude_ids=exclude_ids)
         return json_response(200, {
             "results": attach_display(pool, scores), "pool_size": len(pool),
             "excluded_ineligible": [], "embed_cost_usd": 0.0, "checked": 0,
@@ -119,7 +125,7 @@ def handle_match(body: dict = Depends(json_body),
         return text
 
     try:
-        pool, embed_cost, scores = recall_pool(rows, student, _embed)
+        pool, embed_cost, scores = recall_pool(rows, student, _embed, exclude_ids=exclude_ids)
         gate = gate_pool_eligibility(pool, student, _gate, extract_json)
         results = attach_display(gate["pool"], scores)
     except Exception as e:

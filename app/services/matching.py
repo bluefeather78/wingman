@@ -326,6 +326,7 @@ def recall(
     project_vectors: list | None = None,
     type_prefs: list | None = None,
     min_score: float | None = None,
+    exclude_ids: set | None = None,
 ) -> list[dict]:
     """Narrow the active catalog to the top-`limit` semantic matches for a student.
 
@@ -340,9 +341,14 @@ def recall(
 
     Pure: no I/O, no wall-clock. Ordering is by descending best score; ties keep input order."""
     # 1. Objective filters — status, loosened grade, geo scope, and the pre-recall cost/time asks.
+    #    `exclude_ids` drops rows the student already tracks (Quest Log) BEFORE the top-`limit`
+    #    cut, so the pool is `limit` FRESH opportunities rather than `limit` minus repeats — the
+    #    finder passes its tracked ids so paginating never spends a slot on a card the student
+    #    already has.
     survivors = [
         r for r in rows
         if (r.get("status") != "not_running")
+        and (not exclude_ids or r.get("id") not in exclude_ids)
         and recall_grade_ok(r, student_grade)
         and geo_scope_ok(r, student_state)
         and recall_cost_ok(r, cost_pref)

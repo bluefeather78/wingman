@@ -106,11 +106,12 @@ def _scores_by_id(pool, theme_vecs, project_vecs):
     return {r.get("id"): float(s) for r, s in zip(scorable, scores)}
 
 
-def recall_pool(rows, student, embed_themes_fn, recall_limit=RECALL_POOL_SIZE):
+def recall_pool(rows, student, embed_themes_fn, recall_limit=RECALL_POOL_SIZE, exclude_ids=None):
     """Embed the student's themes + highlight projects, run recall, and attach each survivor's
     cosine score. Returns (pool, embed_cost, scores_by_id). A thin/empty profile still gets a
     filtered, unscored pool (recall's contract); its scores map is empty and nothing is "strong".
-    Themes + projects embed in ONE call, then split — project matches carry PROJECT_MATCH_BOOST."""
+    Themes + projects embed in ONE call, then split — project matches carry PROJECT_MATCH_BOOST.
+    `exclude_ids` (row ids the student already tracks) are dropped before the top-`limit` cut."""
     theme_texts, project_texts = student_embed_texts(student)
     theme_vecs, project_vecs, embed_cost = ([], [], 0.0)
     if theme_texts or project_texts:
@@ -120,7 +121,8 @@ def recall_pool(rows, student, embed_themes_fn, recall_limit=RECALL_POOL_SIZE):
     location = student.get("location") or {}
     state = location.get("state") if isinstance(location, dict) else None
     pool = recall(rows, theme_vecs, student_grade=student.get("grade"),
-                  student_state=state, limit=recall_limit, project_vectors=project_vecs)
+                  student_state=state, limit=recall_limit, project_vectors=project_vecs,
+                  exclude_ids=exclude_ids)
     return pool, embed_cost, _scores_by_id(pool, theme_vecs, project_vecs)
 
 

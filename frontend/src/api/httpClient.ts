@@ -330,9 +330,17 @@ export const AI_TIMEOUT_MS = 180_000;
 
 /** Paths whose answer waits on a model, and so get the longer ceiling. */
 function timeoutFor(path: string): number {
-  return /^\/api\/(ai|match|deadline|action-items|extract-from-resume|tracker\/sync)/.test(path)
-    ? AI_TIMEOUT_MS
-    : REQUEST_TIMEOUT_MS;
+  // Match on the path only, never the query string (?refresh=1 etc.).
+  const p = path.split('?')[0];
+  // Top-level model routes, matched by their leading segment.
+  if (/^\/api\/(ai|match|extract-from-resume|tracker\/sync)(\/|$)/.test(p)) return AI_TIMEOUT_MS;
+  // deadline & action-items are NESTED under /api/opportunities/{id}/..., so they must be
+  // matched by SUFFIX. The old prefix-only regex listed them but could never match them there,
+  // so both silently got the 45s ceiling — and a fresh multi-rung deadline check routinely
+  // runs longer than 45s, aborting client-side into "Live details couldn't be fetched" before
+  // the server ever answers. This is the timeout half of that bug.
+  if (/\/(deadline|action-items)$/.test(p)) return AI_TIMEOUT_MS;
+  return REQUEST_TIMEOUT_MS;
 }
 
 /**

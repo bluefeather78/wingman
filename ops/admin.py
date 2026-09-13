@@ -334,6 +334,17 @@ async def handle_link_queue_resolve(request: Request):
     return json_response(200 if result.get("ok") else 400, result, default=str)
 
 
+@router.post("/api/agents/link-queue/edit-url")
+async def handle_link_queue_edit_url(request: Request):
+    """Manually replace a link-queue row's URL. Body: {id, url}. Scoped in core to rows in the
+    link queue (pending/repaired), so it can fix a live row's rotted link without being a
+    general catalog editor. An active row's finding is cleared; an inactive row is parked as
+    'repaired' for the Activate button. Never activates anything (MARQUEE M2)."""
+    body = await read_json_body(request)
+    result = core.edit_link_url(body.get("id"), body.get("url"))
+    return json_response(200 if result.get("ok") else 400, result, default=str)
+
+
 @router.get("/api/agents/metadata-refresh-queue")
 def handle_metadata_refresh_queue(request: Request):
     """Read-only: rows activated but not yet run through agents/refresh_opportunities.py. Backs the

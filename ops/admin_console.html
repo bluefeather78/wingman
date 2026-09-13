@@ -2725,6 +2725,7 @@ function linkRowHtml(o) {
     <td class="mono">${esc(o.link_status_code || '—')}</td>
     <td class="mono">${o.link_dead_since ? esc(ago(o.link_dead_since)) : '—'}</td>
     <td style="white-space:nowrap">
+      <button class="btn btn-sm" onclick="editLinkUrl('${esc(o.id)}')" title="Manually replace this URL. The finding clears and the next sweep re-verifies the new link.">Edit URL</button>
       <button class="btn btn-sm" onclick="resolveLink(['${esc(o.id)}'], 'clear')" title="Dismiss the finding; the program stays live.">Clear</button>
       <button class="btn btn-sm btn-danger" onclick="resolveLink(['${esc(o.id)}'], 'deactivate')" title="Take this row out of the catalog.">Deactivate</button>
     </td>
@@ -2752,6 +2753,7 @@ function linkRepairedRowHtml(o) {
     <td class="mono" style="font-size:11px;opacity:.7">${esc(wasUrl || '—')}</td>
     <td style="white-space:nowrap">
       <button class="btn btn-sm" onclick="resolveRepaired(['${esc(o.id)}'], 'activate')" title="Put this row live with its repaired URL.">Activate</button>
+      <button class="btn btn-sm" onclick="editLinkUrl('${esc(o.id)}')" title="Manually replace this URL before activating.">Edit URL</button>
       <button class="btn btn-sm btn-danger" onclick="resolveRepaired(['${esc(o.id)}'], 'deactivate')" title="Keep off — dismiss the repair, row stays inactive.">Keep off</button>
     </td>
   </tr>`;
@@ -2852,6 +2854,36 @@ async function resolveLink(ids, action) {
 
 function resolveLinkSelected(action) {
   resolveLink([...S.selectedLinks], action);
+}
+
+// Manually replace one row's URL from the Links tab. Seeds the prompt with the current URL so
+// a typo-fix or a moved path is a small edit. The backend (edit_link_url) is scoped to rows in
+// the link queue, clears the finding on a live row, and parks an inactive row as 'repaired' for
+// the Activate button — it never activates anything itself.
+async function editLinkUrl(id) {
+  const row = (S.linkQueue || []).find(o => o.id === id)
+           || (S.linkRepaired || []).find(o => o.id === id);
+  const current = (row && row.url) || '';
+  const next = prompt('New URL for this program (the finding clears and the next link '
+                    + 'sweep re-checks it):', current);
+  if (next === null) return;                 // cancelled
+  const url = next.trim();
+  if (!url || url === current) return;       // nothing to change
+  try {
+    const r = await api('/api/agents/link-queue/edit-url', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, url }),
+    });
+    toast(r.was_active ? 'URL updated — finding cleared, row stays live.'
+                       : 'URL updated — parked for review, click Activate when verified.');
+    if (r.schema_ready === false) {
+      notice('URL saved, but the review flag could not be written — run db/link_health_schema.sql.');
+    }
+    S.selectedLinks.delete(id); S.selectedRepaired.delete(id);
+    await loadLinkQueue();
+  } catch (e) {
+    notice('Could not update the URL: ' + e.message);
+  }
 }
 
 // The repaired list's own actions: Activate (put live with the repaired URL) or Keep off.

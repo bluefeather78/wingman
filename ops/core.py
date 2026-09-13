@@ -1827,6 +1827,118 @@ def resolve_link_queue(ids, action, reviewed_by="admin-console"):
             "schema_ready": schema_ready}
 
 
+# The link-finding flags agents/check_links.py owns (its _OWNED_PREFIXES). A manual URL edit
+# supersedes whatever finding was raised against the OLD url, so we strip these before writing
+# — otherwise the row keeps advertising "dead link (404)" against a URL that no longer exists.
+# Kept in sync with check_links deliberately: matching on a prefix means an edited wording there
+# does not orphan the strip here.
+_LINK_FINDING_PREFIXES = ("dead link (", "link unverifiable (", "link unreachable (",
+                          "link redirects to a site homepage", "URL was dead (",
+                          "possible replacement found")
+# The link_* telemetry columns, reset to NULL on a manual edit so the row reads "unchecked"
+# rather than carrying the OLD url's dead verdict, and so the next sweep (link_checked_at is
+# NULL ⇒ due) re-verifies the URL a person just typed. Mirrors agents/check_links.py's LINK_COLUMNS
+# minus link_review_status, which this function sets explicitly rather than clearing.
+_LINK_TELEMETRY_COLUMNS = ("link_status", "link_status_code", "link_checked_at",
+                           "link_dead_since")
+
+
+def edit_link_url(opp_id, new_url):
+    """Manually replace a link-queue row's URL from the Links tab.
+
+    Scoped to rows that are actually IN the link queue (link_review_status in
+    'pending'/'repaired'), which is what lets it touch a LIVE row — a link finding can sit on a
+    still-active program (the checker never deactivates) — without becoming a general catalog
+    editor. That scoping is this function's answer to the same worry update_pending_opportunity
+    guards against with its is_active=false check; the queue membership is the boundary here.
+
+    What it does with the edit, and why each half:
+      * strips the checker's stale finding flags (see _LINK_FINDING_PREFIXES) and records the old
+        URL as an audit flag, so the change is reversible by hand and the row stops advertising a
+        finding against a URL that no longer exists;
+      * resets the link_* telemetry to NULL so the row reads "unchecked" and the next --all sweep
+        re-verifies the URL a person just typed (link_checked_at NULL ⇒ due);
+      * routes by visibility. An ACTIVE row: the finding is resolved, so link_review_status is
+        set back to NULL — the row drops out of the pending queue and stays live with the new
+        URL, and if the typed URL is itself broken the next sweep re-queues it (check_links only
+        writes 'pending' over a NULL). An INACTIVE row: the new URL is a proposed replacement, so
+        it is parked at link_review_status='repaired' for the existing Activate button. Nothing
+        here ever sets is_active=true — MARQUEE M2: no code path auto-activates a catalog row.
+    """
+    opp_id = str(opp_id or "").strip()
+    if not opp_id:
+        return {"ok": False, "error": "No opportunity id given."}
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
+
+    new_url = str(new_url or "").strip()
+    if not new_url:
+        return {"ok": False, "error": "url cannot be empty."}
+    if not new_url.lower().startswith(("http://", "https://")):
+        return {"ok": False, "error": "url must start with http:// or https://."}
+
+    existing = _supabase_request("opportunities", params={
+        "select": "id,is_active,url,quality_flags,link_review_status",
+        "id": f"eq.{opp_id}", "limit": "1"})
+    if existing is None:
+        return {"ok": False, "error": "Could not read that opportunity from Supabase."}
+    if not existing:
+        return {"ok": False, "error": f"No opportunity with id {opp_id}."}
+    row = existing[0]
+    if (row.get("link_review_status") or "").strip().lower() not in ("pending", "repaired"):
+        return {"ok": False, "error": "That row is not in the link review queue, so its URL "
+                                      "cannot be edited here. Use the Review-queue Edit for "
+                                      "rows awaiting activation, or the catalog directly."}
+    old_url = (row.get("url") or "").strip()
+    if new_url == old_url:
+        return {"ok": False, "error": "That is already the URL on this row."}
+
+    is_active = bool(row.get("is_active"))
+    # Keep everyone else's flags (the scraper's, a reviewer's); drop only the checker's own
+    # finding flags, which described the OLD url. Then add one audit flag naming the old URL.
+    kept = [f for f in (row.get("quality_flags") or [])
+            if isinstance(f, str) and not f.startswith(_LINK_FINDING_PREFIXES)]
+    # An inactive row's audit flag starts with "URL was dead (" on purpose: the repaired-list
+    # renderer reads the old URL out of exactly that prefix ("...; previously <url>"), so the
+    # manual edit shows up there identically to an automatic repair.
+    audit = (f"URL was dead (manual edit); previously {old_url or '?'}" if not is_active
+             else f"URL manually edited in console; previously {old_url or '?'}")
+    updates = {
+        "url": new_url,
+        "quality_flags": kept + [audit],
+        "link_review_status": None if is_active else "repaired",
+        "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    for col in _LINK_TELEMETRY_COLUMNS:
+        updates[col] = None
+
+    schema_ready = True
+    try:
+        _commit_patch(opp_id, updates)
+    except Exception as e:  # noqa: BLE001
+        if not _is_missing_column_error(e):
+            return {"ok": False, "error": f"Update failed: {str(e)[:200]}"}
+        # Without the link_health migration there is no link_review_status/link_* to write, so
+        # the URL swap still lands but the queue routing cannot. Same fallback shape
+        # resolve_link_queue uses.
+        schema_ready = False
+        stripped = {"url": new_url, "quality_flags": kept + [audit],
+                    "updated_at": updates["updated_at"]}
+        try:
+            _commit_patch(opp_id, stripped)
+        except Exception as e2:  # noqa: BLE001
+            return {"ok": False, "error": f"Update failed: {str(e2)[:200]}"}
+
+    # A live row's URL is public, so drop the catalog cache exactly as a deactivate would.
+    if is_active:
+        bust_catalog_cache()
+
+    return {"ok": True, "id": opp_id, "url": new_url, "old_url": old_url,
+            "was_active": is_active,
+            "review_status": updates.get("link_review_status"),
+            "schema_ready": schema_ready}
+
+
 def _commit_insert(rows):
     req = urllib.request.Request(
         f"{SUPABASE_URL}/rest/v1/opportunities",

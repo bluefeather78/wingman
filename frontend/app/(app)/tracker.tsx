@@ -169,6 +169,49 @@ export default function Tracker() {
     return () => clearTimeout(t);
   }, [view]);
 
+  // The freshness pass: pull cached deadline/task data for tracked rows (free sync), then fan
+  // out a parallel, per-card "Checking dates…" fresh check for the never-checked ones. Shared by
+  // the focus effect (arriving / returning to the Quest Log) AND addSelected (adding from the
+  // in-page search box) so both fill in dates identically. The search box does not re-focus the
+  // screen, so without calling this there its just-added cards would sit status-only until the
+  // next visit. `isAlive` lets the focus-effect caller stop applying results once it unmounts.
+  const runFreshnessPass = useCallback((isAlive: () => boolean, force: boolean) => {
+    syncTrackerFromCatalog({ force })
+      .then((r) => {
+        if (!isAlive()) return;
+        if (r.updated && r.data) setData(r.data);
+        // Stamp "Last checked" with when the CATALOG last verified these deadlines
+        // (dates_last_checked_at), NOT the sync's wall-clock — the sync only mirrors.
+        if (r.lastCheckedAt) {
+          const stamp = new Date(r.lastCheckedAt).toLocaleString('en-US', {
+            month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+          });
+          setLastCheckedLabel(`Last checked: ${stamp}`);
+        }
+        // Rows the sync could only give a status to (never deadline-checked) get a PAID fresh
+        // check, fanned out in parallel with a per-card "Checking dates…" bar — the page is
+        // already rendered, so nothing blocks on these. Bounded per-id-per-session inside
+        // verifyNeverCheckedDeadlines, so a row that never resolves is not re-billed each visit.
+        if (r.neverChecked.length) {
+          verifyNeverCheckedDeadlines(r.neverChecked, {
+            onCardStart: (id) => isAlive() && setCheckingIds((prev) => new Set(prev).add(id)),
+            onCardDone: (id, freshData) => {
+              if (!isAlive()) return;
+              setCheckingIds((prev) => {
+                const n = new Set(prev);
+                n.delete(id);
+                return n;
+              });
+              // freshData is mutated in place; a shallow copy gives React a new reference so
+              // the resolved card re-renders with its dates.
+              setData({ ...freshData });
+            },
+          }).catch(() => null);
+        }
+      })
+      .catch(() => null);
+  }, [setLastCheckedLabel]);
+
   useFocusEffect(
     useCallback(() => {
       let alive = true;
@@ -184,48 +227,11 @@ export default function Tracker() {
           setSaved(s);
         })
         .catch((e) => alive && setError((e as Error).message));
-      // Free catalog sync (throttled): pull any deadline/task updates the catalog has picked
-      // up since this snapshot was written, and re-render if anything changed. Runs after the
-      // fast local load above so the screen paints immediately, then quietly updates. No paid
-      // check — that stays on "Check for updates".
-      // Force the sync when arriving straight from an add, so the just-added cards pick up any
-      // cached dates immediately rather than waiting out the 5-minute throttle.
-      syncTrackerFromCatalog({ force: justAdded.size > 0 })
-        .then((r) => {
-          if (!alive) return;
-          if (r.updated && r.data) setData(r.data);
-          // Stamp "Last checked" with when the CATALOG last verified these deadlines
-          // (dates_last_checked_at), NOT the sync's wall-clock — the sync only mirrors. This
-          // is why the line no longer reads "never" on a fresh load of already-verified data.
-          if (r.lastCheckedAt) {
-            const stamp = new Date(r.lastCheckedAt).toLocaleString('en-US', {
-              month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
-            });
-            setLastCheckedLabel(`Last checked: ${stamp}`);
-          }
-          // Rows the sync could only give a status to (never deadline-checked) get a PAID fresh
-          // check, fanned out in parallel with a per-card "Checking dates…" spinner — the page
-          // is already rendered, so nothing blocks on these. Bounded per-id-per-session inside
-          // verifyNeverCheckedDeadlines, so a row that never resolves is not re-billed each visit.
-          if (r.neverChecked.length) {
-            verifyNeverCheckedDeadlines(r.neverChecked, {
-              onCardStart: (id) =>
-                alive && setCheckingIds((prev) => new Set(prev).add(id)),
-              onCardDone: (id, freshData) => {
-                if (!alive) return;
-                setCheckingIds((prev) => {
-                  const n = new Set(prev);
-                  n.delete(id);
-                  return n;
-                });
-                // freshData is mutated in place; a shallow copy gives React a new reference so
-                // the resolved card re-renders with its dates.
-                setData({ ...freshData });
-              },
-            }).catch(() => null);
-          }
-        })
-        .catch(() => null);
+      // Free catalog sync + per-card fresh checks. Runs after the fast local load above so the
+      // screen paints immediately, then quietly fills in dates. Force the sync when arriving
+      // straight from an add so the just-added cards pick up cached dates without waiting out
+      // the 5-minute throttle.
+      runFreshnessPass(() => alive, justAdded.size > 0);
       return () => {
         alive = false;
         // Matches script.js showPage(): navigating away from the Quest Log ends the batch,
@@ -233,7 +239,7 @@ export default function Tracker() {
         // the cards rendered until the next focus re-reads the (now empty) set.
         clearNewlyAdded();
       };
-    }, []),
+    }, [runFreshnessPass]),
   );
 
   async function remove(id: string) {
@@ -488,6 +494,11 @@ export default function Tracker() {
         // Same treatment a Fresh Finds add gets: badged NEW, floated to the top.
         markNewlyAdded(addedIds);
         setNewIds(new Set(addedIds));
+        // Fill in the just-added cards' dates. Fresh Finds gets this from the focus effect when
+        // it navigates here; a search-box add does NOT re-focus the (already-open) Quest Log, so
+        // trigger the same sync + parallel per-card fresh check explicitly. Without this the new
+        // cards would sit status-only until the next visit.
+        runFreshnessPass(() => true, true);
       }
       const listOf = (names: string[]) => {
         const shown = names.slice(0, 3).join(', ');

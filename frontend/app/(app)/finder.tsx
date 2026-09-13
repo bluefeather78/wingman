@@ -33,7 +33,6 @@ import { suggestStates } from '@/lib/usStates';
 import { buildMetaPills } from '@/lib/opportunityPills';
 import { awaitProfileWrites } from '@/lib/profileWrites';
 import {
-  extractTrackerInfo,
   findBucketForKind,
   // ONE definition, shared with the Quest Log's catalog search. There used to be a verbatim
   // copy here too; see the note in src/lib/finderSearch.ts.
@@ -923,7 +922,7 @@ export default function Finder() {
   }
 
   // P8 (collapsed producer): the add is now three INDEPENDENT sources, each authoritative
-  // for its own slice, replacing the old full extractTrackerInfo() web-search pass that
+  // for its own slice, replacing the old full extractTrackerInfo web-search pass that
   // re-derived everything the two Claude endpoints already produce verified.
   //   meta/fit  — the slim Gemini call (descriptive only, no dates, no search)
   //   dates/status/note — the shared, cached deadline endpoint (the ONLY date producer now;
@@ -951,17 +950,11 @@ export default function Finder() {
     const reviewSummary = (opp.review_summary as string) ?? null;
     const summary = (opp.summary as string) || '';
 
-    let slim: { meta?: string; fit?: string } = {};
-    try {
-      try {
-        slim = await extractTrackerInfo(callFeature, opp);
-      } catch (firstErr) {
-        console.warn(`Retrying ${opp.name} after error:`, (firstErr as Error).message);
-        slim = await extractTrackerInfo(callFeature, opp);
-      }
-    } catch (err) {
-      console.warn(`meta/fit extraction failed for ${opp.name}:`, (err as Error).message);
-    }
+    // meta/fit from data already in hand — no model call on the add path (see trackerAdd.ts
+    // for the full rationale). `meta` is superseded by the facet pills and `fit` is toggle-only
+    // on the Quest Log card, so the old meta/fit Gemini call bought a per-item
+    // blocking round trip for two cosmetic fields that already had catalog fallbacks.
+    const meta = [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · ');
 
     let deadline: Partial<TrackerInfo> | null = null;
     try {
@@ -993,13 +986,13 @@ export default function Finder() {
       status,
       reviewStatus,
       reviewSummary,
-      meta: slim.meta || [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · '),
+      meta,
       // Structured facets for the Quest Log's meta pills (opp.location is the FORMAT).
       price: (opp.price as string) ?? null,
       format: (opp.location as string) ?? null,
       state: (opp.state as string) ?? null,
       season: (opp.season as string) ?? null,
-      fit: slim.fit || reason || summary,
+      fit: reason || summary,
       note: deadline?.important_date_note
         || (deadline
           ? 'Details from the opportunities database — confirm on the official site.'

@@ -84,13 +84,15 @@ describe('callFeatureJSON is the only retry', () => {
 });
 
 describe('the call sites do not add a second retry', () => {
-  it('trackerAdd extracts meta/fit at most twice per opportunity', async () => {
-    // Reading the source rather than driving the whole add path: the regression is somebody
-    // re-adding a try/catch retry, and that is exactly what this sees.
-    const src = await import('node:fs').then((fs) =>
-      fs.readFileSync(new URL('../src/api/trackerAdd.ts', import.meta.url), 'utf8'));
-    const extractCalls = src.match(/extractTrackerInfo\(/g) ?? [];
-    expect(extractCalls.length).toBe(1);
+  it('the add path makes no meta/fit model call', async () => {
+    // extractTrackerInfo was dropped from the add path (its only outputs, meta/fit, are built
+    // from catalog data now). The regression this guards against is someone reintroducing a
+    // per-item model call on add — in EITHER copy of the add flow.
+    const fs = await import('node:fs');
+    const add = fs.readFileSync(new URL('../src/api/trackerAdd.ts', import.meta.url), 'utf8');
+    const finder = fs.readFileSync(new URL('../app/(app)/finder.tsx', import.meta.url), 'utf8');
+    expect(add.match(/extractTrackerInfo\(/g) ?? []).toHaveLength(0);
+    expect(finder.match(/extractTrackerInfo\(/g) ?? []).toHaveLength(0);
   });
 
   it('the finder never calls the ranker from inside a catch', async () => {

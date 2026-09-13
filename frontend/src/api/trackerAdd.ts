@@ -3,7 +3,6 @@ import { addTrackerItemChecked } from './trackerStore';
 import type { Opportunity } from './types';
 import type { Bucket } from '@/lib/constants';
 import {
-  extractTrackerInfo,
   findBucketForKind,
   kindForOpp,
   normalizeVerifiedActionItems,
@@ -11,8 +10,6 @@ import {
   type TrackerInfo,
 } from '@/lib/tracker';
 import { isValidDateISO } from '@/lib/dateISO';
-
-const callFeature = httpClient.callFeature.bind(httpClient);
 
 export interface AddCatalogResult {
   /** False when the item was already tracked (by id OR url) and nothing was written. */
@@ -28,11 +25,10 @@ export function bucketForOpp(opp: Opportunity): Bucket {
   return findBucketForKind(kindForOpp(opp));
 }
 
-// Single source of truth for "add a catalog Opportunity to the Quest Log". Ported verbatim
-// from finder.tsx's addOneToTracker so Fresh Finds and the Quest Log's catalog search cannot
-// drift: meta/fit via extractTrackerInfo, the shared (cached) deadline check, the
-// server-verified action-item checklist, then addTrackerItemChecked. Same cost profile as
-// before — no new prompt, no new paid path.
+// Single source of truth for "add a catalog Opportunity to the Quest Log". Kept in step with
+// finder.tsx's addOneToTracker so Fresh Finds and the Quest Log's catalog search cannot drift:
+// meta/fit from catalog data (no model call), the shared (cached) deadline check, the
+// server-verified action-item checklist, then addTrackerItemChecked.
 export async function addCatalogOpportunity(
   opp: Opportunity,
   bucket: Bucket,
@@ -44,16 +40,13 @@ export async function addCatalogOpportunity(
   const reviewSummary = (opp.review_summary as string) ?? null;
   const summary = (opp.summary as string) || '';
 
-  let slim: { meta?: string; fit?: string } = {};
-  try {
-    // No retry here: extractTrackerInfo goes through callFeatureJSON, which already retries
-    // once and covers a transient network error as well as a parse failure (MARQUEE M9,
-    // Phase 5, finding 7). Retrying again made adding ONE opportunity cost up to four billed
-    // extraction calls, and the finder adds a whole selection at once.
-    slim = await extractTrackerInfo(callFeature, opp);
-  } catch (err) {
-    console.warn(`meta/fit extraction failed for ${opp.name}:`, (err as Error).message);
-  }
+  // meta/fit are built from data already in hand — no model call on the add path. The old
+  // meta/fit Gemini call produced only these two cosmetic fields (dates/status/
+  // tasks moved to the verified endpoints in P8), and both already had catalog fallbacks that
+  // were indistinguishable in practice: `meta` is superseded by buildMetaPills from the facet
+  // fields, and `fit` is toggle-only on the Quest Log card. Using the fallbacks directly
+  // removes a per-item blocking round trip from every add.
+  const meta = [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · ');
 
   let deadline: Partial<TrackerInfo> | null = null;
   try {
@@ -85,13 +78,13 @@ export async function addCatalogOpportunity(
     status,
     reviewStatus,
     reviewSummary,
-    meta: slim.meta || [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · '),
+    meta,
     // Structured facets for the Quest Log's meta pills (opp.location is the FORMAT).
     price: (opp.price as string) ?? null,
     format: (opp.location as string) ?? null,
     state: (opp.state as string) ?? null,
     season: (opp.season as string) ?? null,
-    fit: slim.fit || reason || summary,
+    fit: reason || summary,
     note: deadline?.important_date_note
       || (deadline
         ? 'Details from the opportunities database — confirm on the official site.'

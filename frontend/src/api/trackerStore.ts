@@ -452,9 +452,16 @@ let _lastCatalogStamp: string | null = null;
 // device inherits the previous one's "Last checked" stamp, and — worse — inherits the
 // THROTTLE, so their first sync is skipped and they see stale tracker data with a timestamp
 // that was never theirs.
+// Ids we have already fired a per-card fresh deadline check for THIS session. A never-checked
+// row that comes back silent/unreachable is not stamped, so it stays "never checked" — without
+// this guard it would be re-billed on every Quest Log focus. Once-per-id-per-session matches the
+// old passive on-view semantics without the per-focus amplification. Cleared on session reset.
+const _freshCheckAttempted = new Set<string>();
+
 export function resetCatalogSyncState(): void {
   _lastCatalogSyncAt = 0;
   _lastCatalogStamp = null;
+  _freshCheckAttempted.clear();
 }
 
 onSessionReset(resetCatalogSyncState);
@@ -466,6 +473,12 @@ export interface CatalogSyncResult {
   /** Freshest catalog dates_last_checked_at across tracked items, for the "Last checked"
    *  line — this is when the DATA was verified, not when the mirror ran. Null if unknown. */
   lastCheckedAt: string | null;
+  /** Tracked ids whose catalog row has NEVER been deadline-checked (dates_last_checked_at is
+   *  empty). These are the rows the free sync can give a status to but no dates — the caller
+   *  fans out a paid fresh check for them (verifyNeverCheckedDeadlines). Empty when the sync
+   *  was throttled or returned nothing. A not_running/rolling row has been checked (it carries
+   *  a stamp), so it is correctly NOT here. */
+  neverChecked: string[];
 }
 
 export async function syncTrackerFromCatalog(
@@ -473,27 +486,31 @@ export async function syncTrackerFromCatalog(
 ): Promise<CatalogSyncResult> {
   const now = Date.now();
   if (!opts?.force && now - _lastCatalogSyncAt < SYNC_MIN_INTERVAL_MS) {
-    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp };
+    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp, neverChecked: [] };
   }
   let data: TrackerData;
   try {
     data = await loadTrackerData();
   } catch {
-    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp };
+    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp, neverChecked: [] };
   }
   const items = flattenItems(data);
   const ids = items.map((i) => i.id).filter(Boolean);
   if (!ids.length) {
     _lastCatalogSyncAt = now;
-    return { data, updated: 0, lastCheckedAt: _lastCatalogStamp };
+    return { data, updated: 0, lastCheckedAt: _lastCatalogStamp, neverChecked: [] };
   }
   const catalog = await httpClient.syncTracker(ids); // never throws; {} on failure
   // Stamp the throttle only after a real answer, so a failed/empty sync (network down, signed
   // out) is retried on the next trigger instead of being throttled out for 5 minutes.
   if (!Object.keys(catalog).length) {
-    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp };
+    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp, neverChecked: [] };
   }
   _lastCatalogSyncAt = now;
+  // Catalog rows we have never deadline-checked: a stamp-less row. The caller fans out a paid
+  // fresh check for these (a checked row — running / not_running / rolling alike — carries a
+  // stamp and is skipped).
+  const neverChecked = ids.filter((id) => catalog[id] && !catalog[id].dates_last_checked_at);
   // The "Last checked" line means "when was this deadline data verified against the source".
   // That is the catalog's dates_last_checked_at, not now() — the sync only mirrors. Take the
   // freshest across tracked items (ISO strings compare lexicographically for the same offset;
@@ -520,7 +537,7 @@ export async function syncTrackerFromCatalog(
       // persisted. The next sync will re-derive and retry the write.
     }
   }
-  return { data, updated, lastCheckedAt: _lastCatalogStamp };
+  return { data, updated, lastCheckedAt: _lastCatalogStamp, neverChecked };
 }
 
 // Quest Log's "Check for updates" button — ported from script.js's refreshTracker(), minus
@@ -595,6 +612,73 @@ export async function refreshTrackerDeadlines(
     data, checked, updated, deadlineUpdates, taskUpdates,
     skipped, blocked, failed, signedOut, total: items.length,
   };
+}
+
+export interface FreshCheckHandlers {
+  /** A card's fresh check started — the caller shows a per-card "Checking dates…" state. */
+  onCardStart?: (id: string) => void;
+  /** A card's fresh check finished (resolved or not). `data` is the tracker data with this
+   *  card's result merged in — the caller re-renders from it and clears the card's spinner. */
+  onCardDone?: (id: string, data: TrackerData) => void;
+  /** In-flight paid checks. Bounded to stay under the server's paid lane (shared, global) so
+   *  the fan-out does not just convert "slow" into a pile of 503 sheds. Default 3. */
+  concurrency?: number;
+}
+
+// Fan out a PAID fresh deadline check for never-checked rows, in PARALLEL, one card at a time
+// resolving independently (P: optimistic add). This is the VERIFY half for rows the free sync
+// could only give a status to — it fills in their dates and verified checklist without blocking
+// the page. Unlike refreshTrackerDeadlines (the button, which FORCES a re-check of every row),
+// this targets only stamp-less rows and does NOT force (there is no cache to bypass).
+//
+// Bounded per-id-per-session (_freshCheckAttempted): a row that comes back silent/unreachable is
+// not stamped and would otherwise be re-billed on every focus. 503 (lane full) and 402 (free
+// allowance) surface as a non-ok outcome and simply leave the card status-only — no auto-retry,
+// so a shed check is never silently re-billed. MARQUEE M9: this is the same paid deadline/
+// checklist call the add used to make inline, relocated here and parallelised; no new paid path.
+export async function verifyNeverCheckedDeadlines(
+  neverCheckedIds: string[],
+  handlers?: FreshCheckHandlers,
+): Promise<{ data: TrackerData; checked: number; updated: number }> {
+  const data = await loadTrackerData();
+  const byId = new Map(flattenItems(data).map((i) => [i.id, i] as const));
+  const ids = neverCheckedIds.filter((id) => byId.has(id) && !_freshCheckAttempted.has(id));
+  if (!ids.length) return { data, checked: 0, updated: 0 };
+  ids.forEach((id) => _freshCheckAttempted.add(id));
+
+  let checked = 0;
+  let updated = 0;
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (cursor < ids.length) {
+      const id = ids[cursor++];
+      const item = byId.get(id);
+      if (!item) continue;
+      handlers?.onCardStart?.(id);
+      try {
+        // force=false: a never-checked row has no cache to bypass, so the endpoint runs a fresh
+        // check anyway, and force would needlessly hit the forced-recheck cooldown.
+        const res = await httpClient.getDeadlineCheckResult(id, false);
+        if (res.outcome === 'ok' && res.info) {
+          checked++;
+          const dateChanged = applyDeadlineToTrackerItem(item, res.info);
+          const shared = await httpClient.getActionItems(id);
+          const taskChanged = applyTasksToTrackerItem(item, shared?.action_items);
+          if (dateChanged || taskChanged) updated++;
+          // Persist incrementally so a mid-run navigation keeps whatever has resolved so far.
+          try { await saveTrackerData(data); } catch { /* re-derived next sync */ }
+        }
+        // A non-ok outcome (404 no row, 402 over allowance, 503 lane full, network error)
+        // leaves the card status-only. Not re-attempted this session.
+      } catch {
+        // Network/abort: same as above — leave the card as-is.
+      }
+      handlers?.onCardDone?.(id, data);
+    }
+  }
+  const lanes = Math.min(Math.max(1, handlers?.concurrency ?? 3), ids.length);
+  await Promise.all(Array.from({ length: lanes }, () => worker()));
+  return { data, checked, updated };
 }
 
 export function countItems(data: TrackerData): number {

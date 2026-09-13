@@ -20,6 +20,7 @@ import {
   removeTrackerItem,
   saveTrackerSaved,
   syncTrackerFromCatalog,
+  verifyNeverCheckedDeadlines,
   type SavedState,
   type TrackerData,
   type TrackerItem,
@@ -132,6 +133,9 @@ export default function Tracker() {
   // Snapshotted on focus rather than read during render: the batch is module state, so
   // reading it inline would make the sort order depend on when a re-render happened.
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
+  // Ids with a per-card fresh deadline check in flight (optimistic add): each renders a
+  // "Checking dates…" line until its result lands, so the page is not blocked on the slow ones.
+  const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set());
   // Calendar tile -> list card jump, ported from script.js's goToTrackerCard(): switch to
   // list view, then once its cards exist scroll the matching one into view and flash it.
   const [highlightId, setHighlightId] = useState<string | null>(null);
@@ -184,7 +188,9 @@ export default function Tracker() {
       // up since this snapshot was written, and re-render if anything changed. Runs after the
       // fast local load above so the screen paints immediately, then quietly updates. No paid
       // check — that stays on "Check for updates".
-      syncTrackerFromCatalog()
+      // Force the sync when arriving straight from an add, so the just-added cards pick up any
+      // cached dates immediately rather than waiting out the 5-minute throttle.
+      syncTrackerFromCatalog({ force: justAdded.size > 0 })
         .then((r) => {
           if (!alive) return;
           if (r.updated && r.data) setData(r.data);
@@ -196,6 +202,27 @@ export default function Tracker() {
               month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
             });
             setLastCheckedLabel(`Last checked: ${stamp}`);
+          }
+          // Rows the sync could only give a status to (never deadline-checked) get a PAID fresh
+          // check, fanned out in parallel with a per-card "Checking dates…" spinner — the page
+          // is already rendered, so nothing blocks on these. Bounded per-id-per-session inside
+          // verifyNeverCheckedDeadlines, so a row that never resolves is not re-billed each visit.
+          if (r.neverChecked.length) {
+            verifyNeverCheckedDeadlines(r.neverChecked, {
+              onCardStart: (id) =>
+                alive && setCheckingIds((prev) => new Set(prev).add(id)),
+              onCardDone: (id, freshData) => {
+                if (!alive) return;
+                setCheckingIds((prev) => {
+                  const n = new Set(prev);
+                  n.delete(id);
+                  return n;
+                });
+                // freshData is mutated in place; a shallow copy gives React a new reference so
+                // the resolved card re-renders with its dates.
+                setData({ ...freshData });
+              },
+            }).catch(() => null);
           }
         })
         .catch(() => null);
@@ -613,6 +640,7 @@ export default function Tracker() {
                 bucket={bucket}
                 isSaved={false}
                 isNew={newIds.has(item.id)}
+                checking={checkingIds.has(item.id)}
                 onRemove={remove}
                 onToggleSaved={toggleSaved}
                 highlighted={item.id === highlightId}

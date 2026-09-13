@@ -23,6 +23,7 @@ export function ListCard({
   bucket,
   isSaved,
   isNew,
+  checking,
   onRemove,
   onToggleSaved,
   highlighted,
@@ -34,6 +35,10 @@ export function ListCard({
   bucket: Bucket;
   isSaved: boolean;
   isNew?: boolean;
+  // A per-card fresh deadline check is in flight for this row (optimistic add: the row was
+  // added with a status but no dates yet). Shows a "Checking dates…" line where the dates go,
+  // so the rest of the page is not blocked while never-checked rows fill in.
+  checking?: boolean;
   onRemove: (id: string) => void;
   onToggleSaved: (id: string) => void;
   highlighted?: boolean;
@@ -206,6 +211,15 @@ export function ListCard({
           <Text style={[styles.estimatedText, styles.rollingText]}>
             Open now — rolling admission, apply anytime.
           </Text>
+        </View>
+      )}
+
+      {/* Optimistic add: a per-card fresh check is filling in this never-checked row's dates.
+          Shown only while there are no dates yet, and never over a terminal status (rolling /
+          not_running are already their own answer). */}
+      {checking && milestones.length === 0 && !notRunning && !rolling && (
+        <View style={styles.estimatedNote}>
+          <Text style={styles.estimatedText}>⟳ Checking dates…</Text>
         </View>
       )}
 

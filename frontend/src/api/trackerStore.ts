@@ -638,24 +638,57 @@ export interface FreshCheckHandlers {
 // allowance) surface as a non-ok outcome and simply leave the card status-only — no auto-retry,
 // so a shed check is never silently re-billed. MARQUEE M9: this is the same paid deadline/
 // checklist call the add used to make inline, relocated here and parallelised; no new paid path.
+//
+// WRITES ARE SERIALIZED AND RE-READ (fixes the background-clobber bug): the CHECKS run in
+// parallel (the slow part), but each result is committed one-at-a-time through a promise chain
+// that RE-LOADS the current tracker before applying — so a remove / task-tick the student makes
+// while checks are in flight is picked up rather than overwritten by a stale in-memory copy.
+// A reload that no longer contains the row means the student removed it: we skip it and never
+// resurrect it. (The tracker is stored as one whole blob, so this reload-modify-save is the same
+// shape every other writer here uses; serializing the fan-out's saves also stops its own
+// parallel workers from clobbering each other.)
 export async function verifyNeverCheckedDeadlines(
   neverCheckedIds: string[],
   handlers?: FreshCheckHandlers,
 ): Promise<{ data: TrackerData; checked: number; updated: number }> {
-  const data = await loadTrackerData();
-  const byId = new Map(flattenItems(data).map((i) => [i.id, i] as const));
-  const ids = neverCheckedIds.filter((id) => byId.has(id) && !_freshCheckAttempted.has(id));
-  if (!ids.length) return { data, checked: 0, updated: 0 };
+  const initial = await loadTrackerData();
+  const present = new Set(flattenItems(initial).map((i) => i.id));
+  const ids = neverCheckedIds.filter((id) => present.has(id) && !_freshCheckAttempted.has(id));
+  if (!ids.length) return { data: initial, checked: 0, updated: 0 };
   ids.forEach((id) => _freshCheckAttempted.add(id));
 
   let checked = 0;
   let updated = 0;
+  let latest = initial;
+
+  // The serialized writer. Each commit re-reads the CURRENT tracker, applies just this one
+  // card's result by id, and saves — so it can only ever change the one row it checked, leaving
+  // every concurrent edit intact. Chained (one at a time) so parallel workers cannot clobber
+  // each other. A ms-scale window between this reload and its save remains (a remove that lands
+  // in exactly that gap could still be overwritten), but that is orders of magnitude smaller
+  // than the old tens-of-seconds window of the shared stale copy.
+  let writeChain: Promise<void> = Promise.resolve();
+  function commit(id: string, info: Partial<TrackerInfo>,
+                  actionItems: TrackerInfo['action_items'] | undefined): Promise<void> {
+    writeChain = writeChain
+      .then(async () => {
+        const current = await loadTrackerData();
+        const item = flattenItems(current).find((i) => i.id === id);
+        if (!item) { latest = current; return; } // student removed it meanwhile — respect that
+        const dateChanged = applyDeadlineToTrackerItem(item, info);
+        const taskChanged = applyTasksToTrackerItem(item, actionItems);
+        if (dateChanged || taskChanged) updated++;
+        try { await saveTrackerData(current); } catch { /* re-derived next sync */ }
+        latest = current;
+      })
+      .catch(() => { /* keep the chain alive for the remaining cards */ });
+    return writeChain;
+  }
+
   let cursor = 0;
   async function worker(): Promise<void> {
     while (cursor < ids.length) {
       const id = ids[cursor++];
-      const item = byId.get(id);
-      if (!item) continue;
       handlers?.onCardStart?.(id);
       try {
         // force=false: a never-checked row has no cache to bypass, so the endpoint runs a fresh
@@ -663,24 +696,20 @@ export async function verifyNeverCheckedDeadlines(
         const res = await httpClient.getDeadlineCheckResult(id, false);
         if (res.outcome === 'ok' && res.info) {
           checked++;
-          const dateChanged = applyDeadlineToTrackerItem(item, res.info);
           const shared = await httpClient.getActionItems(id);
-          const taskChanged = applyTasksToTrackerItem(item, shared?.action_items);
-          if (dateChanged || taskChanged) updated++;
-          // Persist incrementally so a mid-run navigation keeps whatever has resolved so far.
-          try { await saveTrackerData(data); } catch { /* re-derived next sync */ }
+          await commit(id, res.info, shared?.action_items);
         }
         // A non-ok outcome (404 no row, 402 over allowance, 503 lane full, network error)
         // leaves the card status-only. Not re-attempted this session.
       } catch {
         // Network/abort: same as above — leave the card as-is.
       }
-      handlers?.onCardDone?.(id, data);
+      handlers?.onCardDone?.(id, latest);
     }
   }
   const lanes = Math.min(Math.max(1, handlers?.concurrency ?? 6), ids.length);
   await Promise.all(Array.from({ length: lanes }, () => worker()));
-  return { data, checked, updated };
+  return { data: latest, checked, updated };
 }
 
 export function countItems(data: TrackerData): number {

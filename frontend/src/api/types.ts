@@ -134,6 +134,10 @@ export interface MatchRequest {
   // accepts both. Fresh Finds sends the rich shape built from the student's filterTags.
   profile_themes: (string | MatchThemeInput)[];
   highlight_projects: string[];
+  // Row ids the student already tracks (Quest Log). The server drops these before the top-N
+  // recall cut so the pool is N FRESH opportunities — the finder paginates its reranking over
+  // this pool, so a repeat would waste a page slot on a card already in the tracker.
+  exclude_ids?: string[];
 }
 
 // Each result IS a flattened Opportunity row plus its cosine `score` and a `strong` badge

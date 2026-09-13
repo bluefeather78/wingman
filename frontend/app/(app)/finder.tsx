@@ -1,6 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
@@ -23,7 +23,7 @@ import {
 import { parseGradeFromText, parseGradeLevel } from '@/lib/grade';
 import { onSessionReset } from '@/lib/sessionScope';
 import {
-  BLANK_FACET, BLANK_FACET_LABEL, FILTER_FIELDS, QUIZ_ROOT, QUIZ_SUB, REASON_TOP_N,
+  BLANK_FACET, BLANK_FACET_LABEL, FILTER_FIELDS, QUIZ_ROOT, QUIZ_SUB,
   facetValue, type FilterKey,
 } from '@/lib/finderSearch';
 import { extractJSON } from '@/lib/extractJSON';
@@ -75,6 +75,17 @@ type Stage = 'home' | 'quiz' | 'form' | 'results';
 const CATALOG_RETRIES = 2;
 const CATALOG_RETRY_DELAY_MS = 800;
 
+// Reranking pagination (theme/suggest path). The recall pool (~100 rows, cosine order, already
+// tracked-excluded server-side) is reasoned one PAGE_SIZE window at a time: each "See more"
+// reasons the NEXT window and shows up to PAGE_SHOW_MAX vouched cards from it. This makes
+// "reason over more of the pool" pay-as-you-go — most students only ever look at page 1, so the
+// amortized cost stays near a single reranking call, while an engaged student can keep pulling
+// deeper bands. The strong/look tier is no longer shown (dropped 2026-09-12): the list is simply
+// ranked by recall (cosine) order, because the measured tier label flipped ~50% across batch
+// contexts and cosine could not reproduce it — see the analysis in the branch commit.
+const PAGE_SIZE = 20;      // candidates sent to the reranker per page
+const PAGE_SHOW_MAX = 10;  // vouched cards shown per page
+
 
 // The "Your Profile" facet's enriched tags, stored on the shared student-profile record
 // (PROFILE_DERIVED_SLOTS.filterTags). EnrichedTag and the generator now live in
@@ -105,6 +116,12 @@ interface SessionSearch {
   // Tag scores ride along with the results they were computed against, so restoring a
   // cached list also restores the work done on top of it.
   tagScores: Map<string, Record<string, TagScore>>;
+  // Theme-path pagination state, so returning to the tab restores exactly where the student
+  // was — the full recall pool (cosine order, no reasons yet), how far the reranking has
+  // paginated, and the theme description each page is reasoned against. Absent on the form path.
+  pool?: Result[];
+  pageOffset?: number;
+  reasonDesc?: string;
 }
 let sessionSearch: SessionSearch | null = null;
 
@@ -236,6 +253,21 @@ export default function Finder() {
   const [addProgress, setAddProgress] = useState<{ done: number; total: number } | null>(null);
   const [visibleCount, setVisibleCount] = useState(10);
   const [untrackedOnly, setUntrackedOnly] = useState(false);
+  // ---------- Theme-path reranking pagination ----------
+  // The full recall pool (cosine order, tracked-excluded server-side, NOT yet reasoned), how
+  // far the reranking has paginated into it, and the theme description each page reasons
+  // against. Refs (not state) because the "See more" click handler must read the latest values
+  // without waiting for a re-render, exactly like selectedThemesRef. Seeded from the session
+  // cache so returning to the tab resumes pagination where it left off.
+  const themePoolRef = useRef<Result[] | null>(sessionSearch?.pool ?? null);
+  const pageOffsetRef = useRef<number>(sessionSearch?.pageOffset ?? 0);
+  const reasonDescRef = useRef<string>(sessionSearch?.reasonDesc ?? '');
+  // Drives the "See more" button: true while un-reasoned pool rows remain on the theme path.
+  const [hasMorePages, setHasMorePages] = useState<boolean>(
+    () => !!(sessionSearch?.pool && (sessionSearch.pageOffset ?? 0) < sessionSearch.pool.length),
+  );
+  // A "See more" reranking call is in flight (its own spinner, distinct from a full re-search).
+  const [pageLoading, setPageLoading] = useState(false);
   const [filters, setFilters] = useState<Record<FilterKey, Set<string>>>({ type: new Set(), price: new Set(), season: new Set(), location: new Set() });
   const [openFacet, setOpenFacet] = useState<FilterKey | 'profile' | null>(null);
   // A facet dropdown is absolutely positioned under its toggle with a fixed width. On a
@@ -354,6 +386,9 @@ export default function Finder() {
         if (sessionSearch && sessionSearch.profileKey !== text) {
           sessionSearch = null;
           tagScoreCache.current = new Map();
+          themePoolRef.current = null;
+          pageOffsetRef.current = 0;
+          setHasMorePages(false);
           setResults([]);
           setNote(null);
           // We restored straight onto the results stage from the cache; with the cache gone
@@ -484,6 +519,11 @@ export default function Finder() {
     setDescription('');
     setResults([]);
     setNote(null);
+    // Leaving the theme path — tear down its reranking pagination so "See more" doesn't try to
+    // reason a stale pool from a different search.
+    themePoolRef.current = null;
+    pageOffsetRef.current = 0;
+    setHasMorePages(false);
     setStage('form');
   }
 
@@ -540,80 +580,130 @@ export default function Finder() {
       })),
       // Not available on this branch — the recall runs on themes alone here.
       highlight_projects: [],
+      // Drop what the student already tracks so the pool is FRESH opportunities. The finder
+      // paginates its reranking over this pool (see reasonPoolPage), so a repeat would spend a
+      // page slot on a card already in the Quest Log.
+      exclude_ids: [...trackedIds],
     };
   }
 
-  // POST /api/match and map its flattened rows into the finder's Result grid. Each result IS
-  // an Opportunity row plus score/strong; tier is derived from strong so the existing "Strong
-  // Fit" badge renders with no card changes.
-  async function callMatchMapped(
+  // ---- Theme/suggest path: recall once, then reason in PAGES ----
+  // POST /api/match to get the full recall pool (cosine order, tracked-excluded server-side),
+  // mapped into UN-reasoned Result rows. The "why it fits" reasoning is paginated separately by
+  // reasonPoolPage, so this call pays only for the embedding + eligibility gate — not the
+  // reranker. Semantic recall (embeddings) does the coarse cut server-side.
+  async function recallThemePool(
     themeTags: EnrichedTag[],
     gradeNum: number | null,
-  ): Promise<{ mapped: Result[]; note: string | null }> {
+  ): Promise<{ pool: Result[]; note: string | null; reasonDesc: string }> {
     // Single-select: themeTags holds exactly one entry (the chosen theme OR the explore text),
     // so its tag is what these results are "for". Captured here so the header is always accurate.
     setResultsTheme(themeTags[0]?.tag ?? null);
     const resp = await httpClient.match(buildMatchBlob(themeTags, gradeNum));
     const rows = resp.results || [];
-    // "WHY IT FITS" — reintroduced from main's ranker (rankCandidates), NOT the retired
-    // curation pass. Semantic recall (embeddings) does the coarse cut server-side; here one
-    // Gemini call writes a specific second-person reason for the best rows and judges each
-    // 'strong'/'look'. That LLM tier — not the profile-dependent cosine magnitude — drives the
-    // Strong Fit badge, so a great entrepreneurship match reads "strong" even though its
-    // absolute cosine (~0.57) is lower than a robotics match's (~0.73). Only the top slice is
-    // reasoned (the model caps at 10-12 and those are the rows the student actually reads);
-    // the rest stay "worth a look". A reasoning failure degrades to no reason, never a crash.
-    // Describe the student to the reasoner from the CHOSEN themes' theme+intent+nextSteps —
-    // not raw profileText. Measured on real profiles: this makes the reason concrete and
-    // goal-aligned ("take Adio from concept to market") and gives the GOAL-FORMAT rule real
-    // signal, where the whole-profile text was unfocused on what the student actually searched.
+    // Describe the student to the reasoner from the CHOSEN theme's theme+intent+nextSteps — not
+    // raw profileText. Measured on real profiles: this makes the reason concrete and goal-aligned
+    // ("take Adio from concept to market") and gives the GOAL-FORMAT rule real signal, where the
+    // whole-profile text was unfocused on what the student actually searched.
     const themeDesc = themeTags
       .map((t) => [t.tag, t.intent || '', (t.nextSteps || []).join('; ')].filter(Boolean).join('. '))
       .filter(Boolean)
       .join('\n');
     const reasonDesc = themeDesc || profileText;
-    const reasons: Record<string, { reason: string; tier: 'strong' | 'look' }> = {};
-    const top = rows.slice(0, REASON_TOP_N) as unknown as Opportunity[];
-    if (top.length) {
-      // One reasoning call produces every card's "why it fits", so a single failure wipes them
-      // ALL — but the retry lives in callFeatureJSON, which rankCandidates goes through
-      // (MARQUEE M9, Phase 5, finding 7). This used to retry here TOO, and since that inner
-      // retry already covers a transient network error as well as a parse failure, one press
-      // of "Find my matches" could bill four reasoning calls. A failure after the one retry
-      // degrades to no reasons, exactly as before.
-      let ranked: RankedPick[] = [];
-      try {
-        ranked = await rankCandidates(callFeature, reasonDesc, top, buildPrefs() || null, false);
-      } catch (e) {
-        console.warn('why-it-fits reasoning failed, showing matches without reasons:', (e as Error).message);
-      }
-      ranked.forEach((p) => {
-        if (p && p.id) reasons[p.id] = { reason: p.reason || '', tier: p.tier === 'strong' ? 'strong' : 'look' };
-      });
+    // Un-reasoned pool rows in recall (cosine) order. `reason` is filled in per page below. The
+    // strong/look tier is no longer shown (dropped 2026-09-12) — `tier`/`strong` are kept on the
+    // Result shape only so the form/quiz path and the type are unchanged; nothing renders them.
+    const pool: Result[] = rows.map((row) => ({
+      opp: row as unknown as Opportunity,
+      reason: '',
+      tier: 'look',
+      score: row.score ?? null,
+      strong: false,
+    }));
+    return { pool, note: resp.note ?? null, reasonDesc };
+  }
+
+  // Reason ONE page of the recall pool: rankCandidates over pool[offset .. offset+PAGE_SIZE],
+  // returning the VOUCHED cards (those the reranker wrote a "why it fits" for) in recall order,
+  // capped at PAGE_SHOW_MAX. This is the paid reranking call, made once per page — page 1 on a
+  // fresh search, then one more each time the student taps "See more" (pay-as-you-go).
+  //   - A reasoning FAILURE degrades to no reasons. On the FIRST page we still show the window
+  //     unreasoned rather than an empty grid (the old "nothing vouched" guard); on a later page
+  //     an empty result is honest — the tail genuinely had no strong fits.
+  //   - The reranker OMITS weak fits, so a deep page legitimately returns fewer than
+  //     PAGE_SHOW_MAX (or zero). That is the "catalog is thin for this niche" signal, not a bug —
+  //     measured: ~42% of profiles cannot fill 10 because the catalog lacks that many fits.
+  async function reasonPoolPage(pool: Result[], offset: number, reasonDesc: string): Promise<Result[]> {
+    const windowRows = pool.slice(offset, offset + PAGE_SIZE);
+    if (!windowRows.length) return [];
+    const candidates = windowRows.map((r) => r.opp);
+    let ranked: RankedPick[] = [];
+    try {
+      // ONE reranking attempt; the retry lives in callFeatureJSON, which rankCandidates goes
+      // through (MARQUEE M9, Phase 5, finding 7) — do not add a second retry here.
+      ranked = await rankCandidates(callFeature, reasonDesc, candidates, buildPrefs() || null, false);
+    } catch (e) {
+      console.warn('why-it-fits reasoning failed for this page:', (e as Error).message);
     }
-    const mapped: Result[] = rows.map((row) => {
-      const rz = reasons[row.id];
-      return {
-        opp: row,
-        reason: rz?.reason ?? '',
-        tier: rz ? rz.tier : 'look',
-        score: row.score ?? null,
-        strong: rz ? rz.tier === 'strong' : false,
-      };
-    });
-    // CURATION (suggest path only): the reranker writes a "why it fits" reason ONLY for the
-    // candidates it genuinely vouches for; every other row is padding pulled up from the cosine
-    // recall pool purely to fill the 10-card grid. Measured on the golden set, blurb-less cards
-    // are ~70% weak matches against ~7% for blurbed ones (an absent blurb is the reranker's own
-    // implicit rejection), and the good matches lost by dropping them all ranked mid-pack (avg
-    // display position 7.79, never top-3) — so show ONLY what the reranker justified. This
-    // curation lives here, not at the render layer, so it can NEVER touch the strict-type
-    // (Conference/Journal, requireAll) path or the keyword fallback — both are separate code
-    // paths in search() that legitimately show un-reasoned rows.
-    // GUARD: if NOTHING got a reason (both rank attempts above threw), fall back to the full
-    // recall order rather than curating the page down to a false "No matches this time".
-    const vouched = mapped.filter((m) => m.reason.trim());
-    return { mapped: vouched.length ? vouched : mapped, note: resp.note ?? null };
+    const reasons: Record<string, string> = {};
+    ranked.forEach((p) => { if (p && p.id) reasons[p.id] = p.reason || ''; });
+    const vouched = windowRows
+      .filter((r) => reasons[r.opp.id]?.trim())
+      .map((r) => ({ ...r, reason: reasons[r.opp.id] }))
+      .slice(0, PAGE_SHOW_MAX);
+    // First-page guard: never show an empty grid when the pool has rows. Fall back to the window
+    // unreasoned (recall order), exactly as the old whole-pool "nothing vouched" guard did.
+    if (!vouched.length && offset === 0) return windowRows.slice(0, PAGE_SHOW_MAX);
+    return vouched;
+  }
+
+  // A fresh theme search: recall the pool, reason page 1, and arm pagination. Shared by the
+  // initial "Find my matches" (search, k===null) and the results-view theme facet re-run.
+  async function runThemeSearch(themeTags: EnrichedTag[], gradeNum: number | null): Promise<void> {
+    const { pool, note: matchNote, reasonDesc } = await recallThemePool(themeTags, gradeNum);
+    const firstPage = await reasonPoolPage(pool, 0, reasonDesc);
+    if (!aliveRef.current) return;
+    themePoolRef.current = pool;
+    reasonDescRef.current = reasonDesc;
+    pageOffsetRef.current = Math.min(PAGE_SIZE, pool.length);
+    setHasMorePages(pageOffsetRef.current < pool.length);
+    setResults(firstPage);
+    setNote(matchNote);
+    setSelected(new Set());
+    setVisibleCount(PAGE_SHOW_MAX);
+    rememberSearch(firstPage, matchNote, null);
+  }
+
+  // "See more" on the theme path: reason the NEXT PAGE_SIZE window of the recall pool and append
+  // its vouched cards. One paid reranking call per tap (MARQUEE M9) — pay-as-you-go, since most
+  // students never tap it, so the amortized cost stays near a single reranking call per search.
+  async function loadNextPage(): Promise<void> {
+    const pool = themePoolRef.current;
+    if (!pool || pageLoading) return;
+    const offset = pageOffsetRef.current;
+    if (offset >= pool.length) { setHasMorePages(false); return; }
+    // Out of AI actions: don't fire a reranking call the server would refuse; show the banner.
+    if (aiBlocked) { reopenAiLimitBanner(); return; }
+    trackEvent('finder_show_more');
+    setPageLoading(true);
+    try {
+      const page = await reasonPoolPage(pool, offset, reasonDescRef.current);
+      if (!aliveRef.current) return;
+      pageOffsetRef.current = Math.min(offset + PAGE_SIZE, pool.length);
+      setHasMorePages(pageOffsetRef.current < pool.length);
+      setResults((prev) => {
+        // De-dupe by id — a card already shown must never appear twice across pages.
+        const seen = new Set(prev.map((r) => r.opp.id));
+        const merged = [...prev, ...page.filter((r) => !seen.has(r.opp.id))];
+        rememberSearch(merged, note, null);
+        return merged;
+      });
+      setVisibleCount((c) => c + PAGE_SHOW_MAX);
+    } catch (e) {
+      if (aliveRef.current) setNote(`Couldn't load more matches: ${(e as Error).message}`);
+    } finally {
+      if (aliveRef.current) setPageLoading(false);
+    }
   }
 
   // Form/quiz path eligibility gate. The theme path is gated inside /api/match; this path
@@ -651,13 +741,7 @@ export default function Finder() {
     setThemeMatching(true);
     try {
       const gradeNum = await resolveGradeNum();
-      const { mapped, note: matchNote } = await callMatchMapped(themeTagsFor(selectedThemesRef.current), gradeNum);
-      if (!aliveRef.current) return;
-      setResults(mapped);
-      setNote(matchNote);
-      rememberSearch(mapped, matchNote, null);
-      setSelected(new Set());
-      setVisibleCount(10);
+      await runThemeSearch(themeTagsFor(selectedThemesRef.current), gradeNum);
     } catch (e) {
       if (aliveRef.current) setNote(`Couldn't refresh matches: ${(e as Error).message}`);
     } finally {
@@ -716,20 +800,14 @@ export default function Finder() {
       const storedGrade = profileRecord.current?.grade;
       const gradeNum = parseGradeLevel(grade) ?? (typeof storedGrade === 'number' ? storedGrade : profileGrade);
 
-      // ---- The profile-driven path is now semantic recall (PR4) ----
-      // Instead of the per-kind preFilter + rankCandidates fan-out, the suggest path posts the
-      // student's selected themes to /api/match: the server embeds them, recalls the top rows
-      // by cosine, drops verified-ineligible ones, and returns the whole scored pool. The grid,
-      // pool facets and add-to-tracker are unchanged — only how the pool is produced. The
-      // non-suggest (form/quiz) path below keeps preFilter/rankCandidates (keyword + grade,
-      // then the LLM reranker).
+      // ---- The profile-driven path is now semantic recall (PR4) + PAGINATED reranking ----
+      // The suggest path posts the student's selected theme to /api/match: the server embeds it,
+      // recalls the top rows by cosine (dropping ones the student already tracks and
+      // verified-ineligible ones), and returns the whole scored pool. runThemeSearch reasons the
+      // FIRST page of that pool; "See more" reasons the next window. The non-suggest (form/quiz)
+      // path below keeps preFilter/rankCandidates (keyword + grade, then the LLM reranker).
       if (!k) {
-        const { mapped, note: matchNote } = await callMatchMapped(themeTagsFor(selectedThemes), gradeNum);
-        setResults(mapped);
-        setNote(matchNote);
-        rememberSearch(mapped, matchNote, k);
-        setSelected(new Set());
-        setVisibleCount(10);
+        await runThemeSearch(themeTagsFor(selectedThemes), gradeNum);
         setStage('results');
         return;
       }
@@ -813,13 +891,19 @@ export default function Finder() {
   // Persist a finished search into the session cache so returning to this tab shows the
   // same list instead of paying for a fresh one. Keyed on the profile text it was based on.
   function rememberSearch(list: Result[], noteText: string | null, k: string | null) {
+    const isTheme = k === null;
     sessionSearch = {
       profileKey: profileText,
       results: list,
-      suggestMode: k === null,
+      suggestMode: isTheme,
       kind: k ?? kind,
       note: noteText,
       tagScores: tagScoreCache.current,
+      // Pagination state rides along on the theme path so returning to the tab resumes where the
+      // student left off; the form/quiz path clears it (it paginates via visibleCount instead).
+      pool: isTheme ? (themePoolRef.current ?? undefined) : undefined,
+      pageOffset: isTheme ? pageOffsetRef.current : undefined,
+      reasonDesc: isTheme ? reasonDescRef.current : undefined,
     };
   }
 
@@ -1043,14 +1127,13 @@ export default function Finder() {
   }
 
   // Tracked first, then saved (selected), then tier (script.js renderResults).
+  // Order: tracked/saved float to the top, then everything keeps RECALL (cosine) order — a
+  // stable sort preserves the order `results` is already in. The strong/look tier no longer
+  // participates in ordering (badge dropped 2026-09-12): the list is a single ranked list, and
+  // the reranker's tier flipped ~50% across batch contexts, so leading with it was unstable.
   const sortedResults = useMemo(() => {
     const rank = (r: Result) => (trackedIds.has(r.opp.id) ? 0 : selected.has(r.opp.id) ? 1 : 2);
-    const tierOrder = { strong: 0, look: 1 };
-    return [...results].sort((a, b) => {
-      const d = rank(a) - rank(b);
-      if (d !== 0) return d;
-      return tierOrder[a.tier] - tierOrder[b.tier];
-    });
+    return [...results].sort((a, b) => rank(a) - rank(b));
   }, [results, trackedIds, selected]);
 
   // filterResultList, ported: field facets → profile-tag filter (AI scores when they
@@ -1076,26 +1159,10 @@ export default function Finder() {
     if (untrackedOnly) filtered = filtered.filter((r) => !trackedIds.has(r.opp.id));
     return filtered as (Result & { aiReasoning?: string; aiRank?: number })[];
   }, [sortedResults, untrackedOnly, filters, trackedIds, selectedTag, tagScores, tagScoring]);
-  const visibleResults = filteredResults.slice(0, visibleCount);
-  // Tier section split. The reranker grades every vouched card 'strong' or 'look' (strong is
-  // 97% good on the golden set, look 81%), so lead with the strong picks and mark where the
-  // "worth a look" tier begins with a section header — recovering the good mid-pack look-tier
-  // matches instead of dropping them. Suggest path only, and suppressed while a profile-tag
-  // filter is active: that path re-sorts by aiRank, so tier order no longer holds.
-  //
-  // The divider anchors to the first look card STILL IN ITS TIER POSITION — not tracked, not
-  // saved. Saving a look card floats it to the top with the tracked/saved cards (rank 0/1 in
-  // sortedResults), and anchoring to the plain "first look card" dragged the header up there
-  // with it. Anchoring past the floated cards keeps the header at the strong→look boundary,
-  // and it disappears once the last unsaved look card is saved.
-  const isFloated = (r: Result) => trackedIds.has(r.opp.id) || selected.has(r.opp.id);
-  const firstUnfloatedLook = visibleResults.find((r) => r.tier === 'look' && !isFloated(r));
-  const tierSplitId =
-    suggestMode && !selectedTag &&
-    visibleResults.some((r) => r.tier === 'strong') &&
-    firstUnfloatedLook
-      ? firstUnfloatedLook.opp.id
-      : null;
+  // The theme/suggest path shows every card reasoned so far (each "See more" page appends up to
+  // PAGE_SHOW_MAX), so it is NOT sliced by visibleCount — pagination is driven by loadNextPage,
+  // not by revealing already-loaded rows. The form/quiz path keeps the visibleCount reveal.
+  const visibleResults = suggestMode ? filteredResults : filteredResults.slice(0, visibleCount);
 
   // ---------- Home stage ----------
   if (stage === 'home') {
@@ -1651,7 +1718,7 @@ export default function Finder() {
       )}
 
       {/* Result cards */}
-      {!themeMatching && visibleResults.map(({ opp, reason, tier, kind: resultKind, aiReasoning, aiRank }) => {
+      {!themeMatching && visibleResults.map(({ opp, reason, kind: resultKind, aiReasoning, aiRank }) => {
         const isSelected = selected.has(opp.id);
         const isTracked = trackedIds.has(opp.id);
         // Prefer the kind whose ranking call actually surfaced this card. kindForOpp only
@@ -1686,11 +1753,6 @@ export default function Finder() {
             <View style={styles.cardTopRow}>
               <View style={styles.badgeRow}>
                 <MiniBadge label={cat} bg={colors.violet200} fg={colors.violet900} />
-                {tier === 'strong' ? (
-                  <MiniBadge label="Strong Fit" bg={colors.yellow300} fg={colors.slate900} />
-                ) : (
-                  <MiniBadge label="Worth a look" bg={colors.slate100} fg={colors.slate900} />
-                )}
                 <ReviewBadge
                   status={opp.review_status as string | null | undefined}
                   summary={opp.review_summary as string | null | undefined}
@@ -1767,23 +1829,22 @@ export default function Finder() {
             )}
           </Pressable>
         );
-        // Header marking the start of the 'look' tier — the reranker's second-tier picks.
-        if (opp.id === tierSplitId) {
-          return (
-            <Fragment key={opp.id}>
-              <View style={styles.tierDivider}>
-                <View style={styles.tierDividerLine} />
-                <Text style={styles.tierDividerText}>MORE TO EXPLORE</Text>
-                <View style={styles.tierDividerLine} />
-              </View>
-              {card}
-            </Fragment>
-          );
-        }
         return card;
       })}
 
-      {!themeMatching && filteredResults.length > visibleCount && (
+      {/* Theme path: "See more" reasons the NEXT page of the recall pool (a paid reranking call,
+          loadNextPage). Form/quiz path: it reveals more already-loaded cards (visibleCount). */}
+      {!themeMatching && suggestMode && hasMorePages && (
+        <View style={styles.centerLink}>
+          <PopButton
+            label={pageLoading ? 'Finding more…' : 'See more'}
+            variant="ink" small square shadowColor={colors.slate900}
+            disabled={pageLoading || aiBlocked}
+            onPress={() => { if (aiBlocked) { reopenAiLimitBanner(); return; } void loadNextPage(); }}
+          />
+        </View>
+      )}
+      {!themeMatching && !suggestMode && filteredResults.length > visibleCount && (
         <View style={styles.centerLink}>
           <PopButton label={`Show more (${filteredResults.length - visibleCount} left)`} variant="ink" small square shadowColor={colors.slate900} onPress={() => { trackEvent('finder_show_more'); setVisibleCount((c) => c + 10); }} />
         </View>

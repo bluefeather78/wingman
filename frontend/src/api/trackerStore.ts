@@ -620,8 +620,10 @@ export interface FreshCheckHandlers {
   /** A card's fresh check finished (resolved or not). `data` is the tracker data with this
    *  card's result merged in — the caller re-renders from it and clears the card's spinner. */
   onCardDone?: (id: string, data: TrackerData) => void;
-  /** In-flight paid checks. Bounded to stay under the server's paid lane (shared, global) so
-   *  the fan-out does not just convert "slow" into a pile of 503 sheds. Default 3. */
+  /** In-flight paid checks. Bounded to stay under the server's paid lane (20, shared/global) so
+   *  the fan-out does not just convert "slow" into a pile of 503 sheds. Default 6 — well under
+   *  the lane, leaving room for other users; raising it speeds a big batch, never costs more
+   *  (the same rows are checked, just more at once). */
   concurrency?: number;
 }
 
@@ -676,7 +678,7 @@ export async function verifyNeverCheckedDeadlines(
       handlers?.onCardDone?.(id, data);
     }
   }
-  const lanes = Math.min(Math.max(1, handlers?.concurrency ?? 3), ids.length);
+  const lanes = Math.min(Math.max(1, handlers?.concurrency ?? 6), ids.length);
   await Promise.all(Array.from({ length: lanes }, () => worker()));
   return { data, checked, updated };
 }

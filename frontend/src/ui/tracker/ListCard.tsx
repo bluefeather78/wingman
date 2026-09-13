@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Animated, Easing, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Bucket } from '@/lib/constants';
 import { buildMetaPills } from '@/lib/opportunityPills';
 import {
@@ -17,6 +17,42 @@ import { trackEvent } from '@/lib/analytics';
 // Phase 5, frontend_report §4 ("Files over 800 lines — suggested splits"), which names
 // `tracker/ListCard.tsx` for exactly this. See CalendarCard.tsx for why moving the shared
 // StyleSheet with it is safe: the split is checked by the compiler in both directions.
+
+// Indeterminate progress bar for the "Checking dates…" state: a short segment that loops
+// left-to-right across a track. useNativeDriver:false so it works on RN-web (web has no native
+// animation driver). Width is measured via onLayout so the travel distance is correct at any
+// card width; before the first layout pass the segment sits off-screen (translateX -9999).
+function CheckingBar() {
+  const progress = useRef(new Animated.Value(0)).current;
+  const [trackW, setTrackW] = useState(0);
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(progress, {
+        toValue: 1,
+        duration: 1100,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: false,
+      }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [progress]);
+  const segW = Math.max(24, trackW * 0.4);
+  const translateX = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-segW, trackW || segW],
+  });
+  return (
+    <View
+      style={styles.checkTrack}
+      onLayout={(e) => setTrackW(e.nativeEvent.layout.width)}
+    >
+      <Animated.View
+        style={[styles.checkFill, { width: segW, transform: [{ translateX: trackW ? translateX : -9999 }] }]}
+      />
+    </View>
+  );
+}
 
 export function ListCard({
   item,
@@ -218,8 +254,9 @@ export function ListCard({
           Shown only while there are no dates yet, and never over a terminal status (rolling /
           not_running are already their own answer). */}
       {checking && milestones.length === 0 && !notRunning && !rolling && (
-        <View style={styles.estimatedNote}>
-          <Text style={styles.estimatedText}>⟳ Checking dates…</Text>
+        <View style={[styles.estimatedNote, styles.checkingNote]}>
+          <Text style={[styles.estimatedText, styles.checkingText]}>Checking for the latest dates…</Text>
+          <CheckingBar />
         </View>
       )}
 
@@ -298,6 +335,13 @@ const styles = StyleSheet.create({
   staleBadText: { color: '#9F1239' },
   rollingNote: { backgroundColor: '#DCFCE7' },
   rollingText: { color: '#166534' },
+  // "Checking dates…" — deliberately BLUE, distinct from the yellow "Predicted dates" pill it
+  // used to share a style with (that reused estimatedNote and read as an estimate warning).
+  checkingNote: { backgroundColor: '#DBEAFE' },
+  checkingText: { color: '#1E40AF', marginBottom: 8 },
+  // Indeterminate progress bar: a track with a looping fill segment (see CheckingBar).
+  checkTrack: { height: 6, borderRadius: 3, backgroundColor: '#BFDBFE', overflow: 'hidden', width: '100%' },
+  checkFill: { height: 6, borderRadius: 3, backgroundColor: '#2563EB' },
   dateCols: { flexDirection: 'row', gap: 24 },
   yearTag: { backgroundColor: '#EEE9DD', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, alignSelf: 'flex-start', marginTop: 10, marginBottom: 6 },
   yearTagText: { fontFamily: fonts.bodyXBold, fontSize: 10, color: '#0F1C33', letterSpacing: 0.3 },

@@ -13,6 +13,12 @@ HTTP client, not the page). Rejecting is reversible — the row stays in the tab
 blocking re-submission) and can be moderated back to pending_review — and it reuses the console's
 own moderation endpoint, so there is no logic drift.
 
+When it rejects the hub bucket it ALSO feeds those pages into the hub-mining queue
+(wingman/discovered_leads) so their programs can be harvested — BOTH kinds, each with the correct
+scope: a first_party_hub is mined same-domain (the institution's own index), a third_party_hub
+off-domain (the round-up's outbound links). It reuses classify_queue's lead builder, so the
+class->scope mapping has one definition. --dry-run previews the feed and writes nothing.
+
     python -m agents.triage_queue                       # FREE: full class breakdown, writes nothing
     python -m agents.triage_queue --all-junk --dry-run  # FREE: show exactly what --all-junk would reject
     python -m agents.triage_queue --all-junk            # reject hubs + none + stale programs
@@ -87,6 +93,53 @@ def plan_triage(rows, *, reject_hubs=False, reject_none=False, reject_stale=Fals
             ids[b].append(r["id"])
     return [{"bucket": b, "reason": _REASON[b], "ids": ids[b]} for b in ("hub", "none", "stale")
             if ids[b]]
+
+
+def hub_leads_for(rows, hub_ids):
+    """discovered_leads hub leads for the hub rows being rejected. Pure — builds dicts, no I/O.
+
+    Each lead is scoped by the row's OWN classifier verdict, so both hub kinds are handled:
+    first_party_hub -> same-domain (mine the institution's own index), third_party_hub ->
+    off-domain (mine the round-up's outbound links). Reuses classify_queue._hub_lead so the
+    lead shape and the class->scope mapping have exactly ONE definition in the repo.
+    """
+    from agents.classify_queue import _hub_lead
+    want = {str(i) for i in (hub_ids or [])}
+    leads = []
+    for r in rows:
+        if str(r.get("id")) in want:
+            klass = queue_flags.flag_class([classify_flag(r) or ""])
+            if klass in _HUB_CLASSES and r.get("url"):
+                leads.append(_hub_lead(r, klass))
+    return leads
+
+
+def feed_hub_leads(rows, hub_ids, *, commit):
+    """Feed the rejected hubs into the mining queue (commit=True) or preview it (commit=False).
+
+    Returns the number of leads built. Prints a [HUB PIPE] line naming the same/off-domain split
+    so an operator can see both kinds were routed. append_leads dedupes by url_key, so a hub
+    already queued is absorbed rather than duplicated.
+    """
+    from wingman import discovered_leads
+    leads = hub_leads_for(rows, hub_ids)
+    if not leads:
+        return 0
+    sd = sum(1 for l in leads if l.get("scope") == discovered_leads.SCOPE_SAME_DOMAIN)
+    od = len(leads) - sd
+    if not commit:
+        print(f"\n  [HUB PIPE] {len(leads)} hub(s) would be fed into the mining queue "
+              f"(same-domain {sd}, off-domain {od}).")
+        return len(leads)
+    try:
+        n = discovered_leads.append_leads(leads)
+    except Exception as e:                                             # noqa: BLE001
+        print(f"\n  [HUB PIPE] could not feed the mining queue: {e}")
+        return len(leads)
+    print(f"\n  [HUB PIPE] {len(leads)} hub(s) rejected -> {n} new lead(s) fed into the mining "
+          f"queue (same-domain {sd}, off-domain {od}; the rest were already queued). "
+          f"Harvest them with: python -m agents.mine_hub_pages --from-leads")
+    return len(leads)
 
 
 # --- I/O (the only impure part) -------------------------------------------------------
@@ -183,7 +236,9 @@ def main():
     if not plan:
         print("    (nothing matched the enabled buckets)")
         return
+    hub_ids = next((p["ids"] for p in plan if p["bucket"] == "hub"), [])
     if args.dry_run:
+        feed_hub_leads(rows, hub_ids, commit=False)
         print("\n[DRY RUN] Nothing was written. Re-run without --dry-run to reject (reversible: "
               "each row stays in the table and can be moderated back to pending_review).")
         return
@@ -202,6 +257,10 @@ def main():
             print(f"    [OK] {p['bucket']}: rejected {done} row(s).")
         else:
             print(f"    [ERROR] {p['bucket']}: {r.get('error')}")
+    # Route the rejected hubs' programs into the mining queue — first-party same-domain,
+    # third-party off-domain — so mine_hub_pages --from-leads can harvest them. The reason
+    # stamped on the row ("its programs are routed to the mining queue") is now true.
+    feed_hub_leads(rows, hub_ids, commit=True)
     print(f"\n[DONE] {rejected} row(s) rejected. They stay in the table (URL still blocks "
           f"re-submission) and are reversible from the console's Rejected tab.")
 

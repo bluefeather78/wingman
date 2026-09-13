@@ -67,3 +67,32 @@ def test_every_plan_bucket_carries_a_reason():
     rows = [_row("hub1", "classify: first_party_hub (high)")]
     plan = tq.plan_triage(rows, reject_hubs=True)
     assert plan[0]["reason"] and "hub" in plan[0]["reason"].lower()
+
+
+def _hub_row(rid, flag, url):
+    return {"id": rid, "quality_flags": [flag], "url": url, "name": f"row {rid}"}
+
+
+def test_hub_leads_scope_both_kinds():
+    from wingman import discovered_leads as dl
+    rows = [_hub_row("h1", "classify: first_party_hub (high)", "https://uni.edu/precollege"),
+            _hub_row("h2", "classify: third_party_hub (high)", "https://listicle.com/best-camps"),
+            _row("p1", "classify: program (high)")]           # not a hub -> never a lead
+    leads = tq.hub_leads_for(rows, ["h1", "h2", "p1"])
+    by_url = {l["url"]: l for l in leads}
+    assert len(leads) == 2
+    assert all(l["kind"] == dl.KIND_HUB for l in leads)
+    assert by_url["https://uni.edu/precollege"]["scope"] == dl.SCOPE_SAME_DOMAIN
+    assert by_url["https://listicle.com/best-camps"]["scope"] == dl.SCOPE_OFF_DOMAIN
+
+
+def test_hub_leads_only_for_selected_ids():
+    rows = [_hub_row("h1", "classify: first_party_hub (high)", "https://a.edu/x"),
+            _hub_row("h2", "classify: third_party_hub (high)", "https://b.com/y")]
+    leads = tq.hub_leads_for(rows, ["h1"])          # only h1 is being rejected
+    assert [l["url"] for l in leads] == ["https://a.edu/x"]
+
+
+def test_hub_leads_skips_url_less_rows():
+    rows = [_hub_row("h1", "classify: first_party_hub (high)", "")]
+    assert tq.hub_leads_for(rows, ["h1"]) == []

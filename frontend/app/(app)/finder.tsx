@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { httpClient } from '@/api/httpClient';
 import { useAuth } from '@/auth/AuthContext';
-import { addTrackerItemChecked, flattenItems, loadTrackerData } from '@/api/trackerStore';
+import { flattenItems, loadTrackerData } from '@/api/trackerStore';
 import type { MatchRequest, Opportunity } from '@/api/types';
 import { PROFILE_SUFFICIENT_LENGTH } from '@/lib/constants';
 import { ACTIVE_KINDS, KIND_CONFIG } from '@/lib/kinds';
@@ -37,10 +37,8 @@ import {
   // ONE definition, shared with the Quest Log's catalog search. There used to be a verbatim
   // copy here too; see the note in src/lib/finderSearch.ts.
   kindForOpp,
-  normalizeVerifiedActionItems,
-  staticGenericChecklist,
-  type TrackerInfo,
 } from '@/lib/tracker';
+import { addCatalogOpportunity } from '@/api/trackerAdd';
 import { MiniBadge, PopButton, ReviewBadge, Screen, SoftCard, Txt, usePopInteraction } from '@/ui/components';
 import { useAiGate } from '@/ui/AiLimitBanner';
 import { reopenAiLimitBanner } from '@/lib/aiLimit';
@@ -921,17 +919,12 @@ export default function Finder() {
     await search(profileText, null, buildPrefs());
   }
 
-  // P8 (collapsed producer): the add is now three INDEPENDENT sources, each authoritative
-  // for its own slice, replacing the old full extractTrackerInfo web-search pass that
-  // re-derived everything the two Claude endpoints already produce verified.
-  //   meta/fit  — the slim Gemini call (descriptive only, no dates, no search)
-  //   dates/status/note — the shared, cached deadline endpoint (the ONLY date producer now;
-  //               G4 is moot — there is no client date guess left for a verified-empty
-  //               result to wipe)
-  //   tasks     — the verified action-items endpoint, else the static generic checklist
-  //   apply link — the catalog's own link-checked opp.url
-  // Each source failing degrades only its slice, so a Gemini outage no longer reduces the
-  // whole add to a database-only stub.
+  // Optimistic add (2026-09-12): builds the card from in-memory catalog data and makes NO
+  // network calls, so adding a whole selection is instant. Dates/status/note and the verified
+  // checklist are filled in afterwards on the Quest Log — for free from its catalog sync
+  // (cached rows) and via its bounded, parallel, per-card fresh check (never-checked rows).
+  // Delegates to addCatalogOpportunity so this and the Quest Log's catalog search share one
+  // implementation; the only per-entry-point difference is the bucket.
   // Returns what actually happened, so the caller can stop claiming an add that the store
   // refused. The Quest Log rejects an item whose id OR url is already tracked, and this used
   // to swallow that — the card flipped to "In Quest Log", the batch was badged NEW, and
@@ -944,80 +937,12 @@ export default function Finder() {
     // Same precedence as the card's category badge: the kind that actually surfaced this
     // beats a guess derived from opp.type, so the Quest Log files it where it was found.
     const bucket = findBucketForKind(resultKind ?? (suggestMode ? kindForOpp(opp) : kind));
-    const url = (opp.url as string) ?? null;
-    const type = (opp.type as string) ?? null;
-    const reviewStatus = (opp.review_status as string) ?? null;
-    const reviewSummary = (opp.review_summary as string) ?? null;
-    const summary = (opp.summary as string) || '';
-
-    // meta/fit from data already in hand — no model call on the add path (see trackerAdd.ts
-    // for the full rationale). `meta` is superseded by the facet pills and `fit` is toggle-only
-    // on the Quest Log card, so the old meta/fit Gemini call bought a per-item
-    // blocking round trip for two cosmetic fields that already had catalog fallbacks.
-    const meta = [opp.org, opp.type, opp.price, opp.location].filter(Boolean).join(' · ');
-
-    let deadline: Partial<TrackerInfo> | null = null;
-    try {
-      deadline = await httpClient.getDeadlineCheck(opp.id);
-    } catch (err) {
-      console.warn(`Deadline check failed for ${opp.name}:`, (err as Error).message);
-    }
-
-    // The catalog's checklist, generated and quote-verified server-side (getActionItems
-    // never throws — null on failure). The static generic list is the fallback when the
-    // endpoint has nothing — it asserts nothing, so it cannot reintroduce the
-    // invented-prerequisite failure the old model fallback carried.
-    const shared = await httpClient.getActionItems(opp.id);
-    const verified = normalizeVerifiedActionItems(shared?.action_items, opp.id);
-    const sharedItems = verified.length ? verified : staticGenericChecklist(opp.id, url);
-
-    const status = deadline?.status
-      && ['running', 'not_running', 'rolling', 'unknown'].includes(deadline.status)
-      ? deadline.status
-      : 'unknown';
-    const res = await addTrackerItemChecked(bucket, {
-      id: opp.id,
-      name: opp.name,
-      org: (opp.org as string) ?? null,
-      url,
-      type,
-      bucket,
-      progressStatus: 'not_started',
-      status,
-      reviewStatus,
-      reviewSummary,
-      meta,
-      // Structured facets for the Quest Log's meta pills (opp.location is the FORMAT).
-      price: (opp.price as string) ?? null,
-      format: (opp.location as string) ?? null,
-      state: (opp.state as string) ?? null,
-      season: (opp.season as string) ?? null,
-      fit: reason || summary,
-      note: deadline?.important_date_note
-        || (deadline
-          ? 'Details from the opportunities database — confirm on the official site.'
-          : "Live details couldn't be fetched — showing database info only. Check the official site directly."),
-      noteType: status === 'not_running' ? 'flag' : deadline ? 'plain' : 'flag',
-      importantDates: Array.isArray(deadline?.important_dates)
-        ? deadline.important_dates
-            .filter((d) => d && d.date_iso)
-            .map((d) => ({
-              label: d.label || 'Date',
-              dateISO: d.date_iso,
-              type: d.type || 'deadline',
-              estimated: d.estimated,
-              verified: d.verified,
-              sourceUrl: d.source_url ?? null,
-            }))
-            .sort((a, b) => a.dateISO.localeCompare(b.dateISO))
-        : [],
-      deadlineLabel: 'CHECK SITE',
-      wasEstimated: !!deadline?.was_estimated,
-      applyUrl: url,
-      applyLabel: 'Apply / learn more',
-      actionItems: sharedItems,
-    });
-    return { added: res.added, existingName: res.existing?.name };
+    // ONE optimistic-add implementation, shared with the Quest Log's catalog search. Both
+    // build the card from in-memory catalog data and make no network calls; dates, the verified
+    // checklist and the note are filled in afterwards by the Quest Log's free sync and per-card
+    // fresh check. The only thing that differs between the two entry points is the bucket, so
+    // this delegates rather than keeping a second copy that could drift.
+    return addCatalogOpportunity(opp, bucket, reason);
   }
 
   async function addSelectedToTracker() {

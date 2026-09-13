@@ -252,7 +252,6 @@ export default function Finder() {
   const [adding, setAdding] = useState(false);
   const [addProgress, setAddProgress] = useState<{ done: number; total: number } | null>(null);
   const [visibleCount, setVisibleCount] = useState(10);
-  const [untrackedOnly, setUntrackedOnly] = useState(false);
   // ---------- Theme-path reranking pagination ----------
   // The full recall pool (cosine order, tracked-excluded server-side, NOT yet reasoned), how
   // far the reranking has paginated into it, and the theme description each page reasons
@@ -1101,18 +1100,16 @@ export default function Finder() {
       return n;
     });
   }
-  // Everything the Clear control undoes, counted the same way it clears — the field facets,
-  // the profile tag, and the untracked toggle. Keep the two in step or the count lies.
+  // Everything the Clear control undoes, counted the same way it clears — the field facets and
+  // the profile tag. Keep the two in step or the count lies.
   const activeFilterCount =
     FILTER_FIELDS.reduce((n, f) => n + filters[f.key].size, 0) +
-    (selectedTag ? 1 : 0) +
-    (untrackedOnly ? 1 : 0);
+    (selectedTag ? 1 : 0);
 
   function clearAllFilters() {
     trackEvent('finder_filters_cleared');
     setFilters({ type: new Set(), price: new Set(), season: new Set(), location: new Set() });
     setSelectedTag(null);
-    setUntrackedOnly(false);
     setVisibleCount(10);
   }
   function toggleFilter(key: FilterKey, value: string) {
@@ -1137,7 +1134,9 @@ export default function Finder() {
   }, [results, trackedIds, selected]);
 
   // filterResultList, ported: field facets → profile-tag filter (AI scores when they
-  // resolved, keyword fallback otherwise) → untracked filter.
+  // resolved, keyword fallback otherwise). The old "Only untracked" toggle was removed
+  // 2026-09-12: the theme/suggest path now excludes tracked rows from the recall pool
+  // server-side (exclude_ids), so the pool is already untracked and the toggle was redundant.
   const filteredResults = useMemo(() => {
     let filtered = sortedResults.filter((r) => {
       for (const f of FILTER_FIELDS) {
@@ -1156,9 +1155,8 @@ export default function Finder() {
         filtered = filtered.filter((r) => tagKeywordMatch(r.opp, selectedTag));
       }
     }
-    if (untrackedOnly) filtered = filtered.filter((r) => !trackedIds.has(r.opp.id));
     return filtered as (Result & { aiReasoning?: string; aiRank?: number })[];
-  }, [sortedResults, untrackedOnly, filters, trackedIds, selectedTag, tagScores, tagScoring]);
+  }, [sortedResults, filters, selectedTag, tagScores, tagScoring]);
   // The theme/suggest path shows every card reasoned so far (each "See more" page appends up to
   // PAGE_SHOW_MAX), so it is NOT sliced by visibleCount — pagination is driven by loadNextPage,
   // not by revealing already-loaded rows. The form/quiz path keeps the visibleCount reveal.
@@ -1522,9 +1520,6 @@ export default function Finder() {
                 <Text style={styles.filterToggleText}>▾ Themes</Text>
               </Pressable>
             )}
-            <Pressable style={[styles.filterToggle, untrackedOnly && styles.filterToggleOn]} onPress={() => setUntrackedOnly(!untrackedOnly)}>
-              <Text style={styles.filterToggleText}>{untrackedOnly ? '☑' : '☐'} Only untracked</Text>
-            </Pressable>
             {FILTER_FIELDS.map((f) => {
               const raw = [...new Set(sortedResults.map((r) => facetValue(r.opp, f.key)))];
               const values = [...raw.filter((v) => v !== BLANK_FACET).sort(), ...(raw.includes(BLANK_FACET) ? [BLANK_FACET] : [])];
@@ -1624,9 +1619,6 @@ export default function Finder() {
             )}
           </View>
         )}
-        <Pressable style={[styles.filterToggle, untrackedOnly && styles.filterToggleOn]} onPress={() => setUntrackedOnly(!untrackedOnly)}>
-          <Text style={styles.filterToggleText}>{untrackedOnly ? '☑' : '☐'} Only untracked</Text>
-        </Pressable>
         {FILTER_FIELDS.map((f) => {
           // Real values sorted alphabetically, with "Not specified" pinned LAST — it is an
           // absence, not a peer of the real options, and sorting it among them invites

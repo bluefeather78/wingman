@@ -137,7 +137,7 @@ select:focus, input:focus, textarea:focus { outline: 2px solid var(--accent); ou
   border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: var(--sp-5);
 }
 .card-head {
-  display: flex; align-items: center; gap: var(--sp-3);
+  display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
   padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--border);
 }
 .card-head h2 { font-size: 15px; }
@@ -266,6 +266,14 @@ tr:last-child td { border-bottom: none; }
 tbody tr.clickable { cursor: pointer; }
 tbody tr.clickable:hover { background: var(--surface-2); }
 .detail-row td { background: var(--surface-2); }
+/* Row actions (Edit/Duplicate/Open ↗) pinned to the right of a wide, horizontally-scrolling
+   table — otherwise the last button silently scrolls out of view on a narrow window. The
+   background must be opaque (not inherited) or scrolled-under cell content shows through. */
+.sticky-actions th:last-child, .sticky-actions td:last-child {
+  position: sticky; right: 0; background: var(--surface); box-shadow: -6px 0 6px -6px rgba(0,0,0,.15);
+}
+.sticky-actions th:last-child { background: var(--surface-2); }
+.sticky-actions tr.sel-row td:last-child { background: var(--accent-soft); }
 .detail-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: var(--sp-3); }
 .detail-grid .d { font-size: 12px; }
 .detail-grid .d .k { color: var(--text-3); text-transform: uppercase; font-size: 10px; letter-spacing: .05em; font-weight: 600; }
@@ -295,7 +303,7 @@ tbody tr.clickable:hover { background: var(--surface-2); }
 /* Top-level view nav. Deliberately a different shape from .tab (the inline pill used
    inside a card head, e.g. the scraper's National/Seattle switch) — one of these swaps the
    whole page, the other filters one table, and they should not look interchangeable. */
-.viewtabs { display: flex; gap: var(--sp-5); border-bottom: 1px solid var(--border);
+.viewtabs { display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-5); border-bottom: 1px solid var(--border);
   margin-bottom: var(--sp-6); }
 .vtab { position: relative; padding: 0 2px 12px; background: transparent; border: 0;
   font-family: var(--font-head); font-size: 14px; font-weight: 600; color: var(--text-3);
@@ -309,7 +317,7 @@ tbody tr.clickable:hover { background: var(--surface-2); }
 .view-lead { color: var(--text-2); font-size: 13px; line-height: 1.6; max-width: 76ch;
   margin: -8px 0 20px; }
 
-.tabs { display: flex; gap: var(--sp-1); }
+.tabs { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
 .tab { padding: 5px 12px; border-radius: var(--radius-sm); border: 1px solid transparent;
   background: transparent; color: var(--text-2); font-weight: 500; font-size: 13px; }
 .tab.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
@@ -1208,7 +1216,7 @@ tr.disabled-seed { opacity: .48; }
           Activation is unaffected.
         </div>
         <div class="tbl-wrap">
-          <table>
+          <table id="pendingTable" class="sticky-actions">
             <thead><tr>
               <th style="width:34px"></th><th>Name</th><th>Org</th><th>Type</th>
               <th>Source</th><th>Found</th><th></th>

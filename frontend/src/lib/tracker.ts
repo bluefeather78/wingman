@@ -141,7 +141,13 @@ export function applyDeadlineCheckToInfo(
     info.important_dates = deadlineInfo.important_dates;
   }
   if (typeof deadlineInfo.was_estimated === 'boolean') info.was_estimated = deadlineInfo.was_estimated;
+  // A verified result CLEARS a stale note even when it carries none of its own — otherwise a
+  // card that got the add-time "Live details couldn't be fetched" placeholder keeps that
+  // failure caption forever, since most verified results have no free-text note and the
+  // `if (...)` guard alone never overwrites it. Only a verified source may clear it, mirroring
+  // the important_dates guard just above so a mock/fallback echo can't wipe a good note.
   if (deadlineInfo.important_date_note) info.note = deadlineInfo.important_date_note;
+  else if (verified && info.note) info.note = undefined;
 }
 
 // ---------- Action items: the client no longer GENERATES any (P8) ----------

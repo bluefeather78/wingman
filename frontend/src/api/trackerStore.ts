@@ -397,7 +397,20 @@ export function applyDeadlineToTrackerItem(item: TrackerItem, info: Partial<Trac
     item.importantDates = mapped;
   }
   if (typeof info.was_estimated === 'boolean') item.wasEstimated = info.was_estimated;
-  if (info.important_date_note) item.note = info.important_date_note;
+  // A verified result CLEARS a stale note even when it carries none of its own. Without the
+  // else-branch, a card that got the add-time "Live details couldn't be fetched" placeholder
+  // (the deadline lookup returned nothing at that instant) kept that failure caption forever:
+  // a later verified check refreshes status/dates right above, but most verified results have
+  // no free-text note, so `if (info.important_date_note)` was false and the old string
+  // survived — the card showed fresh data under a stale error. Same asymmetry the dates guard
+  // uses: only a VERIFIED source may overwrite/clear, so a mock/*-fallback echo (which also
+  // carries no note) can never wipe a good one.
+  if (info.important_date_note) {
+    if (info.important_date_note !== item.note) { item.note = info.important_date_note; changed = true; }
+  } else if (isVerifiedDeadlineSource(info.source) && item.note) {
+    item.note = undefined;
+    changed = true;
+  }
   return changed;
 }
 

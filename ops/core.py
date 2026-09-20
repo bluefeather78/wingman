@@ -2958,6 +2958,18 @@ def activate_opportunities(ids, active=True):
     # Embed the just-activated rows into the RECALL match_vector column (MARQUEE M9) so the
     # student-facing matcher can score them immediately — separate job from the dedupe index above.
     embedded, embed_cost = _embed_match_vectors(activated_ids) if active else (0, 0.0)
+    # Score the newly-live rows for their public SEO page and enter the qualifying ones into the
+    # sitemap, without an operator having to remember to run the SEO tab. Only the just-activated
+    # ids are scored (not the whole catalog) — the full re-sync of drifted rows is the console's
+    # manual button's job. FREE (no model call) and idempotent — a slug, once assigned, is kept,
+    # so this never moves an existing page's URL, and start_seo_evaluation() is a no-op if a run
+    # is already in flight. Best-effort: it runs on a background thread and never affects the
+    # activation result above.
+    if active and activated_ids:
+        try:
+            start_seo_evaluation(activated_ids)
+        except Exception:
+            pass
     return {"ok": errors == 0, "activated": done if active else 0,
             "deactivated": 0 if active else done,
             # How many newly-activated rows were added to the embedding dedupe index (0 in a
@@ -5543,9 +5555,9 @@ def _seo_eval_snapshot():
                 "last_eval_result": _seo_eval_state["last_result"]}
 
 
-def _run_seo_eval_bg():
+def _run_seo_eval_bg(ids=None):
     try:
-        result = evaluate_seo_pages()
+        result = evaluate_seo_pages(ids)
     except Exception as e:                       # a thread must never die silently
         result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
     with _seo_eval_lock:
@@ -5555,9 +5567,12 @@ def _run_seo_eval_bg():
         _seo_eval_state["last_result"] = result
 
 
-def start_seo_evaluation():
+def start_seo_evaluation(ids=None):
     """Kick off evaluate_seo_pages() on a background thread and return at once. A no-op (but a
-    success) if a run is already in flight, so a double-click cannot start two."""
+    success) if a run is already in flight, so a double-click cannot start two.
+
+    ids: forwarded to evaluate_seo_pages — the activation hook passes the just-activated ids so
+    only those pages are scored; the console's manual button passes nothing (full catalog)."""
     with _seo_eval_lock:
         if _seo_eval_state["running"]:
             return {"ok": True, "already_running": True,
@@ -5567,7 +5582,7 @@ def start_seo_evaluation():
             datetime.timezone.utc).isoformat()
         _seo_eval_state["finished_at"] = None
         _seo_eval_state["last_result"] = None
-    threading.Thread(target=_run_seo_eval_bg, name="seo-eval", daemon=True).start()
+    threading.Thread(target=_run_seo_eval_bg, args=(ids,), name="seo-eval", daemon=True).start()
     return {"ok": True, "started": True, "started_at": _seo_eval_state["started_at"]}
 
 
@@ -5595,22 +5610,56 @@ def _seo_not_ready():
             **_seo_eval_snapshot()}
 
 
-def evaluate_seo_pages():
-    """Score every active opportunity and upsert the durable seo_* columns. This is the
+def _seo_fetch_by_ids(ids):
+    """The eval columns for a specific set of ids (active rows only), chunked to stay under
+    PostgREST's URL length and 1000-row limits. Raises on error so the caller can classify a
+    missing column into the setup notice, exactly like _seo_paginated."""
+    out = []
+    for i in range(0, len(ids), 200):
+        chunk = ids[i:i + 200]
+        page = _supabase_request_strict("opportunities", params={
+            "select": _SEO_EVAL_SELECT,
+            "id": "in.(" + ",".join(chunk) + ")",
+            "is_active": "eq.true",
+        })
+        out.extend(page or [])
+    return out
+
+
+def evaluate_seo_pages(ids=None):
+    """Score active opportunities and upsert the durable seo_* columns. This is the
     "create / update the pages" action: a slug is assigned (stable, unique) the first time a
     row is seen and kept thereafter, so publishing a page never moves its URL. Returns a
-    summary. FREE."""
+    summary. FREE.
+
+    ids: when given, ONLY those rows are (re)scored and written — the targeted path the
+    activation hook uses, so publishing a handful of freshly-activated pages does not rewrite
+    the whole catalog. The set of slugs already in use is still read across ALL active rows,
+    so a new page's slug cannot collide with an existing URL. ids=None (the console's manual
+    button) scores the entire active catalog, which additionally re-syncs rows whose content
+    has drifted across or below the bar since the last run — something a targeted pass cannot
+    do and does not need to."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return {"ok": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_KEY not configured."}
+    targeted = ids is not None
+    ids = [str(i).strip() for i in (ids or []) if str(i).strip()]
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if targeted and not ids:
+        return {"ok": True, "schema_ready": True, "evaluated": 0, "indexed": 0,
+                "awaiting": 0, "ran_at": now, "targeted": True}
     try:
-        rows = _seo_paginated(_SEO_EVAL_SELECT)
+        if targeted:
+            # Slugs in use across the WHOLE catalog (collision-safety), but score only `ids`.
+            taken = {r["seo_slug"] for r in _seo_paginated("id,seo_slug") if r.get("seo_slug")}
+            rows = _seo_fetch_by_ids(ids)
+        else:
+            rows = _seo_paginated(_SEO_EVAL_SELECT)
+            taken = {r["seo_slug"] for r in rows if r.get("seo_slug")}
     except Exception as e:
         if _is_missing_column_error(e) or _missing_table_error(e):
             return {"ok": True, "schema_ready": False, "setup_sql": SEO_SETUP_SQL}
         return {"ok": False, "error": f"Could not read opportunities: {e}"}
 
-    taken = {r["seo_slug"] for r in rows if r.get("seo_slug")}
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     updates, indexed, awaiting = [], 0, 0
     for r in rows:
         verdict = _seo.evaluate_seo_page(r)
@@ -5641,7 +5690,7 @@ def evaluate_seo_pages():
             return {"ok": True, "schema_ready": False, "setup_sql": SEO_SETUP_SQL}
         return {"ok": False, "error": f"Wrote {written}/{len(updates)} rows, then failed: {e}"}
     return {"ok": True, "schema_ready": True, "evaluated": len(updates),
-            "indexed": indexed, "awaiting": awaiting, "ran_at": now}
+            "indexed": indexed, "awaiting": awaiting, "ran_at": now, "targeted": targeted}
 
 
 def get_seo_overview(awaiting_limit=300):

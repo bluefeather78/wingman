@@ -789,10 +789,41 @@ def _run_names_page(hub_url, gemini_key, existing, gate_index, gate_by_id, mint,
     return rows, review_by_id, rejected, cost, errors, named, searched
 
 
+def _read_url_file(path):
+    """URLs from a file, one per line. Blank lines and '#' comments are skipped. A missing path
+    (the common case — no --url-file given) returns []. Anything on a line after whitespace is
+    kept as-is; the caller normalises and dedupes."""
+    if not path:
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            out = []
+            for line in f:
+                s = line.strip()
+                if s and not s.startswith("#"):
+                    out.append(s)
+            return out
+    except OSError as e:
+        print(f"[ERROR] --url-file {path}: {e}")
+        raise SystemExit(1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hubs", nargs="+", help="Hub page URL(s).")
     ap.add_argument("--hubs-file", help="JSON file: [{\"url\":..., \"off_domain\": bool}, ...].")
+    ap.add_argument("--url", metavar="URL",
+                    help="A single TARGETED URL, auto-detected. A live run first tries to extract "
+                         "it as ONE program's own page (one no-search call); if the extractor "
+                         "refuses it (it is a hub/directory, not a single program) it falls through "
+                         "to the SAME link-mining the --hubs path runs. Either way the row(s) reach "
+                         "the review queue identically — classify pill, embedding-dedupe hint, "
+                         "is_active=false / pending_review. Preview is free.")
+    ap.add_argument("--url-file", metavar="PATH",
+                    help="A file of targeted URLs, one per line (blank lines and lines starting "
+                         "with '#' are ignored). Each is auto-detected exactly like --url. The "
+                         "catalog dedupe-vector index is loaded ONCE for the whole batch and reused "
+                         "for every URL — the same amortisation a hub's many links already get.")
     ap.add_argument("--from-leads", type=int, nargs="?", const=5, metavar="N",
                     help="Take up to N leads (default 5) of ANY kind that a search run captured "
                          "for free — see wingman/discovered_leads.py. A `hub` lead is mined by "
@@ -851,6 +882,24 @@ def main():
     for u in (args.hubs or []):
         (names_entries.append(u) if args.names
          else hub_entries.append((u, args.off_domain)))
+    # Targeted URLs are handled on their own auto-detect path (below), NOT added to hub_entries:
+    # each is tried as one program first, and only mined as a hub if the extractor refuses it.
+    # Kept separate so that decision is made once per URL, all sharing the one paid dedupe index.
+    # A --url and a --url-file combine; order is preserved and exact-URL duplicates are collapsed.
+    single_targets = []
+    _seen_targets = set()
+    for _t in ([args.url] if args.url else []) + _read_url_file(args.url_file):
+        _t = (_t or "").strip()
+        if not _t:
+            continue
+        try:
+            _tk = url_dedupe.match_key(_t)
+        except ValueError:
+            _tk = _t
+        if _tk in _seen_targets:
+            continue
+        _seen_targets.add(_tk)
+        single_targets.append(_t)
     lead_urls = []
     if args.from_leads:
         from wingman import discovered_leads
@@ -877,8 +926,8 @@ def main():
         print(f"[OK] {len(lead_urls)} lead(s) taken from the queue"
               + (" (" + ", ".join(f"{k}={v}" for k, v in sorted(by_kind.items())) + ")"
                  if by_kind else "") + ".")
-    if not hub_entries and not names_entries:
-        print("[ERROR] Give --hubs, --hubs-file, or --from-leads.")
+    if not hub_entries and not names_entries and not single_targets:
+        print("[ERROR] Give --hubs, --hubs-file, --from-leads, --url, or --url-file.")
         raise SystemExit(1)
 
     from wingman.supabase_common import require_service_key, supabase_get
@@ -956,9 +1005,30 @@ def main():
             # The excerpt is the point of a free preview: a 200 with a cookie banner and a 200
             # with a program list are the same char count until you look at one.
             print(f"    text starts: {text[:280].strip()!r}")
+        targets_reachable = 0
+        for single_target in single_targets:
+            # Free hint only: fetch the page and, using the same free anchor miner discover()
+            # uses, report how many links it would mine IF it turns out not to be one program.
+            # The single-vs-hub decision itself needs the paid extractor and only runs live.
+            text, reason = page_text.fetch_page_text(single_target, args.timeout)
+            if not text:
+                print(f"[TARGET] {single_target}: NOT FETCHABLE ({reason}) — a live run would "
+                      f"cost nothing and extract nothing.")
+                continue
+            targets_reachable += 1
+            urls, _tr = discover(single_target, off_domain=False, timeout=args.timeout)
+            print(f"[TARGET] {single_target}: fetched {len(text)} chars. A live run first "
+                  f"tries to extract it as ONE program (~$0.004); if it is not a single "
+                  f"program it is mined as a hub ({len(urls)} candidate link(s) found here).")
+            print(f"    text starts: {text[:280].strip()!r}")
+            for u in urls[:20]:
+                print(f"    hub-candidate: {u}")
         print(f"\n[PREVIEW] {len(hub_entries)} hub page(s) would classify ~{would_classify} "
               f"in-scope page(s) (~$0.001/hub); {len(names_entries)} names page(s), "
-              f"{names_reachable} fetchable. No model call, no writes. A live run needs approval.")
+              f"{names_reachable} fetchable"
+              + (f"; {len(single_targets)} targeted URL(s), {targets_reachable} fetchable"
+                 if single_targets else "")
+              + ". No model call, no writes. A live run needs approval.")
         return
 
     if not gemini_key:
@@ -1049,6 +1119,87 @@ def main():
     rows, review_by_id, cost, errors = [], {}, select_cost, 0
     rejected = []          # not-running programs DROPPED before insert (kept for the snapshot)
     yield_by_hub = {}
+
+    # ---- TARGETED URL(s) (auto-detect). Try to extract each given page AS ONE program first; if
+    # the extractor refuses it ({"name": null} — it is a hub/directory, not a single program), fall
+    # through to the SAME same-domain link-mining --hubs runs by appending it to `all_new`. Placed
+    # here so the paid extract uses the M9 dedupe index and banks its cost into this run, and so a
+    # hub-case target is mined by the loop directly below. EVERY target shares the ONE gate_index
+    # loaded above — a file of URLs pays that ~30-60s load once, exactly like a hub's many links.
+    for single_target in single_targets:
+        try:
+            tkey = url_dedupe.match_key(single_target)
+        except ValueError:
+            tkey = None
+        if tkey and tkey in catalog_keys:
+            print(f"[TARGET] {single_target} is already in the catalog (same URL) — re-reading it "
+                  f"cannot add anything new. Nothing extracted, nothing spent.")
+        else:
+            dom = url_dedupe.registrable_domain(
+                urllib.parse.urlsplit(single_target).netloc) or "page"
+            print(f"[TARGET] {single_target}: trying single-program extraction first...")
+            cand = None
+            try:
+                cand, c, classification, dup_hints = extract_opportunity(
+                    single_target, gemini_key, index=gate_index, timeout=args.timeout,
+                    min_delay=args.min_delay)
+                cost += c
+            except Exception as e:
+                errors += 1
+                cost += agent_common.banked_cost(e)   # recover what the failed paid call spent
+                print(f"  [WARN] extract failed {single_target}: {str(e)[:100]}")
+            if cand:
+                # A single program page. The SAME source flags the hub loop computes (the URL is
+                # authoritative here too — the admin typed it — so no off-site question), then the
+                # SAME _finalize_extracted tail: classify pill + merged dedupe hints + review row.
+                src_flags = []
+                if url_validate.is_bare_domain(single_target):
+                    src_flags.append(FLAG_BARE_DOMAIN)
+                if url_validate.is_content_mill(single_target):
+                    src_flags.append(FLAG_OFFSITE)
+                if url_dedupe.is_low_value_path(single_target):
+                    src_flags.append(FLAG_LOW_VALUE)
+                if cand.get("type") not in VALID_TYPES:
+                    src_flags.append(FLAG_NO_TYPE)
+                source = f"targeted-{dom}-{today}"
+                row, review, (status, reason) = _finalize_extracted(
+                    cand, classification, dup_hints, src_flags, mint, source, single_target,
+                    single_target, existing, gate_by_id)
+                if status == "not_running":
+                    print(f"  [DROP not-running] {(cand.get('name') or single_target)[:60]}: "
+                          f"{reason[:90]}")
+                    rejected.append({**cand, "url": single_target, "found_via": single_target,
+                                     "source": source, "reject_reason": reason})
+                elif row:
+                    review_by_id[row["id"]] = review
+                    rows.append(row)
+                    existing.append({"id": row["id"], "name": row["name"], "url": row["url"]})
+                    yield_by_hub[single_target] = (1, 1)
+                    print(f"  [ROW] single program extracted: {(row.get('name') or '')[:70]}")
+            else:
+                # Not a single program -> mine it as a same-domain hub, exactly like --hubs: the
+                # free sitemap-LLM selector with the anchor-rules recursive fallback. Its candidates
+                # are appended to all_new so the loop below extracts them on the identical path.
+                print(f"  [HUB] {single_target}: not a single program page — mining it as a hub.")
+                if classify is None:
+                    classify = sitemap_hub.make_gemini_classifier(
+                        gemini_key, timeout=args.timeout, min_delay=args.min_delay)
+                sel_urls, tr = sitemap_hub.program_candidates(
+                    single_target, classify=classify, timeout=args.timeout)
+                cost += tr.get("cost", 0.0)
+                if not sel_urls:
+                    d_urls, _dt = discover(single_target, off_domain=False, timeout=args.timeout)
+                    sel_urls, _c = contained_children(d_urls, catalog_paths)
+                sel_urls, _c = contained_children(sel_urls, catalog_paths)
+                fresh_t, already_t, twice_t = fresh_candidates(
+                    sel_urls, catalog_keys, seen_this_run)
+                print(f"  [HUB] {single_target}: {len(sel_urls)} program page(s), already in "
+                      f"catalog {already_t}, seen this run {twice_t}, new {len(fresh_t)}.")
+                all_new.append((single_target, fresh_t))
+    # Any hub-case target(s) appended to all_new above must be counted in the run summary/notes.
+    if single_targets:
+        total = sum(len(f) for _, f in all_new)
+
     for hub_url, fresh in all_new:
         dom = url_dedupe.registrable_domain(urllib.parse.urlsplit(hub_url).netloc) or "hub"
         source = f"hub-{dom}-{today}"
@@ -1214,7 +1365,8 @@ def main():
     print(f"[SUMMARY] {total} hub candidate(s) + {names_searched} name search(es) across "
           f"{n_pages} page(s) -> extracted {len(rows)} row(s), errors {errors}, "
           f"cost ${cost:.4f}. Wrote {review_path}.")
-    print(f"[DONE] Review before activating anything from a source='hub-*/names-*-{today}' row.")
+    print(f"[DONE] Review before activating anything from a "
+          f"source='hub-*/names-*/targeted-*-{today}' row.")
 
 
 if __name__ == "__main__":

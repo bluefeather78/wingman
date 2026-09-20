@@ -578,6 +578,8 @@ tr.disabled-seed { opacity: .48; }
         the <strong>Utilities</strong> tab.</p></div>
       <div class="section-label">Run the scout</div>
       <div class="agents" id="wf-newopp"></div>
+      <div class="section-label">&hellip;or scout a single URL</div>
+      <div class="agents" id="tools-newopp-targeturl"></div>
       <div class="section-label">Review &amp; admit</div>
       <div id="slot-newopp-review"></div>
     </div>
@@ -6451,6 +6453,7 @@ const TOOL_SLOTS = {
   'slot-inspect': ['inspect'],
   'tools-newopp-queue': ['classifyqueue', 'dedupequeue', 'triagequeue', 'embedindex'],
   'tools-newopp-minehub': ['minehub'],
+  'tools-newopp-targeturl': ['targeturl'],
   'tools-proposeangles': ['proposeangles'],
   'tools-core': ['refreshprog'],
   'tools-upkeep': ['__forcerecheck', 'embedindex'],
@@ -6509,8 +6512,31 @@ function toolParamHTML(p) {
   if (p.type === 'check') {
     return `<label class="check"><input type="checkbox" id="${id}"><span>${esc(p.label)}</span></label>`;
   }
+  if (p.type === 'textarea') {
+    // p.file adds an upload button that reads the file client-side into the textarea, so the
+    // list travels as an ordinary param (no multipart endpoint); the textarea is the data channel.
+    const uploader = p.file
+      ? `<input type="file" accept=".txt,.csv,text/plain" style="margin-bottom:6px"
+           onchange="loadFileIntoTextarea(this,'${id}')">`
+      : '';
+    return `<div class="field"><label for="${id}">${esc(p.label)}</label>
+      ${uploader}
+      <textarea id="${id}" rows="5" placeholder="${esc(p.placeholder || '')}"></textarea>
+      ${p.help ? `<div class="help">${esc(p.help)}</div>` : ''}</div>`;
+  }
   return `<div class="field"><label for="${id}">${esc(p.label)}</label>
-    <input type="${p.type === 'number' ? 'number' : 'text'}" id="${id}" placeholder="${esc(p.placeholder || '')}"></div>`;
+    <input type="${p.type === 'number' ? 'number' : 'text'}" id="${id}" placeholder="${esc(p.placeholder || '')}">
+    ${p.help ? `<div class="help">${esc(p.help)}</div>` : ''}</div>`;
+}
+
+// Read a chosen text file into a textarea, so an uploaded list of URLs is sent as a normal param.
+function loadFileIntoTextarea(input, targetId) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => { const el = $(targetId); if (el) el.value = reader.result || ''; };
+  reader.onerror = () => notice('Could not read that file.');
+  reader.readAsText(file);
 }
 
 function openToolModal(key) {

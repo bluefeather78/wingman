@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -4493,6 +4494,35 @@ MAINTENANCE_TOOLS = {
                 ["run", "Run — PAID: extracts and inserts rows for review"]]},
         ],
     },
+    "targeturl": {
+        # A single admin-supplied URL, AUTO-DETECTED, on the same mine_hub_pages engine. A live run
+        # first tries to extract the page as ONE program (one no-search call, ~$0.004); if it is
+        # not a single program it is mined as a hub. Either way the row(s) reach the review queue
+        # identically (classify pill + embedding-dedupe hint, is_active=false / pending_review), so
+        # this is the New Opportunity Scout's per-URL mode, alongside the angles scraper. Runs
+        # mine_hub_pages --url; preview is free.
+        "name": "Scout a Single URL",
+        "description": "Scrape ONE URL you paste. Auto-detects: if it is a single program's page, "
+                       "extract that one opportunity; if it is a hub/directory, mine its program "
+                       "links. Same downstream as the scout — classify + dedupe, inserted inactive "
+                       "for review. Preview is free; a real run is PAID (~$0.004 for a single page).",
+        "script": "agents/mine_hub_pages.py",
+        "free": False, "writes": True,
+        "params": [
+            {"key": "url", "label": "One URL to scout",
+             "placeholder": "https://example.edu/summer-program"},
+            {"key": "urls", "type": "textarea", "file": True,
+             "label": "…or many URLs — upload a file, or paste one per line",
+             "placeholder": "https://a.edu/program\nhttps://b.org/internship",
+             "help": "The catalog dedupe-vector index loads ONCE for the whole batch and is "
+                     "reused for every URL — a file of 50 URLs pays that ~30-60s load once, not "
+                     "50 times. Blank lines and # comments are ignored; exact-URL duplicates are "
+                     "collapsed. Give a single URL above, a list here, or both."},
+            {"key": "mode", "type": "select", "label": "Mode", "options": [
+                ["preview", "Preview — free, no model call, no writes"],
+                ["run", "Run — PAID: extracts and inserts row(s) for review"]]},
+        ],
+    },
     "proposeangles": {
         # Finds thin catalog cells (under-served type/season/subject) and proposes angles to
         # fill them. Both exposed actions are free — commit writes DISABLED seeds a person must
@@ -4690,6 +4720,23 @@ def build_tool_args(tool_key, params):
         names_cap = _int_or_none(params.get("maxNames"))
         if names_cap:
             args += ["--max-names", str(names_cap)]
+        if str(params.get("mode") or "preview") != "run":
+            args.append("--preview")
+    elif tool_key == "targeturl":
+        # One admin URL and/or a pasted/uploaded list, down the auto-detect single/hub path.
+        url = str(params.get("url") or "").strip()
+        if url:
+            args += ["--url", url]
+        urls_text = str(params.get("urls") or "").strip()
+        if urls_text:
+            # The console sends the file's text (read client-side) or a pasted list; write it to a
+            # STABLE temp path and hand the agent --url-file. Stable (not mkstemp) so the argv-preview
+            # call and the run call don't leave an orphan behind — targeturl runs one at a time
+            # (is_agent_running + the catalog lock), so a fixed name cannot be clobbered mid-run.
+            path = os.path.join(tempfile.gettempdir(), "wingman_targeturl_urls.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(urls_text + "\n")
+            args += ["--url-file", path]
         if str(params.get("mode") or "preview") != "run":
             args.append("--preview")
     elif tool_key == "proposeangles":

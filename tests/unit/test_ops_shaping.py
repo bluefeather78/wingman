@@ -7,6 +7,7 @@ monkeypatching the module's `datetime`. The functions under test are module-leve
 (several private) and imported directly from ops.core / ops.admin.
 """
 import datetime as _dt
+import os
 
 import pytest
 
@@ -647,13 +648,14 @@ class TestMaintenanceTools:
 
     def test_paid_tools(self):
         # The paid tools: the contact-email backfill, the dead-link re-finder, hub mining (which
-        # since the 2026-09-07 merge also does name harvesting — a search per named program), the
-        # queue classifier and queue embedder (both call Gemini), and the dedupe-embedding
-        # backfill (build_catalog_embeddings, a paid embed). Angle proposing and every PREVIEW are
-        # free. Pinned so a new tool cannot quietly join the list that spends. `harvestnames` is
-        # gone — it folded into `minehub`.
+        # since the 2026-09-07 merge also does name harvesting — a search per named program),
+        # `targeturl` (the New Opportunity Scout's single-URL mode — the same mine_hub_pages engine
+        # on one admin URL), the queue classifier and queue embedder (both call Gemini), and the
+        # dedupe-embedding backfill (build_catalog_embeddings, a paid embed). Angle proposing and
+        # every PREVIEW are free. Pinned so a new tool cannot quietly join the list that spends.
+        # `harvestnames` is gone — it folded into `minehub`.
         paid = {k for k, c in core.MAINTENANCE_TOOLS.items() if not c.get("free")}
-        assert paid == {"contactemail", "refind", "minehub",
+        assert paid == {"contactemail", "refind", "minehub", "targeturl",
                         "classifyqueue", "dedupequeue", "embedindex"}
 
     def test_minehub_args(self):
@@ -679,6 +681,24 @@ class TestMaintenanceTools:
         # Free preview still the default.
         prev = core.build_tool_args("minehub", {"url": "https://x.edu/list", "pageType": "names"})
         assert prev[-1] == "--preview"
+
+    def test_targeturl_args(self):
+        # The New Opportunity Scout's single-URL mode: one URL -> --url; defaults to free preview.
+        prev = core.build_tool_args("targeturl", {"url": "https://x.edu/prog"})
+        assert prev[2:] == ["-m", "agents.mine_hub_pages", "--url", "https://x.edu/prog", "--preview"]
+        run = core.build_tool_args("targeturl", {"url": "https://x.edu/prog", "mode": "run"})
+        assert run[2:] == ["-m", "agents.mine_hub_pages", "--url", "https://x.edu/prog"]
+
+    def test_targeturl_url_list_writes_a_file(self):
+        # A pasted/uploaded list travels as the `urls` param -> a temp file -> --url-file, so the
+        # batch shares the ONE dedupe-vector load. --url and a list combine.
+        run = core.build_tool_args("targeturl", {"urls": "https://a.edu/p\n# c\nhttps://b.org/i",
+                                                 "mode": "run"})
+        assert "--url-file" in run and "--preview" not in run
+        path = run[run.index("--url-file") + 1]
+        assert os.path.exists(path) and "https://b.org/i" in open(path, encoding="utf-8").read()
+        both = core.build_tool_args("targeturl", {"url": "https://a.edu/p", "urls": "https://b.org/i"})
+        assert "--url" in both and "--url-file" in both
 
     def test_proposeangles_args(self):
         assert core.build_tool_args("proposeangles", {})[2:] == [

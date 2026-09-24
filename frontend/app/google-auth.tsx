@@ -4,6 +4,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View, type GestureRespo
 import { openBackendPage } from '@/ui/openPage';
 import { useAuth } from '@/auth/AuthContext';
 import { googleHandoffFromUrl } from '@/auth/googleSignIn';
+import { loadRedditPixel, trackSignUp } from '@/lib/redditPixel';
 import { PopButton, PopCard, Screen, Txt } from '@/ui/components';
 import { colors, fonts, radius, space } from '@/ui/theme';
 
@@ -85,6 +86,10 @@ export default function GoogleAuth() {
     setBusy(true);
     try {
       await googleFinish(handoff, { isAdult, parentalConsent, acceptedTerms });
+      // This screen only renders for a genuinely NEW account (phase === 'pending'), so a
+      // successful finish() here is by definition a signup, never a returning sign-in.
+      loadRedditPixel();
+      trackSignUp();
       router.replace('/(app)');
     } catch (e) {
       setError((e as Error).message || 'Could not finish sign-up.');

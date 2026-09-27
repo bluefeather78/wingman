@@ -675,16 +675,26 @@ export interface FreshCheckHandlers {
 export async function verifyStaleDeadlines(
   staleIds: string[],
   handlers?: FreshCheckHandlers,
-): Promise<{ data: TrackerData; checked: number; updated: number }> {
+): Promise<{ data: TrackerData; checked: number; updated: number; lastCheckedAt: string | null }> {
   const initial = await loadTrackerData();
   const present = new Set(flattenItems(initial).map((i) => i.id));
   const ids = staleIds.filter((id) => present.has(id) && !_freshCheckAttempted.has(id));
-  if (!ids.length) return { data: initial, checked: 0, updated: 0 };
+  if (!ids.length) {
+    return { data: initial, checked: 0, updated: 0, lastCheckedAt: _lastCatalogStamp };
+  }
   ids.forEach((id) => _freshCheckAttempted.add(id));
 
   let checked = 0;
   let updated = 0;
   let latest = initial;
+  // Freshest dates_last_checked_at this fan-out produced. A real check re-stamps the row to
+  // now(); a row served from the cross-user cache carries whatever recent stamp is on it. Either
+  // way the MAX is the freshest verified moment, which is what the "Last checked" line should
+  // show. Without this the line lagged a whole sync behind the re-check that this pass triggered.
+  // ISO strings written by the server are all UTC +00:00, so a lexical compare orders them.
+  // Held in an object: it is assigned inside the worker closure, and a plain `let` would be
+  // narrowed to `null` by TS control-flow analysis at the outer read below.
+  const freshest: { stamp: string | null } = { stamp: null };
 
   // The serialized writer. Each commit re-reads the CURRENT tracker, applies just this one
   // card's result by id, and saves — so it can only ever change the one row it checked, leaving
@@ -722,6 +732,8 @@ export async function verifyStaleDeadlines(
         const res = await httpClient.getDeadlineCheckResult(id, false);
         if (res.outcome === 'ok' && res.info) {
           checked++;
+          const t = res.info.dates_last_checked_at;
+          if (t && (!freshest.stamp || t > freshest.stamp)) freshest.stamp = t;
           const shared = await httpClient.getActionItems(id);
           await commit(id, res.info, shared?.action_items);
         }
@@ -735,7 +747,13 @@ export async function verifyStaleDeadlines(
   }
   const lanes = Math.min(Math.max(1, handlers?.concurrency ?? 6), ids.length);
   await Promise.all(Array.from({ length: lanes }, () => worker()));
-  return { data: latest, checked, updated };
+  // Advance the module stamp so a THROTTLED sync right after this (e.g. opening the Quest Log
+  // within 5 min of a login that ran the fan-out) still reports the freshest moment instead of
+  // the pre-check value the login sync captured. Only ever move it forward.
+  if (freshest.stamp && (!_lastCatalogStamp || freshest.stamp > _lastCatalogStamp)) {
+    _lastCatalogStamp = freshest.stamp;
+  }
+  return { data: latest, checked, updated, lastCheckedAt: _lastCatalogStamp };
 }
 
 export function countItems(data: TrackerData): number {

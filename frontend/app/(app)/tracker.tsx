@@ -207,7 +207,20 @@ export default function Tracker() {
               // the resolved card re-renders with its dates.
               setData({ ...freshData });
             },
-          }).catch(() => null);
+          })
+            .then((vr) => {
+              // The fan-out re-stamped rows server-side; advance "Last checked" to the freshest
+              // stamp it produced so the line reflects the just-completed checks instead of
+              // lagging a sync behind. Only ever move it FORWARD (a fan-out that only reached
+              // cached rows can report an OLDER max than the sync's, which must not roll it back).
+              if (!isAlive() || !vr.lastCheckedAt) return;
+              if (r.lastCheckedAt && vr.lastCheckedAt <= r.lastCheckedAt) return;
+              const stamp = new Date(vr.lastCheckedAt).toLocaleString('en-US', {
+                month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+              });
+              setLastCheckedLabel(`Last checked: ${stamp}`);
+            })
+            .catch(() => null);
         }
       })
       .catch(() => null);

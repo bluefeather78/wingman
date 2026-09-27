@@ -1,6 +1,6 @@
 # Wingman Privacy Policy
 
-**Effective Date:** September 24, 2026
+**Effective Date:** September 27, 2026
 
 This Privacy Policy explains how **Blufeather Labs LLC**, doing business as "Highschool Wingman" and the operator of Wingman ("Wingman," "we," "us," or "our"), collects, uses, processes, and protects information in connection with the Wingman beta. Highschool Wingman is a trade name (DBA) of Blufeather Labs LLC.
 
@@ -158,6 +158,8 @@ These technologies include session-replay, heatmap, and product-analytics tools 
 Wingman uses **Microsoft Clarity**, a product-analytics and session-replay service provided by Microsoft Corporation, to capture this event data. Microsoft Clarity is configured to **mask the content you type into fields**, so the text you enter (such as profile answers, resume text, and passwords) is not recorded. Microsoft processes the data it collects in accordance with its own privacy terms; you can read more in the [Microsoft Privacy Statement](https://privacy.microsoft.com/privacystatement).
 
 Separately, Wingman uses the **Reddit Pixel**, an advertising-conversion measurement tool provided by Reddit, Inc., on the pages a Reddit ad may lead to (such as our landing page and the account sign-up screen). It tells us that someone who clicked a Wingman ad on Reddit went on to create an account; it is not loaded anywhere inside the signed-in app. Reddit processes the data it collects in accordance with its own privacy terms; you can read more in the [Reddit Privacy Policy](https://www.reddit.com/policies/privacy-policy).
+
+Wingman also uses the **Google Ads tag** (gtag.js), an advertising-conversion measurement tool provided by Google LLC, on the same pages a Google ad may lead to (such as our landing page and the account sign-up screen). It tells us that someone who clicked a Wingman ad on Google went on to create an account; like the Reddit Pixel, it is not loaded anywhere inside the signed-in app. Google processes the data it collects in accordance with its own privacy terms; you can read more in the [Google Privacy Policy](https://policies.google.com/privacy).
 
 The specific analytics and technology providers used by Wingman may change over time.
 

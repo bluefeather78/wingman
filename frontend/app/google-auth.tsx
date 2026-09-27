@@ -5,6 +5,7 @@ import { openBackendPage } from '@/ui/openPage';
 import { useAuth } from '@/auth/AuthContext';
 import { googleHandoffFromUrl } from '@/auth/googleSignIn';
 import { loadRedditPixel, trackSignUp } from '@/lib/redditPixel';
+import { loadGoogleAdsTag, trackSignUp as trackGoogleAdsSignUp } from '@/lib/googleAdsTag';
 import { PopButton, PopCard, Screen, Txt } from '@/ui/components';
 import { colors, fonts, radius, space } from '@/ui/theme';
 
@@ -90,6 +91,8 @@ export default function GoogleAuth() {
       // successful finish() here is by definition a signup, never a returning sign-in.
       loadRedditPixel();
       trackSignUp();
+      loadGoogleAdsTag();
+      trackGoogleAdsSignUp();
       router.replace('/(app)');
     } catch (e) {
       setError((e as Error).message || 'Could not finish sign-up.');

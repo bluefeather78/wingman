@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { backendUrl } from '@/api/httpClient';
 import { loadRedditPixel } from '@/lib/redditPixel';
+import { loadGoogleAdsTag } from '@/lib/googleAdsTag';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Logo, PopButton, PopCard, SoftCard, usePopInteraction } from '@/ui/components';
 import { openBackendPage } from '@/ui/openPage';
@@ -162,11 +163,12 @@ export default function Landing() {
   const filmSectionY = useRef(0);
   const stageRef = useRef<View>(null);
 
-  // Warms the Reddit conversion pixel on the page an ad click actually lands on, so it's
-  // already initialized by the time a visitor reaches google-auth.tsx and converts. Scoped to
-  // this signed-out marketing page only — see redditPixel.ts for why.
+  // Warms the Reddit conversion pixel and Google Ads tag on the page an ad click actually
+  // lands on, so both are already initialized by the time a visitor reaches google-auth.tsx and
+  // converts. Scoped to this signed-out marketing page only — see redditPixel.ts / googleAdsTag.ts.
   useEffect(() => {
     loadRedditPixel();
+    loadGoogleAdsTag();
   }, []);
 
   useEffect(() => {

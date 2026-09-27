@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { httpClient } from '@/api/httpClient';
-import { syncTrackerFromCatalog } from '@/api/trackerStore';
+import { syncTrackerFromCatalog, verifyStaleDeadlines } from '@/api/trackerStore';
 import { identify, setTag } from '@/lib/analytics';
 import type { AllowanceSnapshot, AppleCredential, AppleSessionResult, GoogleFinishInput, GoogleSessionResult, RegisterInput, SessionUser } from '@/api/types';
 
@@ -67,13 +67,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => httpClient.onAllowanceChanged((a) => setAllowance(a)), []);
 
   // App-open / login: force a free catalog sync so already-tracked items pick up whatever
-  // changed while the app was closed (an agent run, another student's on-demand check). Keyed
-  // on userid, NOT the user object, so it fires once per genuine login/restore and NOT on
-  // every background token refresh or 402 (those keep the same userid). Never throws and
-  // no-ops for a signed-out/lapsed account, so it is safe to fire-and-forget here.
+  // changed while the app was closed (an agent run, another student's on-demand check), then
+  // fan out a fresh deadline check for any tracked row that is missing dates or has gone stale
+  // (>7 days) — so the student never opens Home Base / Quest Log to data older than the
+  // staleness window. Keyed on userid, NOT the user object, so it fires once per genuine
+  // login/restore and NOT on every background token refresh or 402 (those keep the same userid).
+  //
+  // MARQUEE M9: verifyStaleDeadlines makes paid Claude calls (approved 2026-09-27, all users,
+  // login + Quest Log focus). It is bounded: force=false so the server's 7-day gate + cross-user
+  // cache serve any row re-checked elsewhere this week for free; per-id-per-session dedupe
+  // (_freshCheckAttempted, shared with the Quest Log focus pass) so a row is attempted at most
+  // once per session and the two triggers never double-bill; the paid-lane semaphore and the
+  // Free-tier budget/allowance still gate each call. Never throws and no-ops for a signed-out/
+  // lapsed account, so it is safe to fire-and-forget here (no card handlers — this only warms
+  // the local + cross-user cache; the screens render the fresh data on their next focus load).
   useEffect(() => {
     if (!user?.userid) return;
-    void syncTrackerFromCatalog({ force: true });
+    void syncTrackerFromCatalog({ force: true })
+      .then((r) => {
+        if (r.needsCheck.length) return verifyStaleDeadlines(r.needsCheck);
+      })
+      .catch(() => null);
   }, [user?.userid]);
 
   // Clarity: tie the (web) session to the opaque account id once per genuine login/restore.

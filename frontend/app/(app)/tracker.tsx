@@ -17,10 +17,10 @@ import {
   loadTrackerData,
   loadTrackerSaved,
   refreshTrackerDeadlines,
+  verifyStaleDeadlines,
   removeTrackerItem,
   saveTrackerSaved,
   syncTrackerFromCatalog,
-  verifyNeverCheckedDeadlines,
   type SavedState,
   type TrackerData,
   type TrackerItem,
@@ -188,12 +188,13 @@ export default function Tracker() {
           });
           setLastCheckedLabel(`Last checked: ${stamp}`);
         }
-        // Rows the sync could only give a status to (never deadline-checked) get a PAID fresh
+        // Rows that need verifying — never deadline-checked OR stale (>7 days) — get a fresh
         // check, fanned out in parallel with a per-card "Checking dates…" bar — the page is
         // already rendered, so nothing blocks on these. Bounded per-id-per-session inside
-        // verifyNeverCheckedDeadlines, so a row that never resolves is not re-billed each visit.
-        if (r.neverChecked.length) {
-          verifyNeverCheckedDeadlines(r.neverChecked, {
+        // verifyStaleDeadlines, so a row that never resolves is not re-billed each visit, and
+        // force=false lets the cross-user cache serve any row re-checked elsewhere this week.
+        if (r.needsCheck.length) {
+          verifyStaleDeadlines(r.needsCheck, {
             onCardStart: (id) => isAlive() && setCheckingIds((prev) => new Set(prev).add(id)),
             onCardDone: (id, freshData) => {
               if (!isAlive()) return;

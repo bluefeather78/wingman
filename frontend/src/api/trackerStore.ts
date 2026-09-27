@@ -443,6 +443,23 @@ export function applyTasksToTrackerItem(
 // what changed while the app was closed).
 const SYNC_MIN_INTERVAL_MS = 5 * 60 * 1000;
 let _lastCatalogSyncAt = 0;
+
+// Mirrors the server's deadline staleness window (DEADLINE_STALE_DAYS = 7 in
+// app/services/deadlines.py). Used only to DECIDE which rows to fan a check out for; the
+// server's own gate is still the authority (a fan-out uses force=false, so a row the server
+// considers fresh returns cached data for free even if this clock disagrees at the margin).
+const DEADLINE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+// True when a row's cached deadline data is missing OR older than the 7-day window — i.e. a row
+// worth re-verifying. Folds "never checked" (no stamp) and "stale" (old stamp) into one test, so
+// the login/focus fan-out covers both. Unparseable stamps count as stale (re-check rather than
+// trust a value we cannot date).
+export function deadlineStampNeedsCheck(iso: string | null | undefined): boolean {
+  if (!iso) return true;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return true;
+  return Date.now() - t >= DEADLINE_STALE_MS;
+}
 // The freshest opportunities.dates_last_checked_at seen across tracked items on the last real
 // sync. Held so a THROTTLED call can still hand the "Last checked" line a stamp (the line must
 // not blank just because the 5-minute window has not elapsed).
@@ -473,12 +490,13 @@ export interface CatalogSyncResult {
   /** Freshest catalog dates_last_checked_at across tracked items, for the "Last checked"
    *  line — this is when the DATA was verified, not when the mirror ran. Null if unknown. */
   lastCheckedAt: string | null;
-  /** Tracked ids whose catalog row has NEVER been deadline-checked (dates_last_checked_at is
-   *  empty). These are the rows the free sync can give a status to but no dates — the caller
-   *  fans out a paid fresh check for them (verifyNeverCheckedDeadlines). Empty when the sync
-   *  was throttled or returned nothing. A not_running/rolling row has been checked (it carries
-   *  a stamp), so it is correctly NOT here. */
-  neverChecked: string[];
+  /** Tracked ids whose catalog deadline data is missing OR older than the 7-day window
+   *  (deadlineStampNeedsCheck) — the rows the free sync can only give a status to, or gave
+   *  data that has since gone stale. The caller fans out a fresh check for them
+   *  (verifyStaleDeadlines), force=false so the server's own staleness gate + cross-user cache
+   *  absorb anything already re-checked this week. Empty when the sync was throttled or
+   *  returned nothing. */
+  needsCheck: string[];
 }
 
 export async function syncTrackerFromCatalog(
@@ -486,31 +504,34 @@ export async function syncTrackerFromCatalog(
 ): Promise<CatalogSyncResult> {
   const now = Date.now();
   if (!opts?.force && now - _lastCatalogSyncAt < SYNC_MIN_INTERVAL_MS) {
-    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp, neverChecked: [] };
+    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp, needsCheck: [] };
   }
   let data: TrackerData;
   try {
     data = await loadTrackerData();
   } catch {
-    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp, neverChecked: [] };
+    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp, needsCheck: [] };
   }
   const items = flattenItems(data);
   const ids = items.map((i) => i.id).filter(Boolean);
   if (!ids.length) {
     _lastCatalogSyncAt = now;
-    return { data, updated: 0, lastCheckedAt: _lastCatalogStamp, neverChecked: [] };
+    return { data, updated: 0, lastCheckedAt: _lastCatalogStamp, needsCheck: [] };
   }
   const catalog = await httpClient.syncTracker(ids); // never throws; {} on failure
   // Stamp the throttle only after a real answer, so a failed/empty sync (network down, signed
   // out) is retried on the next trigger instead of being throttled out for 5 minutes.
   if (!Object.keys(catalog).length) {
-    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp, neverChecked: [] };
+    return { data: null, updated: 0, lastCheckedAt: _lastCatalogStamp, needsCheck: [] };
   }
   _lastCatalogSyncAt = now;
-  // Catalog rows we have never deadline-checked: a stamp-less row. The caller fans out a paid
-  // fresh check for these (a checked row — running / not_running / rolling alike — carries a
-  // stamp and is skipped).
-  const neverChecked = ids.filter((id) => catalog[id] && !catalog[id].dates_last_checked_at);
+  // Catalog rows worth re-verifying: no stamp (never checked) OR a stamp older than 7 days
+  // (stale). The caller fans out a fresh check for these so the student sees data no older than
+  // the staleness window; force=false, so a row anyone re-checked this week is served free by
+  // the server's own gate and the cross-user cache.
+  const needsCheck = ids.filter(
+    (id) => catalog[id] && deadlineStampNeedsCheck(catalog[id].dates_last_checked_at),
+  );
   // The "Last checked" line means "when was this deadline data verified against the source".
   // That is the catalog's dates_last_checked_at, not now() — the sync only mirrors. Take the
   // freshest across tracked items (ISO strings compare lexicographically for the same offset;
@@ -537,7 +558,7 @@ export async function syncTrackerFromCatalog(
       // persisted. The next sync will re-derive and retry the write.
     }
   }
-  return { data, updated, lastCheckedAt: _lastCatalogStamp, neverChecked };
+  return { data, updated, lastCheckedAt: _lastCatalogStamp, needsCheck };
 }
 
 // Quest Log's "Check for updates" button — ported from script.js's refreshTracker(), minus
@@ -627,17 +648,21 @@ export interface FreshCheckHandlers {
   concurrency?: number;
 }
 
-// Fan out a PAID fresh deadline check for never-checked rows, in PARALLEL, one card at a time
+// Fan out a PAID fresh deadline check for rows that need one, in PARALLEL, one card at a time
 // resolving independently (P: optimistic add). This is the VERIFY half for rows the free sync
-// could only give a status to — it fills in their dates and verified checklist without blocking
-// the page. Unlike refreshTrackerDeadlines (the button, which FORCES a re-check of every row),
-// this targets only stamp-less rows and does NOT force (there is no cache to bypass).
+// could only give a status to (never checked) OR gave data that has since gone stale (>7 days) —
+// it fills in / refreshes their dates and verified checklist without blocking the page. Unlike
+// refreshTrackerDeadlines (the button, which FORCES a re-check of every row), this does NOT force:
+// force=false, so a never-checked row is checked (no cache), a stale row is checked (server's gate
+// agrees it is stale), and a row anyone else already re-checked this week is served free from the
+// cross-user cache — which is what keeps the login/focus fan-out from re-billing popular rows.
 //
 // Bounded per-id-per-session (_freshCheckAttempted): a row that comes back silent/unreachable is
-// not stamped and would otherwise be re-billed on every focus. 503 (lane full) and 402 (free
+// not stamped and would otherwise be re-billed on every focus/login. 503 (lane full) and 402 (free
 // allowance) surface as a non-ok outcome and simply leave the card status-only — no auto-retry,
-// so a shed check is never silently re-billed. MARQUEE M9: this is the same paid deadline/
-// checklist call the add used to make inline, relocated here and parallelised; no new paid path.
+// so a shed check is never silently re-billed. MARQUEE M9: this is the same paid deadline/checklist
+// call, now also fanned out for STALE rows on login + Quest Log focus (approved 2026-09-27) so the
+// student never sees deadline data older than the 7-day window; no new paid endpoint.
 //
 // WRITES ARE SERIALIZED AND RE-READ (fixes the background-clobber bug): the CHECKS run in
 // parallel (the slow part), but each result is committed one-at-a-time through a promise chain
@@ -647,13 +672,13 @@ export interface FreshCheckHandlers {
 // resurrect it. (The tracker is stored as one whole blob, so this reload-modify-save is the same
 // shape every other writer here uses; serializing the fan-out's saves also stops its own
 // parallel workers from clobbering each other.)
-export async function verifyNeverCheckedDeadlines(
-  neverCheckedIds: string[],
+export async function verifyStaleDeadlines(
+  staleIds: string[],
   handlers?: FreshCheckHandlers,
 ): Promise<{ data: TrackerData; checked: number; updated: number }> {
   const initial = await loadTrackerData();
   const present = new Set(flattenItems(initial).map((i) => i.id));
-  const ids = neverCheckedIds.filter((id) => present.has(id) && !_freshCheckAttempted.has(id));
+  const ids = staleIds.filter((id) => present.has(id) && !_freshCheckAttempted.has(id));
   if (!ids.length) return { data: initial, checked: 0, updated: 0 };
   ids.forEach((id) => _freshCheckAttempted.add(id));
 
@@ -691,8 +716,9 @@ export async function verifyNeverCheckedDeadlines(
       const id = ids[cursor++];
       handlers?.onCardStart?.(id);
       try {
-        // force=false: a never-checked row has no cache to bypass, so the endpoint runs a fresh
-        // check anyway, and force would needlessly hit the forced-recheck cooldown.
+        // force=false: a never-checked row has no cache to bypass and a stale row's cache is
+        // already past the server's gate, so the endpoint runs a fresh check for both — while a
+        // still-fresh row is served free. force would needlessly hit the forced-recheck cooldown.
         const res = await httpClient.getDeadlineCheckResult(id, false);
         if (res.outcome === 'ok' && res.info) {
           checked++;

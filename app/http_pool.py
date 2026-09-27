@@ -37,6 +37,22 @@ _LIMITS = httpx.Limits(max_connections=40, max_keepalive_connections=20,
                        keepalive_expiry=30.0)
 _DEFAULT_TIMEOUT = 15.0
 
+# Transport errors where the request did NOT get a response, so re-sending it on a fresh
+# connection is safe. This is the errno-54 "connection reset by peer" that the ops Metrics
+# poll kept hitting: the pool believed a keepalive connection was alive, but the peer
+# (Supabase, or a proxy in front of it) had already idle-closed it — so the request never
+# reached a live handler. httpcore discards the failed connection, so the retry gets a new
+# one. keepalive_expiry alone cannot close this: the reset can arrive on a connection that
+# has not yet expired, and lowering it far enough to help would cost a handshake on nearly
+# every request under Render's steady traffic to save nothing there — the win is here, on a
+# long-idle local process, and a single retry is the targeted fix.
+#
+# Read/write TIMEOUTS are deliberately excluded (they fall to the TimeoutException branch and
+# are NOT retried): a timeout means the request may already have been received, so blindly
+# re-sending a write could apply it twice. A connect-phase timeout IS safe and is included.
+_RETRYABLE_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError,
+                     httpx.WriteError, httpx.RemoteProtocolError, httpx.PoolTimeout)
+
 _client = None
 _client_lock = threading.Lock()
 
@@ -114,16 +130,30 @@ def pooled_urlopen(req, timeout=None):
     client = get_client()
     body = req.data
     headers = dict(req.header_items())
-    try:
-        response = client.request(req.get_method(), req.full_url, content=body,
-                                  headers=headers,
-                                  timeout=_DEFAULT_TIMEOUT if timeout is None else timeout)
-    except httpx.TimeoutException as e:
-        # socket.timeout is what urlopen raises through URLError on a timeout, and some
-        # callers distinguish it from a refused connection.
-        raise urllib.error.URLError(socket.timeout(str(e) or "timed out")) from e
-    except httpx.HTTPError as e:
-        raise urllib.error.URLError(str(e) or type(e).__name__) from e
+    method = req.get_method()
+    to = _DEFAULT_TIMEOUT if timeout is None else timeout
+    attempt = 0
+    while True:
+        try:
+            response = client.request(method, req.full_url, content=body,
+                                      headers=headers, timeout=to)
+            break
+        except _RETRYABLE_ERRORS as e:
+            # Retry ONCE, on a fresh connection, for a stale-connection failure. A second
+            # failure is a real outage, not a dead pooled socket — surface it as urlopen would.
+            if attempt == 0:
+                attempt += 1
+                continue
+            if isinstance(e, (httpx.ConnectTimeout, httpx.PoolTimeout)):
+                raise urllib.error.URLError(socket.timeout(str(e) or "timed out")) from e
+            raise urllib.error.URLError(str(e) or type(e).__name__) from e
+        except httpx.TimeoutException as e:
+            # socket.timeout is what urlopen raises through URLError on a timeout, and some
+            # callers distinguish it from a refused connection. A read/write timeout is NOT
+            # retried above: the request may already have been received.
+            raise urllib.error.URLError(socket.timeout(str(e) or "timed out")) from e
+        except httpx.HTTPError as e:
+            raise urllib.error.URLError(str(e) or type(e).__name__) from e
 
     if response.status_code >= 400:
         # fp is a real file-like object so HTTPError.read() returns the provider's body — the

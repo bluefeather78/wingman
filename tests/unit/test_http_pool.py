@@ -44,6 +44,22 @@ class _FakeClient:
         return self._response
 
 
+class _FlakyClient:
+    """Raises `raises` on the first N calls, then returns `response` — a stale pooled
+    connection that succeeds once it is discarded and reopened."""
+    def __init__(self, raises, response, fail_times=1):
+        self._raises = raises
+        self._response = response
+        self._fail_times = fail_times
+        self.calls = []
+
+    def request(self, method, url, content=None, headers=None, timeout=None):
+        self.calls.append({"method": method, "url": url})
+        if len(self.calls) <= self._fail_times:
+            raise self._raises
+        return self._response
+
+
 def _req(url="https://db.example/rest/v1/users?select=userid", data=None, method=None):
     return urllib.request.Request(url, data=data, method=method,
                                   headers={"apikey": "svc", "Content-Type": "application/json"})
@@ -123,6 +139,47 @@ def test_a_transport_failure_becomes_a_urlerror(monkeypatch):
     monkeypatch.setattr(pool, "get_client", lambda: client)
     with pytest.raises(urllib.error.URLError):
         pool.pooled_urlopen(_req())
+
+
+# ---------- the retry, which is what stops the errno-54 Metrics crash ----------
+
+def test_a_connection_reset_is_retried_once_and_succeeds(monkeypatch):
+    """The errno-54 case: a pooled connection the peer already reset. One retry on a fresh
+    connection must recover it, so the caller never sees the reset."""
+    client = _FlakyClient(httpx.ConnectError("[Errno 54] Connection reset by peer"),
+                          _FakeResponse(200, b'[{"userid":"alice"}]'), fail_times=1)
+    monkeypatch.setattr(pool, "get_client", lambda: client)
+    with pool.pooled_urlopen(_req()) as resp:
+        assert resp.read() == b'[{"userid":"alice"}]'
+    assert len(client.calls) == 2   # reset, then success
+
+
+def test_a_reset_on_a_write_is_retried(monkeypatch):
+    """A reset means the request never reached a live handler, so re-sending a PATCH is safe."""
+    client = _FlakyClient(httpx.RemoteProtocolError("server disconnected"),
+                          _FakeResponse(204), fail_times=1)
+    monkeypatch.setattr(pool, "get_client", lambda: client)
+    pool.pooled_urlopen(_req(data=b'{"a":1}', method="PATCH"))
+    assert len(client.calls) == 2
+
+
+def test_retry_gives_up_after_one_attempt(monkeypatch):
+    """A persistent transport failure is a real outage — retried once, then raised."""
+    client = _FlakyClient(httpx.ConnectError("no route"), _FakeResponse(200), fail_times=5)
+    monkeypatch.setattr(pool, "get_client", lambda: client)
+    with pytest.raises(urllib.error.URLError):
+        pool.pooled_urlopen(_req())
+    assert len(client.calls) == 2   # one try, one retry, then give up
+
+
+def test_a_read_timeout_is_not_retried(monkeypatch):
+    """A read timeout may mean the request WAS received; blindly re-sending a write could
+    apply it twice, so timeouts fall through to the non-retrying branch."""
+    client = _FlakyClient(httpx.ReadTimeout("too slow"), _FakeResponse(200), fail_times=1)
+    monkeypatch.setattr(pool, "get_client", lambda: client)
+    with pytest.raises(urllib.error.URLError):
+        pool.pooled_urlopen(_req())
+    assert len(client.calls) == 1   # not retried
 
 
 # ---------- the pool itself ----------
